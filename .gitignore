@@ -11,3 +11,4 @@ build/
 *.sqlite3
 projects/
 outputs/
+/example.png

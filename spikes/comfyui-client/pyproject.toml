@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-client"
 version = "0.1.0"
-description = "Add your description here"
+description = "Disposable Mac-to-Windows ComfyUI integration spike"
 readme = "README.md"
 authors = [
     { name = "pixeldj", email = "superdj@gmail.com" }
