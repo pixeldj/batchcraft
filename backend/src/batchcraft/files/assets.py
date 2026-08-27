@@ -101,10 +101,7 @@ class ProjectAssetStore:
                 shutil.rmtree(staging_path)
 
     def load(self, sha256: str) -> AssetRecord:
-        if len(sha256) != _SHA256_LENGTH or any(
-            character not in "0123456789abcdef" for character in sha256
-        ):
-            raise AssetStoreError(f"invalid SHA-256 digest: {sha256!r}")
+        _validate_sha256(sha256)
 
         asset_path = self._asset_path(sha256)
         metadata_path = asset_path / "asset.json"
@@ -138,6 +135,23 @@ class ProjectAssetStore:
             raise AssetStoreError(f"asset content digest does not match metadata for {sha256}")
         return record
 
+    def read_asset_id(self, sha256: str) -> str:
+        _validate_sha256(sha256)
+        metadata_path = self._asset_path(sha256) / "asset.json"
+        if metadata_path.is_symlink() or not metadata_path.is_file():
+            raise AssetStoreError(f"asset identity metadata is missing or unsafe for {sha256}")
+        try:
+            metadata = read_json_object(metadata_path)
+            if metadata.get("format_version") != ASSET_FORMAT_VERSION:
+                raise AssetStoreError(f"unsupported asset format version for {sha256}")
+            return _required_string(metadata, "asset_id")
+        except (OSError, ValueError) as error:
+            if isinstance(error, AssetStoreError):
+                raise
+            raise AssetStoreError(
+                f"invalid asset identity metadata for {sha256}: {error}"
+            ) from error
+
     def validate_record(self, record: AssetRecord) -> AssetRecord:
         stored = self.load(record.sha256)
         if stored != record:
@@ -156,6 +170,13 @@ def _required_string(data: dict[str, object], name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string")
     return value
+
+
+def _validate_sha256(sha256: str) -> None:
+    if len(sha256) != _SHA256_LENGTH or any(
+        character not in "0123456789abcdef" for character in sha256
+    ):
+        raise AssetStoreError(f"invalid SHA-256 digest: {sha256!r}")
 
 
 def _optional_string(data: dict[str, object], name: str) -> str | None:

@@ -4,9 +4,15 @@ version = "0.1.0"
 description = "Local-first experiment and batch orchestration for ComfyUI"
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "uvicorn>=0.52.4",
     "websockets>=15.0",
 ]
+
+[project.scripts]
+batchcraft-api = "batchcraft.api.main:main"
 
 [dependency-groups]
 dev = [

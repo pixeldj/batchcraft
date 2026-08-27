@@ -218,6 +218,20 @@ class RunFilesystemStore:
             raise RunStoreError("Run directory is not under its recorded Project filesystem key")
         return published_run
 
+    def read_run_id(self, run_path: Path) -> str:
+        metadata_path = run_path / "run.json"
+        if metadata_path.is_symlink() or not metadata_path.is_file():
+            raise RunStoreError(f"Run identity metadata is missing or unsafe: {run_path}")
+        try:
+            run_data = read_json_object(metadata_path)
+            if run_data.get("format_version") != RUN_FORMAT_VERSION:
+                raise RunStoreError("unsupported run.json format version")
+            return _required_string(run_data, "run_id")
+        except (OSError, ValueError) as error:
+            if isinstance(error, RunStoreError):
+                raise
+            raise RunStoreError(f"invalid Run identity metadata in {run_path}: {error}") from error
+
     def _load_run(self, run_path: Path, project_path: Path, *, validate_csv: bool) -> PublishedRun:
         required_files = (
             "run.json",

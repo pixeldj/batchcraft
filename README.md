@@ -10,9 +10,21 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 Early production development.
 
-The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, and sequential Run executor are complete.
+The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, sequential Run executor, and first thin FastAPI application boundary are complete.
 
-The executor persists mutable execution state separately from immutable Run provenance, submits one Job at a time, reconciles through ComfyUI history, and ingests downloaded Results. SQLite, a global scheduler, automatic recovery, and application frameworks remain unimplemented.
+The API supports ComfyUI status, Batch preview, durable Run creation and lookup, background execution start, execution polling, Result listing, and safe Result file retrieval. SQLite, React, a global scheduler, and automatic recovery remain unimplemented.
+
+## Run The API
+
+From `backend/`:
+
+```bash
+BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
+BATCHCRAFT_COMFYUI_BASE_URL="http://<windows-host>:8188" \
+uv run batchcraft-api
+```
+
+See [`docs/API.md`](docs/API.md) for configuration, endpoints, and current limitations.
 
 ## Initial Deployment Model
 
@@ -128,6 +140,7 @@ Project design documentation lives under [`docs/`](docs/):
 - [`BATCH_COMPILER.md`](docs/BATCH_COMPILER.md)
 - [`COMFYUI_INTEGRATION.md`](docs/COMFYUI_INTEGRATION.md)
 - [`FILE_FORMAT.md`](docs/FILE_FORMAT.md)
+- [`API.md`](docs/API.md)
 - [`DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - [`adr/`](docs/adr/)
 
@@ -146,8 +159,8 @@ The first technical milestone was a disposable ComfyUI integration spike that pr
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, and sequential Run execution under `backend/`.
+Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, sequential Run execution, and a thin FastAPI boundary under `backend/`.
 
-Later application slices will add application indexing, scheduler selection, and a minimal Results Viewer.
+Later application slices will add SQLite-backed mutable application indexing, React, scheduler selection, and a Results Viewer.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.

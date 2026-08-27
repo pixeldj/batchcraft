@@ -12,6 +12,7 @@ from .state import (
     EXECUTION_FORMAT_VERSION,
     ExecutionStateError,
     ExecutionStateStore,
+    initial_execution_state,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "RunExecutionState",
     "RunExecutionStatus",
     "execute_run",
+    "initial_execution_state",
 ]

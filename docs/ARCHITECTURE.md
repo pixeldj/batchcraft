@@ -107,7 +107,7 @@ A reasonable initial backend module split is:
 backend/
 └── batchcraft/
     ├── api/
-    ├── domain/
+    ├── application/
     ├── domain/
     ├── files/
     ├── comfyui/
@@ -121,6 +121,10 @@ backend/
 ```
 
 This layout is illustrative, not mandatory. Avoid creating abstractions before behavior requires them.
+
+The first application slice follows this split. `api/` owns HTTP DTOs, routes, status codes, CORS, configuration, and lifecycle. `application/` coordinates the existing production packages and provides narrow Run/asset discovery plus an in-process Run task registry. It contains no generic repository, command bus, event bus, or scheduler framework.
+
+Mutable Batch definitions are not persisted in this slice. Preview and Run creation accept the same complete ephemeral Batch snapshot, while successful Run publication freezes the durable execution plan and provenance. SQLite remains the intended later home for mutable Batch and searchable application state.
 
 ## Application Queue
 
@@ -151,6 +155,8 @@ submit next Job
 Initial queue depth should be configurable, with `1` as a safe default.
 
 The first production executor fixes queue depth at exactly `1` and executes one published Run. It submits the next Job only after history proves the prior Job succeeded and every discovered Result is durable. Global Run selection, prioritization, concurrency, retries, and automatic recovery remain outside this layer.
+
+FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. It is not durable scheduler state: `execution.json` remains authoritative, and a restarted API refuses automatic recovery of non-created execution state.
 
 Benefits:
 

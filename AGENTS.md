@@ -161,4 +161,6 @@ The production ComfyUI adapter is implemented under `backend/`, including pure W
 
 The sequential Run executor is implemented under `backend/`, including versioned mutable execution state, queue-depth-1 Job orchestration, history reconciliation, and Result ingestion. It executes one published Run against one ComfyUI client and does not provide global scheduling or automatic recovery.
 
-Keep the compiler, filesystem store, ComfyUI adapter, and execution layer separate from SQLite, FastAPI, and React until a focused milestone explicitly introduces them.
+The first FastAPI application boundary is implemented under `backend/`. It exposes ComfyUI status, ephemeral Batch preview, durable Run creation and filesystem lookup, in-process background execution start, execution polling, and safe Result retrieval through a narrow application service layer.
+
+SQLite, React, global scheduling, cancellation, and automatic recovery remain deferred. Keep FastAPI DTOs and route behavior separate from the compiler, filesystem store, ComfyUI adapter, and execution-state rules.

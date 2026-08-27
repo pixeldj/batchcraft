@@ -4,7 +4,7 @@
 
 This document defines the expected development workflow for **batchcraft**.
 
-The project has entered production domain development. The full frontend and backend application remain unscaffolded.
+The project has entered production application development. The backend has a thin FastAPI boundary; the React frontend and SQLite application index remain unscaffolded.
 
 ## Supported Development Environment
 
@@ -135,20 +135,11 @@ This layer excludes global Run selection, concurrent execution, priorities, retr
 
 ### Phase 2: first vertical application slice
 
-After the pure compiler foundation is established, build the smallest application path that proves the architecture end to end:
-
-1. connect to ComfyUI;
-2. select/import a known Workflow Profile;
-3. enter a Prompt Template;
-4. bind one or more Variable Lists;
-5. select reference images;
-6. preview the resolved Job count;
-7. create a Run with frozen plan and provenance;
-8. execute Jobs through the batchcraft scheduler;
-9. persist manifests and outputs;
-10. display a basic Results Viewer.
+Completed for the backend application boundary. Without React or SQLite, the current API checks ComfyUI status, accepts a complete ephemeral Batch snapshot, previews deterministic Jobs, creates a frozen Run, starts queue-depth-1 execution, exposes execution polling, and serves persisted Result metadata and files.
 
 Do not build the full prompt library, advanced search, elaborate ratings, multi-server scheduling, or other roadmap features before this path works reliably.
+
+The slice accepts an ephemeral complete Batch request for preview and Run creation. It does not define another durable Batch format before SQLite. Run lookup narrowly scans complete published Run directories, and long-running execution uses retained in-process tasks while `execution.json` remains authoritative.
 
 ## Python Conventions
 
@@ -173,6 +164,18 @@ uv run mypy
 ```
 
 pytest covers behavior, Ruff owns formatting and linting, and mypy checks the typed domain boundary. Add another tool only when it covers a distinct need.
+
+### Local API
+
+From `backend/`, start the local API with explicit storage and ComfyUI configuration:
+
+```bash
+BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
+BATCHCRAFT_COMFYUI_BASE_URL="http://<windows-host>:8188" \
+uv run batchcraft-api
+```
+
+The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATCHCRAFT_SERVER_PORT` override it. See `docs/API.md` for all application settings and endpoint behavior.
 
 ## Frontend Conventions
 

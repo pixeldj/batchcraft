@@ -79,40 +79,16 @@ class ExecutionStateStore:
     def initialize(self, run: PublishedRun) -> RunExecutionState:
         if self.state_path.exists():
             return self.load(run)
-        state = RunExecutionState(
-            run_id=run.run_id,
-            status=RunExecutionStatus.CREATED,
-            started_at=None,
-            completed_at=None,
-            current_job_ordinal=None,
-            error=None,
-            diagnostics=(),
-            jobs=tuple(
-                JobExecutionState(
-                    job_id=job.job_id,
-                    ordinal=job.compiled_job.ordinal,
-                    status=JobExecutionStatus.PENDING,
-                    client_id=None,
-                    submission_disposition=None,
-                    submission_http_status=None,
-                    submission_response=None,
-                    prompt_id=None,
-                    started_at=None,
-                    completed_at=None,
-                    error=None,
-                    diagnostics=(),
-                    history_status=None,
-                    results=(),
-                )
-                for job in run.jobs
-            ),
-        )
+        state = initial_execution_state(run)
         self._validate_against_run(run, state)
         self._atomic_replace(self.state_path, canonical_json_bytes(_state_data(state)))
         return state
 
     def load(self, run: PublishedRun) -> RunExecutionState:
         return self._load(run, verify_result_files=True)
+
+    def read_for_query(self, run: PublishedRun) -> RunExecutionState:
+        return self._load(run, verify_result_files=False)
 
     def _load(self, run: PublishedRun, *, verify_result_files: bool) -> RunExecutionState:
         try:
@@ -138,6 +114,13 @@ class ExecutionStateStore:
                 tuple(result for job in state.jobs for result in job.results),
             )
         self._atomic_replace(self.state_path, canonical_json_bytes(_state_data(state)))
+
+    def validate_storage(self, run: PublishedRun) -> None:
+        self._validate_against_run(
+            run,
+            initial_execution_state(run),
+            verify_result_files=False,
+        )
 
     def persist_result(
         self,
@@ -257,6 +240,37 @@ def safe_extension(remote_filename: str, content_type: str | None) -> str:
         if _SAFE_EXTENSION.fullmatch(guessed):
             return guessed.lower()
     return ".bin"
+
+
+def initial_execution_state(run: PublishedRun) -> RunExecutionState:
+    return RunExecutionState(
+        run_id=run.run_id,
+        status=RunExecutionStatus.CREATED,
+        started_at=None,
+        completed_at=None,
+        current_job_ordinal=None,
+        error=None,
+        diagnostics=(),
+        jobs=tuple(
+            JobExecutionState(
+                job_id=job.job_id,
+                ordinal=job.compiled_job.ordinal,
+                status=JobExecutionStatus.PENDING,
+                client_id=None,
+                submission_disposition=None,
+                submission_http_status=None,
+                submission_response=None,
+                prompt_id=None,
+                started_at=None,
+                completed_at=None,
+                error=None,
+                diagnostics=(),
+                history_status=None,
+                results=(),
+            )
+            for job in run.jobs
+        ),
+    )
 
 
 def _validate_transition(previous: RunExecutionState, current: RunExecutionState) -> None:
