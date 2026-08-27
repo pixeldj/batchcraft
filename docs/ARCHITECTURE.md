@@ -1,0 +1,295 @@
+# batchcraft Architecture
+
+## Overview
+
+batchcraft is a local-first web application hosted on the user's Mac and connected over the local network to ComfyUI on a Windows workstation.
+
+```text
+Mac
+─────────────────────────────────────────
+Browser
+   |
+   v
+batchcraft frontend
+React + TypeScript
+   |
+   v
+batchcraft backend
+FastAPI + Python
+   |
+   +---- SQLite
+   +---- Project filesystem
+   +---- Prompt Resolver
+   +---- Batch Compiler
+   +---- Job Scheduler
+   +---- ComfyUI Client
+                |
+                | HTTP + WebSocket over LAN
+                v
+Windows workstation
+─────────────────────────────────────────
+ComfyUI
+   |
+   v
+GPU / models / custom nodes
+```
+
+## Responsibility Boundaries
+
+### Frontend
+
+The frontend is responsible for:
+
+- project navigation;
+- prompt editing;
+- Variable List management;
+- reference selection;
+- Workflow Profile configuration;
+- Batch construction;
+- compiled-job preview;
+- Run progress visualization;
+- Results Viewer;
+- user actions such as rerun, pause, cancel, and selection.
+
+The frontend must not communicate directly with ComfyUI.
+
+### Backend
+
+The backend owns:
+
+- domain rules;
+- persistence;
+- prompt resolution;
+- Batch compilation;
+- Run creation;
+- Job scheduling;
+- ComfyUI communication;
+- file upload/download;
+- Run manifests;
+- result ingestion;
+- filesystem integrity.
+
+The backend is the authoritative application API.
+
+### ComfyUI
+
+ComfyUI owns:
+
+- workflow construction;
+- node validation;
+- model loading;
+- custom nodes;
+- GPU execution;
+- native queue execution;
+- generation artifacts before batchcraft retrieves them.
+
+batchcraft should use normal ComfyUI API workflows rather than custom batchcraft nodes unless a future requirement cannot reasonably be implemented externally.
+
+## Core Invariants
+
+1. Batch is mutable.
+2. Run is immutable.
+3. Job is fully resolved.
+4. No unresolved prompt placeholder may reach ComfyUI.
+5. A Run must be reconstructable from its saved artifacts.
+6. Editing library content never changes a Run already created.
+7. The logical queue belongs to batchcraft.
+8. ComfyUI integration is isolated behind a client/service boundary.
+9. Completed Run directories are never silently rewritten.
+
+## Backend Responsibilities
+
+A reasonable initial backend module split is:
+
+```text
+backend/
+└── batchcraft/
+    ├── api/
+    ├── domain/
+    ├── services/
+    │   ├── prompt_resolver.py
+    │   ├── batch_compiler.py
+    │   ├── run_service.py
+    │   └── scheduler.py
+    ├── comfyui/
+    │   ├── client.py
+    │   ├── workflow.py
+    │   └── events.py
+    ├── persistence/
+    └── files/
+```
+
+This layout is illustrative, not mandatory. Avoid creating abstractions before behavior requires them.
+
+## Application Queue
+
+batchcraft should not dump an entire large Run into ComfyUI's native queue by default.
+
+Instead, maintain an application-level scheduler:
+
+```text
+Run
+ |
+ v
+Pending Jobs in batchcraft
+ |
+ | submit up to configured queue depth
+ v
+ComfyUI queue
+ |
+ v
+execution events/history
+ |
+ v
+Result ingestion
+ |
+ v
+submit next Job
+```
+
+Initial queue depth should be configurable, with `1` as a safe default.
+
+Benefits:
+
+- pause future submissions;
+- cancel not-yet-submitted Jobs;
+- isolate immutable Runs from UI edits;
+- maintain accurate local state;
+- avoid flooding a remote ComfyUI queue;
+- support future prioritization and multiple Runs.
+
+## Prompt Resolution Boundary
+
+Prompt Templates use named placeholders such as:
+
+```text
+A photo of {{animal}} in {{location}}.
+```
+
+Structured Variable Lists provide values.
+
+The Prompt Resolver produces explicit resolved prompt variants before Batch compilation.
+
+The Batch Compiler then combines resolved prompts with references, seeds, and exposed workflow parameter dimensions.
+
+No prompt expansion should occur inside ComfyUI for core batchcraft functionality.
+
+## Workflow Profile Boundary
+
+A Workflow Profile stores:
+
+- an API-format ComfyUI workflow snapshot or version reference;
+- friendly exposed input definitions;
+- mappings from those inputs to node IDs and input fields;
+- metadata describing required input types.
+
+Example mapping:
+
+```json
+{
+  "prompt": {
+    "node_id": "104",
+    "input": "text",
+    "type": "string"
+  },
+  "reference_image": {
+    "node_id": "221",
+    "input": "image",
+    "type": "image"
+  }
+}
+```
+
+Jobs refer to friendly exposed fields. ComfyUI-specific node mutation happens inside the workflow adapter.
+
+## Persistence Strategy
+
+### SQLite
+
+SQLite stores searchable, mutable application state such as:
+
+- projects;
+- Prompt Templates and versions;
+- Variable Lists;
+- reference metadata;
+- Workflow Profiles;
+- Batch definitions;
+- Run index/status;
+- Job index/status;
+- Result index;
+- ratings and UI metadata.
+
+### Filesystem
+
+The filesystem stores durable Run artifacts and binaries:
+
+- JSON manifest;
+- CSV manifest;
+- Run metadata;
+- workflow snapshot;
+- required input snapshots or references;
+- downloaded outputs.
+
+For completed Runs, the filesystem artifacts must contain enough information to reconstruct meaningful history without SQLite.
+
+## Local-First Behavior
+
+The initial product requires no external cloud service.
+
+All batchcraft state resides on the Mac.
+
+The Windows workstation is an execution target rather than the permanent archive.
+
+Downloaded outputs under the batchcraft project directory are the application-owned copies.
+
+## Network Model
+
+Initial assumptions:
+
+- batchcraft backend runs on the Mac;
+- ComfyUI runs on a trusted LAN workstation;
+- the backend is configured with a ComfyUI base URL;
+- ComfyUI is reachable from the Mac;
+- Windows Firewall should scope ComfyUI access to the trusted LAN or specific Mac where practical.
+
+Do not design the initial application as if the ComfyUI endpoint is safely exposed to the public Internet.
+
+## Failure Model
+
+The scheduler must distinguish at least:
+
+```text
+pending
+submitted
+running
+succeeded
+failed
+cancelled
+```
+
+A backend restart should eventually be able to reconcile submitted/running Jobs against ComfyUI history.
+
+Graceful recovery may be limited in the first vertical slice, but Run and Job states must be explicit enough to add reconciliation without redesigning the data model.
+
+## Technology Defaults
+
+Initial preferred stack:
+
+- Frontend: React + TypeScript
+- Backend: Python + FastAPI
+- Database: SQLite
+- HTTP client: `httpx`
+- Python project management: `uv`
+
+These are implementation defaults, not product requirements.
+
+## Architectural Decision Records
+
+Significant decisions should be captured under `docs/adr/`.
+
+Examples:
+
+- why Runs are immutable;
+- why prompt expansion occurs in batchcraft;
+- why completed Run artifacts are filesystem-portable;
+- why the browser does not communicate directly with ComfyUI.
