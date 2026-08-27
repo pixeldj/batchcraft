@@ -108,17 +108,16 @@ backend/
 └── batchcraft/
     ├── api/
     ├── domain/
-    ├── services/
-    │   ├── prompt_resolver.py
-    │   ├── batch_compiler.py
-    │   ├── run_service.py
-    │   └── scheduler.py
+    ├── domain/
+    ├── files/
     ├── comfyui/
     │   ├── client.py
     │   ├── workflow.py
     │   └── events.py
-    ├── persistence/
-    └── files/
+    └── execution/
+        ├── models.py
+        ├── state.py
+        └── executor.py
 ```
 
 This layout is illustrative, not mandatory. Avoid creating abstractions before behavior requires them.
@@ -150,6 +149,8 @@ submit next Job
 ```
 
 Initial queue depth should be configurable, with `1` as a safe default.
+
+The first production executor fixes queue depth at exactly `1` and executes one published Run. It submits the next Job only after history proves the prior Job succeeded and every discovered Result is durable. Global Run selection, prioritization, concurrency, retries, and automatic recovery remain outside this layer.
 
 Benefits:
 
@@ -292,6 +293,8 @@ cancelled
 ```
 
 `submission_unknown` means the submission outcome was ambiguous and requires reconciliation. It is not a signal to retry.
+
+The first executor uses `created`, `running`, `succeeded`, `failed`, and `blocked` for Run state. Job state uses `pending`, `preparing`, `submitting`, `submitted`, `submission_unknown`, `succeeded`, and `failed`. `submitting` is persisted before the network call so a crash during submission is never confused with a Job that was never submitted. A history timeout leaves an accepted Job in `submitted` with its prompt ID and blocks the Run. Blocked and unknown-submission states stop automatic execution but permit a future explicit reconciliation transition without weakening immutable succeeded/failed states.
 
 A backend restart should eventually be able to reconcile submitted/running Jobs against ComfyUI history.
 

@@ -10,9 +10,9 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 Early production development.
 
-The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, and production ComfyUI adapter are complete.
+The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, and sequential Run executor are complete.
 
-The production adapter provides pure workflow preparation and typed async ComfyUI protocol operations. SQLite, scheduling, execution-state persistence, result ingestion, and application frameworks remain unimplemented.
+The executor persists mutable execution state separately from immutable Run provenance, submits one Job at a time, reconciles through ComfyUI history, and ingests downloaded Results. SQLite, a global scheduler, automatic recovery, and application frameworks remain unimplemented.
 
 ## Initial Deployment Model
 
@@ -109,6 +109,7 @@ projects/
                 ├── manifest.csv
                 ├── workflow.json
                 ├── workflow-profile.json
+                ├── execution.json
                 └── outputs/
                     ├── 000001-01.png
                     └── 000002-01.png
@@ -145,8 +146,8 @@ The first technical milestone was a disposable ComfyUI integration spike that pr
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, and isolated ComfyUI HTTP/WebSocket primitives under `backend/`.
+Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, and sequential Run execution under `backend/`.
 
-Later application slices will connect the compiler and Run store to remote execution, scheduling, local result ingestion, and a minimal Results Viewer.
+Later application slices will add application indexing, scheduler selection, and a minimal Results Viewer.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.

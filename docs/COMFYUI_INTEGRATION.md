@@ -116,13 +116,15 @@ The first production integration boundary lives under `backend/src/batchcraft/co
 
 Workflow preparation deep-copies the imported API workflow and validates the snapshotted node ID, input name, and value type for every required friendly mapping. It rejects unresolved placeholders before transport.
 
-The adapter does not own scheduling, retries, mutable Job state, Run filesystem updates, or result naming. A caller opens the WebSocket before submission, stores the accepted prompt ID in mutable execution state, treats WebSocket terminal events as advisory, and reconciles final status through history.
+The adapter does not own scheduling, retries, mutable Job state, Run filesystem updates, or result naming. The execution layer opens the WebSocket before submission, stores the accepted prompt ID in mutable execution state, observes WebSocket events concurrently as advisory signals, and begins authoritative history reconciliation immediately.
 
 ## Execution Monitoring
 
 Use ComfyUI's real-time execution events where practical, with history/status queries available for reconciliation.
 
 batchcraft should not assume that a WebSocket connection is perfectly reliable forever.
+
+If observation fails after ComfyUI accepts a prompt, the sequential executor continues polling history within an explicit bound and records the diagnostic when execution remains unresolved. It does not resubmit. A history timeout blocks the Run with the known prompt ID preserved for future recovery.
 
 The domain model should permit a later reconciliation mechanism after transient disconnects or backend restarts.
 

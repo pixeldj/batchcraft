@@ -299,6 +299,8 @@ Once Run creation succeeds, these effective values and the compiled Job plan are
 
 Run execution state is separate from immutable provenance. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance while execution proceeds.
 
+The v1 filesystem representation stores this mutable data in `execution.json`. Run states are `created`, `running`, `succeeded`, `failed`, and `blocked`. `blocked` means automatic progression stopped on an unresolved accepted or ambiguous submission and is not permission to retry. It remains available for a future explicit reconciliation operation; only `succeeded` and `failed` are immutable terminal Run states.
+
 ## Job
 
 One completely resolved ComfyUI execution.
@@ -332,6 +334,8 @@ The compiler orders Job dimensions as PromptVersion, prompt variables, reference
 
 A Job must never contain unresolved prompt variables.
 
+The v1 execution states are `pending`, `preparing`, `submitting`, `submitted`, `submission_unknown`, `succeeded`, and `failed`. `submitting` records that a submission attempt began. `submitted` always carries a known ComfyUI prompt ID. `submission_unknown` carries the client correlation ID and available submission diagnostics but never advances automatically; a future explicit reconciliation may move it to `submitted` with a proved prompt ID or to `failed`.
+
 ## Result
 
 An output artifact associated with a Job.
@@ -355,6 +359,8 @@ created_at
 ```
 
 A Job may produce multiple Results. Local filenames use the Job ordinal and artifact ordinal, for example `000001-01.png`. ComfyUI's remote filename, subfolder, and type remain metadata rather than local filesystem authority.
+
+Each Result also records the ComfyUI output field name, content type when known, byte size, and SHA-256. Result identity is independent per producing node/output descriptor even when remote file metadata is otherwise identical.
 
 ## Ratings and Review Metadata
 

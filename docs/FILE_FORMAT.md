@@ -29,10 +29,11 @@ projects/
             ├── run-001/
             │   ├── run.json
             │   ├── manifest.json
-            │   ├── manifest.csv
-            │   ├── workflow.json
-            │   ├── workflow-profile.json
-            │   └── outputs/
+             │   ├── manifest.csv
+             │   ├── workflow.json
+             │   ├── workflow-profile.json
+             │   ├── execution.json
+             │   └── outputs/
             │       ├── 000001-01.png
             │       ├── 000002-01.png
             │       └── ...
@@ -89,7 +90,7 @@ The v1 creation schema is:
 }
 ```
 
-Run-level status and future execution timestamps are mutable execution state. The v1 filesystem-store milestone writes only the initial `created` state; scheduling and execution-state transitions are deferred. Future state fields may advance without changing the compiled plan and provenance in `manifest.json`.
+`run.json` records the initial published state and is not rewritten by execution. Advancing runtime state lives in `execution.json`.
 
 ## `workflow.json`
 
@@ -161,6 +162,49 @@ For structures that do not map naturally to flat columns, encode compact JSON in
 
 A standalone CSV file is not sufficient for guaranteed exact replay. Exact replay uses `manifest.json` together with the snapshotted base workflow, Workflow Profile mapping, and referenced Project assets.
 
+## `execution.json`
+
+`execution.json` is the versioned mutable execution record. It is reconstructable without SQLite and remains separate from generation-significant data in `manifest.json`.
+
+The v1 shape is:
+
+```json
+{
+  "format_version": 1,
+  "run_id": "...",
+  "status": "running",
+  "started_at": "...",
+  "completed_at": null,
+  "current_job_ordinal": 1,
+  "error": null,
+  "diagnostics": [],
+  "jobs": [
+    {
+      "job_id": "...",
+      "ordinal": 1,
+      "status": "submitted",
+      "client_id": "...",
+      "submission_disposition": "accepted",
+      "submission_http_status": 200,
+      "submission_response": {"prompt_id": "..."},
+      "prompt_id": "...",
+      "started_at": "...",
+      "completed_at": null,
+      "error": null,
+      "diagnostics": [],
+      "history_status": null,
+      "results": []
+    }
+  ]
+}
+```
+
+Legal Run transitions are `created -> running -> succeeded | failed | blocked`; explicit reconciliation may move `blocked -> running | succeeded | failed`. Legal Job transitions are `pending -> preparing -> submitting`, then `submitting -> submitted | submission_unknown | failed`, and `submitted -> succeeded | failed`. Preparation may also transition directly to `failed`, while explicit reconciliation may move `submission_unknown -> submitted | failed`. `succeeded` and `failed` states are not silently rewritten.
+
+`submitting` means the one submission attempt has started. After a restart it must not be treated as never submitted. `submission_unknown` stops automatic progression and preserves correlation data; a future explicit reconciliation may prove that it was accepted or failed, but the executor never retries it automatically. `submitted` carries a known prompt ID; if bounded history reconciliation cannot prove a terminal outcome, the Job remains submitted and the Run becomes blocked.
+
+Every update writes canonical JSON to a unique sibling temporary file, fsyncs it, atomically replaces `execution.json`, and fsyncs the Run directory. A failed temporary write leaves the prior complete state file in place. Loading execution state verifies every recorded Result's existence, size, and SHA-256. Saving validates state transitions and append-only Result metadata, but reads and hashes only newly appended Result files.
+
 ## Outputs
 
 Application-owned outputs live under:
@@ -177,7 +221,9 @@ A simple initial naming scheme is:
 000002-01.png
 ```
 
-The first number is the Job ordinal and the second is the artifact ordinal within that Job. The manifest records the producing ComfyUI node ID and remote output metadata, including filename, subfolder, and type.
+The first number is the Job ordinal and the second is the artifact ordinal within that Job. `execution.json` records each Result's producing ComfyUI node ID, output field name, remote filename/subfolder/type, local path, content type, byte size, and SHA-256.
+
+Remote paths never control local placement. batchcraft constructs the local basename from persisted ordinals and accepts only a short alphanumeric extension from the remote basename or content type, falling back to `.bin`. Result bytes are atomically replaced into the real, non-symlinked `outputs/` directory and verified when execution state is loaded.
 
 The manifest carries the meaningful provenance, so filenames do not need to encode the entire prompt and parameter set.
 

@@ -125,6 +125,14 @@ Production code under `backend/src/batchcraft/comfyui/` contains pure Workflow P
 
 This boundary intentionally excludes scheduling, retries, mutable execution-state persistence, Run filesystem mutation, FastAPI, React, and SQLite. Ordinary tests use mocked transports and do not require a live GPU host.
 
+### Phase 1.95: sequential Run execution
+
+Completed.
+
+Production code under `backend/src/batchcraft/execution/` persists versioned mutable execution state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory.
+
+This layer excludes global Run selection, concurrent execution, priorities, retries, automatic recovery, SQLite, FastAPI, React, and result review UI. Normal tests use a deterministic ComfyUI fake.
+
 ### Phase 2: first vertical application slice
 
 After the pure compiler foundation is established, build the smallest application path that proves the architecture end to end:
@@ -210,6 +218,12 @@ COMFYUI_BASE_URL="http://<windows-host>:8188" uv run python tests/live/comfyui_v
 ```
 
 It defaults to the ignored root `example.png` and the known spike workflow. Override them with `COMFYUI_LIVE_IMAGE` and `COMFYUI_LIVE_WORKFLOW` when needed. Pytest does not collect this script.
+
+The sequential executor has a separate two-Job verification. It publishes a local Run under ignored `outputs/`, executes both Jobs at queue depth one, and verifies persisted Results and unchanged provenance:
+
+```bash
+COMFYUI_BASE_URL="http://<windows-host>:8188" uv run python tests/live/execution_verify.py
+```
 
 They should:
 
