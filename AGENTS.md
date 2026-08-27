@@ -31,9 +31,9 @@ Use these terms consistently:
 - **Reference Asset** — an input file, initially an image.
 - **Reference Collection** — reusable grouping of Reference Assets.
 - **Batch** — mutable experiment definition.
-- **Run** — immutable compiled snapshot of a Batch.
+- **Run** — execution whose compiled plan and provenance freeze at successful Run creation.
 - **Job** — one completely resolved ComfyUI execution.
-- **Result** — one or more artifacts produced by a Job.
+- **Result** — one artifact produced by a Job. A Job may produce multiple Results.
 
 Do not casually introduce synonyms for these domain concepts.
 
@@ -42,19 +42,23 @@ Do not casually introduce synonyms for these domain concepts.
 These are architectural requirements, not implementation suggestions:
 
 1. A Batch is mutable.
-2. A Run is immutable after creation.
-3. A Job is fully resolved before it reaches the scheduler.
-4. No unresolved `{{placeholder}}` may be submitted to ComfyUI.
-5. Random or sampled values, if supported later, must be resolved and stored before execution.
-6. Editing a Prompt Template, Variable List, Reference Collection, Workflow Profile, or Batch must never alter an existing Run.
-7. Rerunning creates a new Run rather than modifying the original.
-8. Completed Run artifacts must contain enough information to understand and re-import the Run without SQLite.
-9. SQLite is an application index/state store, not the sole historical source of truth.
-10. batchcraft owns the logical queue; core behavior must not rely on self-requeueing ComfyUI nodes.
-11. The frontend must not communicate directly with ComfyUI. ComfyUI integration belongs behind the backend client/service boundary.
-12. ComfyUI remains the workflow editor. Do not build a competing node editor into batchcraft.
-13. Preview and execution must use the same compiler/resolver logic.
-14. Completed Run directories must never be silently rewritten.
+2. A Run plan and its provenance freeze when successful Run creation completes, before scheduling begins.
+3. Execution state is mutable while a Run executes. Status, timestamps, ComfyUI IDs, errors, and Results may advance without changing the frozen plan.
+4. A Job is fully resolved before it reaches the scheduler.
+5. No unresolved `{{placeholder}}` may be submitted to ComfyUI.
+6. Random or sampled values, if supported later, must be resolved and stored before execution.
+7. Editing a Prompt Template, Variable List, Reference Collection, Workflow Profile, or Batch must never alter an existing Run plan.
+8. Rerunning creates a new Run rather than modifying the original.
+9. Completed Run artifacts must contain enough information to understand and re-index the Run without SQLite.
+10. SQLite is an application index/state store, not the sole historical source of truth.
+11. The filesystem Run must be published before SQLite indexes it. A complete filesystem Run must be recoverable when SQLite state is missing.
+12. batchcraft owns the logical queue; core behavior must not rely on self-requeueing ComfyUI nodes.
+13. An ambiguous ComfyUI submission failure must be reconciled rather than blindly retried.
+14. The frontend must not communicate directly with ComfyUI. ComfyUI integration belongs behind the backend client/service boundary.
+15. ComfyUI remains the workflow editor. Do not build a competing node editor into batchcraft.
+16. Preview and execution must use the same compiler/resolver logic.
+17. Completed Run directories must never be silently rewritten.
+18. Reproducibility means preserving a replayable execution specification and provenance, not guaranteeing byte-identical pixels.
 
 If a requested implementation conflicts with an invariant, stop and explain the conflict before proceeding.
 
@@ -78,6 +82,7 @@ Treat this as the current architecture unless an ADR explicitly changes it.
 - Keep domain logic independent of FastAPI, React, SQLite, and ComfyUI wherever practical.
 - Isolate ComfyUI-specific node mutation and protocol behavior inside the ComfyUI integration layer.
 - Use deterministic behavior for prompt resolution, Batch compilation, Job ordering, and output naming.
+- Keep stable internal IDs and filesystem identities separate from editable display names.
 - Validate at boundaries and fail with actionable errors rather than silently guessing.
 - Preserve local-first operation. Do not introduce required cloud services without an explicit architectural decision.
 - Avoid premature plugin systems, generic workflow engines, distributed queues, authentication systems, or multi-user architecture.

@@ -98,7 +98,7 @@ After the spike succeeds, build the smallest application path that proves the ar
 4. bind one or more Variable Lists;
 5. select reference images;
 6. preview the resolved Job count;
-7. compile an immutable Run;
+7. create a Run with frozen plan and provenance;
 8. execute Jobs through the batchcraft scheduler;
 9. persist manifests and outputs;
 10. display a basic Results Viewer.
@@ -192,16 +192,24 @@ High-value unit-test areas include:
 - undefined bindings;
 - deterministic value ordering;
 - Cartesian expansion;
+- complete dimension ordering with the rightmost dimension varying fastest;
 - fixed/all variable binding modes;
 - Job count calculations;
 - deterministic Job ordinals;
 - seed policies;
 - Run immutability;
+- separation of frozen Run provenance from mutable execution state;
+- filesystem publication before SQLite indexing;
+- re-indexing complete filesystem Runs;
 - manifest round-tripping;
 - rerun creation;
 - Workflow Profile input mapping.
 
 A preview and an actual Run must be produced by the same underlying compiler behavior. Tests should protect this invariant.
+
+Tests for exact rerun must verify preserved generation inputs and ordering alongside newly allocated Run/Job IDs, timestamps, prompt IDs, and output namespace.
+
+Tests for ComfyUI submission must treat ambiguous outcomes separately from definite rejection. Automatic retries must not turn an uncertain accepted submission into duplicate work.
 
 ## Durable Format Changes
 

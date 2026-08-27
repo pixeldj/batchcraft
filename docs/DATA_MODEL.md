@@ -2,7 +2,7 @@
 
 ## Goal
 
-The data model must support reusable prompts, reusable variable values, reference libraries, reusable ComfyUI workflow mappings, editable experiment definitions, immutable executions, reproducible Jobs, result review, and filesystem-based Run recovery.
+The data model must support reusable prompts, reusable variable values, reference libraries, reusable ComfyUI workflow mappings, editable experiment definitions, frozen Run plans, advancing execution state, reproducible Jobs, result review, and filesystem-based Run recovery.
 
 This document describes domain semantics rather than a final SQL schema.
 
@@ -41,11 +41,11 @@ Suggested fields:
 ```text
 id
 name
-slug
 description
 created_at
 updated_at
 project_path
+filesystem_key
 ```
 
 ## PromptTemplate
@@ -140,7 +140,7 @@ Suggested fields:
 
 ```text
 id
-project_id or library_scope
+project_id
 type
 original_filename
 stored_path
@@ -153,7 +153,11 @@ tags
 notes
 ```
 
-A content hash is strongly recommended for identity, deduplication, and manifest provenance.
+A content hash is required for content-addressed storage, identity, deduplication, and manifest provenance.
+
+Reference Asset bytes are immutable once stored in the Project. The content hash identifies the stored content, while the asset ID provides stable domain identity. Importing identical bytes may reuse the existing content-addressed file.
+
+Deleting an asset from a collection or hiding it from the active library does not remove stored bytes referenced by a historical Run. Physical deletion is allowed only when no historical Run references the content. Missing SQLite state is never evidence that deletion is safe; the filesystem Run history must remain part of the reference check.
 
 ## ReferenceCollection
 
@@ -184,6 +188,7 @@ description
 workflow_version
 workflow_json
 workflow_hash
+mapping_definition
 created_at
 updated_at
 ```
@@ -210,7 +215,7 @@ Exposed inputs may conceptually resemble:
 }
 ```
 
-Workflow Profiles should be versioned or snapshotted when used by a Run.
+Workflow Profiles should be versioned or snapshotted when used by a Run. Each Run retains the imported base workflow snapshot and a separate mapping snapshot.
 
 ## Batch
 
@@ -222,6 +227,7 @@ Suggested fields:
 id
 project_id
 name
+filesystem_key
 description
 workflow_profile_id
 created_at
@@ -230,7 +236,7 @@ updated_at
 
 A Batch also owns configuration such as:
 
-- selected PromptVersions;
+- one selected PromptVersion in v1;
 - VariableBindings;
 - reference bindings;
 - seed policy;
@@ -262,7 +268,7 @@ fixed
 
 ## Run
 
-An immutable execution snapshot.
+An execution with immutable plan and provenance after successful Run creation.
 
 Suggested fields:
 
@@ -289,7 +295,9 @@ The Run snapshot must include effective copies of:
 - output naming configuration;
 - compiled Job list.
 
-Once Run creation succeeds, these effective values are immutable.
+Once Run creation succeeds, these effective values and the compiled Job plan are immutable. This freeze occurs before scheduling begins.
+
+Run execution state is separate from immutable provenance. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance while execution proceeds.
 
 ## Job
 
@@ -320,6 +328,8 @@ A Job additionally records:
 - expected output prefix;
 - workflow hash.
 
+The compiler orders Job dimensions as PromptVersion, prompt variables, reference bindings, seeds, then parameter sweeps. The rightmost dimension varies fastest, and each dimension preserves user selection order.
+
 A Job must never contain unresolved prompt variables.
 
 ## Result
@@ -336,10 +346,15 @@ filename
 relative_path
 sha256
 mime_type
+artifact_ordinal
+producing_node_id
+remote_filename
+remote_subfolder
+remote_type
 created_at
 ```
 
-A Job may produce multiple Results.
+A Job may produce multiple Results. Local filenames use the Job ordinal and artifact ordinal, for example `000001-01.png`. ComfyUI's remote filename, subfolder, and type remain metadata rather than local filesystem authority.
 
 ## Ratings and Review Metadata
 
@@ -361,6 +376,8 @@ reviewed_at
 
 Use stable UUID-style internal IDs.
 
+Editable display names are not identities. Entities that own filesystem locations also use stable, path-safe filesystem keys. Renaming a display name does not change the filesystem key, move historical Runs, or alter stored references.
+
 Where practical, store content hashes for:
 
 - reference assets;
@@ -373,6 +390,8 @@ Hashes provide stronger provenance than filenames.
 
 Mutable library entities may be referenced while editing a Batch.
 
-When creating a Run, batchcraft must snapshot the effective content needed for reproducibility.
+When creating a Run, batchcraft must snapshot the effective content needed for reproducibility. For Reference Assets, the Run snapshots stable asset identities and hashes while relying on the Project's immutable content-addressed asset store by default.
 
 Historical interpretation must not depend on the current state of a mutable library item.
+
+Reproducibility means preserving a replayable execution specification and provenance. It does not promise byte-identical generated pixels across changes to ComfyUI, models, custom nodes, drivers, or GPU execution.

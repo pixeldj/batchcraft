@@ -27,8 +27,7 @@ Users create and debug workflows in ComfyUI. batchcraft imports an API-format wo
 
 Typical exposed inputs include:
 
-- positive prompt;
-- negative prompt;
+- one prompt input in v1;
 - reference image(s);
 - seed;
 - steps;
@@ -41,21 +40,25 @@ A Batch is resolved into explicit Jobs before any Job is submitted to ComfyUI.
 
 No unresolved prompt variables, random choices, or implicit iteration should remain in a submitted Job.
 
-### Runs are immutable
+### Run plans are immutable
 
 A **Batch** is an editable experiment definition.
 
-A **Run** is an immutable snapshot of a Batch at the moment execution begins.
+A **Run** is created from a compiled Batch. Its plan and provenance freeze when successful Run creation completes, before scheduling begins.
 
-Changing a prompt, reference collection, variable list, workflow profile, or parameter after a Run begins must not alter that Run.
+Execution state remains mutable while the Run executes. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance without changing the frozen plan.
+
+Changing a prompt, reference collection, Variable List, Workflow Profile, or parameter after Run creation must not alter that Run plan.
 
 Rerunning an experiment creates a new Run.
 
-### Completed Runs are portable
+### Completed Runs are recoverable
 
-A completed Run must remain understandable and re-importable from its filesystem artifacts even if the batchcraft SQLite database is lost.
+A completed Run must remain understandable and re-indexable from its filesystem artifacts even if the batchcraft SQLite database is lost.
 
 SQLite is an index and application state store, not the only source of historical truth.
+
+Reference Assets live in the Project's immutable content-addressed asset store. A Run records the selected asset identities and hashes. Exact replay requires those assets to remain in the Project unless a later self-contained export copies them into the exported Run.
 
 ### batchcraft owns orchestration
 
@@ -63,7 +66,7 @@ batchcraft owns the logical queue and decides when work is submitted to ComfyUI.
 
 Core batch behavior should not depend on self-requeueing ComfyUI nodes.
 
-This lets users safely edit future work while an immutable Run continues in the background of the application.
+This lets users safely edit future work while a frozen Run plan continues executing in the background of the application.
 
 ## Core User Concepts
 
@@ -126,12 +129,14 @@ An input file, initially an image, that can be supplied to an exposed workflow i
 
 Reference Assets may be grouped into reusable Reference Collections.
 
+Once stored, asset bytes are immutable and identified by a content hash. Removing an asset from a collection or library view does not physically remove bytes still referenced by a historical Run.
+
 ### Batch
 
 An editable experiment definition combining:
 
 - a Workflow Profile;
-- one or more Prompt Templates;
+- one PromptVersion in v1;
 - Variable bindings;
 - Reference Assets or Collections;
 - seed policy;
@@ -142,9 +147,9 @@ A Batch can be previewed before execution.
 
 ### Run
 
-An immutable compiled snapshot of a Batch.
+An execution whose compiled plan and provenance freeze at successful Run creation.
 
-A Run records exactly what was selected and contains an explicit list of Jobs.
+A Run records exactly what was selected and contains an explicit list of Jobs. The Job plan is immutable after successful Run creation; execution state advances separately.
 
 ### Job
 
@@ -163,7 +168,7 @@ Steps:     20
 
 ### Result
 
-One or more output artifacts associated with a Job.
+A single output artifact associated with a Job. A Job may produce multiple Results.
 
 Initially, Results are primarily generated images downloaded from ComfyUI to the batchcraft project directory.
 
@@ -222,7 +227,7 @@ The Results Viewer is a first-class product feature.
 
 ## Reruns
 
-A Run may be rerun from batchcraft or re-imported from its saved manifest.
+A Run may be rerun from batchcraft or re-imported from its authoritative JSON manifest and related Run/Project artifacts.
 
 A rerun creates a new incremented Run directory and never overwrites the original.
 
@@ -234,7 +239,13 @@ Potential rerun scopes include:
 - selected Jobs with new seeds;
 - selected Jobs with modified parameters.
 
+Exact replay preserves generation inputs, the base workflow and Workflow Profile mapping, references, variables, parameters, seeds, and Job ordering. It allocates new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
+
 Only exact Run replay is required initially.
+
+## Reproducibility Scope
+
+batchcraft preserves a replayable execution specification and the provenance needed to understand what ran. It does not guarantee byte-identical generated pixels after ComfyUI, models, custom nodes, drivers, or GPU behavior change.
 
 ## Initial Vertical Slice
 
@@ -247,7 +258,7 @@ The first useful version should prove this complete path:
 5. Bind one Variable List.
 6. Select multiple reference images.
 7. Preview the compiled Job matrix.
-8. Start an immutable Run.
+8. Create a Run with a frozen plan.
 9. Execute Jobs through the batchcraft-owned queue.
 10. Download outputs to the Mac.
 11. Save JSON and CSV manifests.

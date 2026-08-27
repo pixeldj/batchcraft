@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Batch Compiler converts an editable Batch definition into an immutable Run containing explicit Jobs.
+The Batch Compiler converts an editable Batch definition into a Run with a frozen plan containing explicit Jobs.
 
 It is the core reproducibility boundary in batchcraft.
 
@@ -11,7 +11,7 @@ It is the core reproducibility boundary in batchcraft.
 A Batch may provide:
 
 - Workflow Profile;
-- one or more PromptVersions;
+- one PromptVersion in v1;
 - VariableBindings;
 - reference bindings;
 - seed policy;
@@ -21,7 +21,7 @@ A Batch may provide:
 ## Compilation Pipeline
 
 ```text
-Prompt Template(s)
+PromptVersion
        +
 Variable Bindings
        |
@@ -42,7 +42,7 @@ Expansion
 Explicit Job list
        |
        v
-Immutable Run snapshot
+Run with frozen plan
 ```
 
 ## Fundamental Rule
@@ -59,6 +59,8 @@ A Job must not rely on:
 - a self-requeueing ComfyUI node.
 
 Anything necessary to understand what should execute must be resolved or snapshotted at Run creation.
+
+v1 maps its single PromptVersion to one friendly workflow prompt input. Workflows with multiple exposed prompt or text slots are deferred.
 
 ## Example
 
@@ -98,7 +100,17 @@ Compilation produces six Jobs:
 006 bird  ref02  123456
 ```
 
-The ordering must be documented and tested.
+## Deterministic Job Ordering
+
+The compiler applies dimensions in this order:
+
+```text
+PromptVersion -> prompt variables -> reference bindings -> seeds -> parameter sweeps
+```
+
+The rightmost dimension varies fastest. User selection order is preserved within every dimension. Although v1 permits only one PromptVersion, it remains the first dimension so later support cannot silently change existing ordering semantics.
+
+The example above therefore varies the reference dimension fastest. This ordering must be covered by preview, compilation, manifest round-trip, and rerun tests.
 
 ## Job Count
 
@@ -186,16 +198,22 @@ Creating a Run should conceptually:
 4. expand references, seeds, and parameter dimensions;
 5. assign deterministic Job ordinals and IDs;
 6. determine output naming;
-7. write initial Run/manifest artifacts;
+7. publish the initial Run/manifest artifacts;
 8. persist Run and Job index state;
 9. mark the Run ready for scheduling.
 
 A partially compiled Run should not be presented as a valid executable Run.
+
+Successful Run creation completes after the filesystem Run has been published and SQLite has indexed it. At that point the plan and provenance freeze, before scheduling begins. Execution status, timestamps, ComfyUI IDs, errors, and Results may then advance separately.
 
 ## Reproducibility
 
 The compiler should be a pure or near-pure domain service wherever possible.
 
 Given the same immutable input snapshot, it should produce the same ordered Job plan.
+
+Exact rerun preserves generation inputs, base workflow, Workflow Profile mapping, references, variables, parameters, seeds, and ordering. It allocates new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
+
+This is specification reproducibility, not a guarantee of byte-identical generated pixels across changes in the execution environment.
 
 This logic should receive strong unit-test coverage because it is central to batchcraft's reliability.

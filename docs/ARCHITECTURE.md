@@ -88,14 +88,16 @@ batchcraft should use normal ComfyUI API workflows rather than custom batchcraft
 ## Core Invariants
 
 1. Batch is mutable.
-2. Run is immutable.
-3. Job is fully resolved.
-4. No unresolved prompt placeholder may reach ComfyUI.
-5. A Run must be reconstructable from its saved artifacts.
-6. Editing library content never changes a Run already created.
-7. The logical queue belongs to batchcraft.
-8. ComfyUI integration is isolated behind a client/service boundary.
-9. Completed Run directories are never silently rewritten.
+2. A Run plan and its provenance freeze when successful Run creation completes, before scheduling begins.
+3. Run execution state may advance without changing its frozen plan.
+4. Job is fully resolved.
+5. No unresolved prompt placeholder may reach ComfyUI.
+6. A Run must be reconstructable and re-indexable from its saved artifacts.
+7. Editing library content never changes a Run plan already created.
+8. The logical queue belongs to batchcraft.
+9. ComfyUI integration is isolated behind a client/service boundary.
+10. Ambiguous ComfyUI submission failures are reconciled rather than blindly retried.
+11. Completed Run directories are never silently rewritten.
 
 ## Backend Responsibilities
 
@@ -153,7 +155,7 @@ Benefits:
 
 - pause future submissions;
 - cancel not-yet-submitted Jobs;
-- isolate immutable Runs from UI edits;
+- isolate frozen Run plans from UI edits;
 - maintain accurate local state;
 - avoid flooding a remote ComfyUI queue;
 - support future prioritization and multiple Runs.
@@ -168,9 +170,15 @@ A photo of {{animal}} in {{location}}.
 
 Structured Variable Lists provide values.
 
-The Prompt Resolver produces explicit resolved prompt variants before Batch compilation.
+Within Batch compilation, the Prompt Resolver produces explicit resolved prompt variants.
 
-The Batch Compiler then combines resolved prompts with references, seeds, and exposed workflow parameter dimensions.
+The Batch Compiler then combines dimensions in this order:
+
+```text
+PromptVersion -> prompt variables -> reference bindings -> seeds -> parameter sweeps
+```
+
+The rightmost dimension varies fastest. Every dimension preserves user selection order. v1 supports one PromptVersion mapped to one friendly prompt input; multiple workflow prompt or text slots are deferred.
 
 No prompt expansion should occur inside ComfyUI for core batchcraft functionality.
 
@@ -182,6 +190,8 @@ A Workflow Profile stores:
 - friendly exposed input definitions;
 - mappings from those inputs to node IDs and input fields;
 - metadata describing required input types.
+
+A Run stores both the imported base API workflow and a separate snapshot of the Workflow Profile mappings used to compile it. Per-Job resolved friendly values remain in the canonical JSON manifest.
 
 Example mapping:
 
@@ -227,10 +237,23 @@ The filesystem stores durable Run artifacts and binaries:
 - CSV manifest;
 - Run metadata;
 - workflow snapshot;
-- required input snapshots or references;
+- Workflow Profile mapping snapshot;
+- immutable Project asset identities and hashes;
 - downloaded outputs.
 
-For completed Runs, the filesystem artifacts must contain enough information to reconstruct meaningful history without SQLite.
+For completed Runs, the filesystem artifacts must contain enough information to reconstruct meaningful history and rebuild the SQLite index. Exact replay also requires the referenced immutable Project assets unless a self-contained export has copied them.
+
+### Publication order
+
+Run creation publishes a complete filesystem Run before adding its SQLite index records. The scheduler cannot submit Jobs until publication and indexing both succeed.
+
+If SQLite state is lost or incomplete, batchcraft can scan complete filesystem Runs and re-index them. Incomplete staging data is not a valid Run and must not be scheduled or presented as one.
+
+## Identity and Display Names
+
+Domain entities use stable internal IDs. Filesystem paths use stable, path-safe identities that do not change when a user edits a display name.
+
+Display names remain editable labels. Renaming a Project, Batch, Prompt Template, Variable List, Reference Collection, or Workflow Profile must not move historical Run directories or change references stored in existing Runs.
 
 ## Local-First Behavior
 
@@ -260,6 +283,7 @@ The scheduler must distinguish at least:
 
 ```text
 pending
+submission_unknown
 submitted
 running
 succeeded
@@ -267,9 +291,13 @@ failed
 cancelled
 ```
 
+`submission_unknown` means the submission outcome was ambiguous and requires reconciliation. It is not a signal to retry.
+
 A backend restart should eventually be able to reconcile submitted/running Jobs against ComfyUI history.
 
 Graceful recovery may be limited in the first vertical slice, but Run and Job states must be explicit enough to add reconciliation without redesigning the data model.
+
+A timeout or disconnect during submission is not proof that ComfyUI rejected the Job. The scheduler must record the uncertain state and reconcile it through available prompt IDs, queue data, history, and output metadata. It must not blindly submit the Job again.
 
 ## Technology Defaults
 
@@ -289,7 +317,7 @@ Significant decisions should be captured under `docs/adr/`.
 
 Examples:
 
-- why Runs are immutable;
+- why Run plans freeze before scheduling;
 - why prompt expansion occurs in batchcraft;
-- why completed Run artifacts are filesystem-portable;
+- why completed Run history is filesystem-recoverable;
 - why the browser does not communicate directly with ComfyUI.

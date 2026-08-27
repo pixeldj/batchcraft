@@ -101,6 +101,8 @@ The same Variable List may be used by many Prompt Templates.
 
 A Batch binds a placeholder to a list or explicit values.
 
+v1 binds variables for one selected PromptVersion mapped to one friendly workflow prompt input. Multiple prompt or text inputs are deferred.
+
 Example Prompt Template:
 
 ```text
@@ -164,13 +166,15 @@ The UI must show this expansion count before Run creation.
 
 Expansion ordering must be deterministic.
 
-Recommended rule:
+Rule:
 
 1. placeholders are considered in first-occurrence order in the Prompt Template;
 2. values are considered in their stored or selected order;
 3. Cartesian expansion preserves those orders.
 
 This keeps previews, manifests, comparisons, and tests stable.
+
+Prompt-variable expansion is one part of the complete compiler order. The full order is PromptVersion, prompt variables, reference bindings, seeds, then parameter sweeps. The rightmost dimension varies fastest, and all dimensions preserve user selection order.
 
 ## Validation
 
@@ -186,7 +190,7 @@ If an `all` binding has no selected values, compilation fails.
 
 ### Unused bindings
 
-If a Batch defines a binding that no selected Prompt Template references, report a warning rather than a fatal error.
+If a Batch defines a binding that its selected PromptVersion does not reference, report a warning rather than a fatal error.
 
 ### Malformed placeholder
 

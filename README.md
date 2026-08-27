@@ -63,9 +63,9 @@ Project
 Important semantics:
 
 - **Batch**: editable experiment definition.
-- **Run**: immutable snapshot created from a Batch.
+- **Run**: execution with a compiled plan that freezes at successful Run creation, before scheduling.
 - **Job**: one fully resolved ComfyUI execution.
-- **Result**: artifacts produced by a Job and ingested into the local project filesystem.
+- **Result**: one artifact produced by a Job and ingested into the local project filesystem. A Job may produce multiple Results.
 
 ## Prompt Variables
 
@@ -90,26 +90,29 @@ batchcraft does not rely on ComfyUI dynamic-prompt nodes for its core batching b
 
 ## Reproducibility
 
-A Run is compiled before execution into explicit Jobs. A Job must not depend on mutable UI state, implicit folder iteration, unresolved prompt placeholders, or random choices made later inside ComfyUI.
+A Run is compiled before execution into explicit Jobs. Its plan and provenance freeze before scheduling, while execution status, timestamps, ComfyUI IDs, errors, and Results may advance. A Job must not depend on mutable UI state, implicit folder iteration, unresolved prompt placeholders, or random choices made later inside ComfyUI.
 
-Completed Runs are saved in self-describing filesystem artifacts so historical experiments remain understandable even if the local SQLite database is unavailable.
+Completed Runs are saved in self-describing filesystem artifacts so historical experiments remain understandable and can be re-indexed if the local SQLite database is unavailable. Reproducibility preserves the execution specification and provenance; it does not promise byte-identical pixels across changes to ComfyUI, models, custom nodes, or GPU behavior.
 
 A typical Run will eventually resemble:
 
 ```text
 projects/
-└── example-project/
+└── <stable-project-key>/
     └── batches/
-        └── prompt-test/
+        └── <stable-batch-key>/
             └── run-001/
                 ├── run.json
                 ├── manifest.json
                 ├── manifest.csv
                 ├── workflow.json
+                ├── workflow-profile.json
                 └── outputs/
-                    ├── 000001.png
-                    └── 000002.png
+                    ├── 000001-01.png
+                    └── 000002-01.png
 ```
+
+Filesystem keys and internal IDs remain stable when editable Project or Batch display names change.
 
 ## Documentation
 
