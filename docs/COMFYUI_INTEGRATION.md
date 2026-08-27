@@ -97,9 +97,26 @@ The returned ComfyUI prompt ID must be stored on the Job.
 
 ### Ambiguous submission outcomes
 
-A timeout, disconnect, or malformed response during submission does not prove that ComfyUI rejected the workflow. The integration layer must report an ambiguous outcome to the scheduler and preserve all available request and correlation data.
+A timeout, disconnect, HTTP 5xx response, or successful response without a valid prompt ID does not prove that ComfyUI rejected the workflow. The integration layer must report an ambiguous outcome to the scheduler and preserve all available request and correlation data.
+
+A direct HTTP 4xx response from ComfyUI is a definite rejection. Its response body is diagnostic and need not be valid JSON for that classification.
 
 The scheduler must reconcile an ambiguous outcome through available prompt IDs, queue state, history, and output metadata. It must not blindly retry the submission. A new submission is allowed only after reconciliation shows that ComfyUI did not accept the prior attempt or after explicit user action creates a new attempt under defined semantics.
+
+## Production Adapter
+
+The first production integration boundary lives under `backend/src/batchcraft/comfyui/`. It is deliberately narrower than execution orchestration and provides:
+
+- pure Workflow Profile mapping for prompt, reference image, seed, and output prefix values;
+- async system information and input upload operations;
+- one-shot prompt submission with typed accepted, rejected, and unknown outcomes;
+- prompt-correlated WebSocket event observation;
+- authoritative history reconciliation and discovery of all distinct remote output files;
+- artifact download with preserved remote filename, subfolder, and type metadata.
+
+Workflow preparation deep-copies the imported API workflow and validates the snapshotted node ID, input name, and value type for every required friendly mapping. It rejects unresolved placeholders before transport.
+
+The adapter does not own scheduling, retries, mutable Job state, Run filesystem updates, or result naming. A caller opens the WebSocket before submission, stores the accepted prompt ID in mutable execution state, treats WebSocket terminal events as advisory, and reconciles final status through history.
 
 ## Execution Monitoring
 

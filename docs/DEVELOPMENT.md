@@ -117,6 +117,14 @@ This phase should establish:
 
 Filesystem persistence remains straightforward and specific to the documented batchcraft Run format. No generalized repository or storage abstraction was introduced.
 
+### Phase 1.9: production ComfyUI adapter
+
+Completed.
+
+Production code under `backend/src/batchcraft/comfyui/` contains pure Workflow Profile mapping plus typed async operations for system information, input upload, prompt submission, prompt-correlated WebSocket events, history reconciliation, output discovery, and artifact download.
+
+This boundary intentionally excludes scheduling, retries, mutable execution-state persistence, Run filesystem mutation, FastAPI, React, and SQLite. Ordinary tests use mocked transports and do not require a live GPU host.
+
 ### Phase 2: first vertical application slice
 
 After the pure compiler foundation is established, build the smallest application path that proves the architecture end to end:
@@ -194,6 +202,14 @@ For example, the frontend may display a Job count received from a compiler-previ
 ## ComfyUI Integration Tests
 
 Live ComfyUI tests must be separate from normal unit tests.
+
+The production adapter has one standalone opt-in verification script. From `backend/`, run it only with an explicitly configured host:
+
+```bash
+COMFYUI_BASE_URL="http://<windows-host>:8188" uv run python tests/live/comfyui_verify.py
+```
+
+It defaults to the ignored root `example.png` and the known spike workflow. Override them with `COMFYUI_LIVE_IMAGE` and `COMFYUI_LIVE_WORKFLOW` when needed. Pytest does not collect this script.
 
 They should:
 

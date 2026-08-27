@@ -157,4 +157,6 @@ The pure deterministic Batch compiler is implemented under `backend/`.
 
 The Run filesystem store is implemented under `backend/`, including execution identity, canonical manifests, workflow and Workflow Profile snapshots, content-addressed Project assets, loading, and atomic filesystem publication.
 
-The next production milestone has not yet been selected. Keep the existing compiler and filesystem boundaries separate from SQLite, scheduling, FastAPI, React, and production ComfyUI integration until a focused milestone explicitly introduces them.
+The production ComfyUI adapter is implemented under `backend/`, including pure Workflow Profile mapping and typed async HTTP/WebSocket operations. It does not own scheduling, retries, execution-state persistence, or Run filesystem mutation.
+
+The next production milestone has not yet been selected. Keep the compiler, filesystem store, and ComfyUI adapter separate from SQLite, scheduling, FastAPI, and React until a focused milestone explicitly introduces them.
