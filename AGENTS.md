@@ -155,6 +155,6 @@ The disposable remote ComfyUI spike has succeeded and remains isolated under `sp
 
 The pure deterministic Batch compiler is implemented under `backend/`.
 
-The next production milestone is the Run filesystem store: converting a `CompiledRunPlan` into a durable Run with execution identity, canonical manifests, workflow and Workflow Profile snapshots, content-addressed Project assets, and atomic filesystem publication.
+The Run filesystem store is implemented under `backend/`, including execution identity, canonical manifests, workflow and Workflow Profile snapshots, content-addressed Project assets, loading, and atomic filesystem publication.
 
-Keep filesystem persistence separate from SQLite, scheduling, FastAPI, React, and production ComfyUI integration during this milestone.
+The next production milestone has not yet been selected. Keep the existing compiler and filesystem boundaries separate from SQLite, scheduling, FastAPI, React, and production ComfyUI integration until a focused milestone explicitly introduces them.

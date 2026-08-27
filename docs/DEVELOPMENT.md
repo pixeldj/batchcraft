@@ -100,7 +100,7 @@ The compiler intentionally excludes Run/Job execution identity, timestamps, pers
 
 ### Phase 1.75: Run filesystem store
 
-Current phase.
+Completed.
 
 Convert a `CompiledRunPlan` into a durable Run representation without introducing SQLite, scheduling, FastAPI, React, or production ComfyUI integration.
 
@@ -115,7 +115,7 @@ This phase should establish:
 - staging and atomic Run publication;
 - persisted Run reconstruction without SQLite.
 
-Filesystem persistence should remain straightforward and specific to the documented batchcraft Run format. Do not introduce generalized repository or storage abstractions without a concrete requirement.
+Filesystem persistence remains straightforward and specific to the documented batchcraft Run format. No generalized repository or storage abstraction was introduced.
 
 ### Phase 2: first vertical application slice
 

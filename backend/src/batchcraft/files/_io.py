@@ -1,0 +1,77 @@
+import hashlib
+import json
+import os
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import cast
+
+
+def canonical_json_bytes(value: object) -> bytes:
+    try:
+        serialized = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"value is not JSON serializable: {error}") from error
+    return f"{serialized}\n".encode()
+
+
+def write_bytes(path: Path, content: bytes) -> None:
+    with path.open("xb") as file:
+        file.write(content)
+        file.flush()
+        os.fsync(file.fileno())
+
+
+def write_json(path: Path, value: object) -> None:
+    write_bytes(path, canonical_json_bytes(value))
+
+
+def read_json_object(path: Path) -> dict[str, object]:
+    try:
+        value: object = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read valid JSON from {path}: {error}") from error
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"expected a JSON object in {path}")
+    return cast(dict[str, object], value)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def utc_timestamp(clock: Callable[[], datetime]) -> str:
+    value = clock()
+    if value.tzinfo is None:
+        raise ValueError("clock must return a timezone-aware datetime")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def ensure_directory(path: Path) -> None:
+    if path.is_dir():
+        return
+    ensure_directory(path.parent)
+    try:
+        path.mkdir()
+    except FileExistsError:
+        if not path.is_dir():
+            raise
+    fsync_directory(path.parent)

@@ -2,22 +2,30 @@
 
 ## Purpose
 
-Completed batchcraft Runs must remain understandable and re-indexable without depending on the SQLite database.
+Published batchcraft Runs must remain understandable and re-indexable without depending on the SQLite database.
 
 The filesystem format is therefore part of the product contract, not an implementation detail.
 
 ## Project Layout
 
-A proposed layout is:
+The v1 layout is:
 
 ```text
 projects/
 └── <stable-project-key>/
     ├── project.json
     ├── assets/
+    │   ├── .staging/
     │   └── sha256/
+    │       └── ab/
+    │           └── <full-sha256>/
+    │               ├── asset.json
+    │               └── content
     └── batches/
         └── <stable-batch-key>/
+            ├── batch.json
+            ├── .allocations/
+            ├── .staging/
             ├── run-001/
             │   ├── run.json
             │   ├── manifest.json
@@ -32,7 +40,9 @@ projects/
             └── run-003/
 ```
 
-Project and Batch paths use stable, path-safe filesystem keys rather than editable display names. Renaming a Project or Batch does not move historical paths. Stable internal IDs remain distinct from both filesystem keys and display names.
+Project and Batch paths use stable, path-safe filesystem keys rather than editable display names. Renaming a Project or Batch does not move historical paths. Stable internal IDs remain distinct from both filesystem keys and display names. `project.json` and `batch.json` bind each filesystem key to its stable internal ID so the same path cannot later be reused for another entity.
+
+Names in owner identity files are the labels present when those files were first created. Each Run snapshots the Project and Batch labels current at its own creation time.
 
 The incrementing Run directory identifies each execution within its Batch path. `run.json` and `manifest.json` retain the stable internal Run ID.
 
@@ -48,32 +58,38 @@ run-003
 
 Rerunning never overwrites an existing Run directory.
 
-If concurrent Run creation later requires stronger guarantees, allocation must remain collision-safe while preserving human readability.
+Run creation claims the first available number through an atomic directory creation under `.allocations/`; it does not calculate a maximum and assume the next number is free. The reservation is removed after publication or a safely handled failure. Concurrent local creators therefore receive distinct numbers while preserving human readability.
 
 ## `run.json`
 
 Stores Run-level metadata.
 
-Example concepts:
+The v1 creation schema is:
 
 ```json
 {
   "format_version": 1,
   "run_id": "...",
-  "batch_id": "...",
-  "batch_name": "portrait-prompt-test",
-  "batch_filesystem_key": "batch_...",
   "run_number": 3,
-  "status": "succeeded",
+  "status": "created",
   "created_at": "...",
-  "started_at": "...",
-  "completed_at": "...",
-  "workflow_hash": "...",
+  "project": {
+    "project_id": "...",
+    "filesystem_key": "project_...",
+    "name": "Portrait experiments"
+  },
+  "batch": {
+    "batch_id": "...",
+    "filesystem_key": "batch_...",
+    "name": "Portrait prompt test"
+  },
+  "workflow_sha256": "...",
+  "workflow_profile_sha256": "...",
   "job_count": 48
 }
 ```
 
-The exact schema should be versioned. Run-level status and timestamps are execution state and may advance while the Run executes. The compiled plan and provenance do not change after successful Run creation.
+Run-level status and future execution timestamps are mutable execution state. The v1 filesystem-store milestone writes only the initial `created` state; scheduling and execution-state transitions are deferred. Future state fields may advance without changing the compiled plan and provenance in `manifest.json`.
 
 ## `workflow.json`
 
@@ -81,7 +97,7 @@ Contains the imported base ComfyUI API-format workflow snapshot used to compile 
 
 This is immutable once successful Run creation completes.
 
-A workflow hash should also be recorded in Run and Job metadata.
+The file uses canonical JSON encoding. Its SHA-256 is recorded in Run and Job provenance.
 
 ## `workflow-profile.json`
 
@@ -89,27 +105,28 @@ Contains the Workflow Profile metadata and friendly-input-to-node-input mappings
 
 Together, `workflow.json`, `workflow-profile.json`, and the per-Job values in `manifest.json` describe the concrete workflow mutations required for replay.
 
+The file uses canonical JSON encoding. Its SHA-256 is recorded separately from the base workflow hash.
+
 ## `manifest.json`
 
 The JSON manifest is the canonical machine-readable execution description.
 
-It should contain all information necessary to understand every Job, including:
+The v1 manifest contains:
 
-- Job ID and ordinal;
-- source Prompt Template/version snapshot;
+- Run ID, number, creation timestamp, and Project/Batch identity snapshots;
+- PromptVersion ID and Prompt Template text available from `CompiledRunPlan`;
+- compiler warnings;
+- workflow and Workflow Profile snapshot paths and hashes;
+- stable Job ID and compiler ordinal;
 - resolved variables;
 - resolved final prompt;
-- reference asset identity, path, and hash;
+- Reference Asset ID, original filename, MIME type, byte size, Project-relative content path, creation timestamp, and SHA-256;
 - seed;
-- exposed workflow parameter values;
-- workflow hash;
-- ComfyUI prompt ID when submitted;
-- Job status and timestamps;
-- output file metadata.
+- per-Job workflow and Workflow Profile hashes.
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. It distinguishes immutable Job plan and provenance fields from execution fields that may advance, including status, timestamps, ComfyUI prompt IDs, errors, and Results.
+`manifest.json` is authoritative for exact replay. The v1 creation manifest contains immutable plan and provenance only. Job execution status, ComfyUI prompt IDs, errors, Results, exposed parameter sweeps, and output naming are added only when their owning milestones define a separated, versioned representation.
 
 ## `manifest.csv`
 
@@ -121,27 +138,21 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-Likely columns include:
+The v1 columns are:
 
 ```text
 job_ordinal
 job_id
-status
-prompt_name
-prompt_version
+prompt_version_id
 prompt_template
 resolved_prompt
 resolved_variables_json
-reference_filename
+reference_asset_id
+reference_original_filename
 reference_sha256
 seed
-workflow_profile
-workflow_hash
-comfy_prompt_id
-output_files
-started_at
-completed_at
-error
+workflow_sha256
+workflow_profile_sha256
 ```
 
 For structures that do not map naturally to flat columns, encode compact JSON in a column rather than losing information.
@@ -178,6 +189,10 @@ A Run records the stable identity and hash of each input Reference Asset.
 
 Reference Asset bytes live immutably in the Project's content-addressed asset store. Runs do not copy every input asset into their own directories by default.
 
+`asset.json` has `format_version: 1` and records the asset ID, SHA-256, original filename, detected MIME type or `null`, byte size, Project-relative stored path, and creation timestamp. Bytes are stored without a filename-derived extension at `assets/sha256/<first-two-hash-characters>/<full-sha256>/content`.
+
+Import copies and hashes bytes in one pass through Project-local staging, then publishes the complete content/metadata directory atomically. Identical content reuses the existing asset record and bytes, regardless of the later import filename. The first successful import therefore supplies the retained original-filename and MIME metadata. Different content always has a different content path.
+
 The application must not physically remove asset content while any historical Run references it. Removing an asset from a Reference Collection or active library view does not remove those bytes. Missing or incomplete SQLite state never makes deletion safe; deletion checks must account for published filesystem Runs.
 
 A later self-contained Run export may copy all referenced inputs into an export package. Until then, exact replay requires the immutable Project asset store in addition to the Run directory.
@@ -212,6 +227,12 @@ Exact replay preserves generation inputs, the base workflow, Workflow Profile ma
 
 Modified reruns can be added later.
 
+## Loading and Validation
+
+Loading a published Run requires `run.json`, canonical `manifest.json`, `manifest.csv`, both snapshot files, and `outputs/`. It validates format versions, Run/Project/Batch identity consistency, one-based contiguous Job ordinals, unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata, size, and content hash.
+
+The loader reconstructs the original `CompiledRunPlan`, compiler warnings, execution identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be present in a complete v1 Run, but reformatting its line endings or quoting does not override or invalidate canonical JSON provenance.
+
 ## Schema Versioning
 
 Every durable JSON format should include an explicit schema/format version.
@@ -230,7 +251,7 @@ Future migrations should preserve old Run readability whenever practical.
 
 ## Filesystem Publication and SQLite Indexing
 
-Run creation writes and validates a staging directory, then publishes the complete Run directory on the filesystem before SQLite indexes it. Here, complete means that every required plan and provenance file exists and validates; execution need not have started or reached a terminal state. A Run is not ready for scheduling until both publication and indexing succeed.
+Run creation writes and validates a sibling directory under the Batch's `.staging/`, then renames the complete directory to `run-NNN` on the same filesystem before future SQLite indexing. Here, complete means that every required plan and provenance file exists and validates; execution need not have started or reached a terminal state. A Run is not ready for scheduling until both publication and future indexing succeed.
 
 Filesystem publication must be atomic within the destination filesystem. An incomplete staging directory is not a Run. If SQLite state is missing or incomplete, batchcraft can discover complete published Runs and rebuild their index records from the versioned files.
 

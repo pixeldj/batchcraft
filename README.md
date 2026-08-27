@@ -10,9 +10,9 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 Early production development.
 
-The disposable remote ComfyUI spike and pure deterministic Batch compiler are complete.
+The disposable remote ComfyUI spike, pure deterministic Batch compiler, and Run filesystem store are complete.
 
-The current priority is durable Run filesystem persistence before SQLite, scheduling, production ComfyUI integration, or application frameworks are added.
+The next production milestone has not yet been selected. SQLite, scheduling, production ComfyUI integration, and application frameworks remain outside the implemented filesystem boundary.
 
 ## Initial Deployment Model
 
@@ -145,8 +145,8 @@ The first technical milestone was a disposable ComfyUI integration spike that pr
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-Production code now includes pure prompt-variable resolution and deterministic Batch compilation under `backend/`.
+Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, and atomic durable Run publication under `backend/`.
 
-The next milestone adds durable Run filesystem persistence. Later application slices will connect the compiler and Run store to remote execution, scheduling, local result ingestion, and a minimal Results Viewer.
+Later application slices will connect the compiler and Run store to remote execution, scheduling, local result ingestion, and a minimal Results Viewer.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.
