@@ -8,9 +8,11 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 ## Status
 
-Early design / architecture phase.
+Early production development.
 
-The current priority is to validate the remote ComfyUI integration boundary before scaffolding the full frontend and backend.
+The disposable remote ComfyUI spike and pure deterministic Batch compiler are complete.
+
+The current priority is durable Run filesystem persistence before SQLite, scheduling, production ComfyUI integration, or application frameworks are added.
 
 ## Initial Deployment Model
 
@@ -134,7 +136,7 @@ Coding agents must also read [`AGENTS.md`](AGENTS.md).
 
 The project will be built in narrow vertical slices.
 
-The first technical milestone is a disposable ComfyUI integration spike that proves a Mac-hosted client can:
+The first technical milestone was a disposable ComfyUI integration spike that proved a Mac-hosted client can:
 
 1. reach the remote ComfyUI instance;
 2. upload a reference image;
@@ -143,6 +145,8 @@ The first technical milestone is a disposable ComfyUI integration spike that pro
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-After that boundary is proven, the first application slice will connect prompt-variable resolution, Batch compilation, remote execution, local result storage, and a minimal Results Viewer.
+Production code now includes pure prompt-variable resolution and deterministic Batch compilation under `backend/`.
+
+The next milestone adds durable Run filesystem persistence. Later application slices will connect the compiler and Run store to remote execution, scheduling, local result ingestion, and a minimal Results Viewer.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.

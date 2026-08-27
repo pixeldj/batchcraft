@@ -2,9 +2,19 @@
 
 ## Purpose
 
-The Batch Compiler converts an editable Batch definition into a Run with a frozen plan containing explicit Jobs.
+The Batch Compiler converts an editable Batch definition into the explicit logical Job plan used to create a frozen Run.
 
 It is the core reproducibility boundary in batchcraft.
+
+## Logical Compilation Boundary
+
+The production compiler performs only logical compilation:
+
+```text
+BatchDefinition -> CompiledRunPlan
+```
+
+The plan contains ordered, fully resolved Jobs with one-based ordinals. It does not allocate Run IDs, Job IDs, timestamps, output paths, or other execution identity. A later Run creation service will add those fields without changing the compiled plan.
 
 ## Inputs
 
@@ -158,7 +168,9 @@ Useful for controlled comparisons.
 
 A selected list of seeds becomes another Batch dimension.
 
-Random seed generation may be added later, but random seeds must be generated during Run compilation and stored explicitly before Jobs execute.
+A fixed seed input must contain exactly one seed. An explicit seed list must contain at least one seed, and compilation preserves its order.
+
+Random seed generation may be added later, but randomness must occur outside the pure logical compiler. Any generated seeds must be resolved into explicit ordered seed inputs before logical Job compilation and persisted in the resulting Run provenance before execution begins.
 
 ## Reference Dimensions
 
@@ -188,6 +200,8 @@ Examples:
 
 This should use the same compiler machinery as prompt variables and reference dimensions rather than separate ad hoc loops.
 
+Parameter sweeps are not part of the v1 pure compiler milestone. The implemented v1 expansion order therefore ends with seeds while preserving the documented position for future parameter dimensions.
+
 ## Run Creation
 
 Creating a Run should conceptually:
@@ -196,13 +210,15 @@ Creating a Run should conceptually:
 2. snapshot effective source data;
 3. resolve prompt variants;
 4. expand references, seeds, and parameter dimensions;
-5. assign deterministic Job ordinals and IDs;
+5. assign deterministic Job ordinals;
 6. determine output naming;
 7. publish the initial Run/manifest artifacts;
 8. persist Run and Job index state;
 9. mark the Run ready for scheduling.
 
 A partially compiled Run should not be presented as a valid executable Run.
+
+Run and Job IDs belong to later execution identity, not logical compilation.
 
 Successful Run creation completes after the filesystem Run has been published and SQLite has indexed it. At that point the plan and provenance freeze, before scheduling begins. Execution status, timestamps, ComfyUI IDs, errors, and Results may then advance separately.
 

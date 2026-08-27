@@ -149,19 +149,12 @@ Significant architectural decisions belong in `docs/adr/`.
 
 Implementation plans for larger features may be stored under `docs/plans/`.
 
-## Initial Development Priority
+## Current Development Priority
 
-Before building the full application, prove the remote ComfyUI boundary with a small integration spike running from the Mac to the Windows ComfyUI host.
+The disposable remote ComfyUI spike has succeeded and remains isolated under `spikes/`.
 
-The spike should demonstrate:
+The pure deterministic Batch compiler is implemented under `backend/`.
 
-1. connectivity;
-2. input image upload;
-3. API-workflow mutation through known mappings;
-4. workflow submission;
-5. prompt ID capture;
-6. execution monitoring;
-7. history/result inspection;
-8. output download back to the Mac.
+The next production milestone is the Run filesystem store: converting a `CompiledRunPlan` into a durable Run with execution identity, canonical manifests, workflow and Workflow Profile snapshots, content-addressed Project assets, and atomic filesystem publication.
 
-Do not let the spike grow into the production backend. Its purpose is to validate assumptions and inform the real integration layer.
+Keep filesystem persistence separate from SQLite, scheduling, FastAPI, React, and production ComfyUI integration during this milestone.

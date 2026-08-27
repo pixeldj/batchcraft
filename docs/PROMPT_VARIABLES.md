@@ -142,6 +142,8 @@ Use one selected value.
 
 These two modes are enough for the first implementation.
 
+Selected or fixed values must exist in the bound Variable List. An `all` binding stores its selected values in user order. A `fixed` binding stores exactly one fixed value. Defining the same placeholder binding more than once is a validation error.
+
 ## Multiple Variables
 
 Multiple `all` bindings form a Cartesian product.

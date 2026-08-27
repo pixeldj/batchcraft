@@ -4,7 +4,7 @@
 
 This document defines the expected development workflow for **batchcraft**.
 
-The project is in its initial architecture phase. Commands and directory layouts in this document should be updated as the real frontend/backend scaffolding is created rather than preserved as stale assumptions.
+The project has entered production domain development. The full frontend and backend application remain unscaffolded.
 
 ## Supported Development Environment
 
@@ -34,7 +34,7 @@ Agents should plan before implementing non-trivial features and should avoid bro
 
 ## Repository Shape
 
-The exact source layout is intentionally not frozen before scaffolding, but the expected high-level shape is approximately:
+The production Python package now lives under `backend/`. The remaining source layout is intentionally not frozen before its implementation requires it:
 
 ```text
 batchcraft/
@@ -54,7 +54,7 @@ Do not create directories merely to match this diagram. Add them when a real imp
 
 ### Phase 0: design foundation
 
-Current phase.
+Completed.
 
 Goals:
 
@@ -67,15 +67,17 @@ Goals:
 
 ### Phase 1: ComfyUI integration spike
 
-Create a small disposable client under a location such as:
+Completed. The disposable spike remains under `spikes/comfyui-client/` and must not become production integration code.
+
+The disposable client lives under:
 
 ```text
 spikes/comfyui-client/
 ```
 
-The spike should prove the actual Mac-to-Windows network and ComfyUI API assumptions before production integration code is designed.
+The spike proved the actual Mac-to-Windows network and ComfyUI API assumptions before production integration code was designed.
 
-Acceptance criteria are defined in `docs/COMFYUI_INTEGRATION.md` and should include:
+Acceptance criteria are defined in `docs/COMFYUI_INTEGRATION.md` and included:
 
 - connectivity check;
 - input image upload;
@@ -88,9 +90,36 @@ Acceptance criteria are defined in `docs/COMFYUI_INTEGRATION.md` and should incl
 
 The spike is exploratory code. Do not grow it into the production backend by accident.
 
+### Phase 1.5: pure domain compiler
+
+Completed.
+
+Production code under `backend/` contains immutable domain inputs, logical compiled-plan outputs, validation, prompt resolution, deterministic expansion, and compiler previews.
+
+The compiler intentionally excludes Run/Job execution identity, timestamps, persistence, filesystem operations, frameworks, networking, scheduling, and ComfyUI integration.
+
+### Phase 1.75: Run filesystem store
+
+Current phase.
+
+Convert a `CompiledRunPlan` into a durable Run representation without introducing SQLite, scheduling, FastAPI, React, or production ComfyUI integration.
+
+This phase should establish:
+
+- Run and Job execution identity;
+- stable internal filesystem identities independent of editable display names;
+- canonical `manifest.json`;
+- secondary `manifest.csv`;
+- base workflow and Workflow Profile snapshots;
+- immutable content-addressed Project assets;
+- staging and atomic Run publication;
+- persisted Run reconstruction without SQLite.
+
+Filesystem persistence should remain straightforward and specific to the documented batchcraft Run format. Do not introduce generalized repository or storage abstractions without a concrete requirement.
+
 ### Phase 2: first vertical application slice
 
-After the spike succeeds, build the smallest application path that proves the architecture end to end:
+After the pure compiler foundation is established, build the smallest application path that proves the architecture end to end:
 
 1. connect to ComfyUI;
 2. select/import a known Workflow Profile;
@@ -118,18 +147,16 @@ General expectations:
 - use clear exceptions/errors with actionable context;
 - do not hide network or filesystem failures.
 
-The exact formatter, linter, type checker, and test runner should be selected when backend scaffolding is created and then documented here.
+The production Python package uses pytest, Ruff, and mypy. From `backend/`, run:
 
-Likely categories include:
-
-```text
-format/lint
-static type checking
-unit tests
-integration tests
+```bash
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
 ```
 
-Do not introduce multiple overlapping tools for the same purpose without a concrete benefit.
+pytest covers behavior, Ruff owns formatting and linting, and mypy checks the typed domain boundary. Add another tool only when it covers a distinct need.
 
 ## Frontend Conventions
 
