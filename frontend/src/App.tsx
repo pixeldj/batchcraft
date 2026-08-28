@@ -33,6 +33,7 @@ interface PreviewSnapshot {
   request: BatchRequest;
   response: PreviewResponse;
   formRevision: number;
+  singleUse: boolean;
 }
 
 interface RestoredRunSeed {
@@ -261,7 +262,12 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       }
       const nextPreview = await api.previewBatch(request);
       if (requestedRevision === formRevision.current) {
-        setPreviewSnapshot({ request, response: nextPreview, formRevision: requestedRevision });
+        setPreviewSnapshot({
+          request,
+          response: nextPreview,
+          formRevision: requestedRevision,
+          singleUse: form.seedMode === "random",
+        });
         setPreviewRunAssociation(null);
       }
     } catch (caught) {
@@ -313,7 +319,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           },
         }));
       }
-      if (snapshot.formRevision === formRevision.current) {
+      if (snapshot.singleUse) {
+        setPreviewSnapshot((current) => current === snapshot ? null : current);
+        setPreviewRunAssociation(null);
+      } else if (snapshot.formRevision === formRevision.current) {
         setPreviewRunAssociation({
           runId: nextRun.run_id,
           runNumber: nextRun.run_number,

@@ -21,11 +21,14 @@ export interface BatchFormState {
   promptText: string;
   variableBindings: VariableBindingForm[];
   referenceAssetIds: string[];
-  seedMode: "fixed" | "explicit";
+  seedMode: "fixed" | "explicit" | "random";
   seedValues: string;
+  randomSeedCount: string;
   workflowJson: string;
   workflowProfileJson: string;
 }
+
+export const MAX_RANDOM_SEED_COUNT = 100;
 
 let nextKey = 1;
 
@@ -62,6 +65,7 @@ export function initialBatchForm(): BatchFormState {
     referenceAssetIds: [],
     seedMode: "fixed",
     seedValues: "1",
+    randomSeedCount: "1",
     workflowJson: "{}",
     workflowProfileJson: JSON.stringify(
       {
@@ -96,19 +100,9 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
     throw new FormBuildError("references", "Select at least one Project Reference Asset.");
   }
 
-  const seeds = splitSeeds(form.seedValues).map((value) => {
-    if (!/^-?\d+$/.test(value)) {
-      throw new FormBuildError("seeds", `Seed ${JSON.stringify(value)} is not an integer.`);
-    }
-    const seed = Number(value);
-    if (!Number.isSafeInteger(seed)) {
-      throw new FormBuildError("seeds", `Seed ${JSON.stringify(value)} is outside the safe integer range.`);
-    }
-    return seed;
-  });
-  if (seeds.length === 0) {
-    throw new FormBuildError("seeds", "Enter at least one seed.");
-  }
+  const seedInput = form.seedMode === "random"
+    ? { mode: "explicit" as const, values: generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)) }
+    : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
 
   return {
     project: {
@@ -136,7 +130,7 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
       fixed_value: binding.mode === "fixed" ? binding.fixedValue : null,
     })),
     references: references.map((assetId) => ({ asset_id: assetId })),
-    seeds: { mode: form.seedMode, values: seeds },
+    seeds: seedInput,
     workflow: parseJsonObject(form.workflowJson, "workflow", "Workflow"),
     workflow_profile: parseJsonObject(
       form.workflowProfileJson,
@@ -144,6 +138,51 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
       "Workflow Profile",
     ),
   };
+}
+
+export function generateRandomSeeds(
+  count: number,
+  cryptoSource: Pick<Crypto, "getRandomValues"> = globalThis.crypto,
+): number[] {
+  const seeds = new Set<number>();
+  const value = new Uint32Array(1);
+  while (seeds.size < count) {
+    cryptoSource.getRandomValues(value);
+    seeds.add(value[0]);
+  }
+  return [...seeds];
+}
+
+function parseRandomSeedCount(value: string): number {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new FormBuildError("seeds", "Random seed count must be a whole number.");
+  }
+  const count = Number(trimmed);
+  if (count < 1 || count > MAX_RANDOM_SEED_COUNT) {
+    throw new FormBuildError(
+      "seeds",
+      `Random seed count must be between 1 and ${MAX_RANDOM_SEED_COUNT}.`,
+    );
+  }
+  return count;
+}
+
+function parseSeedValues(value: string): number[] {
+  const seeds = splitSeeds(value).map((item) => {
+    if (!/^-?\d+$/.test(item)) {
+      throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is not an integer.`);
+    }
+    const seed = Number(item);
+    if (!Number.isSafeInteger(seed)) {
+      throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is outside the safe integer range.`);
+    }
+    return seed;
+  });
+  if (seeds.length === 0) {
+    throw new FormBuildError("seeds", "Enter at least one seed.");
+  }
+  return seeds;
 }
 
 function splitListValues(value: string): string[] {

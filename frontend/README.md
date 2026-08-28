@@ -6,8 +6,9 @@ state, viewing the current Run's Results, and reviewing accumulated Batch Result
 working session. It communicates only with the batchcraft FastAPI application.
 
 The current tab stores a versioned working draft, current Run ID, and ordered unique session Run IDs
-in `sessionStorage`. Version 2 safely migrates version-1 state by retaining its current Run ID. A
-refresh restores the form, then reloads Run, execution, and Result data from FastAPI. Result metadata
+in `sessionStorage`. Version 3 safely migrates version-1 and version-2 state, retaining existing Run
+IDs and defaulting the new Random seed count. A refresh restores the form, then reloads Run,
+execution, and Result data from FastAPI. Result metadata
 and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
 the restored draft again. Closing the tab or browser session may remove this working state.
 
@@ -16,11 +17,18 @@ a restored selection. The collapsed summary shows only the selected count. Selec
 existing selection order and appends unselected Project assets in deterministic display order; Select
 None clears the selection. Both operations invalidate Preview.
 
-Generated image cards use contained preview frames, so portrait, landscape, and square Results remain
-fully visible. The current Results section shows the active Run. The separate Batch Results section
+Generated image cards render at their intrinsic aspect ratio without a fixed preview frame. Reference
+Asset cards retain a uniform contained thumbnail frame, so neither generated nor reference images are
+cropped. The current Results section shows the active Run. The separate Batch Results section
 accumulates Runs for the current stable Project/Batch identity in session order and restores them once
 from FastAPI after refresh. Changing the Project or Batch ID/filesystem key resets that gallery;
 prompt, reference, seed, and display-name edits retain it.
+
+The seed editor supports Fixed, Explicit list, and frontend-only Random intent. Random accepts a count
+from 1 through 100 and uses Web Crypto to materialize unsigned 32-bit values into the backend's
+explicit seed contract when Preview runs. Run creation reuses that exact inspected request. A
+successful Random Run creation consumes its Preview; a failed creation retains it for retry. Fixed
+and Explicit Previews remain reusable for repeated Runs.
 
 ## Requirements
 

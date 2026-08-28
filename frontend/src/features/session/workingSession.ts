@@ -6,7 +6,7 @@ import {
 } from "../batch/form";
 
 export const WORKING_SESSION_KEY = "batchcraft.working-session";
-const WORKING_SESSION_VERSION = 2;
+const WORKING_SESSION_VERSION = 3;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
 
@@ -14,14 +14,25 @@ interface StoredBatchForm extends Omit<BatchFormState, "variableBindings"> {
   variableBindings: StoredVariableBinding[];
 }
 
+type LegacyStoredBatchForm = Omit<StoredBatchForm, "randomSeedCount" | "seedMode"> & {
+  seedMode: "fixed" | "explicit";
+};
+
 interface WorkingSessionEnvelopeV1 {
   version: 1;
-  form: StoredBatchForm;
+  form: LegacyStoredBatchForm;
   current_run_id: string | null;
 }
 
 interface WorkingSessionEnvelopeV2 {
   version: 2;
+  form: LegacyStoredBatchForm;
+  current_run_id: string | null;
+  session_run_ids: string[];
+}
+
+interface WorkingSessionEnvelopeV3 {
+  version: 3;
   form: StoredBatchForm;
   current_run_id: string | null;
   session_run_ids: string[];
@@ -46,12 +57,19 @@ export function loadWorkingSession(
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (isWorkingSessionEnvelopeV2(value)) {
+    if (isWorkingSessionEnvelopeV3(value)) {
       return restoredSession(value.form, value.current_run_id, value.session_run_ids);
+    }
+    if (isWorkingSessionEnvelopeV2(value)) {
+      return restoredSession(
+        migrateLegacyForm(value.form),
+        value.current_run_id,
+        value.session_run_ids,
+      );
     }
     if (isWorkingSessionEnvelopeV1(value)) {
       return restoredSession(
-        value.form,
+        migrateLegacyForm(value.form),
         value.current_run_id,
         value.current_run_id === null ? [] : [value.current_run_id],
       );
@@ -71,7 +89,7 @@ export function saveWorkingSession(
   if (!storage) {
     return;
   }
-  const envelope: WorkingSessionEnvelopeV2 = {
+  const envelope: WorkingSessionEnvelopeV3 = {
     version: WORKING_SESSION_VERSION,
     form: dehydrateForm(form),
     current_run_id: currentRunId,
@@ -108,6 +126,10 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
   };
 }
 
+function migrateLegacyForm(form: LegacyStoredBatchForm): StoredBatchForm {
+  return { ...form, randomSeedCount: "1" };
+}
+
 function defaultSession(): RestoredWorkingSession {
   return {
     form: initialBatchForm(),
@@ -139,13 +161,24 @@ function browserSessionStorage(): Storage | null {
 }
 
 function isWorkingSessionEnvelopeV1(value: unknown): value is WorkingSessionEnvelopeV1 {
-  if (!isRecord(value) || value.version !== 1 || !isStoredBatchForm(value.form)) {
+  if (!isRecord(value) || value.version !== 1 || !isLegacyStoredBatchForm(value.form)) {
     return false;
   }
   return value.current_run_id === null || isNonEmptyString(value.current_run_id);
 }
 
 function isWorkingSessionEnvelopeV2(value: unknown): value is WorkingSessionEnvelopeV2 {
+  return (
+    isRecord(value) &&
+    value.version === 2 &&
+    isLegacyStoredBatchForm(value.form) &&
+    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
+    isStringArray(value.session_run_ids) &&
+    value.session_run_ids.every(isNonEmptyString)
+  );
+}
+
+function isWorkingSessionEnvelopeV3(value: unknown): value is WorkingSessionEnvelopeV3 {
   return (
     isRecord(value) &&
     value.version === WORKING_SESSION_VERSION &&
@@ -157,6 +190,19 @@ function isWorkingSessionEnvelopeV2(value: unknown): value is WorkingSessionEnve
 }
 
 function isStoredBatchForm(value: unknown): value is StoredBatchForm {
+  return (
+    isStoredBatchFormShape(value) &&
+    typeof value.randomSeedCount === "string" &&
+    (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random")
+  );
+}
+
+function isLegacyStoredBatchForm(value: unknown): value is LegacyStoredBatchForm {
+  return isStoredBatchFormShape(value) &&
+    (value.seedMode === "fixed" || value.seedMode === "explicit");
+}
+
+function isStoredBatchFormShape(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) {
     return false;
   }
@@ -177,8 +223,7 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
     stringFields.every((field) => typeof value[field] === "string") &&
     Array.isArray(value.variableBindings) &&
     value.variableBindings.every(isStoredVariableBinding) &&
-    isStringArray(value.referenceAssetIds) &&
-    (value.seedMode === "fixed" || value.seedMode === "explicit")
+    isStringArray(value.referenceAssetIds)
   );
 }
 

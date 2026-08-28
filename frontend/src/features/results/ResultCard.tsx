@@ -14,8 +14,9 @@ export function ResultCard({ api, result, runLabel }: Props) {
   return (
     <article className="result-card">
       {isImage ? (
-        <a className="result-preview-frame" href={url} target="_blank" rel="noreferrer">
+        <a className="result-image-link" href={url} target="_blank" rel="noreferrer">
           <img
+            className="result-image"
             src={url}
             alt={`Result ${result.artifact_ordinal} from Job ${result.job_ordinal}: ${result.remote_filename}`}
           />

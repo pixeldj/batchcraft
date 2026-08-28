@@ -98,9 +98,11 @@ display-name edits retain it. The gallery is not durable Project-wide Run histor
 Run query endpoint.
 
 Run creation uses the exact complete Batch request stored with the visible successful Preview. Any
-form edit invalidates that Preview pair. A terminal Run does not consume the Batch or Preview, so the
-same Preview request may create another new immutable Run. Durable mutable Batch persistence remains
-part of the later SQLite application-state milestone.
+form edit invalidates that Preview pair. The frontend's Random seed intent is materialized with Web
+Crypto into an explicit ordered seed list before Preview, so the API and compiler remain deterministic.
+A successful Run creation consumes a Random Preview and requires fresh materialization before another
+Run; failed creation retains it for retry. Fixed and Explicit Previews remain reusable after a terminal
+Run. Durable mutable Batch persistence remains part of the later SQLite application-state milestone.
 
 ## Run Lookup
 

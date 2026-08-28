@@ -11,6 +11,7 @@ describe("browser working session", () => {
   it("round-trips form values and ordered unique session Run IDs", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
+    form.seedMode = "random";
 
     saveWorkingSession(form, "run-42", ["run-40", "run-42", "run-40"], storage);
     const restored = loadWorkingSession(storage);
@@ -27,6 +28,7 @@ describe("browser working session", () => {
     const versionTwo = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<string, unknown>;
     versionTwo.version = 1;
     delete versionTwo.session_run_ids;
+    delete (versionTwo.form as Record<string, unknown>).randomSeedCount;
     storage.setItem(WORKING_SESSION_KEY, JSON.stringify(versionTwo));
 
     const restored = loadWorkingSession(storage);
@@ -34,6 +36,22 @@ describe("browser working session", () => {
     expect(restored.currentRunId).toBe("run-42");
     expect(restored.sessionRunIds).toEqual(["run-42"]);
     expect(restored.draftRestored).toBe(true);
+    expect(restored.form.randomSeedCount).toBe("1");
+  });
+
+  it("migrates version 2 with its ordered session Runs and a default Random count", () => {
+    const storage = new MemoryStorage();
+    saveWorkingSession(populatedForm(), "run-42", ["run-40", "run-42"], storage);
+    const versionTwo = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<string, unknown>;
+    versionTwo.version = 2;
+    delete (versionTwo.form as Record<string, unknown>).randomSeedCount;
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(versionTwo));
+
+    const restored = loadWorkingSession(storage);
+
+    expect(restored.currentRunId).toBe("run-42");
+    expect(restored.sessionRunIds).toEqual(["run-40", "run-42"]);
+    expect(restored.form.randomSeedCount).toBe("1");
   });
 
   it("allocates fresh binding keys and advances the allocator after restore", () => {
@@ -89,6 +107,7 @@ function populatedForm(): BatchFormState {
   form.referenceAssetIds = ["asset-b", "asset-a"];
   form.seedMode = "explicit";
   form.seedValues = "9, 3";
+  form.randomSeedCount = "7";
   form.workflowJson = '{"workflow":true}';
   form.workflowProfileJson = '{"profile":true}';
   return form;

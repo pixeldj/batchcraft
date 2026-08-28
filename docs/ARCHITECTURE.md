@@ -46,6 +46,7 @@ The frontend is responsible for:
 - reference selection;
 - Workflow Profile configuration;
 - Batch construction;
+- materializing Random seed intent into explicit values before Preview;
 - compiled-job preview;
 - Run progress visualization;
 - Results Viewer;
@@ -128,9 +129,11 @@ Mutable Batch definitions are not durably persisted in this slice. The browser m
 best-effort working draft and ordered Run identities in tab-scoped `sessionStorage`, but it must
 compile that restored draft again before Run creation. The Run identities rebuild a Batch-scoped
 working-session Results gallery from backend-authoritative Run and Result data; they are not a
-Project-wide history index. Preview and Run creation use the same complete Batch request snapshot,
-while successful Run publication freezes the durable execution plan and provenance. SQLite remains
-the intended later home for mutable Batch and searchable application state.
+Project-wide history index. Preview and Run creation use the same complete Batch request snapshot.
+Frontend Random seed intent is materialized before that snapshot reaches the API; the backend and pure
+compiler receive only concrete Fixed or Explicit seed input. Successful Run publication freezes the
+durable execution plan and provenance. SQLite remains the intended later home for mutable Batch and
+searchable application state.
 
 ## Application Queue
 

@@ -1,6 +1,7 @@
 import type { BatchcraftApi } from "../../api/client";
 import { Field, TextAreaField } from "../../components/Field";
 import {
+  MAX_RANDOM_SEED_COUNT,
   newVariableBinding,
   type BatchFormState,
   type VariableBindingForm,
@@ -230,21 +231,36 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
               id="seed-mode"
               value={form.seedMode}
               onChange={(event) =>
-                update("seedMode", event.target.value as "fixed" | "explicit")
+                update("seedMode", event.target.value as BatchFormState["seedMode"])
               }
             >
               <option value="fixed">Fixed</option>
               <option value="explicit">Explicit list</option>
+              <option value="random">Random</option>
             </select>
           </label>
-          <TextAreaField
-            id="seed-values"
-            className="short-list"
-            label={form.seedMode === "fixed" ? "Seed" : "Explicit seeds"}
-            hint="Integers, one per line or comma-separated"
-            value={form.seedValues}
-            onChange={(event) => update("seedValues", event.target.value)}
-          />
+          {form.seedMode === "random" ? (
+            <Field
+              id="random-seed-count"
+              type="number"
+              min="1"
+              max={MAX_RANDOM_SEED_COUNT}
+              step="1"
+              label="Random seed count"
+              hint={`Generate 1 to ${MAX_RANDOM_SEED_COUNT} concrete seeds when Preview runs`}
+              value={form.randomSeedCount}
+              onChange={(event) => update("randomSeedCount", event.target.value)}
+            />
+          ) : (
+            <TextAreaField
+              id="seed-values"
+              className="short-list"
+              label={form.seedMode === "fixed" ? "Seed" : "Explicit seeds"}
+              hint="Integers, one per line or comma-separated"
+              value={form.seedValues}
+              onChange={(event) => update("seedValues", event.target.value)}
+            />
+          )}
         </div>
       </fieldset>
 

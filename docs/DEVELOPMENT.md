@@ -214,6 +214,11 @@ selection exists. Its collapsed state renders only the selected count. Select Al
 selection order and appends unselected Project assets in deterministic picker order; Select None
 clears the selection. Both are semantic form changes and must invalidate Preview.
 
+Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it
+once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact
+request for Run creation, and consume the Preview only after successful Run publication. Fixed and
+Explicit Previews remain reusable; a failed Random Run creation keeps its inspected request for retry.
+
 From `frontend/`, install and run the development server:
 
 ```bash

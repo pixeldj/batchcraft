@@ -256,7 +256,9 @@ export function ReferenceAssetPicker({
                     aria-label={`${selected ? "Deselect" : "Select"} ${asset.original_filename}`}
                     onClick={() => toggleAsset(asset.asset_id)}
                   >
-                    <img src={api.assetUrl(asset.content_url)} alt="" />
+                    <span className="asset-preview-frame">
+                      <img src={api.assetUrl(asset.content_url)} alt="" />
+                    </span>
                     <span className="asset-card-name">{asset.original_filename}</span>
                     <span className="asset-card-meta">{formatBytes(asset.byte_size)}</span>
                     {selected ? <span className="selection-order">{selectionIndex + 1}</span> : null}

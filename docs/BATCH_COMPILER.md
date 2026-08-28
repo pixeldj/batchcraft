@@ -170,7 +170,7 @@ A selected list of seeds becomes another Batch dimension.
 
 A fixed seed input must contain exactly one seed. An explicit seed list must contain at least one seed, and compilation preserves its order.
 
-Random seed generation may be added later, but randomness must occur outside the pure logical compiler. Any generated seeds must be resolved into explicit ordered seed inputs before logical Job compilation and persisted in the resulting Run provenance before execution begins.
+The browser supports Random seed intent without adding randomness to the pure logical compiler. It uses Web Crypto to materialize 1 through 100 unsigned 32-bit seeds into an explicit ordered seed input before Preview. Run creation submits that exact inspected request, and successful Run publication persists the resolved values in Run provenance before execution begins.
 
 ## Reference Dimensions
 

@@ -155,7 +155,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .asset-card { position: relative; display: grid; min-width: 0; padding: 0; overflow: hidden; color: var(--ink); background: var(--paper-raised); border: 1px solid var(--line-strong); text-align: left; }
 .asset-card:hover { border-color: var(--accent); transform: translateY(-1px); }
 .asset-card.selected { border: 3px solid var(--accent); }
-.asset-card img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #d3d3ca; border-bottom: 1px solid var(--line); }
+.asset-preview-frame { display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; background: #d3d3ca; border-bottom: 1px solid var(--line); }
+.asset-preview-frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .asset-card-name { padding: 0.55rem 0.55rem 0.1rem; overflow: hidden; font-size: 0.76rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .asset-card-meta { padding: 0.1rem 0.55rem 0.55rem; color: var(--muted); font: 0.64rem "SFMono-Regular", monospace; }
 .selection-order { position: absolute; top: 0.45rem; right: 0.45rem; display: grid; place-items: center; width: 1.7rem; height: 1.7rem; color: #fff; background: var(--accent); border: 2px solid var(--paper-raised); border-radius: 50%; font: 700 0.7rem "SFMono-Regular", monospace; }
@@ -219,9 +220,9 @@ progress::-webkit-progress-value { background: var(--accent); }
 
 .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }
 .results-actions { display: flex; align-items: center; gap: 0.75rem; }
-.result-card { min-width: 0; overflow: hidden; background: var(--paper-raised); border: 1px solid var(--line-strong); }
-.result-preview-frame { display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; background: #d3d3ca; }
-.result-preview-frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.result-card { min-width: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); }
+.result-image-link, .result-image { display: block; width: 100%; }
+.result-image { height: auto; }
 .artifact-placeholder { display: grid; place-items: center; align-content: center; gap: 0.4rem; aspect-ratio: 1; color: var(--ink); background: repeating-linear-gradient(-45deg, #ecebe3, #ecebe3 10px, #e1e0d8 10px, #e1e0d8 20px); text-decoration: none; }
 .artifact-placeholder span { color: var(--accent); font: 700 1.8rem "SFMono-Regular", monospace; }
 .result-body { padding: 0.75rem; }

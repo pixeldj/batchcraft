@@ -143,6 +143,56 @@ describe("Batch preview", () => {
     expect(screen.getByText("2", { selector: ".run-metadata dd" })).toBeInTheDocument();
   });
 
+  it("materializes Random seeds once and consumes the Preview after successful Run creation", async () => {
+    const api = makeApi({
+      previewBatch: vi.fn(async () => previewResponse(3)),
+      createRun: vi.fn(async () => runResponse("run-random", 4, 3)),
+    });
+    render(<App api={api} />);
+    await enterAsset();
+    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "random" } });
+    fireEvent.change(screen.getByLabelText(/Random seed count/), { target: { value: "3" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+    const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+    expect(previewRequest.seeds.mode).toBe("explicit");
+    expect(previewRequest.seeds.values).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+
+    expect(await screen.findByRole("heading", { name: "Run 4" })).toBeInTheDocument();
+    expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Seed mode")).toHaveValue("random");
+    expect(screen.getByLabelText(/Random seed count/)).toHaveValue(3);
+  });
+
+  it("retains a Random Preview when Run creation fails", async () => {
+    const api = makeApi({
+      createRun: vi.fn(async () => {
+        throw new ApiError("Run publication failed", "run_publication_failed", 500);
+      }),
+    });
+    render(<App api={api} />);
+    await enterAsset();
+    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "random" } });
+    fireEvent.change(screen.getByLabelText(/Random seed count/), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    const createRun = await screen.findByRole("button", { name: "Create Run" });
+    const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+
+    fireEvent.click(createRun);
+
+    expect(await screen.findByText("Run publication failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await waitFor(() => expect(api.createRun).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
+    expect(vi.mocked(api.createRun).mock.calls[1][0]).toBe(previewRequest);
+  });
+
   it("invalidates Preview after reference edits and requires Preview before creation", async () => {
     const assets = [
       asset("asset-a", "a.png"),
@@ -341,6 +391,8 @@ describe("Reference Asset picker", () => {
       "src",
       "http://api.test/api/assets/asset-a",
     );
+    expect(screen.getByRole("button", { name: "Deselect a.png" }).querySelector(".asset-preview-frame img"))
+      .toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
     fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
     fireEvent.click(screen.getByRole("button", { name: "Deselect c.png" }));
@@ -783,7 +835,9 @@ describe("Results", () => {
     );
     expect(within(currentResults as HTMLElement).getByText("metadata.json")).toBeInTheDocument();
     expect(within(currentResults as HTMLElement).getByText("512 B")).toBeInTheDocument();
-    expect(firstImage.closest(".result-preview-frame")).toBeInTheDocument();
+    expect(firstImage).toHaveClass("result-image");
+    expect(firstImage.closest(".result-image-link")).toBeInTheDocument();
+    expect(firstImage.closest(".result-preview-frame")).not.toBeInTheDocument();
 
     const cards = currentResults?.querySelectorAll(".result-card") ?? [];
     expect(cards).toHaveLength(3);

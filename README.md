@@ -14,10 +14,10 @@ The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run file
 
 The browser now supports ComfyUI status, Project image import and collapsible ordered Reference Asset
 selection, ephemeral Batch editing, deterministic Job preview, durable Run creation, background
-execution start, Job progress, uncropped Result viewing, repeated Run creation, and a Batch Results
-gallery restored within the current tab session. SQLite, durable editable Batch persistence, a
-Project-wide historical gallery, a global scheduler, and automatic backend recovery remain
-unimplemented.
+execution start, Job progress, uncropped Result viewing, frontend Random seed materialization,
+repeated Run creation, and a Batch Results gallery restored within the current tab session. SQLite,
+durable editable Batch persistence, a Project-wide historical gallery, a global scheduler, and
+automatic backend recovery remain unimplemented.
 
 ## Run The API
 
