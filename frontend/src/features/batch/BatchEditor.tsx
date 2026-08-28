@@ -278,18 +278,6 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>Reference Assets</legend>
-        <ReferenceAssetPicker
-          api={api}
-          projectKey={form.projectFilesystemKey}
-          selectedAssetIds={form.referenceAssetIds}
-          onSelectedAssetIdsChange={(referenceAssetIds) =>
-            update("referenceAssetIds", referenceAssetIds)
-          }
-        />
-      </fieldset>
-
       <fieldset className="seed-fieldset">
         <legend>Seeds</legend>
         <div className="field-grid two-columns align-start">
@@ -330,6 +318,18 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
             />
           )}
         </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Reference Assets</legend>
+        <ReferenceAssetPicker
+          api={api}
+          projectKey={form.projectFilesystemKey}
+          selectedAssetIds={form.referenceAssetIds}
+          onSelectedAssetIdsChange={(referenceAssetIds) =>
+            update("referenceAssetIds", referenceAssetIds)
+          }
+        />
       </fieldset>
 
       <fieldset>

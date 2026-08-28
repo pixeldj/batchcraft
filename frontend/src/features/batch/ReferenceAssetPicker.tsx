@@ -170,7 +170,7 @@ export function ReferenceAssetPicker({
             </p>
             <div className="asset-picker-actions">
               <button
-                className="button-link"
+                className="button-secondary compact"
                 type="button"
                 disabled={!normalizedProjectKey || loading}
                 onClick={() => setRefreshToken((token) => token + 1)}

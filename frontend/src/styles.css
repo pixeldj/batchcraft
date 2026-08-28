@@ -145,10 +145,11 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .asset-picker-content { display: grid; gap: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--line); }
 .asset-picker-toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
 .asset-picker-toolbar p { margin: 0; max-width: 46rem; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
-.asset-picker-actions { display: flex; flex-shrink: 0; gap: 0.8rem; align-items: center; }
+.asset-picker-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 0.8rem; align-items: center; }
+.asset-picker-actions > .button-secondary { display: inline-flex; align-items: center; justify-content: center; }
 .button-secondary.disabled { cursor: wait; opacity: 0.58; }
-.asset-selection-actions { display: flex; justify-content: space-between; gap: 1rem; align-items: center; color: var(--muted); font-size: 0.75rem; }
-.asset-selection-actions > div { display: flex; gap: 1rem; }
+.asset-selection-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; align-items: center; color: var(--muted); font-size: 0.75rem; }
+.asset-selection-actions > div { display: flex; flex-wrap: wrap; gap: 1rem; }
 .selected-assets { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0; padding: 0; list-style: none; counter-reset: selected-assets; }
 .selected-assets li { display: flex; gap: 0.55rem; align-items: center; padding: 0.4rem 0.55rem; background: var(--paper-raised); border: 1px solid var(--accent); font-size: 0.72rem; counter-increment: selected-assets; }
 .selected-assets li::before { content: counter(selected-assets, decimal-leading-zero); color: var(--accent); font: 700 0.66rem "SFMono-Regular", monospace; }
@@ -250,7 +251,7 @@ progress::-webkit-progress-value { background: var(--accent); }
   .action-row .button-primary { width: 100%; }
   textarea.json-editor { min-height: 15rem; }
   .asset-picker-toolbar { align-items: flex-start; flex-direction: column; }
-  .asset-picker-actions { width: 100%; justify-content: space-between; }
+  .asset-picker-actions { width: 100%; justify-content: flex-start; }
   .repeater-title { align-items: flex-start; gap: 0.75rem; }
   .repeater-actions { flex-wrap: wrap; justify-content: flex-end; }
 }

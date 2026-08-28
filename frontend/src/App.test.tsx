@@ -46,6 +46,16 @@ describe("ComfyUI status", () => {
 });
 
 describe("Batch preview", () => {
+  it("places Seeds before Reference Assets in the Batch editor", () => {
+    const api = makeApi();
+    render(<App api={api} />);
+
+    const seeds = screen.getByRole("group", { name: "Seeds" });
+    const references = screen.getByRole("group", { name: "Reference Assets" });
+
+    expect(seeds.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
   it("builds the API request and renders Jobs and compiler warnings", async () => {
     const api = makeApi({ previewBatch: vi.fn(async () => previewResponse()) });
     render(<App api={api} />);
