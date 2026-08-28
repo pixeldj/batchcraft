@@ -106,7 +106,11 @@ def _fixture_plan(asset_id: str, *, seeds: tuple[int, ...] = (9, 3)) -> Compiled
     unused = VariableList(id="unused", values=("value",))
     return compile_batch(
         BatchDefinition(
-            prompt_version=PromptVersion(id="prompt-v3", text="Portrait of {{animal}}"),
+            prompt_versions=(
+                PromptVersion(
+                    id="prompt-v3", name="Portrait prompt", text="Portrait of {{animal}}"
+                ),
+            ),
             variable_bindings=(
                 VariableBinding(
                     placeholder="animal",
@@ -200,11 +204,16 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
             + "\n"
         ).encode()
     )
-    assert manifest["prompt_version"] == {
-        "prompt_version_id": "prompt-v3",
-        "prompt_template": "Portrait of {{animal}}",
-    }
+    assert manifest["format_version"] == 2
+    assert manifest["prompt_versions"] == [
+        {
+            "prompt_version_id": "prompt-v3",
+            "prompt_version_name": "Portrait prompt",
+            "prompt_template": "Portrait of {{animal}}",
+        }
+    ]
     assert [job["ordinal"] for job in manifest["jobs"]] == [1, 2, 3, 4]
+    assert {job["prompt_version_id"] for job in manifest["jobs"]} == {"prompt-v3"}
     assert [job["resolved_prompt"] for job in manifest["jobs"]] == [
         "Portrait of dog",
         "Portrait of dog",
@@ -219,6 +228,7 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
         rows = list(csv.DictReader(file))
     assert [row["job_id"] for row in rows] == ["job-1", "job-2", "job-3", "job-4"]
     assert [row["job_ordinal"] for row in rows] == ["1", "2", "3", "4"]
+    assert all(row["prompt_version_name"] == "Portrait prompt" for row in rows)
     assert all(row["reference_sha256"] == asset.sha256 for row in rows)
     assert json.loads(rows[0]["resolved_variables_json"]) == [{"name": "animal", "value": "dog"}]
 
@@ -246,6 +256,112 @@ def test_published_run_reconstructs_without_sqlite(tmp_path: Path) -> None:
     assert loaded.workflow_sha256 == created.workflow_sha256
     assert loaded.workflow_profile_sha256 == created.workflow_profile_sha256
     assert loaded.jobs[0].reference_asset == asset
+
+
+def test_manifest_v2_round_trips_ordered_prompt_versions_and_job_associations(
+    tmp_path: Path,
+) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    plan = compile_batch(
+        BatchDefinition(
+            prompt_versions=(
+                PromptVersion(id="first", name="First", text="First {{animal}}"),
+                PromptVersion(id="second", name="Second", text="Second"),
+            ),
+            variable_bindings=(
+                VariableBinding(
+                    placeholder="animal",
+                    variable_list=VariableList(id="animals", values=("cat", "dog")),
+                    mode=VariableBindingMode.ALL,
+                    selected_values=("dog", "cat"),
+                ),
+            ),
+            references=(ReferenceSelection(asset_id=asset.asset_id),),
+            seeds=SeedInput.fixed(7),
+        )
+    )
+    created = _create(RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME), plan, asset)
+
+    loaded = RunFilesystemStore(projects_path).load_run(created.path)
+
+    assert loaded.compiled_plan == plan
+    assert [version.id for version in loaded.compiled_plan.prompt_versions] == ["first", "second"]
+    assert [job.prompt_version_id for job in loaded.compiled_plan.jobs] == [
+        "first",
+        "first",
+        "second",
+    ]
+
+
+@pytest.mark.parametrize("corruption", ("duplicate_prompt", "unknown_job_prompt"))
+def test_manifest_v2_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(asset.asset_id),
+        asset,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    if corruption == "duplicate_prompt":
+        manifest["prompt_versions"].append(dict(manifest["prompt_versions"][0]))
+    else:
+        manifest["jobs"][0]["prompt_version_id"] = "unknown"
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    with pytest.raises(RunStoreError, match="duplicate PromptVersion|unknown PromptVersion"):
+        RunFilesystemStore(projects_path).load_run(created.path)
+
+
+def test_manifest_v1_loads_with_fallback_name_and_job_association(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(asset.asset_id),
+        asset,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    version = manifest.pop("prompt_versions")[0]
+    manifest["format_version"] = 1
+    manifest["prompt_version"] = {
+        "prompt_version_id": version["prompt_version_id"],
+        "prompt_template": version["prompt_template"],
+    }
+    for job in manifest["jobs"]:
+        job.pop("prompt_version_id")
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    loaded = RunFilesystemStore(projects_path).load_run(created.path)
+
+    assert loaded.compiled_plan.prompt_versions == (
+        PromptVersion(
+            id="prompt-v3",
+            name="prompt-v3",
+            text="Portrait of {{animal}}",
+        ),
+    )
+    assert {job.prompt_version_id for job in loaded.compiled_plan.jobs} == {"prompt-v3"}
+
+
+def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(asset.asset_id),
+        asset,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format_version"] = 3
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    with pytest.raises(RunStoreError, match="unsupported manifest.json format version"):
+        RunFilesystemStore(projects_path).load_run(created.path)
 
 
 def test_run_load_validates_a_repeated_asset_only_once(

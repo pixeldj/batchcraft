@@ -27,7 +27,7 @@ Users create and debug workflows in ComfyUI. batchcraft imports an API-format wo
 
 Typical exposed inputs include:
 
-- one prompt input in v1;
+- one mapped prompt input receiving each Job's resolved prompt;
 - reference image(s);
 - seed;
 - steps;
@@ -136,7 +136,7 @@ Once stored, asset bytes are immutable and identified by a content hash. Removin
 An editable experiment definition combining:
 
 - a Workflow Profile;
-- one PromptVersion in v1;
+- an ordered non-empty selection of PromptVersions;
 - Variable bindings;
 - Reference Assets or Collections;
 - seed policy;

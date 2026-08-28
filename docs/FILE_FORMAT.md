@@ -112,13 +112,14 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded separately from t
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The v1 manifest contains:
+The current v2 manifest contains:
 
 - Run ID, number, creation timestamp, and Project/Batch identity snapshots;
-- PromptVersion ID and Prompt Template text available from `CompiledRunPlan`;
+- ordered PromptVersion snapshots containing ID, name, and exact Prompt Template text;
 - compiler warnings;
 - workflow and Workflow Profile snapshot paths and hashes;
 - stable Job ID and compiler ordinal;
+- each Job's source PromptVersion ID;
 - resolved variables;
 - resolved final prompt;
 - Reference Asset ID, original filename, MIME type, byte size, Project-relative content path, creation timestamp, and SHA-256;
@@ -127,7 +128,9 @@ The v1 manifest contains:
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v1 creation manifest contains immutable plan and provenance only. Job execution status, ComfyUI prompt IDs, errors, Results, exposed parameter sweeps, and output naming are added only when their owning milestones define a separated, versioned representation.
+`manifest.json` is authoritative for exact replay. The v2 creation manifest contains immutable plan and
+provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
+versioned execution representation.
 
 ## `manifest.csv`
 
@@ -139,12 +142,13 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-The v1 columns are:
+The columns emitted alongside a v2 JSON manifest are:
 
 ```text
 job_ordinal
 job_id
 prompt_version_id
+prompt_version_name
 prompt_template
 resolved_prompt
 resolved_variables_json
@@ -155,6 +159,10 @@ seed
 workflow_sha256
 workflow_profile_sha256
 ```
+
+The legacy CSV emitted alongside a v1 JSON manifest used the same order without
+`prompt_version_name`. `manifest.json`'s `format_version` identifies which CSV schema accompanies
+the Run; the CSV has no independent version field.
 
 For structures that do not map naturally to flat columns, encode compact JSON in a column rather than losing information.
 
@@ -277,6 +285,12 @@ Modified reruns can be added later.
 
 Loading a published Run requires `run.json`, canonical `manifest.json`, `manifest.csv`, both snapshot files, and `outputs/`. It validates format versions, Run/Project/Batch identity consistency, one-based contiguous Job ordinals, unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata, size, and content hash.
 
+Manifest v2 additionally validates a non-empty ordered PromptVersion collection, unique PromptVersion
+IDs, required names, and every Job's association with a known PromptVersion. The loader explicitly
+supports manifest v1 as a single-PromptVersion historical format: it assigns the one stored
+PromptVersion ID to every Job and uses that ID as the unavailable historical display-name fallback.
+Existing Run directories are never rewritten. Unknown manifest versions are rejected.
+
 The loader reconstructs the original `CompiledRunPlan`, compiler warnings, execution identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be present in a complete v1 Run, but reformatting its line endings or quoting does not override or invalidate canonical JSON provenance.
 
 ## Schema Versioning
@@ -293,7 +307,8 @@ Example:
 }
 ```
 
-Future migrations should preserve old Run readability whenever practical.
+Future migrations should preserve old Run readability whenever practical. New Runs use manifest v2;
+manifest v1 remains safely readable through its explicit parser.
 
 ## Filesystem Publication and SQLite Indexing
 

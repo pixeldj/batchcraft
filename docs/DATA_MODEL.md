@@ -76,10 +76,14 @@ Suggested fields:
 id
 prompt_template_id
 version_number
+name
 text
 notes
 created_at
 ```
+
+The name is a human-readable label snapshotted with the immutable PromptVersion. It is not an
+identity and does not replace the stable PromptVersion ID.
 
 Example text:
 
@@ -236,7 +240,7 @@ updated_at
 
 A Batch also owns configuration such as:
 
-- one selected PromptVersion in v1;
+- an ordered, non-empty collection of selected PromptVersions;
 - VariableBindings;
 - reference bindings;
 - seed policy;
@@ -247,7 +251,7 @@ Changing a Batch does not alter previous Runs.
 
 ## VariableBinding
 
-Connects a placeholder name in a PromptVersion to values for this Batch.
+Connects a placeholder name used by one or more selected PromptVersions to values for this Batch.
 
 Conceptual fields:
 
@@ -324,13 +328,17 @@ error
 
 A Job additionally records:
 
+- the PromptVersion ID that produced it;
 - resolved variable name/value pairs;
 - bound reference assets;
 - resolved workflow parameters;
 - expected output prefix;
 - workflow hash.
 
-The compiler orders Job dimensions as PromptVersion, prompt variables, reference bindings, seeds, then parameter sweeps. The rightmost dimension varies fastest, and each dimension preserves user selection order.
+The compiler orders Job dimensions as PromptVersion, prompt variables, reference bindings, seeds,
+then parameter sweeps. PromptVersion order is the Batch's selected order. Each PromptVersion expands
+only the bindings it references, in placeholder first-occurrence order. The rightmost dimension varies
+fastest, and each dimension preserves user selection order.
 
 A Job must never contain unresolved prompt variables.
 

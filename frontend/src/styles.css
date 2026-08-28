@@ -132,6 +132,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .repeater-stack, .reference-list { display: grid; gap: 0.75rem; }
 .repeater-card { padding: 0.9rem; background: rgba(255, 255, 255, 0.38); border: 1px solid var(--line); }
 .repeater-title { justify-content: space-between; margin-bottom: 0.75rem; }
+.repeater-actions { display: flex; gap: 0.8rem; align-items: center; }
+.prompt-card .prompt-editor { min-height: 7rem; margin-top: 0.9rem; }
 .inline-control { gap: 0.6rem; align-items: flex-end; }
 .inline-control .field { flex: 1; }
 .limitation-note, .empty-note { margin: -0.2rem 0 0.85rem; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
@@ -189,6 +191,9 @@ table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 th { padding: 0.65rem; color: var(--muted); background: #e6e5dc; text-align: left; font-size: 0.68rem; letter-spacing: 0.05em; text-transform: uppercase; }
 td { padding: 0.7rem; border-top: 1px solid var(--line); vertical-align: top; }
 .prompt-cell { min-width: 18rem; max-width: 34rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-identity { min-width: 9rem; }
+.prompt-identity strong, .prompt-identity code { display: block; }
+.prompt-identity code { margin-top: 0.2rem; color: var(--muted); font-size: 0.68rem; }
 .ordinal { color: var(--accent); font-weight: 700; }
 
 .status-pill { padding: 0.35rem 0.55rem; border: 1px solid currentColor; font: 700 0.7rem "SFMono-Regular", monospace; text-transform: uppercase; }
@@ -246,6 +251,8 @@ progress::-webkit-progress-value { background: var(--accent); }
   textarea.json-editor { min-height: 15rem; }
   .asset-picker-toolbar { align-items: flex-start; flex-direction: column; }
   .asset-picker-actions { width: 100%; justify-content: space-between; }
+  .repeater-title { align-items: flex-start; gap: 0.75rem; }
+  .repeater-actions { flex-wrap: wrap; justify-content: flex-end; }
 }
 
 @media (prefers-color-scheme: dark) {

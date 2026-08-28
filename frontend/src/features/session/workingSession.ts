@@ -1,21 +1,32 @@
 import {
   initialBatchForm,
+  newPrompt,
   newVariableBinding,
   type BatchFormState,
+  type PromptForm,
   type VariableBindingForm,
 } from "../batch/form";
 
 export const WORKING_SESSION_KEY = "batchcraft.working-session";
-const WORKING_SESSION_VERSION = 3;
+const WORKING_SESSION_VERSION = 4;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
+type StoredPrompt = Omit<PromptForm, "key">;
 
-interface StoredBatchForm extends Omit<BatchFormState, "variableBindings"> {
+interface StoredBatchForm extends Omit<BatchFormState, "prompts" | "variableBindings"> {
+  prompts: StoredPrompt[];
   variableBindings: StoredVariableBinding[];
 }
 
-type LegacyStoredBatchForm = Omit<StoredBatchForm, "randomSeedCount" | "seedMode"> & {
+type LegacyStoredBatchForm = Omit<StoredBatchForm, "prompts" | "randomSeedCount" | "seedMode"> & {
+  promptVersionId: string;
+  promptText: string;
   seedMode: "fixed" | "explicit";
+};
+
+type LegacyStoredBatchFormV3 = Omit<StoredBatchForm, "prompts"> & {
+  promptVersionId: string;
+  promptText: string;
 };
 
 interface WorkingSessionEnvelopeV1 {
@@ -33,6 +44,13 @@ interface WorkingSessionEnvelopeV2 {
 
 interface WorkingSessionEnvelopeV3 {
   version: 3;
+  form: LegacyStoredBatchFormV3;
+  current_run_id: string | null;
+  session_run_ids: string[];
+}
+
+interface WorkingSessionEnvelopeV4 {
+  version: 4;
   form: StoredBatchForm;
   current_run_id: string | null;
   session_run_ids: string[];
@@ -57,8 +75,15 @@ export function loadWorkingSession(
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (isWorkingSessionEnvelopeV3(value)) {
+    if (isWorkingSessionEnvelopeV4(value)) {
       return restoredSession(value.form, value.current_run_id, value.session_run_ids);
+    }
+    if (isWorkingSessionEnvelopeV3(value)) {
+      return restoredSession(
+        migrateLegacyForm(value.form),
+        value.current_run_id,
+        value.session_run_ids,
+      );
     }
     if (isWorkingSessionEnvelopeV2(value)) {
       return restoredSession(
@@ -89,7 +114,7 @@ export function saveWorkingSession(
   if (!storage) {
     return;
   }
-  const envelope: WorkingSessionEnvelopeV3 = {
+  const envelope: WorkingSessionEnvelopeV4 = {
     version: WORKING_SESSION_VERSION,
     form: dehydrateForm(form),
     current_run_id: currentRunId,
@@ -105,6 +130,7 @@ export function saveWorkingSession(
 function dehydrateForm(form: BatchFormState): StoredBatchForm {
   return {
     ...form,
+    prompts: form.prompts.map(({ versionId, name, text }) => ({ versionId, name, text })),
     variableBindings: form.variableBindings.map((binding) => ({
       placeholder: binding.placeholder,
       variableListId: binding.variableListId,
@@ -119,6 +145,10 @@ function dehydrateForm(form: BatchFormState): StoredBatchForm {
 function hydrateForm(form: StoredBatchForm): BatchFormState {
   return {
     ...form,
+    prompts: form.prompts.map((prompt) => ({
+      ...prompt,
+      key: newPrompt().key,
+    })),
     variableBindings: form.variableBindings.map((binding) => ({
       ...binding,
       key: newVariableBinding().key,
@@ -126,8 +156,15 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
   };
 }
 
-function migrateLegacyForm(form: LegacyStoredBatchForm): StoredBatchForm {
-  return { ...form, randomSeedCount: "1" };
+function migrateLegacyForm(
+  form: LegacyStoredBatchForm | LegacyStoredBatchFormV3,
+): StoredBatchForm {
+  const { promptVersionId, promptText, ...rest } = form;
+  return {
+    ...rest,
+    prompts: [{ versionId: promptVersionId, name: "Prompt 1", text: promptText }],
+    randomSeedCount: "randomSeedCount" in form ? form.randomSeedCount : "1",
+  };
 }
 
 function defaultSession(): RestoredWorkingSession {
@@ -181,6 +218,17 @@ function isWorkingSessionEnvelopeV2(value: unknown): value is WorkingSessionEnve
 function isWorkingSessionEnvelopeV3(value: unknown): value is WorkingSessionEnvelopeV3 {
   return (
     isRecord(value) &&
+    value.version === 3 &&
+    isLegacyStoredBatchFormV3(value.form) &&
+    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
+    isStringArray(value.session_run_ids) &&
+    value.session_run_ids.every(isNonEmptyString)
+  );
+}
+
+function isWorkingSessionEnvelopeV4(value: unknown): value is WorkingSessionEnvelopeV4 {
+  return (
+    isRecord(value) &&
     value.version === WORKING_SESSION_VERSION &&
     isStoredBatchForm(value.form) &&
     (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
@@ -192,14 +240,25 @@ function isWorkingSessionEnvelopeV3(value: unknown): value is WorkingSessionEnve
 function isStoredBatchForm(value: unknown): value is StoredBatchForm {
   return (
     isStoredBatchFormShape(value) &&
+    Array.isArray(value.prompts) &&
+    value.prompts.length > 0 &&
+    value.prompts.every(isStoredPrompt) &&
     typeof value.randomSeedCount === "string" &&
     (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random")
   );
 }
 
 function isLegacyStoredBatchForm(value: unknown): value is LegacyStoredBatchForm {
-  return isStoredBatchFormShape(value) &&
+  return isLegacyStoredBatchFormShape(value) &&
     (value.seedMode === "fixed" || value.seedMode === "explicit");
+}
+
+function isLegacyStoredBatchFormV3(value: unknown): value is LegacyStoredBatchFormV3 {
+  return (
+    isLegacyStoredBatchFormShape(value) &&
+    typeof value.randomSeedCount === "string" &&
+    (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random")
+  );
 }
 
 function isStoredBatchFormShape(value: unknown): value is Record<string, unknown> {
@@ -213,8 +272,6 @@ function isStoredBatchFormShape(value: unknown): value is Record<string, unknown
     "batchId",
     "batchFilesystemKey",
     "batchName",
-    "promptVersionId",
-    "promptText",
     "seedValues",
     "workflowJson",
     "workflowProfileJson",
@@ -224,6 +281,23 @@ function isStoredBatchFormShape(value: unknown): value is Record<string, unknown
     Array.isArray(value.variableBindings) &&
     value.variableBindings.every(isStoredVariableBinding) &&
     isStringArray(value.referenceAssetIds)
+  );
+}
+
+function isLegacyStoredBatchFormShape(value: unknown): value is Record<string, unknown> {
+  return (
+    isStoredBatchFormShape(value) &&
+    typeof value.promptVersionId === "string" &&
+    typeof value.promptText === "string"
+  );
+}
+
+function isStoredPrompt(value: unknown): value is StoredPrompt {
+  return (
+    isRecord(value) &&
+    typeof value.versionId === "string" &&
+    typeof value.name === "string" &&
+    typeof value.text === "string"
   );
 }
 

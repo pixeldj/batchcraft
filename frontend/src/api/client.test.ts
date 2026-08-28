@@ -106,7 +106,7 @@ function batchRequest() {
   return {
     project: { id: "project", filesystem_key: "project", name: "Project" },
     batch: { id: "batch", filesystem_key: "batch", name: "Batch" },
-    prompt_version: { id: "prompt", text: "Portrait" },
+    prompt_versions: [{ id: "prompt", name: "Portrait", text: "Portrait" }],
     variable_bindings: [],
     references: [{ asset_id: "asset" }],
     seeds: { mode: "fixed" as const, values: [1] },

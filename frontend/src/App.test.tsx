@@ -57,6 +57,8 @@ describe("Batch preview", () => {
     expect(screen.getByText("Unused binding variable")).toBeInTheDocument();
     expect(screen.getByText("A studio portrait of cat.")).toBeInTheDocument();
     expect(screen.getByText("subject = cat")).toBeInTheDocument();
+    expect(screen.getAllByText("Portrait", { selector: ".prompt-identity strong" })).toHaveLength(2);
+    expect(screen.getAllByText("prompt-v1", { selector: ".prompt-identity code" })).toHaveLength(2);
     const request = vi.mocked(api.previewBatch).mock.calls[0][0];
     expect(request.references).toEqual([{ asset_id: "asset-1" }]);
     expect(request.seeds).toEqual({ mode: "fixed", values: [1] });
@@ -152,12 +154,16 @@ describe("Batch preview", () => {
     await enterAsset();
     fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "random" } });
     fireEvent.change(screen.getByLabelText(/Random seed count/), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    const promptTemplates = screen.getAllByLabelText(/Prompt template/);
+    fireEvent.change(promptTemplates[1], { target: { value: "A second portrait of {{subject}}." } });
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
     expect(previewRequest.seeds.mode).toBe("explicit");
     expect(previewRequest.seeds.values).toHaveLength(3);
+    expect(previewRequest.prompt_versions).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
@@ -227,6 +233,50 @@ describe("Batch preview", () => {
   });
 });
 
+describe("PromptVersion editor", () => {
+  it("starts with one prompt and supports stable add, edit, reorder, remove, and final removal prevention", () => {
+    render(<App api={makeApi()} />);
+
+    expect(screen.getAllByLabelText("PromptVersion ID")).toHaveLength(1);
+    expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait");
+    expect(within(promptCards()[0]).getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    const ids = screen.getAllByLabelText("PromptVersion ID");
+    const names = screen.getAllByLabelText("Prompt name");
+    const templates = screen.getAllByLabelText(/Prompt template/);
+    expect(ids).toHaveLength(2);
+    expect(names[1]).toHaveValue("Prompt 2");
+
+    fireEvent.change(ids[1], { target: { value: "prompt-alt" } });
+    fireEvent.change(names[1], { target: { value: "Alternate" } });
+    fireEvent.change(templates[1], { target: { value: "Alternate {{subject}}" } });
+    const secondCard = templates[1].closest(".prompt-card");
+    expect(secondCard).not.toBeNull();
+    fireEvent.click(within(secondCard as HTMLElement).getByRole("button", { name: "Move up" }));
+
+    expect(screen.getAllByLabelText("PromptVersion ID")[0]).toHaveValue("prompt-alt");
+    expect(screen.getAllByLabelText("Prompt name")[0]).toHaveValue("Alternate");
+    expect(screen.getAllByLabelText(/Prompt template/)[0]).toHaveValue("Alternate {{subject}}");
+
+    fireEvent.click(within(promptCards()[0]).getByRole("button", { name: "Remove" }));
+    expect(screen.getAllByLabelText("PromptVersion ID")).toHaveLength(1);
+    expect(within(promptCards()[0]).getByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait");
+  });
+
+  it("routes prompt edits through form change and invalidates Preview", async () => {
+    render(<App api={makeApi()} />);
+    await reachPreview();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Changed" } });
+
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+  });
+});
+
 describe("Browser working-session restoration", () => {
   it("restores the form and ordered references after remount but requires a new Preview", async () => {
     const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
@@ -234,6 +284,16 @@ describe("Browser working-session restoration", () => {
     const first = render(<App api={api} />);
     fireEvent.change(screen.getByLabelText(/Prompt template/), {
       target: { value: "Restored portrait of {{subject}}" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.change(screen.getAllByLabelText("PromptVersion ID")[1], {
+      target: { value: "prompt-editorial" },
+    });
+    fireEvent.change(screen.getAllByLabelText("Prompt name")[1], {
+      target: { value: "Editorial" },
+    });
+    fireEvent.change(screen.getAllByLabelText(/Prompt template/)[1], {
+      target: { value: "Editorial image of {{subject}}" },
     });
     fireEvent.change(screen.getByLabelText(/Variable List values/), {
       target: { value: "fox\nwolf" },
@@ -254,7 +314,12 @@ describe("Browser working-session restoration", () => {
     render(<App api={api} />);
 
     expect(await screen.findByText(/Draft restored from this browser session/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Prompt template/)).toHaveValue("Restored portrait of {{subject}}");
+    expect(screen.getAllByLabelText("PromptVersion ID").map((field) => (field as HTMLInputElement).value))
+      .toEqual(["prompt-v1", "prompt-editorial"]);
+    expect(screen.getAllByLabelText("Prompt name").map((field) => (field as HTMLInputElement).value))
+      .toEqual(["Portrait", "Editorial"]);
+    expect(screen.getAllByLabelText(/Prompt template/).map((field) => (field as HTMLTextAreaElement).value))
+      .toEqual(["Restored portrait of {{subject}}", "Editorial image of {{subject}}"]);
     expect(screen.getByLabelText(/Variable List values/)).toHaveValue("fox\nwolf");
     expect(screen.getByLabelText("Seed mode")).toHaveValue("explicit");
     expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("9, 3");
@@ -615,6 +680,10 @@ describe("Repeated Runs", () => {
       getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
     });
     render(<App api={api} pollIntervalMs={5} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.change(screen.getAllByLabelText(/Prompt template/)[1], {
+      target: { value: "Alternate {{subject}}" },
+    });
     await createRunAndStart();
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
@@ -628,7 +697,11 @@ describe("Repeated Runs", () => {
     expect(createRun).toHaveBeenCalledTimes(2);
     expect(createRun.mock.calls[0][0]).toBe(previewRequest);
     expect(createRun.mock.calls[1][0]).toBe(previewRequest);
-    expect(screen.getByLabelText(/Prompt template/)).toHaveValue(
+    expect(previewRequest.prompt_versions.map((prompt) => prompt.name)).toEqual([
+      "Portrait",
+      "Prompt 2",
+    ]);
+    expect(screen.getAllByLabelText(/Prompt template/)[0]).toHaveValue(
       "A studio portrait of {{subject}}.",
     );
     expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
@@ -1009,6 +1082,8 @@ function previewResponse(jobCount = 2): PreviewResponse {
       const subject = subjects[index] ?? `subject-${index + 1}`;
       return {
         ordinal: index + 1,
+        prompt_version_id: "prompt-v1",
+        prompt_version_name: "Portrait",
         resolved_prompt: `A studio portrait of ${subject}.`,
         resolved_variables: [{ name: "subject", value: subject }],
         reference_asset_id: "asset-1",
@@ -1043,6 +1118,13 @@ function runLookupResponse(
   return {
     ...runResponse(runId, runNumber),
     created_at: "2026-08-27T12:00:00Z",
+    prompt_versions: [
+      { id: "prompt-v1", name: "Portrait", text: "A studio portrait of {{subject}}." },
+    ],
+    jobs: [
+      { ordinal: 1, prompt_version_id: "prompt-v1" },
+      { ordinal: 2, prompt_version_id: "prompt-v1" },
+    ],
     execution: execution(status, runId),
   };
 }
@@ -1134,6 +1216,10 @@ function currentRunSection(): HTMLElement {
     throw new Error("Current Run section was not rendered");
   }
   return section;
+}
+
+function promptCards(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>(".prompt-card")];
 }
 
 async function enterAsset() {

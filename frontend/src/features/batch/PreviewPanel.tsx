@@ -69,6 +69,7 @@ export function PreviewPanel({
           <thead>
             <tr>
               <th scope="col">Job</th>
+              <th scope="col">Prompt</th>
               <th scope="col">Resolved prompt</th>
               <th scope="col">Variables</th>
               <th scope="col">Asset ID</th>
@@ -79,6 +80,10 @@ export function PreviewPanel({
             {preview.jobs.map((job) => (
               <tr key={job.ordinal}>
                 <td className="ordinal">{job.ordinal}</td>
+                <td className="prompt-identity">
+                  <strong>{job.prompt_version_name}</strong>
+                  <code>{job.prompt_version_id}</code>
+                </td>
                 <td className="prompt-cell">{job.resolved_prompt}</td>
                 <td>
                   {job.resolved_variables.length

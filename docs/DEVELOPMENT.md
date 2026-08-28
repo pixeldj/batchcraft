@@ -151,6 +151,10 @@ durable Run creation, repeated terminal Run creation, execution start and pollin
 Result rendering, and a tab-scoped Batch Results gallery across session Runs. The browser uses only
 the FastAPI endpoints documented in `docs/API.md`.
 
+Batch editing includes an ordered repeatable list of ephemeral PromptVersions. Prompt additions,
+removals, edits, and ordering changes invalidate Preview. The browser session schema stores this list
+without UI keys and migrates older singular-prompt drafts; it is not a persistent Prompt library.
+
 This phase does not add durable editable Batch persistence, Reference Collections, asset deletion,
 Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
 Profile mapping.
@@ -218,6 +222,10 @@ Random seed intent belongs to the ephemeral frontend form, not the API domain mo
 once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact
 request for Run creation, and consume the Preview only after successful Run publication. Fixed and
 Explicit Previews remain reusable; a failed Random Run creation keeps its inspected request for retry.
+
+PromptVersion is the compiler's first dimension. The frontend preserves PromptVersion request order
+and displays backend-returned PromptVersion identity in Preview. It does not calculate prompt products
+or infer provenance from resolved prompt text.
 
 From `frontend/`, install and run the development server:
 

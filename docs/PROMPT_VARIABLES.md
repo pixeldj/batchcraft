@@ -99,9 +99,10 @@ The same Variable List may be used by many Prompt Templates.
 
 ## Variable Binding
 
-A Batch binds a placeholder to a list or explicit values.
-
-v1 binds variables for one selected PromptVersion mapped to one friendly workflow prompt input. Multiple prompt or text inputs are deferred.
+A Batch binds a placeholder to a list or explicit values. The bindings apply across the Batch's
+ordered PromptVersion selection, while each PromptVersion expands only the placeholders it uses.
+Every resulting Job still supplies one resolved prompt string to the Workflow Profile's single
+friendly prompt input. Multiple workflow prompt or text inputs are deferred.
 
 Example Prompt Template:
 
@@ -178,6 +179,11 @@ This keeps previews, manifests, comparisons, and tests stable.
 
 Prompt-variable expansion is one part of the complete compiler order. The full order is PromptVersion, prompt variables, reference bindings, seeds, then parameter sweeps. The rightmost dimension varies fastest, and all dimensions preserve user selection order.
 
+PromptVersion is the first Batch dimension. PromptVersions preserve user selection order. Within each
+PromptVersion, placeholders are resolved independently in that template's first-occurrence order. A
+binding used by another selected PromptVersion does not multiply a template that does not reference
+it.
+
 ## Validation
 
 Before compilation, validate:
@@ -192,7 +198,9 @@ If an `all` binding has no selected values, compilation fails.
 
 ### Unused bindings
 
-If a Batch defines a binding that its selected PromptVersion does not reference, report a warning rather than a fatal error.
+If a Batch defines a binding that none of its selected PromptVersions reference, report one warning
+rather than a fatal error. A binding used by at least one selected PromptVersion is globally used and
+does not produce warnings for the other templates.
 
 ### Malformed placeholder
 
@@ -215,6 +223,14 @@ A dog looking at another dog.
 ```
 
 It does not independently expand each occurrence.
+
+## No Recursive Expansion
+
+Each PromptVersion receives exactly one substitution pass. Variable values are data, not nested Prompt
+Templates. If a value inserts text such as `portrait of {{subject}}`, batchcraft does not perform a
+second pass to resolve `{{subject}}`. The resulting unresolved placeholder is rejected before a Job
+can reach ComfyUI; there is no recursive expansion, implicit PromptVersion creation, or cycle
+detection.
 
 ## Manifest Provenance
 

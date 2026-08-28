@@ -1,14 +1,15 @@
 # batchcraft frontend
 
 The frontend is the first browser workflow for importing and ordering Project Reference Assets,
-configuring an ephemeral Batch, previewing its compiled Jobs, creating durable Runs, watching Job
-state, viewing the current Run's Results, and reviewing accumulated Batch Results from this browser
-working session. It communicates only with the batchcraft FastAPI application.
+configuring an ephemeral ordered multi-prompt Batch, previewing its compiled Jobs, creating durable
+Runs, watching Job state, viewing the current Run's Results, and reviewing accumulated Batch Results
+from this browser working session. It communicates only with the batchcraft FastAPI application.
 
 The current tab stores a versioned working draft, current Run ID, and ordered unique session Run IDs
-in `sessionStorage`. Version 3 safely migrates version-1 and version-2 state, retaining existing Run
-IDs and defaulting the new Random seed count. A refresh restores the form, then reloads Run,
-execution, and Result data from FastAPI. Result metadata
+in `sessionStorage`. Version 4 safely migrates version-1 through version-3 state, retaining existing
+Run IDs, migrating the singular prompt to one `Prompt 1` entry, and defaulting Random seed count when
+needed. A refresh restores the form and ordered prompt list, then reloads Run, execution, and Result
+data from FastAPI. Result metadata
 and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
 the restored draft again. Closing the tab or browser session may remove this working state.
 
@@ -29,6 +30,11 @@ from 1 through 100 and uses Web Crypto to materialize unsigned 32-bit values int
 explicit seed contract when Preview runs. Run creation reuses that exact inspected request. A
 successful Random Run creation consumes its Preview; a failed creation retains it for retry. Fixed
 and Explicit Previews remain reusable for repeated Runs.
+
+The prompt editor stores an ordered non-empty list of ephemeral PromptVersions with ID, name, and
+template text. Add, Remove, Move up, and Move down controls make the outermost Batch dimension
+explicit. Preview identifies each Job's source PromptVersion. This is working-session state, not a
+persistent Prompt library.
 
 ## Requirements
 

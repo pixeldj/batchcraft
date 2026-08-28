@@ -20,10 +20,11 @@ export interface VariableBindingRequest {
 export interface BatchRequest {
   project: IdentityRequest;
   batch: IdentityRequest;
-  prompt_version: {
+  prompt_versions: Array<{
     id: string;
+    name: string;
     text: string;
-  };
+  }>;
   variable_bindings: VariableBindingRequest[];
   references: Array<{ asset_id: string }>;
   seeds: {
@@ -63,6 +64,8 @@ export interface CompilationWarningResponse {
 
 export interface JobPreviewResponse {
   ordinal: number;
+  prompt_version_id: string;
+  prompt_version_name: string;
   resolved_prompt: string;
   resolved_variables: Array<{ name: string; value: string }>;
   reference_asset_id: string;
@@ -88,6 +91,8 @@ export interface RunCreatedResponse {
 
 export interface RunResponse extends RunCreatedResponse {
   created_at: string;
+  prompt_versions: Array<{ id: string; name: string; text: string }>;
+  jobs: Array<{ ordinal: number; prompt_version_id: string }>;
   execution: ExecutionResponse;
 }
 

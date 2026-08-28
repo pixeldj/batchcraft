@@ -22,7 +22,7 @@ from batchcraft.comfyui import (
     WorkflowPreparationValues,
     prepare_workflow,
 )
-from batchcraft.domain import CompiledJob, CompiledRunPlan
+from batchcraft.domain import CompiledJob, CompiledRunPlan, PromptVersion
 from batchcraft.execution import (
     ExecutionConfig,
     ExecutionStateError,
@@ -238,6 +238,7 @@ def _published_run(tmp_path: Path, *, job_count: int = 2) -> tuple[PublishedRun,
     jobs = tuple(
         CompiledJob(
             ordinal=index,
+            prompt_version_id="prompt-version",
             resolved_prompt=f"resolved prompt {index}",
             resolved_variables=(),
             reference_asset_id=assets[index - 1].asset_id,
@@ -246,8 +247,7 @@ def _published_run(tmp_path: Path, *, job_count: int = 2) -> tuple[PublishedRun,
         for index in range(1, job_count + 1)
     )
     plan = CompiledRunPlan(
-        prompt_version_id="prompt-version",
-        prompt_template="template",
+        prompt_versions=(PromptVersion(id="prompt-version", name="Prompt", text="template"),),
         jobs=jobs,
         warnings=(),
     )

@@ -194,7 +194,10 @@ The Batch Compiler then combines dimensions in this order:
 PromptVersion -> prompt variables -> reference bindings -> seeds -> parameter sweeps
 ```
 
-The rightmost dimension varies fastest. Every dimension preserves user selection order. v1 supports one PromptVersion mapped to one friendly prompt input; multiple workflow prompt or text slots are deferred.
+PromptVersion is the first Batch dimension. Selected PromptVersions preserve user order, and each is
+templated independently against the bindings it references. The rightmost dimension varies fastest.
+Each compiled Job still resolves to one final prompt string mapped to one friendly workflow prompt
+input; multiple workflow prompt or text slots are deferred.
 
 No prompt expansion should occur inside ComfyUI for core batchcraft functionality.
 

@@ -5,9 +5,18 @@ import {
   generateRandomSeeds,
   initialBatchForm,
   MAX_RANDOM_SEED_COUNT,
+  newPrompt,
 } from "./form";
 
 describe("buildBatchRequest", () => {
+  it("creates a prompt with safe identity defaults", () => {
+    expect(newPrompt(3)).toMatchObject({
+      versionId: "prompt-v3",
+      name: "Prompt 3",
+      text: "",
+    });
+  });
+
   it("converts the editor state to the exact API contract", () => {
     const form = initialBatchForm();
     form.referenceAssetIds = ["asset-1"];
@@ -18,7 +27,9 @@ describe("buildBatchRequest", () => {
     expect(buildBatchRequest(form)).toEqual({
       project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
       batch: { id: "batch-1", filesystem_key: "batch_1", name: "First experiment" },
-      prompt_version: { id: "prompt-v1", text: "A studio portrait of {{subject}}." },
+      prompt_versions: [
+        { id: "prompt-v1", name: "Portrait", text: "A studio portrait of {{subject}}." },
+      ],
       variable_bindings: [
         {
           placeholder: "subject",
@@ -33,6 +44,40 @@ describe("buildBatchRequest", () => {
       workflow: { "7": { class_type: "KSampler", inputs: { seed: 0 } } },
       workflow_profile: expect.objectContaining({ id: "workflow-profile-1" }),
     });
+  });
+
+  it("preserves PromptVersion order and permits duplicate IDs for backend validation", () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-1"];
+    form.prompts = [
+      { key: 10, versionId: "shared", name: "Second", text: "Second prompt" },
+      { key: 11, versionId: "shared", name: "First", text: "First prompt" },
+    ];
+
+    expect(buildBatchRequest(form).prompt_versions).toEqual([
+      { id: "shared", name: "Second", text: "Second prompt" },
+      { id: "shared", name: "First", text: "First prompt" },
+    ]);
+  });
+
+  it.each([
+    { prompts: [], message: /at least one PromptVersion/ },
+    { prompts: [{ key: 1, versionId: "", name: "Name", text: "Text" }], message: /Prompt 1 ID/ },
+    { prompts: [{ key: 1, versionId: "id", name: "", text: "Text" }], message: /Prompt 1 name/ },
+  ])("rejects an invalid prompt list", ({ prompts, message }) => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-1"];
+    form.prompts = prompts;
+
+    expect(() => buildBatchRequest(form)).toThrow(message);
+  });
+
+  it("preserves an empty PromptVersion template", () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-1"];
+    form.prompts[0].text = "";
+
+    expect(buildBatchRequest(form).prompt_versions[0].text).toBe("");
   });
 
   it("preserves commas inside newline-separated variable values", () => {

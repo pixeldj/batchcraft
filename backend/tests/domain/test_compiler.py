@@ -43,12 +43,14 @@ def fixed_binding(placeholder: str, source: VariableList, value: str) -> Variabl
 def batch_definition(
     template: str,
     *,
+    prompt_versions: tuple[PromptVersion, ...] | None = None,
     bindings: tuple[VariableBinding, ...] = (),
     references: tuple[str, ...] = ("ref-1",),
     seeds: SeedInput | None = None,
 ) -> BatchDefinition:
     return BatchDefinition(
-        prompt_version=PromptVersion(id="prompt-v1", text=template),
+        prompt_versions=prompt_versions
+        or (PromptVersion(id="prompt-v1", name="Prompt one", text=template),),
         variable_bindings=bindings,
         references=tuple(ReferenceSelection(asset_id=value) for value in references),
         seeds=seeds or SeedInput.fixed(123),
@@ -199,6 +201,106 @@ def test_documented_dimension_order_and_rightmost_seed_variation() -> None:
     ]
 
 
+def test_prompt_versions_are_outermost_with_prompt_specific_placeholder_axes() -> None:
+    animals = variable_list("animals", "cat", "dog")
+    styles = variable_list("styles", "ink", "oil")
+    batch = batch_definition(
+        "unused",
+        prompt_versions=(
+            PromptVersion(id="animals", name="Animals", text="A {{animal}}"),
+            PromptVersion(id="styles", name="Styles", text="In {{style}}"),
+        ),
+        bindings=(
+            all_binding("animal", animals, "dog", "cat"),
+            all_binding("style", styles, "oil", "ink"),
+        ),
+        references=("ref-b", "ref-a"),
+        seeds=SeedInput.explicit((20, 10)),
+    )
+
+    actual = [
+        (
+            job.ordinal,
+            job.prompt_version_id,
+            job.resolved_prompt,
+            tuple((value.name, value.value) for value in job.resolved_variables),
+            job.reference_asset_id,
+            job.seed,
+        )
+        for job in compile_batch(batch).jobs
+    ]
+
+    assert actual == [
+        (ordinal, prompt_id, prompt, variables, reference, seed)
+        for ordinal, (prompt_id, prompt, variables, reference, seed) in enumerate(
+            (
+                (prompt_id, prompt, variables, reference, seed)
+                for prompt_id, prompts in (
+                    ("animals", (("A dog", (("animal", "dog"),)), ("A cat", (("animal", "cat"),)))),
+                    ("styles", (("In oil", (("style", "oil"),)), ("In ink", (("style", "ink"),)))),
+                )
+                for prompt, variables in prompts
+                for reference in ("ref-b", "ref-a")
+                for seed in (20, 10)
+            ),
+            start=1,
+        )
+    ]
+
+
+def test_binding_used_by_any_prompt_does_not_warn() -> None:
+    animals = variable_list("animals", "cat")
+    batch = batch_definition(
+        "unused",
+        prompt_versions=(
+            PromptVersion(id="fixed", name="Fixed", text="Fixed"),
+            PromptVersion(id="animal", name="Animal", text="{{animal}}"),
+        ),
+        bindings=(fixed_binding("animal", animals, "cat"),),
+    )
+
+    assert compile_batch(batch).warnings == ()
+
+
+def test_binding_unused_by_all_prompts_warns_once() -> None:
+    unused = variable_list("unused", "value")
+    batch = batch_definition(
+        "unused",
+        prompt_versions=(
+            PromptVersion(id="one", name="One", text="One"),
+            PromptVersion(id="two", name="Two", text="Two"),
+        ),
+        bindings=(fixed_binding("unused", unused, "value"),),
+    )
+
+    assert [warning.placeholder for warning in compile_batch(batch).warnings] == ["unused"]
+
+
+def test_prompt_versions_cannot_be_empty() -> None:
+    batch = batch_definition("unused")
+
+    with pytest.raises(CompilationError, match="at least one PromptVersion"):
+        compile_batch(
+            BatchDefinition(
+                prompt_versions=(),
+                variable_bindings=(),
+                references=batch.references,
+                seeds=batch.seeds,
+            )
+        )
+
+
+@pytest.mark.parametrize("prompt_id", ("", "duplicate"))
+def test_prompt_version_ids_must_be_nonempty_and_unique(prompt_id: str) -> None:
+    versions = (
+        PromptVersion(id="duplicate", name="One", text="One"),
+        PromptVersion(id=prompt_id, name="Two", text="Two"),
+    )
+
+    with pytest.raises(CompilationError, match="empty|duplicate PromptVersion ID"):
+        compile_batch(batch_definition("unused", prompt_versions=versions))
+
+
 def test_reference_order_is_preserved() -> None:
     batch = batch_definition("Prompt", references=("ref-3", "ref-1", "ref-2"))
 
@@ -209,7 +311,7 @@ def test_reference_order_is_preserved() -> None:
     ]
 
 
-def test_v1_requires_a_reference_selection() -> None:
+def test_batch_requires_a_reference_selection() -> None:
     with pytest.raises(CompilationError, match="at least one reference"):
         compile_batch(batch_definition("Prompt", references=()))
 

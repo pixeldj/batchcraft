@@ -27,6 +27,7 @@ from batchcraft.comfyui import (
     SubmissionDisposition,
     UploadedInput,
 )
+from batchcraft.domain import PromptVersion
 from batchcraft.execution import (
     ExecutionClient,
     ExecutionConfig,
@@ -232,7 +233,9 @@ def _batch_request(
     return {
         "project": {"id": "project-id", "filesystem_key": "project_key", "name": "Project"},
         "batch": {"id": "batch-id", "filesystem_key": "batch_key", "name": "Batch"},
-        "prompt_version": {"id": "prompt-v1", "text": "Portrait of {{animal}}"},
+        "prompt_versions": [
+            {"id": "prompt-v1", "name": "Portrait prompt", "text": "Portrait of {{animal}}"}
+        ],
         "variable_bindings": bindings,
         "references": [{"asset_id": asset_id} for asset_id in asset_ids],
         "seeds": {"mode": "explicit", "values": [9, 3]},
@@ -451,6 +454,92 @@ def test_preview_uses_production_compiler_order_and_preserves_warnings(tmp_path:
     assert body.warnings[0].code == "unused_binding"
 
 
+def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    request = _batch_request((asset_id,))
+    request["prompt_versions"] = [
+        {"id": "animal", "name": "Animal", "text": "Portrait of {{animal}}"},
+        {"id": "fixed", "name": "Fixed", "text": "A fixed portrait"},
+    ]
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        preview = http.post("/api/batches/preview", json=request)
+        created = http.post("/api/runs", json=request)
+        run = http.get(f"/api/runs/{created.json()['run_id']}")
+        singular_request = dict(request)
+        singular_request.pop("prompt_versions")
+        singular_request["prompt_version"] = {
+            "id": "old",
+            "name": "Old",
+            "text": "Old",
+        }
+        singular = http.post("/api/batches/preview", json=singular_request)
+
+    assert preview.status_code == 200
+    preview_body = preview.json()
+    assert preview_body["job_count"] == 6
+    assert [
+        (job["prompt_version_id"], job["prompt_version_name"], job["resolved_prompt"])
+        for job in preview_body["jobs"]
+    ] == [
+        ("animal", "Animal", "Portrait of dog"),
+        ("animal", "Animal", "Portrait of dog"),
+        ("animal", "Animal", "Portrait of cat"),
+        ("animal", "Animal", "Portrait of cat"),
+        ("fixed", "Fixed", "A fixed portrait"),
+        ("fixed", "Fixed", "A fixed portrait"),
+    ]
+    assert created.status_code == 201
+    assert "prompt_versions" not in created.json()
+    assert run.json()["prompt_versions"] == request["prompt_versions"]
+    assert [job["prompt_version_id"] for job in run.json()["jobs"]] == [
+        "animal",
+        "animal",
+        "animal",
+        "animal",
+        "fixed",
+        "fixed",
+    ]
+    assert singular.status_code == 422
+
+
+def test_api_rejects_an_empty_prompt_collection_with_stable_error_envelope(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(("asset-1",))
+    request["prompt_versions"] = []
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {"code": "invalid_request", "message": "Request data is invalid"}
+    }
+
+
+def test_api_rejects_duplicate_prompt_version_ids_as_an_invalid_batch(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(("asset-1",))
+    request["prompt_versions"] = [
+        {"id": "duplicate", "name": "One", "text": "One"},
+        {"id": "duplicate", "name": "Two", "text": "Two"},
+    ]
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_batch"
+    assert "duplicate PromptVersion ID" in response.json()["error"]["message"]
+
+
 def test_invalid_binding_returns_api_error(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     request = _batch_request(("asset-1",))
@@ -492,6 +581,49 @@ def test_run_creation_and_lookup_use_real_durable_store(tmp_path: Path) -> None:
     assert not (run_path / "execution.json").exists()
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "run_not_found"
+
+
+def test_repeated_multi_prompt_run_creation_freezes_identical_plans_with_new_identities(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    request = _batch_request((asset_id,))
+    request["prompt_versions"] = [
+        {"id": "animal", "name": "Animal", "text": "Portrait of {{animal}}"},
+        {"id": "fixed", "name": "Fixed", "text": "A fixed portrait"},
+    ]
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        first_response = http.post("/api/runs", json=request)
+        second_response = http.post("/api/runs", json=request)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert first_response.json()["run_id"] != second_response.json()["run_id"]
+    assert (first_response.json()["run_number"], second_response.json()["run_number"]) == (1, 2)
+
+    store = RunFilesystemStore(settings.projects_root)
+    first_path, second_path = sorted(settings.projects_root.glob("*/batches/*/run-*"))
+    first = store.load_run(first_path)
+    second = store.load_run(second_path)
+
+    assert first.compiled_plan == second.compiled_plan
+    assert first.compiled_plan.prompt_versions == (
+        PromptVersion(id="animal", name="Animal", text="Portrait of {{animal}}"),
+        PromptVersion(id="fixed", name="Fixed", text="A fixed portrait"),
+    )
+    assert [job.compiled_job.prompt_version_id for job in first.jobs] == [
+        "animal",
+        "animal",
+        "animal",
+        "animal",
+        "fixed",
+        "fixed",
+    ]
+    assert {job.job_id for job in first.jobs}.isdisjoint(job.job_id for job in second.jobs)
 
 
 def test_run_lookup_ignores_corrupt_unrelated_run_and_only_loads_target(

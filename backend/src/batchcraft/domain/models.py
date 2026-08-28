@@ -19,6 +19,7 @@ class CompilationWarningCode(StrEnum):
 @dataclass(frozen=True, slots=True)
 class PromptVersion:
     id: str
+    name: str
     text: str
 
 
@@ -58,7 +59,7 @@ class SeedInput:
 
 @dataclass(frozen=True, slots=True)
 class BatchDefinition:
-    prompt_version: PromptVersion
+    prompt_versions: tuple[PromptVersion, ...]
     variable_bindings: tuple[VariableBinding, ...]
     references: tuple[ReferenceSelection, ...]
     seeds: SeedInput
@@ -80,6 +81,7 @@ class CompilationWarning:
 @dataclass(frozen=True, slots=True)
 class CompiledJob:
     ordinal: int
+    prompt_version_id: str
     resolved_prompt: str
     resolved_variables: tuple[ResolvedVariable, ...]
     reference_asset_id: str
@@ -88,8 +90,7 @@ class CompiledJob:
 
 @dataclass(frozen=True, slots=True)
 class CompiledRunPlan:
-    prompt_version_id: str
-    prompt_template: str
+    prompt_versions: tuple[PromptVersion, ...]
     jobs: tuple[CompiledJob, ...]
     warnings: tuple[CompilationWarning, ...]
 

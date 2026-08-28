@@ -33,6 +33,7 @@ class IdentityRequest(ApiModel):
 
 class PromptVersionRequest(ApiModel):
     id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
     text: str
 
 
@@ -61,7 +62,7 @@ class SeedRequest(ApiModel):
 class BatchRequest(ApiModel):
     project: IdentityRequest
     batch: IdentityRequest
-    prompt_version: PromptVersionRequest
+    prompt_versions: list[PromptVersionRequest] = Field(min_length=1)
     variable_bindings: list[VariableBindingRequest] = Field(default_factory=list)
     references: list[ReferenceRequest]
     seeds: SeedRequest
@@ -81,9 +82,9 @@ class BatchRequest(ApiModel):
                 name=self.batch.name,
             ),
             definition=BatchDefinition(
-                prompt_version=PromptVersion(
-                    id=self.prompt_version.id,
-                    text=self.prompt_version.text,
+                prompt_versions=tuple(
+                    PromptVersion(id=version.id, name=version.name, text=version.text)
+                    for version in self.prompt_versions
                 ),
                 variable_bindings=tuple(
                     VariableBinding(
@@ -179,15 +180,19 @@ class ResolvedVariableResponse(ApiModel):
 
 class JobPreviewResponse(ApiModel):
     ordinal: int
+    prompt_version_id: str
+    prompt_version_name: str
     resolved_prompt: str
     resolved_variables: list[ResolvedVariableResponse]
     reference_asset_id: str
     seed: int
 
     @classmethod
-    def from_job(cls, job: CompiledJob) -> Self:
+    def from_job(cls, job: CompiledJob, prompt_version_name: str) -> Self:
         return cls(
             ordinal=job.ordinal,
+            prompt_version_id=job.prompt_version_id,
+            prompt_version_name=prompt_version_name,
             resolved_prompt=job.resolved_prompt,
             resolved_variables=[
                 ResolvedVariableResponse(name=variable.name, value=variable.value)
@@ -205,10 +210,14 @@ class PreviewResponse(ApiModel):
 
     @classmethod
     def from_plan(cls, plan: CompiledRunPlan) -> Self:
+        prompt_names = {version.id: version.name for version in plan.prompt_versions}
         return cls(
             job_count=plan.job_count,
             warnings=[WarningResponse.from_warning(warning) for warning in plan.warnings],
-            jobs=[JobPreviewResponse.from_job(job) for job in plan.jobs],
+            jobs=[
+                JobPreviewResponse.from_job(job, prompt_names[job.prompt_version_id])
+                for job in plan.jobs
+            ],
         )
 
 
@@ -283,8 +292,21 @@ class RunCreatedResponse(ApiModel):
         )
 
 
+class PromptSnapshotResponse(ApiModel):
+    id: str
+    name: str
+    text: str
+
+
+class RunJobResponse(ApiModel):
+    ordinal: int
+    prompt_version_id: str
+
+
 class RunResponse(RunCreatedResponse):
     created_at: str
+    prompt_versions: list[PromptSnapshotResponse]
+    jobs: list[RunJobResponse]
     execution: ExecutionResponse
 
     @classmethod
@@ -293,6 +315,17 @@ class RunResponse(RunCreatedResponse):
         return cls(
             **created.model_dump(),
             created_at=run.created_at,
+            prompt_versions=[
+                PromptSnapshotResponse(id=version.id, name=version.name, text=version.text)
+                for version in run.compiled_plan.prompt_versions
+            ],
+            jobs=[
+                RunJobResponse(
+                    ordinal=job.ordinal,
+                    prompt_version_id=job.prompt_version_id,
+                )
+                for job in run.compiled_plan.jobs
+            ],
             execution=ExecutionResponse.from_state(state),
         )
 

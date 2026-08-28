@@ -102,7 +102,20 @@ def _resolve_prompt(template: str, assignments: dict[str, str]) -> str:
 
 
 def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
-    placeholder_names = _placeholder_names(batch.prompt_version.text)
+    if not batch.prompt_versions:
+        raise CompilationError("Batch must contain at least one PromptVersion")
+    prompt_ids: set[str] = set()
+    prompt_placeholders: list[tuple[str, ...]] = []
+    for prompt_version in batch.prompt_versions:
+        if not prompt_version.id:
+            raise CompilationError("PromptVersion ID must not be empty")
+        if not prompt_version.name:
+            raise CompilationError(f"PromptVersion {prompt_version.id!r} name must not be empty")
+        if prompt_version.id in prompt_ids:
+            raise CompilationError(f"duplicate PromptVersion ID: {prompt_version.id!r}")
+        prompt_ids.add(prompt_version.id)
+        prompt_placeholders.append(_placeholder_names(prompt_version.text))
+
     bindings_by_name: dict[str, VariableBinding] = {}
     binding_values: dict[str, tuple[str, ...]] = {}
 
@@ -112,57 +125,68 @@ def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
         bindings_by_name[binding.placeholder] = binding
         binding_values[binding.placeholder] = _binding_values(binding)
 
-    missing = tuple(name for name in placeholder_names if name not in bindings_by_name)
-    if missing:
-        names = ", ".join(repr(name) for name in missing)
-        raise CompilationError(f"prompt has undefined placeholder bindings: {names}")
+    for prompt_version, placeholder_names in zip(
+        batch.prompt_versions, prompt_placeholders, strict=True
+    ):
+        missing = tuple(name for name in placeholder_names if name not in bindings_by_name)
+        if missing:
+            names = ", ".join(repr(name) for name in missing)
+            raise CompilationError(
+                f"PromptVersion {prompt_version.id!r} has undefined placeholder bindings: {names}"
+            )
 
     if not batch.references:
-        raise CompilationError("v1 requires at least one reference selection")
+        raise CompilationError("Batch requires at least one reference selection")
     for reference in batch.references:
         if not reference.asset_id:
             raise CompilationError("reference selection has an empty asset ID")
 
     seeds = _seed_values(batch)
+    globally_used_placeholders = {
+        name for placeholder_names in prompt_placeholders for name in placeholder_names
+    }
     warnings = tuple(
         CompilationWarning(
             code=CompilationWarningCode.UNUSED_BINDING,
             placeholder=binding.placeholder,
-            message=f"binding for {binding.placeholder!r} is not used by the PromptVersion",
+            message=f"binding for {binding.placeholder!r} is not used by any PromptVersion",
         )
         for binding in batch.variable_bindings
-        if binding.placeholder not in placeholder_names
+        if binding.placeholder not in globally_used_placeholders
     )
 
-    value_axes = tuple(binding_values[name] for name in placeholder_names)
     jobs: list[CompiledJob] = []
 
-    for variable_values in product(*value_axes):
-        assignments = dict(zip(placeholder_names, variable_values, strict=True))
-        resolved_prompt = _resolve_prompt(batch.prompt_version.text, assignments)
-        unresolved = _placeholder_names(resolved_prompt)
-        if unresolved:
-            names = ", ".join(repr(name) for name in unresolved)
-            raise CompilationError(f"resolved prompt still contains placeholders: {names}")
+    for prompt_version, placeholder_names in zip(
+        batch.prompt_versions, prompt_placeholders, strict=True
+    ):
+        value_axes = tuple(binding_values[name] for name in placeholder_names)
+        for variable_values in product(*value_axes):
+            assignments = dict(zip(placeholder_names, variable_values, strict=True))
+            resolved_prompt = _resolve_prompt(prompt_version.text, assignments)
+            unresolved = _placeholder_names(resolved_prompt)
+            if unresolved:
+                names = ", ".join(repr(name) for name in unresolved)
+                raise CompilationError(f"resolved prompt still contains placeholders: {names}")
 
-        resolved_variables = tuple(
-            ResolvedVariable(name=name, value=assignments[name]) for name in placeholder_names
-        )
-        for reference in batch.references:
-            for seed in seeds:
-                jobs.append(
-                    CompiledJob(
-                        ordinal=len(jobs) + 1,
-                        resolved_prompt=resolved_prompt,
-                        resolved_variables=resolved_variables,
-                        reference_asset_id=reference.asset_id,
-                        seed=seed,
+            resolved_variables = tuple(
+                ResolvedVariable(name=name, value=assignments[name]) for name in placeholder_names
+            )
+            for reference in batch.references:
+                for seed in seeds:
+                    jobs.append(
+                        CompiledJob(
+                            ordinal=len(jobs) + 1,
+                            prompt_version_id=prompt_version.id,
+                            resolved_prompt=resolved_prompt,
+                            resolved_variables=resolved_variables,
+                            reference_asset_id=reference.asset_id,
+                            seed=seed,
+                        )
                     )
-                )
 
     return CompiledRunPlan(
-        prompt_version_id=batch.prompt_version.id,
-        prompt_template=batch.prompt_version.text,
+        prompt_versions=batch.prompt_versions,
         jobs=tuple(jobs),
         warnings=warnings,
     )

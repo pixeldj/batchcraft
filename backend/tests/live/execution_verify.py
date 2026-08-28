@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from batchcraft.comfyui import ComfyUIClient
-from batchcraft.domain import CompiledJob, CompiledRunPlan
+from batchcraft.domain import CompiledJob, CompiledRunPlan, PromptVersion
 from batchcraft.execution import ExecutionConfig, RunExecutionStatus, execute_run
 from batchcraft.files import (
     BatchIdentity,
@@ -79,11 +79,17 @@ async def verify() -> dict[str, object]:
     )
     asset = ProjectAssetStore(projects_path / project.filesystem_key).import_file(image_path)
     plan = CompiledRunPlan(
-        prompt_version_id="live-prompt-version",
-        prompt_template="live verification prompt",
+        prompt_versions=(
+            PromptVersion(
+                id="live-prompt-version",
+                name="Live verification prompt",
+                text="live verification prompt",
+            ),
+        ),
         jobs=tuple(
             CompiledJob(
                 ordinal=ordinal,
+                prompt_version_id="live-prompt-version",
                 resolved_prompt=(
                     "Turn the reference into a polished character illustration. "
                     f"[batchcraft sequential live verification {verification_id} Job {ordinal}]"

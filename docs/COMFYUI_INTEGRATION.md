@@ -54,7 +54,10 @@ Node input:     text
 Type:           string
 ```
 
-The Workflow Profile becomes the stable mapping used by Jobs. v1 exposes one mapped prompt input; support for multiple workflow prompt or text slots is deferred.
+The Workflow Profile becomes the stable mapping used by Jobs. The current profile exposes one mapped
+prompt input. Multi-prompt batching selects among ordered PromptVersion templates, but each compiled
+Job still injects exactly one resolved prompt string into this mapping. Support for multiple workflow
+prompt or text slots is deferred.
 
 ## Workflow Snapshotting
 

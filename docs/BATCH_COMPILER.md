@@ -21,7 +21,7 @@ The plan contains ordered, fully resolved Jobs with one-based ordinals. It does 
 A Batch may provide:
 
 - Workflow Profile;
-- one PromptVersion in v1;
+- an ordered, non-empty collection of PromptVersions;
 - VariableBindings;
 - reference bindings;
 - seed policy;
@@ -31,7 +31,7 @@ A Batch may provide:
 ## Compilation Pipeline
 
 ```text
-PromptVersion
+Ordered PromptVersions
        +
 Variable Bindings
        |
@@ -70,7 +70,9 @@ A Job must not rely on:
 
 Anything necessary to understand what should execute must be resolved or snapshotted at Run creation.
 
-v1 maps its single PromptVersion to one friendly workflow prompt input. Workflows with multiple exposed prompt or text slots are deferred.
+Each PromptVersion produces one resolved prompt string per prompt-variable combination. Every Job maps
+that one final string to the existing friendly workflow prompt input. Workflows with multiple exposed
+prompt or text slots are deferred.
 
 ## Example
 
@@ -118,7 +120,10 @@ The compiler applies dimensions in this order:
 PromptVersion -> prompt variables -> reference bindings -> seeds -> parameter sweeps
 ```
 
-The rightmost dimension varies fastest. User selection order is preserved within every dimension. Although v1 permits only one PromptVersion, it remains the first dimension so later support cannot silently change existing ordering semantics.
+PromptVersion is the first Batch dimension and preserves user selection order. Each PromptVersion is
+templated independently and expands only the bindings it references, in placeholder first-occurrence
+order. Reference bindings follow, then seeds, so the rightmost dimension varies fastest. User order is
+preserved within every dimension.
 
 The example above therefore varies the reference dimension fastest. This ordering must be covered by preview, compilation, manifest round-trip, and rerun tests.
 
@@ -130,7 +135,7 @@ For independent dimensions:
 
 ```text
 jobs =
-prompt variants
+sum(prompt-variable combinations for each PromptVersion)
 × reference combinations
 × seed values
 × parameter sweep combinations
@@ -145,6 +150,7 @@ Large job counts should produce a warning threshold rather than an arbitrary har
 Before execution, users should be able to preview at least:
 
 - total Job count;
+- source PromptVersion identity and name;
 - resolved prompt;
 - reference filename or thumbnail;
 - seed;
@@ -229,6 +235,10 @@ The compiler should be a pure or near-pure domain service wherever possible.
 Given the same immutable input snapshot, it should produce the same ordered Job plan.
 
 Exact rerun preserves generation inputs, base workflow, Workflow Profile mapping, references, variables, parameters, seeds, and ordering. It allocates new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
+
+For multi-prompt Runs, generation inputs include the exact ordered PromptVersion snapshots and every
+Job's PromptVersion association. Prompt resolution is single-pass; variable values never become nested
+templates.
 
 This is specification reproducibility, not a guarantee of byte-identical generated pixels across changes in the execution environment.
 

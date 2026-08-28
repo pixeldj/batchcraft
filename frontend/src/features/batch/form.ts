@@ -10,6 +10,13 @@ export interface VariableBindingForm {
   fixedValue: string;
 }
 
+export interface PromptForm {
+  key: number;
+  versionId: string;
+  name: string;
+  text: string;
+}
+
 export interface BatchFormState {
   projectId: string;
   projectFilesystemKey: string;
@@ -17,8 +24,7 @@ export interface BatchFormState {
   batchId: string;
   batchFilesystemKey: string;
   batchName: string;
-  promptVersionId: string;
-  promptText: string;
+  prompts: PromptForm[];
   variableBindings: VariableBindingForm[];
   referenceAssetIds: string[];
   seedMode: "fixed" | "explicit" | "random";
@@ -30,11 +36,12 @@ export interface BatchFormState {
 
 export const MAX_RANDOM_SEED_COUNT = 100;
 
-let nextKey = 1;
+let nextVariableBindingKey = 1;
+let nextPromptKey = 1;
 
 export function newVariableBinding(): VariableBindingForm {
   return {
-    key: nextKey++,
+    key: nextVariableBindingKey++,
     placeholder: "variable",
     variableListId: "variable-list-1",
     values: "value one\nvalue two",
@@ -44,8 +51,21 @@ export function newVariableBinding(): VariableBindingForm {
   };
 }
 
+export function newPrompt(promptNumber = 1): PromptForm {
+  const key = nextPromptKey++;
+  return {
+    key,
+    versionId: `prompt-v${promptNumber}`,
+    name: `Prompt ${promptNumber}`,
+    text: "",
+  };
+}
+
 export function initialBatchForm(): BatchFormState {
   const binding = newVariableBinding();
+  const prompt = newPrompt(1);
+  prompt.name = "Portrait";
+  prompt.text = "A studio portrait of {{subject}}.";
   binding.placeholder = "subject";
   binding.variableListId = "subjects";
   binding.values = "cat\ndog";
@@ -59,8 +79,7 @@ export function initialBatchForm(): BatchFormState {
     batchId: "batch-1",
     batchFilesystemKey: "batch_1",
     batchName: "First experiment",
-    promptVersionId: "prompt-v1",
-    promptText: "A studio portrait of {{subject}}.",
+    prompts: [prompt],
     variableBindings: [binding],
     referenceAssetIds: [],
     seedMode: "fixed",
@@ -95,6 +114,9 @@ export class FormBuildError extends Error {
 }
 
 export function buildBatchRequest(form: BatchFormState): BatchRequest {
+  if (form.prompts.length === 0) {
+    throw new FormBuildError("prompts", "Add at least one PromptVersion.");
+  }
   const references = form.referenceAssetIds;
   if (references.length === 0) {
     throw new FormBuildError("references", "Select at least one Project Reference Asset.");
@@ -115,10 +137,11 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
       filesystem_key: required(form.batchFilesystemKey, "batch", "Batch filesystem key"),
       name: required(form.batchName, "batch", "Batch name"),
     },
-    prompt_version: {
-      id: required(form.promptVersionId, "prompt", "PromptVersion ID"),
-      text: form.promptText,
-    },
+    prompt_versions: form.prompts.map((prompt, index) => ({
+      id: required(prompt.versionId, "prompts", `Prompt ${index + 1} ID`),
+      name: required(prompt.name, "prompts", `Prompt ${index + 1} name`),
+      text: prompt.text,
+    })),
     variable_bindings: form.variableBindings.map((binding) => ({
       placeholder: required(binding.placeholder, "variables", "Placeholder"),
       variable_list: {

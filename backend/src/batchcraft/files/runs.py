@@ -16,6 +16,7 @@ from batchcraft.domain import (
     CompilationWarningCode,
     CompiledJob,
     CompiledRunPlan,
+    PromptVersion,
     ResolvedVariable,
 )
 from batchcraft.files._io import (
@@ -39,13 +40,14 @@ from batchcraft.files.models import (
 )
 
 RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 1
+MANIFEST_FORMAT_VERSION = 2
 OWNER_FORMAT_VERSION = 1
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
     "job_ordinal",
     "job_id",
     "prompt_version_id",
+    "prompt_version_name",
     "prompt_template",
     "resolved_prompt",
     "resolved_variables_json",
@@ -398,12 +400,30 @@ class RunFilesystemStore:
             raise RunStoreError(f"{kind} filesystem key is not path-safe: {key!r}")
 
     def _validate_plan(self, plan: CompiledRunPlan) -> None:
-        if not plan.prompt_version_id:
-            raise RunStoreError("compiled plan PromptVersion ID must not be empty")
+        if not plan.prompt_versions:
+            raise RunStoreError("compiled plan must contain at least one PromptVersion")
+        prompt_ids: set[str] = set()
+        for prompt_version in plan.prompt_versions:
+            if not prompt_version.id:
+                raise RunStoreError("compiled plan PromptVersion ID must not be empty")
+            if not prompt_version.name:
+                raise RunStoreError(
+                    f"compiled plan PromptVersion {prompt_version.id!r} name must not be empty"
+                )
+            if prompt_version.id in prompt_ids:
+                raise RunStoreError(
+                    f"compiled plan contains duplicate PromptVersion ID: {prompt_version.id!r}"
+                )
+            prompt_ids.add(prompt_version.id)
         expected_ordinals = tuple(range(1, plan.job_count + 1))
         if tuple(job.ordinal for job in plan.jobs) != expected_ordinals:
             raise RunStoreError("compiled Job ordinals must be one-based and contiguous")
         for job in plan.jobs:
+            if job.prompt_version_id not in prompt_ids:
+                raise RunStoreError(
+                    f"compiled Job {job.ordinal} references unknown PromptVersion ID: "
+                    f"{job.prompt_version_id!r}"
+                )
             if "{{" in job.resolved_prompt or "}}" in job.resolved_prompt:
                 raise RunStoreError(
                     f"compiled Job {job.ordinal} contains an unresolved prompt placeholder"
@@ -479,10 +499,14 @@ def _manifest(
             "project": run_metadata["project"],
             "batch": run_metadata["batch"],
         },
-        "prompt_version": {
-            "prompt_version_id": plan.prompt_version_id,
-            "prompt_template": plan.prompt_template,
-        },
+        "prompt_versions": [
+            {
+                "prompt_version_id": version.id,
+                "prompt_version_name": version.name,
+                "prompt_template": version.text,
+            }
+            for version in plan.prompt_versions
+        ],
         "compiler_warnings": [
             {
                 "code": warning.code.value,
@@ -503,6 +527,7 @@ def _manifest(
             {
                 "job_id": job.job_id,
                 "ordinal": job.compiled_job.ordinal,
+                "prompt_version_id": job.compiled_job.prompt_version_id,
                 "resolved_prompt": job.compiled_job.resolved_prompt,
                 "resolved_variables": [
                     {"name": variable.name, "value": variable.value}
@@ -525,16 +550,19 @@ def _manifest_csv_bytes(
     workflow_sha256: str,
     workflow_profile_sha256: str,
 ) -> bytes:
+    prompt_versions = {version.id: version for version in plan.prompt_versions}
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=_CSV_COLUMNS, lineterminator="\n")
     writer.writeheader()
     for job in jobs:
+        prompt_version = prompt_versions[job.compiled_job.prompt_version_id]
         writer.writerow(
             {
                 "job_ordinal": job.compiled_job.ordinal,
                 "job_id": job.job_id,
-                "prompt_version_id": plan.prompt_version_id,
-                "prompt_template": plan.prompt_template,
+                "prompt_version_id": prompt_version.id,
+                "prompt_version_name": prompt_version.name,
+                "prompt_template": prompt_version.text,
                 "resolved_prompt": job.compiled_job.resolved_prompt,
                 "resolved_variables_json": canonical_json_bytes(
                     [
@@ -560,7 +588,8 @@ def _parse_run(
 ) -> PublishedRun:
     if run_data.get("format_version") != RUN_FORMAT_VERSION:
         raise RunStoreError("unsupported run.json format version")
-    if manifest_data.get("format_version") != MANIFEST_FORMAT_VERSION:
+    manifest_version = manifest_data.get("format_version")
+    if manifest_version not in {1, MANIFEST_FORMAT_VERSION}:
         raise RunStoreError("unsupported manifest.json format version")
 
     run_id = _required_string(run_data, "run_id")
@@ -595,9 +624,29 @@ def _parse_run(
     if _required_string(profile_snapshot, "sha256") != workflow_profile_sha256:
         raise RunStoreError("Workflow Profile hash differs between run.json and manifest.json")
 
-    prompt_version = _required_object(manifest_data, "prompt_version")
-    prompt_version_id = _required_string(prompt_version, "prompt_version_id")
-    prompt_template = _required_string(prompt_version, "prompt_template", allow_empty=True)
+    prompt_versions: tuple[PromptVersion, ...]
+    if manifest_version == 1:
+        prompt_version_data = _required_object(manifest_data, "prompt_version")
+        legacy_prompt_id = _required_string(prompt_version_data, "prompt_version_id")
+        prompt_versions = (
+            PromptVersion(
+                id=legacy_prompt_id,
+                name=legacy_prompt_id,
+                text=_required_string(prompt_version_data, "prompt_template", allow_empty=True),
+            ),
+        )
+    else:
+        prompt_versions = tuple(
+            _parse_prompt_version(_object_item(value, "PromptVersion"))
+            for value in _required_array(manifest_data, "prompt_versions")
+        )
+        if not prompt_versions:
+            raise RunStoreError("manifest must contain at least one PromptVersion")
+        prompt_ids = tuple(version.id for version in prompt_versions)
+        if len(set(prompt_ids)) != len(prompt_ids):
+            raise RunStoreError("manifest contains duplicate PromptVersion IDs")
+        legacy_prompt_id = None
+    known_prompt_ids = {version.id for version in prompt_versions}
     warnings = tuple(
         _parse_warning(_object_item(value, "compiler warning"))
         for value in _required_array(manifest_data, "compiler_warnings")
@@ -607,12 +656,12 @@ def _parse_run(
             _object_item(value, "Job"),
             workflow_sha256,
             workflow_profile_sha256,
+            legacy_prompt_id=legacy_prompt_id,
         )
         for value in _required_array(manifest_data, "jobs")
     )
     compiled_plan = CompiledRunPlan(
-        prompt_version_id=prompt_version_id,
-        prompt_template=prompt_template,
+        prompt_versions=prompt_versions,
         jobs=tuple(job.compiled_job for job in persisted_jobs),
         warnings=warnings,
     )
@@ -624,6 +673,11 @@ def _parse_run(
     job_ids = tuple(job.job_id for job in persisted_jobs)
     if len(set(job_ids)) != len(job_ids):
         raise RunStoreError("manifest contains duplicate Job IDs")
+    for job in compiled_plan.jobs:
+        if job.prompt_version_id not in known_prompt_ids:
+            raise RunStoreError(
+                f"Job {job.ordinal} references unknown PromptVersion ID: {job.prompt_version_id!r}"
+            )
 
     return PublishedRun(
         run_id=run_id,
@@ -642,7 +696,11 @@ def _parse_run(
 
 
 def _parse_job(
-    data: dict[str, object], workflow_sha256: str, workflow_profile_sha256: str
+    data: dict[str, object],
+    workflow_sha256: str,
+    workflow_profile_sha256: str,
+    *,
+    legacy_prompt_id: str | None,
 ) -> PersistedJob:
     if _required_string(data, "workflow_sha256") != workflow_sha256:
         raise RunStoreError("Job workflow hash differs from the Run workflow hash")
@@ -667,6 +725,11 @@ def _parse_job(
         raise RunStoreError("Job contains an unresolved prompt placeholder")
     compiled_job = CompiledJob(
         ordinal=_positive_integer(data, "ordinal"),
+        prompt_version_id=(
+            legacy_prompt_id
+            if legacy_prompt_id is not None
+            else _required_string(data, "prompt_version_id")
+        ),
         resolved_prompt=resolved_prompt,
         resolved_variables=variables,
         reference_asset_id=asset.asset_id,
@@ -676,6 +739,14 @@ def _parse_job(
         job_id=_required_string(data, "job_id"),
         compiled_job=compiled_job,
         reference_asset=asset,
+    )
+
+
+def _parse_prompt_version(data: dict[str, object]) -> PromptVersion:
+    return PromptVersion(
+        id=_required_string(data, "prompt_version_id"),
+        name=_required_string(data, "prompt_version_name"),
+        text=_required_string(data, "prompt_template", allow_empty=True),
     )
 
 

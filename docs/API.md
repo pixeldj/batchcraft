@@ -57,9 +57,18 @@ GET  /api/runs/{run_id}/results
 GET  /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}
 ```
 
-`POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape. The request carries Project and Batch identity, one PromptVersion, Variable List bindings, Reference Asset IDs, explicit seed input, the API-format workflow, and its Workflow Profile mapping.
+`POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape. The
+request carries Project and Batch identity, an ordered non-empty `prompt_versions` array with stable
+ID, frozen name, and template text, Variable List bindings, Reference Asset IDs, concrete seed input,
+the API-format workflow, and its Workflow Profile mapping. The singular `prompt_version` field is not
+accepted.
 
-Preview calls the production Batch compiler and returns every resolved Job in deterministic order. Run creation compiles the request again, validates the Workflow Profile against the workflow, resolves existing Project assets, and publishes through `RunFilesystemStore`.
+Preview calls the production Batch compiler and returns every resolved Job in deterministic order.
+Each Preview Job includes `prompt_version_id` and `prompt_version_name`; clients do not infer source
+identity from resolved text. Run creation compiles the request again, validates the Workflow Profile
+against the workflow, resolves existing Project assets, and publishes through `RunFilesystemStore`.
+The compact Run creation response is unchanged. `GET /api/runs/{run_id}` additionally returns the
+ordered frozen PromptVersion snapshots and each Job ordinal's PromptVersion ID association.
 
 ## Project Assets
 
