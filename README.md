@@ -10,9 +10,9 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 Early production development.
 
-The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, sequential Run executor, and first thin FastAPI application boundary are complete.
+The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, sequential Run executor, thin FastAPI application boundary, and first React workflow are complete.
 
-The API supports ComfyUI status, Batch preview, durable Run creation and lookup, background execution start, execution polling, Result listing, and safe Result file retrieval. SQLite, React, a global scheduler, and automatic recovery remain unimplemented.
+The browser now supports ComfyUI status, ephemeral Batch editing, deterministic Job preview, durable Run creation, background execution start, Job progress, and Result viewing through the API. SQLite, durable editable Batch persistence, a global scheduler, and automatic recovery remain unimplemented.
 
 ## Run The API
 
@@ -25,6 +25,19 @@ uv run batchcraft-api
 ```
 
 See [`docs/API.md`](docs/API.md) for configuration, endpoints, and current limitations.
+
+## Run The Frontend
+
+With the API running, use a second terminal from `frontend/`:
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The frontend defaults to the API at `http://127.0.0.1:8000`;
+`VITE_BATCHCRAFT_API_URL` overrides that address. See [`frontend/README.md`](frontend/README.md)
+for frontend checks and first-slice limitations.
 
 ## Initial Deployment Model
 
@@ -159,8 +172,8 @@ The first technical milestone was a disposable ComfyUI integration spike that pr
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, sequential Run execution, and a thin FastAPI boundary under `backend/`.
+Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, sequential Run execution, a thin FastAPI boundary under `backend/`, and the first browser workflow under `frontend/`.
 
-Later application slices will add SQLite-backed mutable application indexing, React, scheduler selection, and a Results Viewer.
+Later application slices will add SQLite-backed mutable application indexing, durable editable Batches, scheduler selection, and deeper Result review.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.

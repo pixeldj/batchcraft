@@ -163,4 +163,6 @@ The sequential Run executor is implemented under `backend/`, including versioned
 
 The first FastAPI application boundary is implemented under `backend/`. It exposes ComfyUI status, ephemeral Batch preview, durable Run creation and filesystem lookup, in-process background execution start, execution polling, and safe Result retrieval through a narrow application service layer.
 
-SQLite, React, global scheduling, cancellation, and automatic recovery remain deferred. Keep FastAPI DTOs and route behavior separate from the compiler, filesystem store, ComfyUI adapter, and execution-state rules.
+The first React frontend is implemented under `frontend/`. It provides one browser screen for ComfyUI status, ephemeral Batch configuration, deterministic Job preview, durable Run creation, execution polling, and Result rendering. It uses the FastAPI application as its only backend boundary.
+
+SQLite, durable editable Batch persistence, global scheduling, cancellation, retry, and automatic recovery remain deferred. Keep frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, and execution rules.

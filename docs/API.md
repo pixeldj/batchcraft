@@ -4,7 +4,7 @@
 
 The first application boundary exposes the production compiler, Run filesystem store, execution state, sequential executor, and ComfyUI adapter through FastAPI.
 
-The API is a local single-user development boundary. It does not add SQLite, authentication, a global scheduler, restart recovery, cancellation, or a frontend. The browser never communicates directly with ComfyUI.
+The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. The API does not add SQLite, authentication, a global scheduler, restart recovery, or cancellation.
 
 ## Local Startup
 
@@ -35,6 +35,10 @@ Configuration is read centrally from environment variables:
 | `BATCHCRAFT_SERVER_PORT` | `8000` | API bind port |
 
 The real ComfyUI host is never committed to repository configuration.
+
+The Vite frontend defaults to this API at `http://127.0.0.1:8000`. Set
+`VITE_BATCHCRAFT_API_URL` in the frontend environment to use another API address. Its origin must
+match `BATCHCRAFT_FRONTEND_ORIGIN` for browser API requests.
 
 ## Endpoints
 

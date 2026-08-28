@@ -4,7 +4,7 @@
 
 This document defines the expected development workflow for **batchcraft**.
 
-The project has entered production application development. The backend has a thin FastAPI boundary; the React frontend and SQLite application index remain unscaffolded.
+The project has entered production application development. The backend has a thin FastAPI boundary, and the first React browser workflow is implemented. The SQLite application index remains unscaffolded.
 
 ## Supported Development Environment
 
@@ -13,7 +13,7 @@ Initial development target:
 - development host: macOS;
 - shell: normal macOS terminal environment;
 - Python tooling: `uv`;
-- Node tooling: to be selected when frontend scaffolding begins;
+- Node tooling: Node.js `^20.19.0` or `>=22.12.0` with npm;
 - generation host: ComfyUI on a Windows workstation reachable over the local LAN;
 - source control: Git.
 
@@ -141,6 +141,17 @@ Do not build the full prompt library, advanced search, elaborate ratings, multi-
 
 The slice accepts an ephemeral complete Batch request for preview and Run creation. It does not define another durable Batch format before SQLite. Run lookup narrowly scans complete published Run directories, and long-running execution uses retained in-process tasks while `execution.json` remains authoritative.
 
+### Phase 2.1: first React workflow
+
+Completed.
+
+Production code under `frontend/` provides one screen for ComfyUI status, ephemeral Batch editing,
+backend-compiled Job preview, durable Run creation, execution start and polling, and deterministic
+Result rendering. The browser uses only the FastAPI endpoints documented in `docs/API.md`.
+
+This phase does not add asset import or discovery, durable editable Batch persistence, Run history,
+recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow Profile mapping.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -179,19 +190,36 @@ The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATC
 
 ## Frontend Conventions
 
-The planned frontend is React + TypeScript.
+The frontend under `frontend/` uses React, strict TypeScript, Vite, npm, native `fetch`, and plain
+CSS. Vitest, jsdom, and React Testing Library cover user-visible behavior at a mocked API boundary.
+ESLint checks TypeScript and React Hooks rules. No router, component framework, data-fetching
+library, or client state library is installed.
 
-When scaffolding begins:
+Keep API access in `src/api/`, feature components in `src/features/`, and small shared controls in
+`src/components/`. Treat HTTP responses as typed contracts. Keep Batch compilation, validation,
+execution transitions, and Result provenance on the backend.
 
-- enable strict TypeScript;
-- keep API/data access out of presentational components;
-- treat server responses as typed contracts;
-- keep Batch compilation and other authoritative business logic on the backend;
-- do not duplicate compiler logic in the frontend for previews;
-- design image-heavy screens for responsive thumbnail/grid workflows;
-- prioritize clarity and fast experiment construction over decorative complexity.
+From `frontend/`, install and run the development server:
 
-The exact package manager, build tool, component system, formatter, and test stack should be selected deliberately during frontend scaffolding and documented here.
+```bash
+npm install
+npm run dev
+```
+
+Vite serves `http://localhost:5173`. The frontend uses `http://127.0.0.1:8000` by default and reads
+an override from `VITE_BATCHCRAFT_API_URL`. Keep the backend's `BATCHCRAFT_FRONTEND_ORIGIN` aligned
+with the Vite origin.
+
+Run all frontend checks from `frontend/`:
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+The committed npm lockfile defines dependency versions. Do not commit `.env` or `.env.local`.
 
 ## Backend/Frontend Boundary
 

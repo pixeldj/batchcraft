@@ -1,0 +1,318 @@
+import { Field, TextAreaField } from "../../components/Field";
+import {
+  newReference,
+  newVariableBinding,
+  type BatchFormState,
+  type ReferenceForm,
+  type VariableBindingForm,
+} from "./form";
+
+interface Props {
+  form: BatchFormState;
+  error: string | null;
+  previewing: boolean;
+  onChange(form: BatchFormState): void;
+  onPreview(): void;
+}
+
+export function BatchEditor({ form, error, previewing, onChange, onPreview }: Props) {
+  function update<K extends keyof BatchFormState>(key: K, value: BatchFormState[K]) {
+    onChange({ ...form, [key]: value });
+  }
+
+  function updateBinding(key: number, patch: Partial<VariableBindingForm>) {
+    update(
+      "variableBindings",
+      form.variableBindings.map((binding) =>
+        binding.key === key ? { ...binding, ...patch } : binding,
+      ),
+    );
+  }
+
+  function updateReference(key: number, patch: Partial<ReferenceForm>) {
+    update(
+      "references",
+      form.references.map((reference) =>
+        reference.key === key ? { ...reference, ...patch } : reference,
+      ),
+    );
+  }
+
+  return (
+    <section className="section-card batch-editor" aria-labelledby="batch-heading">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">01 / Define</p>
+          <h2 id="batch-heading">Batch configuration</h2>
+        </div>
+        <p className="section-note">Ephemeral until a Run is created</p>
+      </div>
+
+      <fieldset>
+        <legend>Project identity</legend>
+        <div className="field-grid three-columns">
+          <Field
+            id="project-id"
+            label="Project ID"
+            value={form.projectId}
+            onChange={(event) => update("projectId", event.target.value)}
+          />
+          <Field
+            id="project-key"
+            label="Filesystem key"
+            value={form.projectFilesystemKey}
+            onChange={(event) => update("projectFilesystemKey", event.target.value)}
+          />
+          <Field
+            id="project-name"
+            label="Project name"
+            value={form.projectName}
+            onChange={(event) => update("projectName", event.target.value)}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Batch identity</legend>
+        <div className="field-grid three-columns">
+          <Field
+            id="batch-id"
+            label="Batch ID"
+            value={form.batchId}
+            onChange={(event) => update("batchId", event.target.value)}
+          />
+          <Field
+            id="batch-key"
+            label="Filesystem key"
+            value={form.batchFilesystemKey}
+            onChange={(event) => update("batchFilesystemKey", event.target.value)}
+          />
+          <Field
+            id="batch-name"
+            label="Batch name"
+            value={form.batchName}
+            onChange={(event) => update("batchName", event.target.value)}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>PromptVersion</legend>
+        <Field
+          id="prompt-version-id"
+          label="PromptVersion ID"
+          value={form.promptVersionId}
+          onChange={(event) => update("promptVersionId", event.target.value)}
+        />
+        <TextAreaField
+          id="prompt-text"
+          className="prompt-editor"
+          label="Prompt template"
+          hint="Use named placeholders such as {{subject}}. The backend validates and resolves them."
+          value={form.promptText}
+          onChange={(event) => update("promptText", event.target.value)}
+        />
+      </fieldset>
+
+      <fieldset>
+        <legend>Variable bindings</legend>
+        <div className="fieldset-action">
+          <button
+            className="button-secondary compact"
+            type="button"
+            onClick={() => update("variableBindings", [...form.variableBindings, newVariableBinding()])}
+          >
+            Add binding
+          </button>
+        </div>
+        {form.variableBindings.length === 0 ? (
+          <p className="empty-note">No bindings. Prompts without placeholders need none.</p>
+        ) : null}
+        <div className="repeater-stack">
+          {form.variableBindings.map((binding, index) => (
+            <div className="repeater-card" key={binding.key}>
+              <div className="repeater-title">
+                <strong>Binding {index + 1}</strong>
+                <button
+                  className="button-link danger"
+                  type="button"
+                  onClick={() =>
+                    update(
+                      "variableBindings",
+                      form.variableBindings.filter((item) => item.key !== binding.key),
+                    )
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+              <div className="field-grid three-columns">
+                <Field
+                  id={`placeholder-${binding.key}`}
+                  label="Placeholder"
+                  value={binding.placeholder}
+                  onChange={(event) => updateBinding(binding.key, { placeholder: event.target.value })}
+                />
+                <Field
+                  id={`list-id-${binding.key}`}
+                  label="Variable List ID"
+                  value={binding.variableListId}
+                  onChange={(event) =>
+                    updateBinding(binding.key, { variableListId: event.target.value })
+                  }
+                />
+                <label className="field" htmlFor={`mode-${binding.key}`}>
+                  <span className="field-label">Binding mode</span>
+                  <select
+                    id={`mode-${binding.key}`}
+                    value={binding.mode}
+                    onChange={(event) =>
+                      updateBinding(binding.key, { mode: event.target.value as "all" | "fixed" })
+                    }
+                  >
+                    <option value="all">All selected values</option>
+                    <option value="fixed">Fixed value</option>
+                  </select>
+                </label>
+              </div>
+              <div className="field-grid two-columns">
+                <TextAreaField
+                  id={`values-${binding.key}`}
+                  className="short-list"
+                  label="Variable List values"
+                  hint="One per line; commas inside a value are preserved"
+                  value={binding.values}
+                  onChange={(event) => updateBinding(binding.key, { values: event.target.value })}
+                />
+                {binding.mode === "all" ? (
+                  <TextAreaField
+                    id={`selected-${binding.key}`}
+                    className="short-list"
+                    label="Selected values"
+                    hint="Order controls deterministic expansion"
+                    value={binding.selectedValues}
+                    onChange={(event) =>
+                      updateBinding(binding.key, { selectedValues: event.target.value })
+                    }
+                  />
+                ) : (
+                  <Field
+                    id={`fixed-${binding.key}`}
+                    label="Fixed value"
+                    value={binding.fixedValue}
+                    onChange={(event) =>
+                      updateBinding(binding.key, { fixedValue: event.target.value })
+                    }
+                  />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+
+      <div className="field-grid two-columns align-start">
+        <fieldset>
+          <legend>References</legend>
+          <div className="fieldset-action">
+            <button
+              className="button-secondary compact"
+              type="button"
+              onClick={() => update("references", [...form.references, newReference()])}
+            >
+              Add Asset ID
+            </button>
+          </div>
+          <p className="limitation-note">
+            This API cannot import or browse assets yet. Enter Asset IDs already stored under this
+            Project.
+          </p>
+          <div className="reference-list">
+            {form.references.map((reference, index) => (
+              <div className="inline-control" key={reference.key}>
+                <Field
+                  id={`asset-${reference.key}`}
+                  label={`Project Asset ID ${index + 1}`}
+                  value={reference.assetId}
+                  onChange={(event) =>
+                    updateReference(reference.key, { assetId: event.target.value })
+                  }
+                />
+                <button
+                  className="button-link danger"
+                  type="button"
+                  onClick={() =>
+                    update(
+                      "references",
+                      form.references.filter((item) => item.key !== reference.key),
+                    )
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Seeds</legend>
+          <label className="field" htmlFor="seed-mode">
+            <span className="field-label">Seed mode</span>
+            <select
+              id="seed-mode"
+              value={form.seedMode}
+              onChange={(event) =>
+                update("seedMode", event.target.value as "fixed" | "explicit")
+              }
+            >
+              <option value="fixed">Fixed</option>
+              <option value="explicit">Explicit list</option>
+            </select>
+          </label>
+          <TextAreaField
+            id="seed-values"
+            className="short-list"
+            label={form.seedMode === "fixed" ? "Seed" : "Explicit seeds"}
+            hint="Integers, one per line or comma-separated"
+            value={form.seedValues}
+            onChange={(event) => update("seedValues", event.target.value)}
+          />
+        </fieldset>
+      </div>
+
+      <fieldset>
+        <legend>ComfyUI workflow</legend>
+        <p className="limitation-note">
+          Paste the complete API-format workflow exported from ComfyUI. This is not the UI-format
+          workflow.
+        </p>
+        <div className="field-grid two-columns align-start">
+          <TextAreaField
+            id="workflow-json"
+            className="json-editor"
+            label="Workflow JSON"
+            spellCheck={false}
+            value={form.workflowJson}
+            onChange={(event) => update("workflowJson", event.target.value)}
+          />
+          <TextAreaField
+            id="workflow-profile-json"
+            className="json-editor"
+            label="Workflow Profile JSON"
+            spellCheck={false}
+            value={form.workflowProfileJson}
+            onChange={(event) => update("workflowProfileJson", event.target.value)}
+          />
+        </div>
+      </fieldset>
+
+      {error ? <p className="operation-error" role="alert">{error}</p> : null}
+      <div className="action-row">
+        <button className="button-primary" type="button" disabled={previewing} onClick={onPreview}>
+          {previewing ? "Previewing..." : "Preview Batch"}
+        </button>
+      </div>
+    </section>
+  );
+}
