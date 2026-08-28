@@ -33,11 +33,16 @@ from batchcraft.files import (
     PublishedRun,
     RunFilesystemStore,
     RunStoreError,
+    is_safe_filesystem_key,
 )
 
 from .errors import (
+    AssetDataError,
     AssetNotFoundError,
+    AssetPublicationError,
+    AssetUploadError,
     ExecutionNotEligibleError,
+    InvalidProjectKeyError,
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
@@ -47,6 +52,12 @@ from .errors import (
 from .tasks import RunTaskRegistry
 
 _RUN_DIRECTORY = re.compile(r"run-[0-9]+")
+_IMAGE_MIME_TYPES = {
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 class ApplicationComfyUIClient(ExecutionClient, Protocol):
@@ -72,6 +83,12 @@ class RunCreationInput:
     definition: BatchDefinition
     workflow: Mapping[str, object]
     workflow_profile: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AssetImportInput:
+    source: Path
+    content_type: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +119,62 @@ class BatchcraftService:
 
     def preview_batch(self, definition: BatchDefinition) -> CompiledRunPlan:
         return compile_batch(definition)
+
+    def list_project_assets(self, project_filesystem_key: str) -> tuple[AssetRecord, ...]:
+        store = self._project_asset_store(project_filesystem_key)
+        try:
+            records = store.list_metadata()
+        except (AssetStoreError, OSError, ValueError) as error:
+            raise AssetDataError("Project asset data is invalid") from error
+        return tuple(record for record in records if _is_supported_image_record(record))
+
+    def import_project_assets(
+        self,
+        project_filesystem_key: str,
+        uploads: tuple[AssetImportInput, ...],
+    ) -> tuple[AssetRecord, ...]:
+        if not uploads:
+            raise AssetUploadError("At least one image file is required")
+        store = self._project_asset_store(project_filesystem_key)
+        for upload in uploads:
+            _validate_image_file(upload.source, upload.content_type)
+
+        imported: dict[str, AssetRecord] = {}
+        try:
+            for upload in uploads:
+                record = store.import_file(upload.source)
+                imported.setdefault(record.asset_id, record)
+        except (AssetStoreError, OSError, ValueError) as error:
+            if _has_os_error_cause(error) or isinstance(error, OSError):
+                raise AssetPublicationError("Project assets could not be published") from error
+            raise AssetDataError("Project asset data is invalid") from error
+        return tuple(imported.values())
+
+    def get_project_asset_content(
+        self, project_filesystem_key: str, asset_id: str
+    ) -> tuple[AssetRecord, bytes]:
+        store = self._project_asset_store(project_filesystem_key)
+        try:
+            matches = [
+                record
+                for record in store.list_metadata()
+                if record.asset_id == asset_id and _is_supported_image_record(record)
+            ]
+        except (AssetStoreError, OSError, ValueError) as error:
+            raise AssetDataError("Project asset data is invalid") from error
+        if not matches:
+            raise AssetNotFoundError(f"Project asset {asset_id!r} was not found")
+        if len(matches) > 1:
+            raise AssetDataError(f"duplicate Project asset ID: {asset_id}")
+
+        try:
+            record = store.load(matches[0].sha256)
+            content = _read_asset_content(store.project_path / record.stored_path, record)
+            if not _has_image_signature(content, record.mime_type):
+                raise AssetDataError("Project asset image signature is invalid")
+        except (AssetStoreError, OSError, ValueError) as error:
+            raise AssetDataError("Project asset data is invalid") from error
+        return record, content
 
     def create_run(self, creation: RunCreationInput) -> PublishedRun:
         self._validate_creation_paths(
@@ -246,24 +319,17 @@ class BatchcraftService:
         project_path = self.projects_root / project_filesystem_key
         store = ProjectAssetStore(project_path)
         found: dict[str, AssetRecord] = {}
-        assets_root = store.assets_path / "sha256"
-        if assets_root.is_dir():
-            for metadata_path in sorted(assets_root.glob("*/*/asset.json")):
-                candidate = metadata_path.parent
-                if candidate.is_symlink() or not _is_within(candidate, assets_root):
-                    raise RunCreationError("Project asset path is unsafe")
-                try:
-                    asset_id = store.read_asset_id(candidate.name)
-                except AssetStoreError:
-                    continue
-                if asset_id not in needed:
-                    continue
-                if asset_id in found:
-                    raise RunCreationError(f"duplicate Project asset ID: {asset_id}")
-                try:
-                    found[asset_id] = store.load(candidate.name)
-                except AssetStoreError as error:
-                    raise RunCreationError("Project asset data is invalid") from error
+        try:
+            records = store.list_metadata()
+        except AssetStoreError as error:
+            raise RunCreationError("Project asset data is invalid") from error
+        for record in records:
+            if record.asset_id not in needed:
+                continue
+            try:
+                found[record.asset_id] = store.load(record.sha256)
+            except AssetStoreError as error:
+                raise RunCreationError("Project asset data is invalid") from error
         missing = sorted(needed - found.keys())
         if missing:
             raise AssetNotFoundError(f"Project assets were not found: {', '.join(missing)}")
@@ -278,6 +344,16 @@ class BatchcraftService:
         for path in (project_path, batches_path, batch_path):
             if path.is_symlink() or not _is_within(path, self.projects_root):
                 raise RunCreationError("Project or Batch filesystem path is unsafe")
+
+    def _project_asset_store(self, project_filesystem_key: str) -> ProjectAssetStore:
+        if not is_safe_filesystem_key(project_filesystem_key):
+            raise InvalidProjectKeyError("Project filesystem key is not path-safe")
+        project_path = self.projects_root / project_filesystem_key
+        if project_path.is_symlink() or not _is_within(project_path, self.projects_root):
+            raise InvalidProjectKeyError("Project filesystem path is unsafe")
+        if project_path.exists() and not project_path.is_dir():
+            raise AssetDataError("Project filesystem path is not a directory")
+        return ProjectAssetStore(project_path)
 
     def _run_candidates(self) -> tuple[Path, ...]:
         if not self.projects_root.is_dir():
@@ -325,4 +401,49 @@ def _read_result(path: Path, result: ResultRecord) -> bytes:
         raise RunDataError(f"recorded Result cannot be read: {result.local_path}") from error
     if len(content) != result.byte_size or hashlib.sha256(content).hexdigest() != result.sha256:
         raise RunDataError(f"recorded Result integrity check failed: {result.local_path}")
+    return content
+
+
+def _validate_image_file(source: Path, declared_content_type: str) -> None:
+    expected_content_type = _IMAGE_MIME_TYPES.get(source.suffix.lower())
+    if expected_content_type is None or declared_content_type != expected_content_type:
+        raise AssetUploadError("Image type must be PNG, JPEG, or WebP and match its filename")
+    try:
+        with source.open("rb") as file:
+            prefix = file.read(12)
+    except OSError as error:
+        raise AssetUploadError("Uploaded image could not be read") from error
+    if not _has_image_signature(prefix, declared_content_type):
+        raise AssetUploadError("Uploaded bytes do not match the declared image type")
+
+
+def _has_image_signature(content: bytes, content_type: str | None) -> bool:
+    return bool(
+        content_type == "image/png"
+        and content.startswith(b"\x89PNG\r\n\x1a\n")
+        or content_type == "image/jpeg"
+        and content.startswith(b"\xff\xd8\xff")
+        or content_type == "image/webp"
+        and len(content) >= 12
+        and content[:4] == b"RIFF"
+        and content[8:12] == b"WEBP"
+    )
+
+
+def _is_supported_image_record(record: AssetRecord) -> bool:
+    return _IMAGE_MIME_TYPES.get(Path(record.original_filename).suffix.lower()) == record.mime_type
+
+
+def _read_asset_content(path: Path, record: AssetRecord) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                raise AssetDataError(f"Project asset is not a regular file: {record.asset_id}")
+            content = file.read()
+    except OSError as error:
+        raise AssetDataError(f"Project asset cannot be read: {record.asset_id}") from error
+    if len(content) != record.byte_size or hashlib.sha256(content).hexdigest() != record.sha256:
+        raise AssetDataError(f"Project asset integrity check failed: {record.asset_id}")
     return content

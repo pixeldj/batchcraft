@@ -70,9 +70,11 @@ class ProjectAssetStore:
 
             mime_type, _ = mimetypes.guess_type(source.name)
             stored_path = self._content_path(sha256).relative_to(self.project_path).as_posix()
+            asset_id = self._id_factory()
+            _validate_asset_id(asset_id)
             metadata = {
                 "format_version": ASSET_FORMAT_VERSION,
-                "asset_id": self._id_factory(),
+                "asset_id": asset_id,
                 "sha256": sha256,
                 "original_filename": source.name,
                 "mime_type": mime_type,
@@ -101,11 +103,19 @@ class ProjectAssetStore:
                 shutil.rmtree(staging_path)
 
     def load(self, sha256: str) -> AssetRecord:
+        record = self.read_metadata(sha256)
+        content_path = self._content_path(sha256)
+        if sha256_file(content_path) != sha256:
+            raise AssetStoreError(f"asset content digest does not match metadata for {sha256}")
+        return record
+
+    def read_metadata(self, sha256: str) -> AssetRecord:
         _validate_sha256(sha256)
 
         asset_path = self._asset_path(sha256)
         metadata_path = asset_path / "asset.json"
         content_path = asset_path / "content"
+        self._validate_asset_paths(sha256)
         try:
             metadata = read_json_object(metadata_path)
             record = AssetRecord(
@@ -123,6 +133,7 @@ class ProjectAssetStore:
         expected_stored_path = content_path.relative_to(self.project_path).as_posix()
         if metadata.get("format_version") != ASSET_FORMAT_VERSION:
             raise AssetStoreError(f"unsupported asset format version for {sha256}")
+        _validate_asset_id(record.asset_id)
         if record.sha256 != sha256:
             raise AssetStoreError(f"asset metadata digest does not match path for {sha256}")
         if record.stored_path != expected_stored_path:
@@ -131,9 +142,38 @@ class ProjectAssetStore:
             raise AssetStoreError(f"asset content is missing for {sha256}")
         if content_path.stat().st_size != record.byte_size:
             raise AssetStoreError(f"asset byte size does not match metadata for {sha256}")
-        if sha256_file(content_path) != sha256:
-            raise AssetStoreError(f"asset content digest does not match metadata for {sha256}")
         return record
+
+    def list_metadata(self) -> tuple[AssetRecord, ...]:
+        assets_root = self.assets_path / "sha256"
+        if not assets_root.exists():
+            return ()
+        if assets_root.is_symlink() or not assets_root.is_dir():
+            raise AssetStoreError("Project asset root is missing or unsafe")
+
+        records: list[AssetRecord] = []
+        asset_ids: set[str] = set()
+        for metadata_path in sorted(assets_root.glob("*/*/asset.json")):
+            candidate = metadata_path.parent
+            if (
+                metadata_path.is_symlink()
+                or candidate.is_symlink()
+                or candidate.parent.is_symlink()
+                or not candidate.resolve().is_relative_to(assets_root.resolve())
+            ):
+                continue
+            try:
+                record = self.read_metadata(candidate.name)
+            except AssetStoreError:
+                continue
+            if record.asset_id in asset_ids:
+                raise AssetStoreError(f"duplicate Project asset ID: {record.asset_id}")
+            asset_ids.add(record.asset_id)
+            records.append(record)
+
+        records.sort(key=lambda record: record.sha256)
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return tuple(records)
 
     def read_asset_id(self, sha256: str) -> str:
         _validate_sha256(sha256)
@@ -144,7 +184,9 @@ class ProjectAssetStore:
             metadata = read_json_object(metadata_path)
             if metadata.get("format_version") != ASSET_FORMAT_VERSION:
                 raise AssetStoreError(f"unsupported asset format version for {sha256}")
-            return _required_string(metadata, "asset_id")
+            asset_id = _required_string(metadata, "asset_id")
+            _validate_asset_id(asset_id)
+            return asset_id
         except (OSError, ValueError) as error:
             if isinstance(error, AssetStoreError):
                 raise
@@ -164,6 +206,19 @@ class ProjectAssetStore:
     def _content_path(self, sha256: str) -> Path:
         return self._asset_path(sha256) / "content"
 
+    def _validate_asset_paths(self, sha256: str) -> None:
+        assets_root = self.assets_path / "sha256"
+        prefix_path = assets_root / sha256[:2]
+        asset_path = prefix_path / sha256
+        metadata_path = asset_path / "asset.json"
+        content_path = asset_path / "content"
+        if any(path.is_symlink() for path in (assets_root, prefix_path, asset_path)):
+            raise AssetStoreError(f"asset directory is unsafe for {sha256}")
+        if metadata_path.is_symlink() or not metadata_path.is_file():
+            raise AssetStoreError(f"asset metadata is missing or unsafe for {sha256}")
+        if content_path.is_symlink() or not content_path.is_file():
+            raise AssetStoreError(f"asset content is missing or unsafe for {sha256}")
+
 
 def _required_string(data: dict[str, object], name: str) -> str:
     value = data.get(name)
@@ -177,6 +232,16 @@ def _validate_sha256(sha256: str) -> None:
         character not in "0123456789abcdef" for character in sha256
     ):
         raise AssetStoreError(f"invalid SHA-256 digest: {sha256!r}")
+
+
+def _validate_asset_id(asset_id: str) -> None:
+    if (
+        asset_id in {".", ".."}
+        or "/" in asset_id
+        or "\\" in asset_id
+        or any(ord(character) < 32 for character in asset_id)
+    ):
+        raise AssetStoreError(f"asset ID is not URL-safe: {asset_id!r}")
 
 
 def _optional_string(data: dict[str, object], name: str) -> str | None:

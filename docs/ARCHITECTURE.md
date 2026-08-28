@@ -124,7 +124,13 @@ This layout is illustrative, not mandatory. Avoid creating abstractions before b
 
 The first application slice follows this split. `api/` owns HTTP DTOs, routes, status codes, CORS, configuration, and lifecycle. `application/` coordinates the existing production packages and provides narrow Run/asset discovery plus an in-process Run task registry. It contains no generic repository, command bus, event bus, or scheduler framework.
 
-Mutable Batch definitions are not persisted in this slice. Preview and Run creation accept the same complete ephemeral Batch snapshot, while successful Run publication freezes the durable execution plan and provenance. SQLite remains the intended later home for mutable Batch and searchable application state.
+Mutable Batch definitions are not durably persisted in this slice. The browser may retain a
+best-effort working draft and ordered Run identities in tab-scoped `sessionStorage`, but it must
+compile that restored draft again before Run creation. The Run identities rebuild a Batch-scoped
+working-session Results gallery from backend-authoritative Run and Result data; they are not a
+Project-wide history index. Preview and Run creation use the same complete Batch request snapshot,
+while successful Run publication freezes the durable execution plan and provenance. SQLite remains
+the intended later home for mutable Batch and searchable application state.
 
 ## Application Queue
 

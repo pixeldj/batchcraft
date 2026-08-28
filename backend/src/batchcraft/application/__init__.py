@@ -1,8 +1,12 @@
 from .errors import (
     ApplicationError,
+    AssetDataError,
     AssetNotFoundError,
+    AssetPublicationError,
+    AssetUploadError,
     ExecutionAlreadyActiveError,
     ExecutionNotEligibleError,
+    InvalidProjectKeyError,
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
@@ -11,6 +15,7 @@ from .errors import (
 )
 from .service import (
     ApplicationComfyUIClient,
+    AssetImportInput,
     BatchcraftService,
     ComfyUIStatus,
     RunCreationInput,
@@ -21,11 +26,16 @@ from .tasks import RunTaskRegistry
 __all__ = [
     "ApplicationComfyUIClient",
     "ApplicationError",
+    "AssetDataError",
+    "AssetImportInput",
     "AssetNotFoundError",
+    "AssetPublicationError",
+    "AssetUploadError",
     "BatchcraftService",
     "ComfyUIStatus",
     "ExecutionAlreadyActiveError",
     "ExecutionNotEligibleError",
+    "InvalidProjectKeyError",
     "ResultNotFoundError",
     "RunCreationError",
     "RunCreationInput",

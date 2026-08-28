@@ -22,6 +22,7 @@ from batchcraft.files._io import (
     canonical_json_bytes,
     ensure_directory,
     fsync_directory,
+    is_safe_filesystem_key,
     read_json_object,
     sha256_file,
     utc_timestamp,
@@ -40,9 +41,7 @@ from batchcraft.files.models import (
 RUN_FORMAT_VERSION = 1
 MANIFEST_FORMAT_VERSION = 1
 OWNER_FORMAT_VERSION = 1
-_FILESYSTEM_KEY_CHARACTERS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-)
+_ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
     "job_ordinal",
     "job_id",
@@ -395,12 +394,7 @@ class RunFilesystemStore:
             raise RunStoreError(f"{kind} ID must not be empty")
         if not name:
             raise RunStoreError(f"{kind} display name must not be empty")
-        if (
-            not key
-            or key in {".", ".."}
-            or key[0] not in _FILESYSTEM_KEY_CHARACTERS
-            or any(character not in _FILESYSTEM_KEY_CHARACTERS for character in key)
-        ):
+        if not is_safe_filesystem_key(key):
             raise RunStoreError(f"{kind} filesystem key is not path-safe: {key!r}")
 
     def _validate_plan(self, plan: CompiledRunPlan) -> None:
@@ -427,7 +421,7 @@ class RunFilesystemStore:
         if (
             not value
             or value in {".", ".."}
-            or any(character not in _FILESYSTEM_KEY_CHARACTERS for character in value)
+            or any(character not in _ID_CHARACTERS for character in value)
         ):
             raise RunStoreError(f"{kind} ID factory returned an unsafe value: {value!r}")
         return value

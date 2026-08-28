@@ -10,11 +10,6 @@ export interface VariableBindingForm {
   fixedValue: string;
 }
 
-export interface ReferenceForm {
-  key: number;
-  assetId: string;
-}
-
 export interface BatchFormState {
   projectId: string;
   projectFilesystemKey: string;
@@ -25,7 +20,7 @@ export interface BatchFormState {
   promptVersionId: string;
   promptText: string;
   variableBindings: VariableBindingForm[];
-  references: ReferenceForm[];
+  referenceAssetIds: string[];
   seedMode: "fixed" | "explicit";
   seedValues: string;
   workflowJson: string;
@@ -46,10 +41,6 @@ export function newVariableBinding(): VariableBindingForm {
   };
 }
 
-export function newReference(): ReferenceForm {
-  return { key: nextKey++, assetId: "" };
-}
-
 export function initialBatchForm(): BatchFormState {
   const binding = newVariableBinding();
   binding.placeholder = "subject";
@@ -68,7 +59,7 @@ export function initialBatchForm(): BatchFormState {
     promptVersionId: "prompt-v1",
     promptText: "A studio portrait of {{subject}}.",
     variableBindings: [binding],
-    references: [newReference()],
+    referenceAssetIds: [],
     seedMode: "fixed",
     seedValues: "1",
     workflowJson: "{}",
@@ -100,9 +91,9 @@ export class FormBuildError extends Error {
 }
 
 export function buildBatchRequest(form: BatchFormState): BatchRequest {
-  const references = form.references.map((reference) => reference.assetId.trim()).filter(Boolean);
+  const references = form.referenceAssetIds;
   if (references.length === 0) {
-    throw new FormBuildError("references", "Enter at least one existing Project Asset ID.");
+    throw new FormBuildError("references", "Select at least one Project Reference Asset.");
   }
 
   const seeds = splitSeeds(form.seedValues).map((value) => {

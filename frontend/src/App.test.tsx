@@ -1,14 +1,22 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { ApiError, type BatchcraftApi } from "./api/client";
 import type {
+  AssetResponse,
   ExecutionResponse,
   PreviewResponse,
   ResultResponse,
   RunCreatedResponse,
+  RunResponse,
 } from "./api/types";
+import { initialBatchForm } from "./features/batch/form";
+import { loadWorkingSession, saveWorkingSession } from "./features/session/workingSession";
+
+beforeEach(() => {
+  sessionStorage.clear();
+});
 
 describe("ComfyUI status", () => {
   it("shows a reachable server and device", async () => {
@@ -41,7 +49,7 @@ describe("Batch preview", () => {
   it("builds the API request and renders Jobs and compiler warnings", async () => {
     const api = makeApi({ previewBatch: vi.fn(async () => previewResponse()) });
     render(<App api={api} />);
-    enterAsset();
+    await enterAsset();
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
@@ -64,7 +72,7 @@ describe("Batch preview", () => {
       }),
     });
     render(<App api={api} />);
-    enterAsset();
+    await enterAsset();
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
@@ -76,7 +84,7 @@ describe("Batch preview", () => {
   it("rejects invalid workflow and Workflow Profile JSON before fetching", async () => {
     const api = makeApi();
     render(<App api={api} />);
-    enterAsset();
+    await enterAsset();
 
     fireEvent.change(screen.getByLabelText("Workflow JSON"), { target: { value: "{" } });
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
@@ -96,7 +104,7 @@ describe("Batch preview", () => {
     const pendingPreview = deferred<PreviewResponse>();
     const api = makeApi({ previewBatch: vi.fn(() => pendingPreview.promise) });
     render(<App api={api} />);
-    enterAsset();
+    await enterAsset();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
     fireEvent.change(screen.getByLabelText("Batch name"), {
@@ -106,6 +114,297 @@ describe("Batch preview", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+  });
+
+  it("creates a two-Job Run from the exact BatchRequest stored with its Preview", async () => {
+    const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
+    const api = makeApi({
+      listProjectAssets: vi.fn(async () => ({ assets })),
+      previewBatch: vi.fn(async () => previewResponse(2)),
+      createRun: vi.fn(async () => runResponse("run-two", 2, 2)),
+    });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Select a.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+    const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+    expect(previewRequest.references).toEqual([
+      { asset_id: "asset-a" },
+      { asset_id: "asset-b" },
+    ]);
+    expect(screen.getByText("2", { selector: ".count-block strong" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+
+    expect(await screen.findByRole("heading", { name: "Run 2" })).toBeInTheDocument();
+    expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
+    expect(screen.getByText("2", { selector: ".run-metadata dd" })).toBeInTheDocument();
+  });
+
+  it("invalidates Preview after reference edits and requires Preview before creation", async () => {
+    const assets = [
+      asset("asset-a", "a.png"),
+      asset("asset-b", "b.png"),
+      asset("asset-c", "c.png"),
+    ];
+    const api = makeApi({
+      listProjectAssets: vi.fn(async () => ({ assets })),
+      previewBatch: vi
+        .fn<BatchcraftApi["previewBatch"]>()
+        .mockResolvedValueOnce(previewResponse(2))
+        .mockResolvedValueOnce(previewResponse(3)),
+      createRun: vi.fn(async () => runResponse("run-three", 3, 3)),
+    });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Select a.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
+
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("3", { selector: ".count-block strong" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+
+    expect(await screen.findByRole("heading", { name: "Run 3" })).toBeInTheDocument();
+    expect(vi.mocked(api.createRun).mock.calls[0][0].references).toHaveLength(3);
+  });
+});
+
+describe("Browser working-session restoration", () => {
+  it("restores the form and ordered references after remount but requires a new Preview", async () => {
+    const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
+    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
+    const first = render(<App api={api} />);
+    fireEvent.change(screen.getByLabelText(/Prompt template/), {
+      target: { value: "Restored portrait of {{subject}}" },
+    });
+    fireEvent.change(screen.getByLabelText(/Variable List values/), {
+      target: { value: "fox\nwolf" },
+    });
+    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "explicit" } });
+    fireEvent.change(screen.getByLabelText(/Explicit seeds/), { target: { value: "9, 3" } });
+    fireEvent.change(screen.getByLabelText("Workflow JSON"), {
+      target: { value: '{"workflow":true}' },
+    });
+    fireEvent.change(screen.getByLabelText("Workflow Profile JSON"), {
+      target: { value: '{"profile":true}' },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Select b.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select a.png" }));
+    await waitFor(() => expect(sessionStorage.getItem("batchcraft.working-session")).not.toBeNull());
+    first.unmount();
+
+    render(<App api={api} />);
+
+    expect(await screen.findByText(/Draft restored from this browser session/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Prompt template/)).toHaveValue("Restored portrait of {{subject}}");
+    expect(screen.getByLabelText(/Variable List values/)).toHaveValue("fox\nwolf");
+    expect(screen.getByLabelText("Seed mode")).toHaveValue("explicit");
+    expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("9, 3");
+    expect(screen.getByLabelText("Workflow JSON")).toHaveValue('{"workflow":true}');
+    expect(screen.getByLabelText("Workflow Profile JSON")).toHaveValue('{"profile":true}');
+    expect(screen.getByText("2 images selected")).toBeInTheDocument();
+    expect(screen.queryByText("b.png")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Selected Reference Assets" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    const selected = await screen.findByRole("list", { name: "Selected Reference Assets" });
+    expect([...selected.querySelectorAll("li > span")].map((item) => item.textContent)).toEqual([
+      "b.png",
+      "a.png",
+    ]);
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Preview usable when sessionStorage writes fail", async () => {
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    const api = makeApi();
+    render(<App api={api} />);
+    await enterAsset();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+
+    expect(await screen.findByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    write.mockRestore();
+  });
+
+  it("surfaces a restored Reference Asset that no longer exists and blocks Preview", async () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-missing"];
+    saveWorkingSession(form, null);
+    const api = makeApi();
+    render(<App api={api} />);
+
+    expect(screen.getByText("1 image selected")).toBeInTheDocument();
+    expect(screen.queryByText("asset-missing (missing from Project)")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    expect(await screen.findByText("asset-missing (missing from Project)")).toBeInTheDocument();
+    expect(screen.getByText("Remove missing Reference Assets before Previewing this Batch.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+
+    expect(
+      await screen.findByText(/Selected Reference Assets are no longer available/),
+    ).toBeInTheDocument();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("Reference Asset picker", () => {
+  it("shows only the selected count while collapsed and toggles the Project library", async () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-a"];
+    saveWorkingSession(form, null);
+    const api = makeApi({
+      listProjectAssets: vi.fn(async () => ({ assets: [asset("asset-a", "a.png")] })),
+    });
+    render(<App api={api} />);
+
+    expect(screen.getByText("1 image selected")).toBeInTheDocument();
+    expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deselect a.png" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    expect(await screen.findByRole("button", { name: "Deselect a.png" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Hide images" }));
+
+    expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+    expect(screen.getByText("1 image selected")).toBeInTheDocument();
+  });
+
+  it("Select All preserves selected order, appends display order, and Select None invalidates Preview", async () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-c", "asset-a"];
+    saveWorkingSession(form, null);
+    const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png"), asset("asset-c", "c.png")];
+    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
+    render(<App api={api} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    await screen.findByRole("button", { name: "Deselect a.png" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Select All" }));
+
+    expect(screen.getByText("3 images selected")).toBeInTheDocument();
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.previewBatch).mock.calls[1][0].references).toEqual([
+      { asset_id: "asset-c" },
+      { asset_id: "asset-a" },
+      { asset_id: "asset-b" },
+    ]);
+    await screen.findByRole("button", { name: "Create Run" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Select None" }));
+
+    expect(screen.getByText("0 images selected")).toBeInTheDocument();
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+  });
+
+  it("renders an empty library and reports listing errors without blocking editing", async () => {
+    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets: [] })) });
+    const { rerender } = render(<App api={api} />);
+
+    expect(await screen.findByText("This Project has no imported images.")).toBeInTheDocument();
+
+    const failingApi = makeApi({
+      listProjectAssets: vi.fn(async () => {
+        throw new ApiError("Asset index unavailable", "invalid_asset_data", 500);
+      }),
+    });
+    rerender(<App api={failingApi} />);
+
+    expect(await screen.findByText("Asset library: Asset index unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled();
+  });
+
+  it("preserves selection order and appends an asset when it is reselected", async () => {
+    const assets = [asset("asset-a", "a.png"), asset("asset-c", "c.png"), asset("asset-b", "b.png")];
+    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
+    render(<App api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select a.png" }));
+    expect(screen.getByRole("button", { name: "Deselect a.png" }).querySelector("img")).toHaveAttribute(
+      "src",
+      "http://api.test/api/assets/asset-a",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deselect c.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].references).toEqual([
+      { asset_id: "asset-a" },
+      { asset_id: "asset-b" },
+      { asset_id: "asset-c" },
+    ]);
+    const selected = screen.getByRole("list", { name: "Selected Reference Assets" });
+    expect([...selected.querySelectorAll("li > span")].map((item) => item.textContent)).toEqual([
+      "a.png",
+      "b.png",
+      "c.png",
+    ]);
+  });
+
+  it("clears selection and ignores a stale library response when the Project changes", async () => {
+    const oldLibrary = deferred<{ assets: AssetResponse[] }>();
+    const api = makeApi({
+      listProjectAssets: vi.fn((projectKey: string) =>
+        projectKey === "project_1"
+          ? oldLibrary.promise
+          : Promise.resolve({ assets: [asset("asset-new", "new.png")] }),
+      ),
+    });
+    render(<App api={api} />);
+    fireEvent.change(screen.getByLabelText("Filesystem key", { selector: "#project-key" }), {
+      target: { value: "new_project" },
+    });
+
+    expect(await screen.findByRole("button", { name: "Select new.png" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select new.png" }));
+    fireEvent.change(screen.getByLabelText("Filesystem key", { selector: "#project-key" }), {
+      target: { value: "final_project" },
+    });
+    oldLibrary.resolve({ assets: [asset("asset-old", "old.png")] });
+
+    await waitFor(() => expect(api.listProjectAssets).toHaveBeenCalledWith("final_project", expect.any(AbortSignal)));
+    expect(screen.queryByRole("button", { name: /old\.png/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Selected Reference Assets" })).not.toBeInTheDocument();
+  });
+
+  it("merges imported assets, deduplicates them, and selects new imports", async () => {
+    const existing = asset("asset-a", "a.png");
+    const imported = asset("asset-b", "b.png");
+    const api = makeApi({
+      listProjectAssets: vi.fn(async () => ({ assets: [existing] })),
+      uploadProjectAssets: vi.fn(async () => ({ assets: [existing, imported, imported] })),
+    });
+    render(<App api={api} />);
+    await screen.findByRole("button", { name: "Select a.png" });
+
+    fireEvent.change(screen.getByLabelText("Import images"), {
+      target: { files: [new File(["image"], "b.png", { type: "image/png" })] },
+    });
+
+    expect(await screen.findByRole("button", { name: "Deselect b.png" })).toBeInTheDocument();
+    expect(screen.getAllByText("b.png")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /b\.png/ })).toHaveLength(1);
+    expect(api.uploadProjectAssets).toHaveBeenCalledWith("project_1", expect.any(Array));
   });
 });
 
@@ -118,10 +417,11 @@ describe("Run creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
     expect(await screen.findByRole("heading", { name: "Run 7" })).toBeInTheDocument();
-    expect(screen.getByText("run-123")).toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-123")).toBeInTheDocument();
     expect(screen.getByText("Created · Ready to start")).toBeInTheDocument();
     expect(api.createRun).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "Run Created" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create Another Run" })).toBeDisabled();
+    expect(screen.getByText("Created as Run 7.")).toBeInTheDocument();
   });
 
   it("renders Run creation errors", async () => {
@@ -137,6 +437,21 @@ describe("Run creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
     expect(await screen.findByText("Project assets were not found: asset-1")).toBeInTheDocument();
+  });
+
+  it("preserves a newly durable Run and reports a Preview job-count mismatch", async () => {
+    const api = makeApi({ createRun: vi.fn(async () => runResponse("run-mismatch", 9, 3)) });
+    render(<App api={api} />);
+    await reachPreview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+
+    expect(await screen.findByRole("heading", { name: "Run 9" })).toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-mismatch")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Run 9 was created with 3 Jobs, but the inspected Preview has 2",
+    );
+    expect(screen.getByText("Run 9 was created but does not match this Preview.")).toBeInTheDocument();
   });
 });
 
@@ -237,6 +552,210 @@ describe("Run execution polling", () => {
   });
 });
 
+describe("Repeated Runs", () => {
+  it("creates a second Run from the same valid Preview after success", async () => {
+    const createRun = vi
+      .fn<BatchcraftApi["createRun"]>()
+      .mockResolvedValueOnce(runResponse("run-1", 7))
+      .mockResolvedValueOnce(runResponse("run-2", 8));
+    const api = makeApi({
+      createRun,
+      getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+
+    const createAnother = screen.getByRole("button", { name: "Create Another Run" });
+    await waitFor(() => expect(createAnother).toBeEnabled());
+    fireEvent.click(createAnother);
+
+    expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-2")).toBeInTheDocument();
+    expect(createRun).toHaveBeenCalledTimes(2);
+    expect(createRun.mock.calls[0][0]).toBe(previewRequest);
+    expect(createRun.mock.calls[1][0]).toBe(previewRequest);
+    expect(screen.getByLabelText(/Prompt template/)).toHaveValue(
+      "A studio portrait of {{subject}}.",
+    );
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
+    expect(loadWorkingSession().currentRunId).toBe("run-2");
+  });
+
+  it.each(["failed", "blocked"] as const)(
+    "allows a new Run after a %s Run without offering Retry",
+    async (status) => {
+      const createRun = vi
+        .fn<BatchcraftApi["createRun"]>()
+        .mockResolvedValueOnce(runResponse("run-1", 7))
+        .mockResolvedValueOnce(runResponse("run-2", 8));
+      const api = makeApi({
+        createRun,
+        getExecution: vi.fn(async (runId: string) => execution(status, runId)),
+      });
+      render(<App api={api} pollIntervalMs={5} />);
+      await createRunAndStart();
+      expect(
+        await screen.findByText(status === "failed" ? "Failed" : "Blocked"),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Retry/i })).not.toBeInTheDocument();
+
+      const createAnother = screen.getByRole("button", { name: "Create Another Run" });
+      await waitFor(() => expect(createAnother).toBeEnabled());
+      if (status === "blocked") {
+        expect(screen.getByText(/previous Run is unchanged/)).toBeInTheDocument();
+      }
+      fireEvent.click(createAnother);
+
+      expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
+      expect(createRun).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("does not allow a running Run workspace to be replaced", async () => {
+    const pending = deferred<ExecutionResponse>();
+    const api = makeApi({
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockImplementation(() => pending.promise),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Another Run" })).toBeDisabled();
+    expect(await screen.findByText("The current Run is still running.")).toBeInTheDocument();
+    expect(api.createRun).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the previous terminal Run visible when another creation fails", async () => {
+    const createRun = vi
+      .fn<BatchcraftApi["createRun"]>()
+      .mockResolvedValueOnce(runResponse("run-1", 7))
+      .mockRejectedValueOnce(new ApiError("Run publication failed", "run_publication_failed", 500));
+    const api = makeApi({
+      createRun,
+      getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await screen.findByText("Succeeded");
+
+    const createAnother = screen.getByRole("button", { name: "Create Another Run" });
+    await waitFor(() => expect(createAnother).toBeEnabled());
+    fireEvent.click(createAnother);
+
+    expect(await screen.findByText("Run publication failed")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Run 7" })).toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-1")).toBeInTheDocument();
+  });
+});
+
+describe("Current Run restoration", () => {
+  it("restores a running Run and resumes polling without submitting execution", async () => {
+    seedWorkingSession("run-running");
+    const nextPoll = deferred<ExecutionResponse>();
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("running", "run-running", 11)),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running", "run-running"))
+        .mockImplementationOnce(() => nextPoll.promise),
+      getResults: vi.fn(async () => ({ run_id: "run-running", results: [] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+
+    expect(await screen.findByRole("heading", { name: "Run 11" })).toBeInTheDocument();
+    expect(screen.getByText("Running · Job 1 of 2")).toBeInTheDocument();
+    expect(api.getRun).toHaveBeenCalledWith("run-running", expect.any(AbortSignal));
+    await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
+    expect(api.startRun).not.toHaveBeenCalled();
+    nextPoll.resolve(execution("succeeded", "run-running"));
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+  });
+
+  it("restores a created Run with Start available and does not start automatically", async () => {
+    seedWorkingSession("run-created");
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("created", "run-created", 12)),
+      getExecution: vi.fn(async () => execution("created", "run-created")),
+      getResults: vi.fn(async () => ({ run_id: "run-created", results: [] })),
+    });
+    render(<App api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Run 12" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("restores a succeeded Run and its Results", async () => {
+    seedWorkingSession("run-succeeded");
+    const artifact = result(1, 1, "image/png", "restored.png", 1024);
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("succeeded", "run-succeeded", 13)),
+      getExecution: vi.fn(async () => execution("succeeded", "run-succeeded")),
+      getResults: vi.fn(async () => ({ run_id: "run-succeeded", results: [artifact] })),
+    });
+    render(<App api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Run 13" })).toBeInTheDocument();
+    expect(await screen.findAllByAltText("Result 1 from Job 1: restored.png")).toHaveLength(2);
+    expect(api.getResults).toHaveBeenCalledOnce();
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("clears a missing restored Run ID and leaves the Batch usable", async () => {
+    seedWorkingSession("run-missing");
+    const api = makeApi({
+      getRun: vi.fn(async () => {
+        throw new ApiError("Run was not found", "run_not_found", 404);
+      }),
+    });
+    render(<App api={api} />);
+
+    expect(await screen.findByText(/The previous Run could not be restored/)).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().currentRunId).toBeNull());
+    expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    expect(await screen.findByRole("button", { name: "Create Run" })).toBeEnabled();
+  });
+
+  it("does not let an old Run Result response replace a newly created Run workspace", async () => {
+    const oldResults = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const createRun = vi
+      .fn<BatchcraftApi["createRun"]>()
+      .mockResolvedValueOnce(runResponse("run-a", 7))
+      .mockResolvedValueOnce(runResponse("run-b", 8));
+    const getResults = vi
+      .fn<BatchcraftApi["getResults"]>()
+      .mockResolvedValueOnce({ run_id: "run-a", results: [] })
+      .mockImplementationOnce(() => oldResults.promise);
+    const api = makeApi({
+      createRun,
+      getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
+      getResults,
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await screen.findByText("Succeeded");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Results" }));
+    await waitFor(() => expect(getResults).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Another Run" }));
+    expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
+    oldResults.resolve({
+      run_id: "run-a",
+      results: [result(1, 1, "image/png", "old-run.png", 1024)],
+    });
+    await pause(0);
+
+    expect(screen.queryByText("old-run.png")).not.toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-b")).toBeInTheDocument();
+  });
+});
+
 describe("Results", () => {
   it("renders ordered image and non-image artifacts with metadata", async () => {
     const artifacts: ResultResponse[] = [
@@ -249,19 +768,24 @@ describe("Results", () => {
       getExecution: vi.fn(async () => execution("succeeded")),
       getResults: vi.fn(async () => ({ run_id: "run-123", results: artifacts })),
     });
-    const { container } = render(<App api={api} pollIntervalMs={5} />);
+    render(<App api={api} pollIntervalMs={5} />);
     await createRunAndStart();
 
-    const firstImage = await screen.findByAltText("Result 1 from Job 1: first.png");
+    const currentResults = screen.getByRole("heading", { name: "Results" }).closest("section");
+    expect(currentResults).not.toBeNull();
+    const firstImage = await within(currentResults as HTMLElement).findByAltText(
+      "Result 1 from Job 1: first.png",
+    );
     expect(firstImage).toHaveAttribute("src", "http://api.test/api/result/1/1");
-    expect(screen.getByRole("link", { name: /JSON\s*Open artifact/ })).toHaveAttribute(
+    expect(within(currentResults as HTMLElement).getByRole("link", { name: /JSON\s*Open artifact/ })).toHaveAttribute(
       "href",
       "http://api.test/api/result/1/2",
     );
-    expect(screen.getByText("metadata.json")).toBeInTheDocument();
-    expect(screen.getByText("512 B")).toBeInTheDocument();
+    expect(within(currentResults as HTMLElement).getByText("metadata.json")).toBeInTheDocument();
+    expect(within(currentResults as HTMLElement).getByText("512 B")).toBeInTheDocument();
+    expect(firstImage.closest(".result-preview-frame")).toBeInTheDocument();
 
-    const cards = container.querySelectorAll(".result-card");
+    const cards = currentResults?.querySelectorAll(".result-card") ?? [];
     expect(cards).toHaveLength(3);
     expect(within(cards[0] as HTMLElement).getByText("first.png")).toBeInTheDocument();
     expect(within(cards[1] as HTMLElement).getByText("metadata.json")).toBeInTheDocument();
@@ -289,6 +813,115 @@ describe("Results", () => {
   });
 });
 
+describe("Batch working-session Results gallery", () => {
+  it("accumulates ordered Results from multiple Runs without replacing older Results", async () => {
+    const createRun = vi
+      .fn<BatchcraftApi["createRun"]>()
+      .mockResolvedValueOnce(runResponse("run-a", 10))
+      .mockResolvedValueOnce(runResponse("run-b", 11));
+    const resultsByRun: Record<string, ResultResponse[]> = {
+      "run-a": [
+        result(1, 1, "image/png", "a1.png", 100),
+        result(2, 1, "image/png", "a2.png", 100),
+      ],
+      "run-b": [
+        result(1, 1, "image/png", "b1.png", 100),
+        result(1, 2, "application/json", "b2.json", 100),
+      ],
+    };
+    const api = makeApi({
+      createRun,
+      getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
+      getResults: vi.fn(async (runId: string) => ({ run_id: runId, results: resultsByRun[runId] ?? [] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByRole("heading", { name: "Run 10" });
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+    const gallery = batchResultsSection();
+    expect(await within(gallery).findByText("a1.png")).toBeInTheDocument();
+    expect(within(gallery).getByText("a2.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Another Run" }));
+    await screen.findByRole("heading", { name: "Run 11" });
+    expect(within(gallery).getByText("a1.png")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+
+    expect(await within(gallery).findByText("b1.png")).toBeInTheDocument();
+    const filenames = [...gallery.querySelectorAll(".result-filename")].map((item) => item.textContent);
+    expect(filenames).toEqual(["a1.png", "a2.png", "b1.png", "b2.json"]);
+    expect(loadWorkingSession().sessionRunIds).toEqual(["run-a", "run-b"]);
+  });
+
+  it("restores multiple session Runs once without executing or duplicating the current Run", async () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-1"];
+    saveWorkingSession(form, "run-b", ["run-a", "run-b", "run-b"]);
+    const api = makeApi({
+      getRun: vi.fn(async (runId: string) =>
+        runLookupResponse("succeeded", runId, runId === "run-a" ? 10 : 11),
+      ),
+      getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
+      getResults: vi.fn(async (runId: string) => ({
+        run_id: runId,
+        results: [result(1, 1, "image/png", `${runId}.png`, 100)],
+      })),
+    });
+    render(<App api={api} />);
+
+    const gallery = batchResultsSection();
+    expect(await within(gallery).findByText("run-a.png")).toBeInTheDocument();
+    expect(await within(gallery).findByText("run-b.png")).toBeInTheDocument();
+    expect(within(gallery).getAllByRole("region")).toHaveLength(2);
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(api.getResults).toHaveBeenCalledTimes(2);
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("resets accumulated Results when the stable Batch identity changes", async () => {
+    const artifact = result(1, 1, "image/png", "old-batch.png", 100);
+    const api = makeApi({
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: [artifact] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    const gallery = batchResultsSection();
+    expect(await within(gallery).findByText("old-batch.png")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Batch ID"), { target: { value: "different-batch" } });
+
+    expect(within(gallery).queryByText("old-batch.png")).not.toBeInTheDocument();
+    expect(within(gallery).getByText(/will accumulate here/)).toBeInTheDocument();
+    expect(loadWorkingSession().sessionRunIds).toEqual([]);
+  });
+
+  it("keeps healthy historical Results when another session Run is unavailable", async () => {
+    const form = initialBatchForm();
+    form.referenceAssetIds = ["asset-1"];
+    saveWorkingSession(form, null, ["run-bad", "run-good"]);
+    const api = makeApi({
+      getRun: vi.fn(async (runId: string) => {
+        if (runId === "run-bad") {
+          throw new ApiError("Run data is invalid", "invalid_run_data", 500);
+        }
+        return runLookupResponse("succeeded", runId, 22);
+      }),
+      getResults: vi.fn(async (runId: string) => ({
+        run_id: runId,
+        results: [result(1, 1, "image/png", "healthy.png", 100)],
+      })),
+    });
+    render(<App api={api} />);
+
+    const gallery = batchResultsSection();
+    expect(await within(gallery).findByText("healthy.png")).toBeInTheDocument();
+    expect(within(gallery).getByText("Unavailable: Run data is invalid")).toBeInTheDocument();
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+  });
+});
+
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
     getComfyUIStatus: vi.fn(async () => ({
@@ -297,58 +930,73 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
       devices: ["Test GPU"],
       diagnostic: null,
     })),
+    listProjectAssets: vi.fn(async () => ({ assets: [asset("asset-1", "portrait.png")] })),
+    uploadProjectAssets: vi.fn(async () => ({ assets: [] })),
     previewBatch: vi.fn(async () => previewResponse()),
     createRun: vi.fn(async () => runResponse()),
+    getRun: vi.fn(async () => runLookupResponse()),
     startRun: vi.fn(async (runId: string) => ({ run_id: runId, status: "accepted" })),
     getExecution: vi.fn(async () => execution("succeeded")),
     getResults: vi.fn(async () => ({ run_id: "run-123", results: [] })),
     resultUrl: (url: string) => `http://api.test${url}`,
+    assetUrl: (url: string) => `http://api.test${url}`,
     ...overrides,
   };
 }
 
-function previewResponse(): PreviewResponse {
+function previewResponse(jobCount = 2): PreviewResponse {
+  const subjects = ["cat", "dog", "bird"];
   return {
-    job_count: 2,
+    job_count: jobCount,
     warnings: [
       { code: "unused_binding", message: "Unused binding variable", placeholder: "unused" },
     ],
-    jobs: [
-      {
-        ordinal: 1,
-        resolved_prompt: "A studio portrait of cat.",
-        resolved_variables: [{ name: "subject", value: "cat" }],
+    jobs: Array.from({ length: jobCount }, (_, index) => {
+      const subject = subjects[index] ?? `subject-${index + 1}`;
+      return {
+        ordinal: index + 1,
+        resolved_prompt: `A studio portrait of ${subject}.`,
+        resolved_variables: [{ name: "subject", value: subject }],
         reference_asset_id: "asset-1",
         seed: 1,
-      },
-      {
-        ordinal: 2,
-        resolved_prompt: "A studio portrait of dog.",
-        resolved_variables: [{ name: "subject", value: "dog" }],
-        reference_asset_id: "asset-1",
-        seed: 1,
-      },
-    ],
+      };
+    }),
   };
 }
 
-function runResponse(): RunCreatedResponse {
+function runResponse(
+  runId = "run-123",
+  runNumber = 7,
+  jobCount = 2,
+): RunCreatedResponse {
   return {
-    run_id: "run-123",
-    run_number: 7,
+    run_id: runId,
+    run_number: runNumber,
     project_id: "project-1",
     project_name: "My Project",
     batch_id: "batch-1",
     batch_name: "First experiment",
-    job_count: 2,
+    job_count: jobCount,
     durable_status: "created",
   };
 }
 
-function execution(status: ExecutionResponse["status"]): ExecutionResponse {
+function runLookupResponse(
+  status: ExecutionResponse["status"] = "succeeded",
+  runId = "run-123",
+  runNumber = 7,
+): RunResponse {
+  return {
+    ...runResponse(runId, runNumber),
+    created_at: "2026-08-27T12:00:00Z",
+    execution: execution(status, runId),
+  };
+}
+
+function execution(status: ExecutionResponse["status"], runId = "run-123"): ExecutionResponse {
   const terminal = status === "succeeded" || status === "failed" || status === "blocked";
   return {
-    run_id: "run-123",
+    run_id: runId,
     status,
     started_at: "2026-08-27T12:00:00Z",
     completed_at: terminal ? "2026-08-27T12:01:00Z" : null,
@@ -400,14 +1048,46 @@ function result(
   };
 }
 
-function enterAsset() {
-  fireEvent.change(screen.getByLabelText("Project Asset ID 1"), {
-    target: { value: "asset-1" },
-  });
+function asset(assetId: string, filename: string): AssetResponse {
+  return {
+    asset_id: assetId,
+    original_filename: filename,
+    content_type: "image/png",
+    byte_size: 2048,
+    sha256: `${assetId}-sha256`,
+    created_at: "2026-08-27T12:00:00Z",
+    content_url: `/api/assets/${assetId}`,
+  };
+}
+
+function seedWorkingSession(runId: string) {
+  const form = initialBatchForm();
+  form.referenceAssetIds = ["asset-1"];
+  saveWorkingSession(form, runId, [runId]);
+}
+
+function batchResultsSection(): HTMLElement {
+  const section = screen.getByRole("heading", { name: "Batch Results" }).closest("section");
+  if (!section) {
+    throw new Error("Batch Results section was not rendered");
+  }
+  return section;
+}
+
+function currentRunSection(): HTMLElement {
+  const section = screen.getByRole("heading", { name: /^Run \d+$/ }).closest("section");
+  if (!section) {
+    throw new Error("Current Run section was not rendered");
+  }
+  return section;
+}
+
+async function enterAsset() {
+  fireEvent.click(await screen.findByRole("button", { name: "Select portrait.png" }));
 }
 
 async function reachPreview() {
-  enterAsset();
+  await enterAsset();
   fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
   await screen.findByRole("button", { name: "Create Run" });
 }

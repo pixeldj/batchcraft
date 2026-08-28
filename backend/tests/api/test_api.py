@@ -37,6 +37,9 @@ from batchcraft.execution import (
 )
 from batchcraft.files import AssetRecord, ProjectAssetStore, PublishedRun, RunFilesystemStore
 
+PNG_A = b"\x89PNG\r\n\x1a\nimage-a"
+PNG_B = b"\x89PNG\r\n\x1a\nimage-b"
+
 
 class FakeEventSource:
     async def events(self, prompt_id: str) -> AsyncIterator[ExecutionEvent]:
@@ -312,6 +315,112 @@ def test_comfyui_unavailable_is_a_stable_status_response(tmp_path: Path) -> None
         "devices": [],
         "diagnostic": "cannot connect to ComfyUI",
     }
+
+
+def test_project_assets_upload_list_deduplicate_and_serve_content(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        empty = http.get("/api/projects/project_key/assets")
+        imported = http.post(
+            "/api/projects/project_key/assets",
+            files=[
+                ("files", ("nested/portrait.png", PNG_A, "image/png")),
+                ("files", ("second.png", PNG_B, "image/png")),
+                ("files", ("duplicate.png", PNG_A, "image/png")),
+            ],
+        )
+        listed = http.get("/api/projects/project_key/assets")
+        first_asset = imported.json()["assets"][0]
+        content = http.get(first_asset["content_url"])
+
+    assert empty.status_code == 200
+    assert empty.json() == {"assets": []}
+    assert imported.status_code == 201
+    assert len(imported.json()["assets"]) == 2
+    assert first_asset["original_filename"] == "portrait.png"
+    assert first_asset["content_type"] == "image/png"
+    assert first_asset["byte_size"] == len(PNG_A)
+    assert first_asset["content_url"].startswith("/api/projects/project_key/assets/")
+    assert "stored_path" not in first_asset
+    assert listed.status_code == 200
+    assert {asset["asset_id"] for asset in listed.json()["assets"]} == {
+        asset["asset_id"] for asset in imported.json()["assets"]
+    }
+    assert content.status_code == 200
+    assert content.headers["content-type"] == "image/png"
+    assert content.content == PNG_A
+    assert not (settings.projects_root / "project_key" / "project.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "content_type"),
+    (
+        ("image.gif", b"GIF89a", "image/gif"),
+        ("image.png", b"not a png", "image/png"),
+        ("image.jpg", b"\xff\xd8\xffimage", "image/png"),
+    ),
+)
+def test_project_asset_upload_rejects_unsupported_or_mismatched_images(
+    tmp_path: Path, filename: str, content: bytes, content_type: str
+) -> None:
+    settings = _settings(tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post(
+            "/api/projects/project_key/assets",
+            files={"files": (filename, content, content_type)},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_asset_upload"
+    assert not (settings.projects_root / "project_key" / "assets").exists()
+
+
+def test_project_asset_routes_reject_unsafe_project_paths(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.projects_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (settings.projects_root / "linked").symlink_to(outside, target_is_directory=True)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        unsafe_key = http.get("/api/projects/bad%5Ckey/assets")
+        symlink = http.get("/api/projects/linked/assets")
+
+    assert unsafe_key.status_code == 422
+    assert unsafe_key.json()["error"]["code"] == "invalid_project_key"
+    assert symlink.status_code == 422
+    assert symlink.json()["error"]["code"] == "invalid_project_key"
+
+
+def test_project_asset_listing_is_lightweight_but_content_is_fully_verified(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        imported = http.post(
+            "/api/projects/project_key/assets",
+            files={"files": ("image.png", PNG_A, "image/png")},
+        ).json()["assets"][0]
+        content_path = next(settings.projects_root.glob("project_key/assets/sha256/*/*/content"))
+        content_path.write_bytes(b"\x89PNG\r\n\x1a\nchanged")
+        listed = http.get("/api/projects/project_key/assets")
+        content = http.get(imported["content_url"])
+
+    assert listed.status_code == 200
+    assert [asset["asset_id"] for asset in listed.json()["assets"]] == [imported["asset_id"]]
+    assert content.status_code == 500
+    assert content.json()["error"]["code"] == "invalid_asset_data"
 
 
 def test_preview_uses_production_compiler_order_and_preserves_warnings(tmp_path: Path) -> None:

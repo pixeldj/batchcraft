@@ -1,5 +1,6 @@
 import type {
   ApiErrorEnvelope,
+  AssetsResponse,
   BatchRequest,
   ComfyUIStatusResponse,
   ExecutionResponse,
@@ -7,6 +8,7 @@ import type {
   PreviewResponse,
   ResultsResponse,
   RunCreatedResponse,
+  RunResponse,
 } from "./types";
 
 const DEFAULT_API_URL = "http://127.0.0.1:8000";
@@ -24,12 +26,20 @@ export class ApiError extends Error {
 
 export interface BatchcraftApi {
   getComfyUIStatus(signal?: AbortSignal): Promise<ComfyUIStatusResponse>;
+  listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse>;
+  uploadProjectAssets(
+    projectKey: string,
+    files: File[],
+    signal?: AbortSignal,
+  ): Promise<AssetsResponse>;
   previewBatch(batch: BatchRequest): Promise<PreviewResponse>;
   createRun(batch: BatchRequest): Promise<RunCreatedResponse>;
+  getRun(runId: string, signal?: AbortSignal): Promise<RunResponse>;
   startRun(runId: string): Promise<ExecutionStartedResponse>;
   getExecution(runId: string, signal?: AbortSignal): Promise<ExecutionResponse>;
   getResults(runId: string, signal?: AbortSignal): Promise<ResultsResponse>;
   resultUrl(downloadUrl: string): string;
+  assetUrl(contentUrl: string): string;
 }
 
 export class BatchcraftApiClient implements BatchcraftApi {
@@ -43,12 +53,36 @@ export class BatchcraftApiClient implements BatchcraftApi {
     return this.request("/api/comfyui/status", { signal });
   }
 
+  listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectKey)}/assets`, { signal });
+  }
+
+  uploadProjectAssets(
+    projectKey: string,
+    files: File[],
+    signal?: AbortSignal,
+  ): Promise<AssetsResponse> {
+    const body = new FormData();
+    for (const file of files) {
+      body.append("files", file);
+    }
+    return this.request(`/api/projects/${encodeURIComponent(projectKey)}/assets`, {
+      method: "POST",
+      body,
+      signal,
+    });
+  }
+
   previewBatch(batch: BatchRequest): Promise<PreviewResponse> {
     return this.request("/api/batches/preview", this.jsonRequest(batch));
   }
 
   createRun(batch: BatchRequest): Promise<RunCreatedResponse> {
     return this.request("/api/runs", this.jsonRequest(batch));
+  }
+
+  getRun(runId: string, signal?: AbortSignal): Promise<RunResponse> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}`, { signal });
   }
 
   startRun(runId: string): Promise<ExecutionStartedResponse> {
@@ -64,7 +98,11 @@ export class BatchcraftApiClient implements BatchcraftApi {
   }
 
   resultUrl(downloadUrl: string): string {
-    return `${this.baseUrl}${downloadUrl.startsWith("/") ? "" : "/"}${downloadUrl}`;
+    return this.absoluteUrl(downloadUrl);
+  }
+
+  assetUrl(contentUrl: string): string {
+    return this.absoluteUrl(contentUrl);
   }
 
   private jsonRequest(body: BatchRequest): RequestInit {
@@ -73,6 +111,10 @@ export class BatchcraftApiClient implements BatchcraftApi {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     };
+  }
+
+  private absoluteUrl(path: string): string {
+    return `${this.baseUrl}${path.startsWith("/") ? "" : "/"}${path}`;
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

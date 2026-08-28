@@ -45,6 +45,9 @@ match `BATCHCRAFT_FRONTEND_ORIGIN` for browser API requests.
 ```text
 GET  /api/health
 GET  /api/comfyui/status
+GET  /api/projects/{project_key}/assets
+POST /api/projects/{project_key}/assets
+GET  /api/projects/{project_key}/assets/{asset_id}/content
 POST /api/batches/preview
 POST /api/runs
 GET  /api/runs/{run_id}
@@ -58,9 +61,46 @@ GET  /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}
 
 Preview calls the production Batch compiler and returns every resolved Job in deterministic order. Run creation compiles the request again, validates the Workflow Profile against the workflow, resolves existing Project assets, and publishes through `RunFilesystemStore`.
 
+## Project Assets
+
+`POST /api/projects/{project_key}/assets` accepts one or more multipart fields named `files`.
+Uploads are copied into request-scoped temporary files and then imported through
+`ProjectAssetStore.import_file()`. The API accepts PNG, JPEG, and WebP only when the filename
+extension, declared content type, and file signature agree. Content-addressed import retains the
+existing deduplication behavior: importing identical bytes returns the original Asset record.
+
+`GET /api/projects/{project_key}/assets` returns image Asset metadata without local filesystem
+paths. Results are ordered by creation time newest first, then SHA-256 ascending. Discovery validates
+metadata version, identity, stored path, location, regular-file status, and byte size without hashing
+every image. Invalid unrelated records are omitted; duplicate valid Asset IDs make the Project asset
+data invalid.
+
+`GET /api/projects/{project_key}/assets/{asset_id}/content` resolves only an Asset in the requested
+Project, performs full size and SHA-256 verification through `ProjectAssetStore.load()`, rejects
+unsafe files, and verifies the selected image signature before serving it. Arbitrary local paths are
+never accepted.
+
+A missing Project has an empty asset listing. Import may create its content-addressed asset
+hierarchy, but it does not manufacture `project.json`; successful Run publication remains
+responsible for binding a Project filesystem key to Project identity.
+
 ## Batch Persistence
 
-This slice does not create a mutable Batch file format. The Batch request is ephemeral; a successfully published Run contains the durable frozen plan and provenance. Mutable Batch persistence remains part of the later SQLite application-state milestone.
+This slice does not create a mutable Batch file format. The frontend keeps a versioned, best-effort
+working draft, current Run ID, and ordered unique session Run IDs in browser `sessionStorage` so a
+refresh in the same tab can restore the current workflow and its Batch working-session gallery. It
+does not persist Preview output, execution state, Result metadata, or Result bytes. The browser
+reloads Run, execution, and Result data through the API because backend data remains authoritative.
+
+The session Run list is scoped to the stable Project and Batch IDs plus their filesystem keys. A
+change to any of those identity fields resets the accumulated gallery; prompt, reference, seed, and
+display-name edits retain it. The gallery is not durable Project-wide Run history and does not add a
+Run query endpoint.
+
+Run creation uses the exact complete Batch request stored with the visible successful Preview. Any
+form edit invalidates that Preview pair. A terminal Run does not consume the Batch or Preview, so the
+same Preview request may create another new immutable Run. Durable mutable Batch persistence remains
+part of the later SQLite application-state milestone.
 
 ## Run Lookup
 
@@ -85,6 +125,10 @@ The task registry:
 
 An execution request is accepted only when `execution.json` does not yet exist. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism.
 
+A refreshed browser may reconnect to a Run already executing in the same backend process. It reads
+the existing state and resumes polling without calling the execution-start endpoint. This is UI
+reconnection, not backend execution recovery.
+
 ## Results
 
 Result listing follows persisted Job and artifact order. Application queries validate execution-state schema, identities, invariants, Result metadata paths, and output-directory safety without hashing every Result file. File retrieval accepts integer Job and artifact ordinals, resolves only a matching `ResultRecord`, and validates that selected file's regular-file status, size, and SHA-256 before returning it. Arbitrary filesystem paths are never accepted.
@@ -102,4 +146,8 @@ API errors use:
 }
 ```
 
-Defined cases include invalid requests and Batches, invalid Workflow Profile mappings, missing Project assets, missing Runs or Results, active or ineligible execution, Run publication failure, invalid durable Run data, and unexpected internal errors. Python stack traces are logged server-side rather than returned to clients.
+Defined cases include invalid requests and Batches, invalid Workflow Profile mappings, unsafe
+Project keys, invalid image uploads, missing or invalid Project assets, missing Runs or Results,
+active or ineligible execution, asset or Run publication failure, invalid durable Run data, and
+unexpected internal errors. Python stack traces are logged server-side rather than returned to
+clients.

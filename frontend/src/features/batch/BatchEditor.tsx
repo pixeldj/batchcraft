@@ -1,21 +1,22 @@
+import type { BatchcraftApi } from "../../api/client";
 import { Field, TextAreaField } from "../../components/Field";
 import {
-  newReference,
   newVariableBinding,
   type BatchFormState,
-  type ReferenceForm,
   type VariableBindingForm,
 } from "./form";
+import { ReferenceAssetPicker } from "./ReferenceAssetPicker";
 
 interface Props {
   form: BatchFormState;
+  api: BatchcraftApi;
   error: string | null;
   previewing: boolean;
   onChange(form: BatchFormState): void;
   onPreview(): void;
 }
 
-export function BatchEditor({ form, error, previewing, onChange, onPreview }: Props) {
+export function BatchEditor({ api, form, error, previewing, onChange, onPreview }: Props) {
   function update<K extends keyof BatchFormState>(key: K, value: BatchFormState[K]) {
     onChange({ ...form, [key]: value });
   }
@@ -29,15 +30,6 @@ export function BatchEditor({ form, error, previewing, onChange, onPreview }: Pr
     );
   }
 
-  function updateReference(key: number, patch: Partial<ReferenceForm>) {
-    update(
-      "references",
-      form.references.map((reference) =>
-        reference.key === key ? { ...reference, ...patch } : reference,
-      ),
-    );
-  }
-
   return (
     <section className="section-card batch-editor" aria-labelledby="batch-heading">
       <div className="section-heading">
@@ -45,7 +37,7 @@ export function BatchEditor({ form, error, previewing, onChange, onPreview }: Pr
           <p className="eyebrow">01 / Define</p>
           <h2 id="batch-heading">Batch configuration</h2>
         </div>
-        <p className="section-note">Ephemeral until a Run is created</p>
+        <p className="section-note">Working draft · this browser session only</p>
       </div>
 
       <fieldset>
@@ -61,7 +53,13 @@ export function BatchEditor({ form, error, previewing, onChange, onPreview }: Pr
             id="project-key"
             label="Filesystem key"
             value={form.projectFilesystemKey}
-            onChange={(event) => update("projectFilesystemKey", event.target.value)}
+            onChange={(event) =>
+              onChange({
+                ...form,
+                projectFilesystemKey: event.target.value,
+                referenceAssetIds: [],
+              })
+            }
           />
           <Field
             id="project-name"
@@ -211,52 +209,21 @@ export function BatchEditor({ form, error, previewing, onChange, onPreview }: Pr
         </div>
       </fieldset>
 
-      <div className="field-grid two-columns align-start">
-        <fieldset>
-          <legend>References</legend>
-          <div className="fieldset-action">
-            <button
-              className="button-secondary compact"
-              type="button"
-              onClick={() => update("references", [...form.references, newReference()])}
-            >
-              Add Asset ID
-            </button>
-          </div>
-          <p className="limitation-note">
-            This API cannot import or browse assets yet. Enter Asset IDs already stored under this
-            Project.
-          </p>
-          <div className="reference-list">
-            {form.references.map((reference, index) => (
-              <div className="inline-control" key={reference.key}>
-                <Field
-                  id={`asset-${reference.key}`}
-                  label={`Project Asset ID ${index + 1}`}
-                  value={reference.assetId}
-                  onChange={(event) =>
-                    updateReference(reference.key, { assetId: event.target.value })
-                  }
-                />
-                <button
-                  className="button-link danger"
-                  type="button"
-                  onClick={() =>
-                    update(
-                      "references",
-                      form.references.filter((item) => item.key !== reference.key),
-                    )
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        </fieldset>
+      <fieldset>
+        <legend>Reference Assets</legend>
+        <ReferenceAssetPicker
+          api={api}
+          projectKey={form.projectFilesystemKey}
+          selectedAssetIds={form.referenceAssetIds}
+          onSelectedAssetIdsChange={(referenceAssetIds) =>
+            update("referenceAssetIds", referenceAssetIds)
+          }
+        />
+      </fieldset>
 
-        <fieldset>
-          <legend>Seeds</legend>
+      <fieldset className="seed-fieldset">
+        <legend>Seeds</legend>
+        <div className="field-grid two-columns align-start">
           <label className="field" htmlFor="seed-mode">
             <span className="field-label">Seed mode</span>
             <select
@@ -278,8 +245,8 @@ export function BatchEditor({ form, error, previewing, onChange, onPreview }: Pr
             value={form.seedValues}
             onChange={(event) => update("seedValues", event.target.value)}
           />
-        </fieldset>
-      </div>
+        </div>
+      </fieldset>
 
       <fieldset>
         <legend>ComfyUI workflow</legend>

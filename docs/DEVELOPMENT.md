@@ -146,11 +146,14 @@ The slice accepts an ephemeral complete Batch request for preview and Run creati
 Completed.
 
 Production code under `frontend/` provides one screen for ComfyUI status, ephemeral Batch editing,
-backend-compiled Job preview, durable Run creation, execution start and polling, and deterministic
-Result rendering. The browser uses only the FastAPI endpoints documented in `docs/API.md`.
+Project image import and collapsible ordered Reference Asset selection, backend-compiled Job preview,
+durable Run creation, repeated terminal Run creation, execution start and polling, non-cropping
+Result rendering, and a tab-scoped Batch Results gallery across session Runs. The browser uses only
+the FastAPI endpoints documented in `docs/API.md`.
 
-This phase does not add asset import or discovery, durable editable Batch persistence, Run history,
-recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow Profile mapping.
+This phase does not add durable editable Batch persistence, Reference Collections, asset deletion,
+Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
+Profile mapping.
 
 ## Python Conventions
 
@@ -198,6 +201,18 @@ library, or client state library is installed.
 Keep API access in `src/api/`, feature components in `src/features/`, and small shared controls in
 `src/components/`. Treat HTTP responses as typed contracts. Keep Batch compilation, validation,
 execution transitions, and Result provenance on the backend.
+
+Browser `sessionStorage` is a best-effort refresh aid, not application persistence. Store semantic
+form values, the current Run ID, and ordered unique Run IDs for the current Batch working session.
+Restore Run, execution, and Result state from the backend, and require a fresh compiler Preview after
+restoring a form draft. Never store Result metadata or bytes as browser truth. Changing stable Project
+or Batch identity resets the session gallery; editing prompts, references, seeds, or display names does
+not.
+
+The Reference Asset picker starts expanded with no selection and may start collapsed when a restored
+selection exists. Its collapsed state renders only the selected count. Select All preserves current
+selection order and appends unselected Project assets in deterministic picker order; Select None
+clears the selection. Both are semantic form changes and must invalidate Preview.
 
 From `frontend/`, install and run the development server:
 

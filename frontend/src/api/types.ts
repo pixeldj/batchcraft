@@ -41,6 +41,20 @@ export interface ComfyUIStatusResponse {
   diagnostic: string | null;
 }
 
+export interface AssetResponse {
+  asset_id: string;
+  original_filename: string;
+  content_type: string;
+  byte_size: number;
+  sha256: string;
+  created_at: string;
+  content_url: string;
+}
+
+export interface AssetsResponse {
+  assets: AssetResponse[];
+}
+
 export interface CompilationWarningResponse {
   code: string;
   message: string;
@@ -70,6 +84,11 @@ export interface RunCreatedResponse {
   batch_name: string;
   job_count: number;
   durable_status: string;
+}
+
+export interface RunResponse extends RunCreatedResponse {
+  created_at: string;
+  execution: ExecutionResponse;
 }
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed" | "blocked";

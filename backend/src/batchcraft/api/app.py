@@ -1,21 +1,27 @@
 import logging
+import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, File, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from batchcraft.application import (
     ApplicationComfyUIClient,
+    AssetDataError,
+    AssetImportInput,
     AssetNotFoundError,
+    AssetPublicationError,
+    AssetUploadError,
     BatchcraftService,
     ExecutionAlreadyActiveError,
     ExecutionNotEligibleError,
+    InvalidProjectKeyError,
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
@@ -30,6 +36,8 @@ from batchcraft.execution import execute_run
 
 from .config import Settings
 from .schemas import (
+    AssetResponse,
+    AssetsResponse,
     BatchRequest,
     ComfyUIStatusResponse,
     ErrorDetail,
@@ -103,6 +111,48 @@ def create_app(
     @app.get("/api/comfyui/status", response_model=ComfyUIStatusResponse)
     async def comfyui_status(service: ServiceDependency) -> ComfyUIStatusResponse:
         return ComfyUIStatusResponse.from_status(await service.get_comfyui_status())
+
+    @app.get("/api/projects/{project_key}/assets", response_model=AssetsResponse)
+    async def list_project_assets(
+        project_key: str,
+        service: ServiceDependency,
+    ) -> AssetsResponse:
+        return AssetsResponse(
+            assets=[
+                AssetResponse.from_asset(project_key, asset)
+                for asset in service.list_project_assets(project_key)
+            ]
+        )
+
+    @app.post(
+        "/api/projects/{project_key}/assets",
+        response_model=AssetsResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_project_assets(
+        project_key: str,
+        service: ServiceDependency,
+        files: Annotated[list[UploadFile], File()],
+    ) -> AssetsResponse:
+        with tempfile.TemporaryDirectory(prefix="batchcraft-assets-") as temporary_directory:
+            try:
+                staged = await _stage_asset_uploads(files, Path(temporary_directory))
+                assets = service.import_project_assets(project_key, staged)
+            finally:
+                for upload in files:
+                    await upload.close()
+        return AssetsResponse(
+            assets=[AssetResponse.from_asset(project_key, asset) for asset in assets]
+        )
+
+    @app.get("/api/projects/{project_key}/assets/{asset_id}/content")
+    async def get_project_asset_content(
+        project_key: str,
+        asset_id: str,
+        service: ServiceDependency,
+    ) -> Response:
+        asset, content = service.get_project_asset_content(project_key, asset_id)
+        return Response(content=content, media_type=asset.mime_type)
 
     @app.post("/api/batches/preview", response_model=PreviewResponse)
     async def preview_batch(
@@ -219,6 +269,38 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def missing_asset(_request: Request, error: AssetNotFoundError) -> JSONResponse:
         return _error_response(status.HTTP_404_NOT_FOUND, "project_asset_not_found", str(error))
 
+    @app.exception_handler(InvalidProjectKeyError)
+    async def invalid_project_key(_request: Request, error: InvalidProjectKeyError) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_project_key", str(error)
+        )
+
+    @app.exception_handler(AssetUploadError)
+    async def invalid_asset_upload(_request: Request, error: AssetUploadError) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_asset_upload", str(error)
+        )
+
+    @app.exception_handler(AssetDataError)
+    async def invalid_asset_data(_request: Request, error: AssetDataError) -> JSONResponse:
+        logger.error("Invalid Project asset data: %s", error)
+        return _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "invalid_asset_data",
+            "Project asset data is invalid",
+        )
+
+    @app.exception_handler(AssetPublicationError)
+    async def asset_publication_failed(
+        _request: Request, error: AssetPublicationError
+    ) -> JSONResponse:
+        logger.error("Project asset publication failed: %s", error)
+        return _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "asset_publication_failed",
+            "Project assets could not be published",
+        )
+
     @app.exception_handler(RunNotFoundError)
     async def missing_run(_request: Request, _error: RunNotFoundError) -> JSONResponse:
         return _error_response(status.HTTP_404_NOT_FOUND, "run_not_found", "Run was not found")
@@ -292,6 +374,33 @@ def _register_error_handlers(app: FastAPI) -> None:
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
     body = ErrorResponse(error=ErrorDetail(code=code, message=message))
     return JSONResponse(status_code=status_code, content=body.model_dump())
+
+
+async def _stage_asset_uploads(
+    uploads: list[UploadFile], temporary_root: Path
+) -> tuple[AssetImportInput, ...]:
+    staged: list[AssetImportInput] = []
+    for index, upload in enumerate(uploads):
+        filename = _safe_upload_filename(upload.filename)
+        upload_path = temporary_root / str(index) / filename
+        upload_path.parent.mkdir()
+        with upload_path.open("xb") as output:
+            while chunk := await upload.read(1024 * 1024):
+                output.write(chunk)
+        staged.append(AssetImportInput(source=upload_path, content_type=upload.content_type or ""))
+    return tuple(staged)
+
+
+def _safe_upload_filename(filename: str | None) -> str:
+    normalized = (filename or "").replace("\\", "/")
+    basename = normalized.rsplit("/", maxsplit=1)[-1]
+    if (
+        not basename
+        or basename in {".", ".."}
+        or any(ord(character) < 32 for character in basename)
+    ):
+        raise AssetUploadError("Uploaded image filename is invalid")
+    return basename
 
 
 app = create_app()

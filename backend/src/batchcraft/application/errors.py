@@ -14,6 +14,22 @@ class AssetNotFoundError(ApplicationError):
     pass
 
 
+class AssetUploadError(ApplicationError):
+    pass
+
+
+class AssetDataError(ApplicationError):
+    pass
+
+
+class AssetPublicationError(ApplicationError):
+    pass
+
+
+class InvalidProjectKeyError(ApplicationError):
+    pass
+
+
 class RunDataError(ApplicationError):
     pass
 

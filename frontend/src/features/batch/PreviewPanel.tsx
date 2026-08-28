@@ -1,14 +1,28 @@
-import type { PreviewResponse } from "../../api/types";
+import type { PreviewResponse, RunCreatedResponse, RunStatus } from "../../api/types";
 
 interface Props {
   preview: PreviewResponse | null;
   creating: boolean;
-  runCreated: boolean;
+  currentRun: RunCreatedResponse | null;
+  currentRunStatus: RunStatus | null;
+  canCreateRun: boolean;
+  creationBlockedMessage: string | null;
+  association: { runId: string; runNumber: number; consistent: boolean } | null;
   error: string | null;
   onCreateRun(): void;
 }
 
-export function PreviewPanel({ preview, creating, runCreated, error, onCreateRun }: Props) {
+export function PreviewPanel({
+  preview,
+  creating,
+  currentRun,
+  currentRunStatus,
+  canCreateRun,
+  creationBlockedMessage,
+  association,
+  error,
+  onCreateRun,
+}: Props) {
   if (!preview) {
     return (
       <section className="section-card quiet-card" aria-labelledby="preview-heading">
@@ -18,7 +32,9 @@ export function PreviewPanel({ preview, creating, runCreated, error, onCreateRun
             <h2 id="preview-heading">Preview</h2>
           </div>
         </div>
-        <p>Preview the Batch to inspect the backend-compiled Job plan before creating a Run.</p>
+        <p>
+          Preview required. Compile the current Batch draft before creating a new immutable Run.
+        </p>
         {error ? <p className="operation-error" role="alert">{error}</p> : null}
       </section>
     );
@@ -80,19 +96,27 @@ export function PreviewPanel({ preview, creating, runCreated, error, onCreateRun
       </div>
 
       {error ? <p className="operation-error" role="alert">{error}</p> : null}
+      {association && association.runId === currentRun?.run_id ? (
+        <p className={association.consistent ? "preview-run-note" : "operation-error"}>
+          {association.consistent
+            ? `Created as Run ${association.runNumber}.`
+            : `Run ${association.runNumber} was created but does not match this Preview.`}
+        </p>
+      ) : null}
       <div className="action-row">
         <p>
-          {runCreated
-            ? "This browser session already owns a Run. Refresh to begin another session."
-            : "The backend recompiles the current form when it creates the frozen Run."}
+          {creationBlockedMessage ??
+            (currentRun && currentRunStatus && ["succeeded", "failed", "blocked"].includes(currentRunStatus)
+              ? "Create a new immutable Run from this inspected Preview. The previous Run is unchanged."
+              : "Run creation submits the exact Batch specification used for this Preview.")}
         </p>
         <button
           className="button-primary"
           type="button"
-          disabled={creating || runCreated}
+          disabled={creating || !canCreateRun}
           onClick={onCreateRun}
         >
-          {creating ? "Creating Run..." : runCreated ? "Run Created" : "Create Run"}
+          {creating ? "Creating Run..." : currentRun ? "Create Another Run" : "Create Run"}
         </button>
       </div>
     </section>

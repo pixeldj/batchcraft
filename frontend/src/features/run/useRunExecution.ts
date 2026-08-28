@@ -15,16 +15,24 @@ export function useRunExecution(
   api: BatchcraftApi,
   run: RunCreatedResponse | null,
   pollIntervalMs: number,
+  initialExecution: ExecutionResponse | null,
+  initialResults: ResultResponse[],
+  initialResultsError: string | null,
+  onStatusChange: (status: RunStatus | null) => void,
 ) {
-  const [execution, setExecution] = useState<ExecutionResponse | null>(null);
-  const [results, setResults] = useState<ResultResponse[]>([]);
+  const [execution, setExecution] = useState<ExecutionResponse | null>(initialExecution);
+  const [results, setResults] = useState<ResultResponse[]>(initialResults);
   const [starting, setStarting] = useState(false);
-  const [polling, setPolling] = useState(false);
+  const [polling, setPolling] = useState(initialExecution?.status === "running");
   const [refreshingResults, setRefreshingResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [resultsError, setResultsError] = useState<string | null>(null);
+  const [resultsError, setResultsError] = useState<string | null>(initialResultsError);
   const reconcilingStart = useRef(false);
   const createdReconciliationPolls = useRef(0);
+
+  useEffect(() => {
+    onStatusChange(execution?.status ?? (run ? "created" : null));
+  }, [execution?.status, onStatusChange, run]);
 
   useEffect(() => {
     if (!polling || !run) {

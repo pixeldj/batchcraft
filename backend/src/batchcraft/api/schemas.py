@@ -1,4 +1,5 @@
 from typing import Self
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,7 +18,7 @@ from batchcraft.domain import (
     VariableList,
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
-from batchcraft.files import BatchIdentity, ProjectIdentity, PublishedRun
+from batchcraft.files import AssetRecord, BatchIdentity, ProjectIdentity, PublishedRun
 
 
 class ApiModel(BaseModel):
@@ -126,6 +127,35 @@ class ComfyUIStatusResponse(ApiModel):
             devices=list(status.devices),
             diagnostic=status.diagnostic,
         )
+
+
+class AssetResponse(ApiModel):
+    asset_id: str
+    original_filename: str
+    content_type: str
+    byte_size: int
+    sha256: str
+    created_at: str
+    content_url: str
+
+    @classmethod
+    def from_asset(cls, project_key: str, asset: AssetRecord) -> Self:
+        return cls(
+            asset_id=asset.asset_id,
+            original_filename=asset.original_filename,
+            content_type=asset.mime_type or "application/octet-stream",
+            byte_size=asset.byte_size,
+            sha256=asset.sha256,
+            created_at=asset.created_at,
+            content_url=(
+                f"/api/projects/{quote(project_key, safe='')}/assets/"
+                f"{quote(asset.asset_id, safe='')}/content"
+            ),
+        )
+
+
+class AssetsResponse(ApiModel):
+    assets: list[AssetResponse]
 
 
 class WarningResponse(ApiModel):

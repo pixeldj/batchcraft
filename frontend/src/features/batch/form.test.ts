@@ -5,7 +5,7 @@ import { buildBatchRequest, initialBatchForm } from "./form";
 describe("buildBatchRequest", () => {
   it("converts the editor state to the exact API contract", () => {
     const form = initialBatchForm();
-    form.references[0].assetId = "asset-1";
+    form.referenceAssetIds = ["asset-1"];
     form.seedMode = "explicit";
     form.seedValues = "9, 3";
     form.workflowJson = '{"7":{"class_type":"KSampler","inputs":{"seed":0}}}';
@@ -32,7 +32,7 @@ describe("buildBatchRequest", () => {
 
   it("preserves commas inside newline-separated variable values", () => {
     const form = initialBatchForm();
-    form.references[0].assetId = "asset-1";
+    form.referenceAssetIds = ["asset-1"];
     form.variableBindings[0].values = "red, white, and blue\nblue";
     form.variableBindings[0].selectedValues = "red, white, and blue";
 

@@ -63,6 +63,43 @@ describe("BatchcraftApiClient", () => {
       status: null,
     } satisfies Partial<ApiError>);
   });
+
+  it("uploads Project images as multipart without setting a JSON content type", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ assets: [] }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient("http://api.test");
+    const file = new File(["image"], "portrait.png", { type: "image/png" });
+
+    await client.uploadProjectAssets("project key", [file]);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://api.test/api/projects/project%20key/assets");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).getAll("files")).toEqual([file]);
+  });
+
+  it("looks up a durable Run by encoded ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ run_id: "run 1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new BatchcraftApiClient("http://api.test").getRun("run 1");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/runs/run%201", {
+      signal: undefined,
+    });
+  });
 });
 
 function batchRequest() {

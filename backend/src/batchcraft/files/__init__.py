@@ -1,3 +1,4 @@
+from batchcraft.files._io import is_safe_filesystem_key
 from batchcraft.files.assets import AssetStoreError, ProjectAssetStore
 from batchcraft.files.models import (
     AssetRecord,
@@ -18,4 +19,5 @@ __all__ = [
     "PublishedRun",
     "RunFilesystemStore",
     "RunStoreError",
+    "is_safe_filesystem_key",
 ]

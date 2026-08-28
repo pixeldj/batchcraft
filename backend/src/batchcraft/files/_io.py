@@ -6,6 +6,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+_FILESYSTEM_KEY_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def is_safe_filesystem_key(value: str) -> bool:
+    return bool(
+        value
+        and value not in {".", ".."}
+        and value[0] in _FILESYSTEM_KEY_CHARACTERS
+        and all(character in _FILESYSTEM_KEY_CHARACTERS for character in value)
+    )
+
 
 def canonical_json_bytes(value: object) -> bytes:
     try:

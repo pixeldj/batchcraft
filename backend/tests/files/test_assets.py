@@ -3,7 +3,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from batchcraft.files import ProjectAssetStore
+import pytest
+
+from batchcraft.files import AssetStoreError, ProjectAssetStore
 
 FIXED_TIME = datetime(2026, 8, 27, 12, 30, tzinfo=UTC)
 
@@ -88,3 +90,70 @@ def test_different_content_remains_distinct(tmp_path: Path) -> None:
     assert first.stored_path != second.stored_path
     assert (tmp_path / "project" / first.stored_path).read_bytes() == b"first"
     assert (tmp_path / "project" / second.stored_path).read_bytes() == b"second"
+
+
+def test_metadata_listing_is_deterministic_and_does_not_hash_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated_ids = iter(("asset-b", "asset-a"))
+    times = iter(
+        (
+            datetime(2026, 8, 27, 12, 30, tzinfo=UTC),
+            datetime(2026, 8, 27, 12, 31, tzinfo=UTC),
+        )
+    )
+    store = ProjectAssetStore(
+        tmp_path / "project",
+        id_factory=lambda: next(generated_ids),
+        clock=lambda: next(times),
+    )
+    first_source = tmp_path / "first.png"
+    second_source = tmp_path / "second.png"
+    first_source.write_bytes(b"first")
+    second_source.write_bytes(b"second")
+    first = store.import_file(first_source)
+    second = store.import_file(second_source)
+    monkeypatch.setattr(
+        "batchcraft.files.assets.sha256_file",
+        lambda _path: pytest.fail("metadata listing must not hash content"),
+    )
+
+    assert store.list_metadata() == (second, first)
+
+
+def test_metadata_listing_skips_corrupt_unrelated_asset_and_rejects_duplicate_ids(
+    tmp_path: Path,
+) -> None:
+    generated_ids = iter(("asset-1", "asset-2"))
+    store = ProjectAssetStore(
+        tmp_path / "project",
+        id_factory=lambda: next(generated_ids),
+        clock=lambda: FIXED_TIME,
+    )
+    first_source = tmp_path / "first.png"
+    second_source = tmp_path / "second.png"
+    first_source.write_bytes(b"first")
+    second_source.write_bytes(b"second")
+    first = store.import_file(first_source)
+    second = store.import_file(second_source)
+    second_metadata_path = store.project_path / second.stored_path
+    second_metadata_path.with_name("asset.json").write_text("not json")
+
+    assert store.list_metadata() == (first,)
+
+    second_metadata_path.with_name("asset.json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "asset_id": first.asset_id,
+                "sha256": second.sha256,
+                "original_filename": second.original_filename,
+                "mime_type": second.mime_type,
+                "byte_size": second.byte_size,
+                "stored_path": second.stored_path,
+                "created_at": second.created_at,
+            }
+        )
+    )
+    with pytest.raises(AssetStoreError, match="duplicate Project asset ID"):
+        store.list_metadata()
