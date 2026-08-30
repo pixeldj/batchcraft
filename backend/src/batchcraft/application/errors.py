@@ -38,6 +38,10 @@ class ProjectAdoptionError(ApplicationError):
     pass
 
 
+class ProjectDiscoveryError(ApplicationError):
+    pass
+
+
 class RunDataError(ApplicationError):
     pass
 

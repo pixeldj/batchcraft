@@ -56,6 +56,106 @@ export interface AssetsResponse {
   assets: AssetResponse[];
 }
 
+export interface ProjectResponse {
+  id: string;
+  name: string;
+  filesystem_key: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface ProjectsResponse {
+  projects: ProjectResponse[];
+}
+
+export interface ProjectCreateRequest {
+  name: string;
+  filesystem_key: string;
+  description?: string | null;
+}
+
+export interface ProjectUpdateRequest {
+  name?: string;
+  description?: string | null;
+}
+
+export interface ProjectAdoptRequest {
+  filesystem_key: string;
+  project_id?: string | null;
+  name?: string | null;
+  description?: string | null;
+}
+
+export interface AdoptableProject {
+  filesystem_key: string;
+  owner_state: "owned" | "ownerless";
+  project_id: string | null;
+  initial_name: string | null;
+}
+
+export interface AdoptableProjectsResponse {
+  projects: AdoptableProject[];
+}
+
+export interface Prompt {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface LibraryPromptVersion {
+  id: string;
+  prompt_id: string;
+  version_number: number;
+  name_snapshot: string;
+  text: string;
+  note: string | null;
+  created_at: string;
+  archived_at: string | null;
+}
+
+export interface ProjectPrompt extends Prompt {
+  latest_active_version: LibraryPromptVersion | null;
+}
+
+export interface PromptsResponse {
+  prompts: ProjectPrompt[];
+}
+
+export interface PromptVersionsResponse {
+  prompt_versions: LibraryPromptVersion[];
+}
+
+export interface CreatePromptRequest {
+  name: string;
+  description?: string | null;
+  text: string;
+  note?: string | null;
+}
+
+export interface CreatePromptResponse {
+  prompt: Prompt;
+  version: LibraryPromptVersion;
+}
+
+export interface CreatePromptVersionRequest {
+  text: string;
+  note?: string | null;
+}
+
+export type CreatePromptVersionResponse = LibraryPromptVersion;
+
+export interface PromptUpdateRequest {
+  name?: string;
+  description?: string | null;
+}
+
 export interface CompilationWarningResponse {
   code: string;
   message: string;
@@ -68,7 +168,7 @@ export interface JobPreviewResponse {
   prompt_version_name: string;
   resolved_prompt: string;
   resolved_variables: Array<{ name: string; value: string }>;
-  reference_asset_id: string;
+  reference_asset_id: string | null;
   seed: number;
 }
 

@@ -72,7 +72,7 @@ export function PreviewPanel({
               <th scope="col">Prompt</th>
               <th scope="col">Resolved prompt</th>
               <th scope="col">Variables</th>
-              <th scope="col">Asset ID</th>
+              <th scope="col">Reference</th>
               <th scope="col">Seed</th>
             </tr>
           </thead>
@@ -92,7 +92,7 @@ export function PreviewPanel({
                         .join(", ")
                     : "None"}
                 </td>
-                <td><code>{job.reference_asset_id}</code></td>
+                <td>{job.reference_asset_id === null ? "Base workflow" : <code>{job.reference_asset_id}</code>}</td>
                 <td><code>{job.seed}</code></td>
               </tr>
             ))}

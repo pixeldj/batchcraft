@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { initialBatchForm, newVariableBinding, type BatchFormState } from "../batch/form";
+import { initialBatchForm, newPrompt, newVariableBinding, type BatchFormState } from "../batch/form";
 import {
   loadWorkingSession,
   saveWorkingSession,
@@ -8,36 +8,151 @@ import {
 } from "./workingSession";
 
 describe("browser working session", () => {
-  it("round-trips ordered prompts without UI keys and ordered unique session Run IDs", () => {
+  it("round-trips a v6 draft with no selected PromptVersions", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.prompts = [];
+
+    saveWorkingSession(form, null, [], "restored-project", storage);
+
+    const restored = loadWorkingSession(storage);
+    expect(restored.form.prompts).toEqual([]);
+    expect(restored.selectedProjectId).toBe("restored-project");
+  });
+
+  it("round-trips v6 Project selection and v5 prompt metadata without UI keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
     form.prompts.push({
       key: 999,
+      libraryProjectId: null,
+      promptId: null,
+      promptName: "Second Prompt",
       versionId: "prompt-second",
-      name: "Second Prompt",
+      versionNumber: null,
+      snapshotName: "Second Prompt",
       text: "Second {{subject}}",
     });
 
-    saveWorkingSession(form, "run-42", ["run-40", "run-42", "run-40"], storage);
+    saveWorkingSession(
+      form,
+      "run-42",
+      ["run-40", "run-42", "run-40"],
+      "selected-project",
+      storage,
+    );
     const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<string, unknown>;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.version).toBe(4);
+    expect(stored.version).toBe(6);
+    expect(stored.selected_project_id).toBe("selected-project");
     expect((stored.form as { prompts: unknown[] }).prompts).toEqual([
-      { versionId: "prompt-restored", name: "Restored Prompt", text: "Restored {{subject}}" },
-      { versionId: "prompt-second", name: "Second Prompt", text: "Second {{subject}}" },
+      {
+        libraryProjectId: "library-project",
+        promptId: "prompt-logical",
+        promptName: "Current Prompt Name",
+        versionId: "prompt-restored",
+        versionNumber: 7,
+        snapshotName: "Restored Prompt",
+        text: "Restored {{subject}}",
+      },
+      {
+        libraryProjectId: null,
+        promptId: null,
+        promptName: "Second Prompt",
+        versionId: "prompt-second",
+        versionNumber: null,
+        snapshotName: "Second Prompt",
+        text: "Second {{subject}}",
+      },
     ]);
     expect(stored).not.toHaveProperty("preview");
     expect(withoutKeys(restored.form)).toEqual(withoutKeys(form));
     expect(restored.currentRunId).toBe("run-42");
     expect(restored.sessionRunIds).toEqual(["run-40", "run-42"]);
+    expect(restored.selectedProjectId).toBe("selected-project");
     expect(restored.draftRestored).toBe(true);
+  });
+
+  it("round-trips a null Project selection", () => {
+    const storage = new MemoryStorage();
+
+    saveWorkingSession(populatedForm(), null, [], null, storage);
+
+    expect(loadWorkingSession(storage).selectedProjectId).toBeNull();
+  });
+
+  it("migrates version 5 with a trimmed form Project candidate", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.projectId = "  restored-project  ";
+    saveWorkingSession(form, "run-42", ["run-42"], null, storage);
+    const versionFive = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    versionFive.version = 5;
+    delete versionFive.selected_project_id;
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(versionFive));
+
+    const restored = loadWorkingSession(storage);
+
+    expect(restored.selectedProjectId).toBe("restored-project");
+    expect(restored.form.projectId).toBe("  restored-project  ");
+    expect(restored.currentRunId).toBe("run-42");
+    expect(restored.form.prompts[0]).toMatchObject({
+      libraryProjectId: "library-project",
+      promptId: "prompt-logical",
+      versionId: "prompt-restored",
+      text: "Restored {{subject}}",
+    });
+  });
+
+  it("rejects malformed v5 prompt metadata", () => {
+    const storage = new MemoryStorage();
+    saveWorkingSession(populatedForm(), "run-42", ["run-42"], null, storage);
+    const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    > & { form: { prompts: Array<Record<string, unknown>> } };
+    envelope.version = 5;
+    delete envelope.selected_project_id;
+    envelope.form.prompts[0].versionNumber = "7";
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
+
+    const restored = loadWorkingSession(storage);
+
+    expect(restored.draftRestored).toBe(false);
+  });
+
+  it("migrates version 4 prompts to detached library metadata", () => {
+    const storage = new MemoryStorage();
+    saveWorkingSession(populatedForm(), "run-42", ["run-42"], null, storage);
+    const versionFour = version4Envelope(storage);
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(versionFour));
+
+    const restored = loadWorkingSession(storage);
+
+    expect(restored.form.prompts[0]).toMatchObject({
+      libraryProjectId: null,
+      promptId: null,
+      promptName: "Restored Prompt",
+      versionId: "prompt-restored",
+      versionNumber: null,
+      snapshotName: "Restored Prompt",
+      text: "Restored {{subject}}",
+    });
+    expect(restored.selectedProjectId).toBe("restored-project");
+    expect(restored.form.referenceAssetIds).toEqual(["asset-b", "asset-a"]);
+    expect(restored.form.seedValues).toBe("9, 3");
+    expect(restored.form.workflowJson).toBe('{"workflow":true}');
+    expect(restored.form.batchId).toBe("restored-batch");
   });
 
   it("migrates version 1 by retaining its current Run as the first session Run", () => {
     const storage = new MemoryStorage();
-    saveWorkingSession(populatedForm(), "run-42", [], storage);
+    saveWorkingSession(populatedForm(), "run-42", [], null, storage);
     const versionOne = legacyEnvelope(storage, 1);
     delete versionOne.session_run_ids;
     delete (versionOne.form as Record<string, unknown>).randomSeedCount;
@@ -50,15 +165,24 @@ describe("browser working session", () => {
     expect(restored.draftRestored).toBe(true);
     expect(restored.form.randomSeedCount).toBe("1");
     expect(restored.form.prompts[0]).toMatchObject({
+      libraryProjectId: null,
+      promptId: null,
+      promptName: "Prompt 1",
       versionId: "prompt-restored",
-      name: "Prompt 1",
+      versionNumber: null,
+      snapshotName: "Prompt 1",
       text: "Restored {{subject}}",
     });
+    expect(restored.selectedProjectId).toBe("restored-project");
+    expect(restored.form.referenceAssetIds).toEqual(["asset-b", "asset-a"]);
+    expect(restored.form.seedValues).toBe("9, 3");
+    expect(restored.form.workflowProfileJson).toBe('{"profile":true}');
+    expect(restored.form.batchId).toBe("restored-batch");
   });
 
   it("migrates version 2 with its ordered session Runs and a default Random count", () => {
     const storage = new MemoryStorage();
-    saveWorkingSession(populatedForm(), "run-42", ["run-40", "run-42"], storage);
+    saveWorkingSession(populatedForm(), "run-42", ["run-40", "run-42"], null, storage);
     const versionTwo = legacyEnvelope(storage, 2);
     delete (versionTwo.form as Record<string, unknown>).randomSeedCount;
     storage.setItem(WORKING_SESSION_KEY, JSON.stringify(versionTwo));
@@ -72,7 +196,7 @@ describe("browser working session", () => {
 
   it("migrates a version 3 singular prompt and preserves Run IDs", () => {
     const storage = new MemoryStorage();
-    saveWorkingSession(populatedForm(), "run-42", ["run-40", "run-42"], storage);
+    saveWorkingSession(populatedForm(), "run-42", ["run-40", "run-42"], null, storage);
     const versionThree = legacyEnvelope(storage, 3);
     storage.setItem(WORKING_SESSION_KEY, JSON.stringify(versionThree));
 
@@ -80,8 +204,12 @@ describe("browser working session", () => {
 
     expect(restored.form.prompts).toHaveLength(1);
     expect(restored.form.prompts[0]).toMatchObject({
+      libraryProjectId: null,
+      promptId: null,
+      promptName: "Prompt 1",
       versionId: "prompt-restored",
-      name: "Prompt 1",
+      versionNumber: null,
+      snapshotName: "Prompt 1",
       text: "Restored {{subject}}",
     });
     expect(restored.currentRunId).toBe("run-42");
@@ -93,18 +221,38 @@ describe("browser working session", () => {
     const form = populatedForm();
     form.prompts.push({ ...form.prompts[0], key: 999, versionId: "prompt-2" });
     form.variableBindings.push({ ...newVariableBinding(), placeholder: "style" });
-    saveWorkingSession(form, null, [], storage);
+    const storedPromptKeys = form.prompts.map((prompt) => prompt.key);
+    const storedBindingKeys = form.variableBindings.map((binding) => binding.key);
+    saveWorkingSession(form, null, [], null, storage);
 
     const restored = loadWorkingSession(storage).form;
     const restoredPromptKeys = restored.prompts.map((prompt) => prompt.key);
     const restoredKeys = restored.variableBindings.map((binding) => binding.key);
-    const addedPrompt = initialBatchForm().prompts[0];
+    const addedPrompt = newPrompt();
     const added = newVariableBinding();
 
     expect(new Set(restoredPromptKeys).size).toBe(restoredPromptKeys.length);
+    expect(restoredPromptKeys).not.toEqual(storedPromptKeys);
     expect(restoredPromptKeys).not.toContain(addedPrompt.key);
     expect(new Set(restoredKeys).size).toBe(restoredKeys.length);
+    expect(restoredKeys).not.toEqual(storedBindingKeys);
     expect(restoredKeys).not.toContain(added.key);
+  });
+
+  it("falls back for a malformed v6 selected Project ID", () => {
+    const storage = new MemoryStorage();
+    saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
+    const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    envelope.selected_project_id = "";
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
+
+    const restored = loadWorkingSession(storage);
+
+    expect(restored.draftRestored).toBe(false);
+    expect(restored.selectedProjectId).toBeNull();
   });
 
   it.each([
@@ -120,13 +268,16 @@ describe("browser working session", () => {
     expect(restored.draftRestored).toBe(false);
     expect(restored.currentRunId).toBeNull();
     expect(restored.sessionRunIds).toEqual([]);
-    expect(restored.form.prompts[0].text).toBe(initialBatchForm().prompts[0].text);
+    expect(restored.selectedProjectId).toBeNull();
+    expect(restored.form.prompts).toEqual([]);
   });
 
   it("ignores storage read and write exceptions", () => {
     const unavailable = new ThrowingStorage();
 
-    expect(() => saveWorkingSession(populatedForm(), "run-42", ["run-42"], unavailable)).not.toThrow();
+    expect(() =>
+      saveWorkingSession(populatedForm(), "run-42", ["run-42"], null, unavailable),
+    ).not.toThrow();
     expect(loadWorkingSession(unavailable).draftRestored).toBe(false);
   });
 });
@@ -139,9 +290,16 @@ function populatedForm(): BatchFormState {
   form.batchId = "restored-batch";
   form.batchFilesystemKey = "restored_batch";
   form.batchName = "Restored Batch";
-  form.prompts[0].versionId = "prompt-restored";
-  form.prompts[0].name = "Restored Prompt";
-  form.prompts[0].text = "Restored {{subject}}";
+  form.prompts = [{
+    key: newPrompt().key,
+    libraryProjectId: "library-project",
+    promptId: "prompt-logical",
+    promptName: "Current Prompt Name",
+    versionId: "prompt-restored",
+    versionNumber: 7,
+    snapshotName: "Restored Prompt",
+    text: "Restored {{subject}}",
+  }];
   form.variableBindings[0].values = "fox\nwolf";
   form.variableBindings[0].selectedValues = "wolf\nfox";
   form.referenceAssetIds = ["asset-b", "asset-a"];
@@ -156,7 +314,15 @@ function populatedForm(): BatchFormState {
 function withoutKeys(form: BatchFormState) {
   return {
     ...form,
-    prompts: form.prompts.map(({ versionId, name, text }) => ({ versionId, name, text })),
+    prompts: form.prompts.map((prompt) => ({
+      libraryProjectId: prompt.libraryProjectId,
+      promptId: prompt.promptId,
+      promptName: prompt.promptName,
+      versionId: prompt.versionId,
+      versionNumber: prompt.versionNumber,
+      snapshotName: prompt.snapshotName,
+      text: prompt.text,
+    })),
     variableBindings: form.variableBindings.map((binding) => ({
       placeholder: binding.placeholder,
       variableListId: binding.variableListId,
@@ -176,6 +342,19 @@ function legacyEnvelope(storage: Storage, version: 1 | 2 | 3): Record<string, un
   form.promptVersionId = prompts[0].versionId;
   form.promptText = prompts[0].text;
   delete form.prompts;
+  return envelope;
+}
+
+function version4Envelope(storage: Storage): Record<string, unknown> {
+  const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<string, unknown>;
+  envelope.version = 4;
+  const form = envelope.form as Record<string, unknown>;
+  const prompts = form.prompts as Array<{ versionId: string; snapshotName: string; text: string }>;
+  form.prompts = prompts.map(({ versionId, snapshotName, text }) => ({
+    versionId,
+    name: snapshotName,
+    text,
+  }));
   return envelope;
 }
 

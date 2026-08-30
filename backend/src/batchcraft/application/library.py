@@ -5,19 +5,22 @@ from batchcraft.db import (
     ProjectRecord,
     ProjectStore,
     ProjectValidationError,
+    PromptListRecord,
     PromptRecord,
     PromptStore,
     PromptVersionRecord,
 )
 from batchcraft.files import (
+    AdoptableProject,
     ProjectIdentity,
+    ProjectOwnerDiscoveryError,
     ProjectOwnerError,
     ProjectOwnerMissingError,
     ProjectOwnerStore,
     is_safe_filesystem_key,
 )
 
-from .errors import ProjectAdoptionError, ProjectPublicationError
+from .errors import ProjectAdoptionError, ProjectDiscoveryError, ProjectPublicationError
 
 
 class LibraryService:
@@ -100,6 +103,21 @@ class LibraryService:
     def list_projects(self, *, include_archived: bool = False) -> tuple[ProjectRecord, ...]:
         return self._projects.list(include_archived=include_archived)
 
+    def list_adoptable_projects(self) -> tuple[AdoptableProject, ...]:
+        registered = self._projects.list(include_archived=True)
+        registered_keys = {project.filesystem_key for project in registered}
+        registered_ids = {project.id for project in registered}
+        try:
+            candidates = self._owners.discover()
+        except ProjectOwnerDiscoveryError as error:
+            raise ProjectDiscoveryError("Project discovery failed") from error
+        return tuple(
+            candidate
+            for candidate in candidates
+            if candidate.filesystem_key not in registered_keys
+            and (candidate.project_id is None or candidate.project_id not in registered_ids)
+        )
+
     def get_project(self, project_id: str) -> ProjectRecord:
         return self._projects.get(project_id)
 
@@ -134,7 +152,7 @@ class LibraryService:
 
     def list_prompts(
         self, project_id: str, *, include_archived: bool = False
-    ) -> tuple[PromptRecord, ...]:
+    ) -> tuple[PromptListRecord, ...]:
         return self._prompts.list(project_id, include_archived=include_archived)
 
     def get_prompt(self, prompt_id: str) -> PromptRecord:

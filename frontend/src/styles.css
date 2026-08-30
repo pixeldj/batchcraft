@@ -40,6 +40,7 @@ button:disabled { cursor: wait; opacity: 0.58; }
 code, textarea.json-editor, .ordinal, .result-ordinal, .job-number {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
+pre.prompt-editor { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 
 .app-header {
   position: sticky;
@@ -134,10 +135,16 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .repeater-title { justify-content: space-between; margin-bottom: 0.75rem; }
 .repeater-actions { display: flex; gap: 0.8rem; align-items: center; }
 .prompt-card .prompt-editor { min-height: 7rem; margin-top: 0.9rem; }
+pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; overflow-x: auto; background: var(--paper-raised); border-left: 3px solid var(--accent); white-space: pre-wrap; overflow-wrap: anywhere; }
 .inline-control { gap: 0.6rem; align-items: flex-end; }
 .inline-control .field { flex: 1; }
 .limitation-note, .empty-note { margin: -0.2rem 0 0.85rem; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
 .seed-fieldset { max-width: 45rem; }
+.project-selector { padding: 0.9rem; background: rgba(255, 255, 255, 0.28); border: 1px solid var(--line); }
+.project-selector > .field { max-width: 32rem; }
+.project-selector details { margin-top: 0.65rem; color: var(--muted); font-size: 0.75rem; }
+.project-selector details p { margin-bottom: 0; }
+.project-selector > .action-row { justify-content: flex-start; margin-top: 0.9rem; padding-top: 0.9rem; }
 
 .asset-picker { display: grid; gap: 0.9rem; }
 .asset-picker-summary { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
@@ -179,6 +186,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .action-row { justify-content: flex-end; gap: 1.5rem; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .action-row p { margin: 0; color: var(--muted); font-size: 0.78rem; }
 .operation-error, .run-error, .blocked-note { padding: 0.75rem; border-left: 4px solid var(--danger); background: var(--danger-bg); color: #6e201b; line-height: 1.45; }
+.operation-error p { margin: 0 0 0.45rem; }
+dialog { width: min(46rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 1.2rem; overflow-y: auto; color: var(--ink); background: var(--paper); border: 2px solid var(--line-strong); box-shadow: 8px 8px 0 rgba(23, 32, 28, 0.28); }
+.prompt-dialog { z-index: 20; }
+dialog::backdrop { background: rgba(23, 32, 28, 0.58); }
+dialog h2 { margin: 0 0 1rem; font: 500 1.7rem Georgia, "Times New Roman", serif; }
+dialog h3 { margin: 0 0 0.8rem; }
+dialog > .button-link:last-child { margin-top: 1rem; }
+dialog form { display: grid; gap: 0.9rem; }
 .consistency-error { margin: 0 0 1.25rem; padding: 0.9rem 1rem; color: #6e201b; background: var(--danger-bg); border: 2px solid var(--danger); box-shadow: 3px 3px 0 rgba(163, 58, 50, 0.22); font-weight: 700; line-height: 1.45; }
 .preview-run-note { margin: 1rem 0 0; padding: 0.65rem 0.8rem; color: var(--accent); background: rgba(36, 92, 69, 0.08); border-left: 4px solid var(--accent); font-size: 0.78rem; }
 

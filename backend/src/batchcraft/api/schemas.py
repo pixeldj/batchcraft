@@ -1,11 +1,11 @@
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
-from batchcraft.db import ProjectRecord, PromptRecord, PromptVersionRecord
+from batchcraft.db import ProjectRecord, PromptListRecord, PromptRecord, PromptVersionRecord
 from batchcraft.domain import (
     BatchDefinition,
     CompilationWarning,
@@ -20,7 +20,13 @@ from batchcraft.domain import (
     VariableList,
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
-from batchcraft.files import AssetRecord, BatchIdentity, ProjectIdentity, PublishedRun
+from batchcraft.files import (
+    AdoptableProject,
+    AssetRecord,
+    BatchIdentity,
+    ProjectIdentity,
+    PublishedRun,
+)
 
 
 class ApiModel(BaseModel):
@@ -168,6 +174,26 @@ class ProjectsResponse(ApiModel):
     projects: list[ProjectResponse]
 
 
+class AdoptableProjectResponse(ApiModel):
+    filesystem_key: str
+    owner_state: Literal["owned", "ownerless"]
+    project_id: str | None
+    initial_name: str | None
+
+    @classmethod
+    def from_candidate(cls, project: AdoptableProject) -> Self:
+        return cls(
+            filesystem_key=project.filesystem_key,
+            owner_state=project.owner_state,
+            project_id=project.project_id,
+            initial_name=project.initial_name,
+        )
+
+
+class AdoptableProjectsResponse(ApiModel):
+    projects: list[AdoptableProjectResponse]
+
+
 class PromptCreateRequest(ApiModel):
     name: str = Field(min_length=1)
     description: str | None = None
@@ -215,10 +241,6 @@ class PromptResponse(ApiModel):
         )
 
 
-class PromptsResponse(ApiModel):
-    prompts: list[PromptResponse]
-
-
 class LibraryPromptVersionResponse(ApiModel):
     id: str
     prompt_id: str
@@ -241,6 +263,31 @@ class LibraryPromptVersionResponse(ApiModel):
             created_at=version.created_at,
             archived_at=version.archived_at,
         )
+
+
+class PromptListResponse(PromptResponse):
+    latest_active_version: LibraryPromptVersionResponse | None
+
+    @classmethod
+    def from_list_record(cls, prompt: PromptListRecord) -> Self:
+        return cls(
+            id=prompt.id,
+            project_id=prompt.project_id,
+            name=prompt.name,
+            description=prompt.description,
+            created_at=prompt.created_at,
+            updated_at=prompt.updated_at,
+            archived_at=prompt.archived_at,
+            latest_active_version=(
+                None
+                if prompt.latest_active_version is None
+                else LibraryPromptVersionResponse.from_record(prompt.latest_active_version)
+            ),
+        )
+
+
+class PromptsResponse(ApiModel):
+    prompts: list[PromptListResponse]
 
 
 class PromptVersionsResponse(ApiModel):
@@ -322,7 +369,7 @@ class JobPreviewResponse(ApiModel):
     prompt_version_name: str
     resolved_prompt: str
     resolved_variables: list[ResolvedVariableResponse]
-    reference_asset_id: str
+    reference_asset_id: str | None
     seed: int
 
     @classmethod

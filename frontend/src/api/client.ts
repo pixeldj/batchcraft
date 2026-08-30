@@ -1,11 +1,26 @@
 import type {
+  AdoptableProjectsResponse,
   ApiErrorEnvelope,
   AssetsResponse,
   BatchRequest,
   ComfyUIStatusResponse,
+  CreatePromptRequest,
+  CreatePromptResponse,
+  CreatePromptVersionRequest,
+  CreatePromptVersionResponse,
   ExecutionResponse,
   ExecutionStartedResponse,
+  LibraryPromptVersion,
   PreviewResponse,
+  ProjectAdoptRequest,
+  ProjectCreateRequest,
+  ProjectResponse,
+  ProjectsResponse,
+  ProjectUpdateRequest,
+  Prompt,
+  PromptsResponse,
+  PromptUpdateRequest,
+  PromptVersionsResponse,
   ResultsResponse,
   RunCreatedResponse,
   RunResponse,
@@ -26,12 +41,32 @@ export class ApiError extends Error {
 
 export interface BatchcraftApi {
   getComfyUIStatus(signal?: AbortSignal): Promise<ComfyUIStatusResponse>;
+  listProjects(includeArchived?: boolean, signal?: AbortSignal): Promise<ProjectsResponse>;
+  createProject(body: ProjectCreateRequest): Promise<ProjectResponse>;
+  getProject(projectId: string, signal?: AbortSignal): Promise<ProjectResponse>;
+  updateProject(projectId: string, body: ProjectUpdateRequest): Promise<ProjectResponse>;
+  adoptProject(body: ProjectAdoptRequest): Promise<ProjectResponse>;
+  listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse>;
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse>;
   uploadProjectAssets(
     projectKey: string,
     files: File[],
     signal?: AbortSignal,
   ): Promise<AssetsResponse>;
+  listPrompts(projectId: string, signal?: AbortSignal): Promise<PromptsResponse>;
+  createPrompt(projectId: string, body: CreatePromptRequest): Promise<CreatePromptResponse>;
+  getPrompt(promptId: string, signal?: AbortSignal): Promise<Prompt>;
+  updatePrompt(promptId: string, body: PromptUpdateRequest): Promise<Prompt>;
+  listPromptVersions(
+    promptId: string,
+    includeArchived?: boolean,
+    signal?: AbortSignal,
+  ): Promise<PromptVersionsResponse>;
+  createPromptVersion(
+    promptId: string,
+    body: CreatePromptVersionRequest,
+  ): Promise<CreatePromptVersionResponse>;
+  getPromptVersion(versionId: string, signal?: AbortSignal): Promise<LibraryPromptVersion>;
   previewBatch(batch: BatchRequest): Promise<PreviewResponse>;
   createRun(batch: BatchRequest): Promise<RunCreatedResponse>;
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse>;
@@ -51,6 +86,34 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   getComfyUIStatus(signal?: AbortSignal): Promise<ComfyUIStatusResponse> {
     return this.request("/api/comfyui/status", { signal });
+  }
+
+  listProjects(includeArchived = false, signal?: AbortSignal): Promise<ProjectsResponse> {
+    const query = includeArchived ? "?include_archived=true" : "";
+    return this.request(`/api/projects${query}`, { signal });
+  }
+
+  createProject(body: ProjectCreateRequest): Promise<ProjectResponse> {
+    return this.request("/api/projects", this.jsonRequest(body, "POST"));
+  }
+
+  getProject(projectId: string, signal?: AbortSignal): Promise<ProjectResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}`, { signal });
+  }
+
+  updateProject(projectId: string, body: ProjectUpdateRequest): Promise<ProjectResponse> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      this.jsonRequest(body, "PATCH"),
+    );
+  }
+
+  adoptProject(body: ProjectAdoptRequest): Promise<ProjectResponse> {
+    return this.request("/api/projects/adopt", this.jsonRequest(body, "POST"));
+  }
+
+  listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse> {
+    return this.request("/api/projects/adoptable", { signal });
   }
 
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse> {
@@ -73,12 +136,60 @@ export class BatchcraftApiClient implements BatchcraftApi {
     });
   }
 
+  listPrompts(projectId: string, signal?: AbortSignal): Promise<PromptsResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/prompts`, { signal });
+  }
+
+  createPrompt(projectId: string, body: CreatePromptRequest): Promise<CreatePromptResponse> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/prompts`,
+      this.jsonRequest(body, "POST"),
+    );
+  }
+
+  getPrompt(promptId: string, signal?: AbortSignal): Promise<Prompt> {
+    return this.request(`/api/prompts/${encodeURIComponent(promptId)}`, { signal });
+  }
+
+  updatePrompt(promptId: string, body: PromptUpdateRequest): Promise<Prompt> {
+    return this.request(
+      `/api/prompts/${encodeURIComponent(promptId)}`,
+      this.jsonRequest(body, "PATCH"),
+    );
+  }
+
+  listPromptVersions(
+    promptId: string,
+    includeArchived = false,
+    signal?: AbortSignal,
+  ): Promise<PromptVersionsResponse> {
+    const query = includeArchived ? "?include_archived=true" : "";
+    return this.request(`/api/prompts/${encodeURIComponent(promptId)}/versions${query}`, { signal });
+  }
+
+  createPromptVersion(
+    promptId: string,
+    body: CreatePromptVersionRequest,
+  ): Promise<CreatePromptVersionResponse> {
+    return this.request(
+      `/api/prompts/${encodeURIComponent(promptId)}/versions`,
+      this.jsonRequest(body, "POST"),
+    );
+  }
+
+  getPromptVersion(
+    versionId: string,
+    signal?: AbortSignal,
+  ): Promise<LibraryPromptVersion> {
+    return this.request(`/api/prompt-versions/${encodeURIComponent(versionId)}`, { signal });
+  }
+
   previewBatch(batch: BatchRequest): Promise<PreviewResponse> {
-    return this.request("/api/batches/preview", this.jsonRequest(batch));
+    return this.request("/api/batches/preview", this.jsonRequest(batch, "POST"));
   }
 
   createRun(batch: BatchRequest): Promise<RunCreatedResponse> {
-    return this.request("/api/runs", this.jsonRequest(batch));
+    return this.request("/api/runs", this.jsonRequest(batch, "POST"));
   }
 
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse> {
@@ -105,9 +216,9 @@ export class BatchcraftApiClient implements BatchcraftApi {
     return this.absoluteUrl(contentUrl);
   }
 
-  private jsonRequest(body: BatchRequest): RequestInit {
+  private jsonRequest(body: unknown, method: "POST" | "PATCH"): RequestInit {
     return {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     };

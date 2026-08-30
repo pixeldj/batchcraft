@@ -57,12 +57,19 @@ class ComfyUIClient:
         timeout: float = 30.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        parsed = urlsplit(base_url)
+        normalized_base_url = base_url.strip().rstrip("/")
+        parsed = urlsplit(normalized_base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("ComfyUI base URL must be an absolute HTTP or HTTPS URL")
         if parsed.query or parsed.fragment:
             raise ValueError("ComfyUI base URL must not contain a query or fragment")
-        self.base_url = base_url.rstrip("/")
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("ComfyUI base URL must contain a valid port") from error
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError("ComfyUI base URL must contain a valid port")
+        self.base_url = normalized_base_url
         self.timeout = timeout
         self._owns_http_client = http_client is None
         self._http = http_client or httpx.AsyncClient(timeout=timeout, trust_env=False)

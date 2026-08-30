@@ -41,7 +41,7 @@ from batchcraft.files.models import (
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 
 RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 2
+MANIFEST_FORMAT_VERSION = 3
 OWNER_FORMAT_VERSION = 1
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
@@ -135,7 +135,11 @@ class RunFilesystemStore:
                 PersistedJob(
                     job_id=self._new_id("Job"),
                     compiled_job=job,
-                    reference_asset=assets_by_id[job.reference_asset_id],
+                    reference_asset=(
+                        assets_by_id[job.reference_asset_id]
+                        if job.reference_asset_id is not None
+                        else None
+                    ),
                 )
                 for job in plan.jobs
             )
@@ -266,6 +270,8 @@ class RunFilesystemStore:
         validated_assets: dict[str, AssetRecord] = {}
         for job in loaded.jobs:
             asset = job.reference_asset
+            if asset is None:
+                continue
             validated = validated_assets.get(asset.asset_id)
             if validated is not None:
                 if validated != asset:
@@ -314,6 +320,8 @@ class RunFilesystemStore:
         assets_by_id: dict[str, AssetRecord] = {}
         for job in plan.jobs:
             asset_id = job.reference_asset_id
+            if asset_id is None:
+                continue
             if asset_id in assets_by_id:
                 continue
             record = reference_assets.get(asset_id)
@@ -430,7 +438,7 @@ class RunFilesystemStore:
                 raise RunStoreError(
                     f"compiled Job {job.ordinal} contains duplicate resolved variables"
                 )
-            if not job.reference_asset_id:
+            if job.reference_asset_id == "":
                 raise RunStoreError(f"compiled Job {job.ordinal} has an empty reference asset ID")
 
     def _new_id(self, kind: str) -> str:
@@ -530,7 +538,9 @@ def _manifest(
                     {"name": variable.name, "value": variable.value}
                     for variable in job.compiled_job.resolved_variables
                 ],
-                "reference_asset": _asset_data(job.reference_asset),
+                "reference_asset": (
+                    _asset_data(job.reference_asset) if job.reference_asset is not None else None
+                ),
                 "seed": job.compiled_job.seed,
                 "workflow_sha256": workflow_sha256,
                 "workflow_profile_sha256": workflow_profile_sha256,
@@ -569,9 +579,15 @@ def _manifest_csv_bytes(
                 )
                 .decode()
                 .rstrip("\n"),
-                "reference_asset_id": job.reference_asset.asset_id,
-                "reference_original_filename": job.reference_asset.original_filename,
-                "reference_sha256": job.reference_asset.sha256,
+                "reference_asset_id": (
+                    job.reference_asset.asset_id if job.reference_asset is not None else ""
+                ),
+                "reference_original_filename": (
+                    job.reference_asset.original_filename if job.reference_asset is not None else ""
+                ),
+                "reference_sha256": (
+                    job.reference_asset.sha256 if job.reference_asset is not None else ""
+                ),
                 "seed": job.compiled_job.seed,
                 "workflow_sha256": workflow_sha256,
                 "workflow_profile_sha256": workflow_profile_sha256,
@@ -586,7 +602,7 @@ def _parse_run(
     if run_data.get("format_version") != RUN_FORMAT_VERSION:
         raise RunStoreError("unsupported run.json format version")
     manifest_version = manifest_data.get("format_version")
-    if manifest_version not in {1, MANIFEST_FORMAT_VERSION}:
+    if manifest_version not in {1, 2, MANIFEST_FORMAT_VERSION}:
         raise RunStoreError("unsupported manifest.json format version")
 
     run_id = _required_string(run_data, "run_id")
@@ -653,6 +669,7 @@ def _parse_run(
             _object_item(value, "Job"),
             workflow_sha256,
             workflow_profile_sha256,
+            manifest_version=manifest_version,
             legacy_prompt_id=legacy_prompt_id,
         )
         for value in _required_array(manifest_data, "jobs")
@@ -697,6 +714,7 @@ def _parse_job(
     workflow_sha256: str,
     workflow_profile_sha256: str,
     *,
+    manifest_version: object,
     legacy_prompt_id: str | None,
 ) -> PersistedJob:
     if _required_string(data, "workflow_sha256") != workflow_sha256:
@@ -716,7 +734,18 @@ def _parse_job(
     variable_names = tuple(variable.name for variable in variables)
     if len(set(variable_names)) != len(variable_names):
         raise RunStoreError("Job contains duplicate resolved variables")
-    asset = _parse_asset(_required_object(data, "reference_asset"))
+    asset: AssetRecord | None
+    if manifest_version in {1, 2}:
+        asset = _parse_asset(_required_object(data, "reference_asset"))
+    else:
+        if "reference_asset" not in data:
+            raise RunStoreError("Job must define reference_asset")
+        reference_asset = data["reference_asset"]
+        asset = (
+            None
+            if reference_asset is None
+            else _parse_asset(_object_item(reference_asset, "reference_asset"))
+        )
     resolved_prompt = _required_string(data, "resolved_prompt", allow_empty=True)
     if "{{" in resolved_prompt or "}}" in resolved_prompt:
         raise RunStoreError("Job contains an unresolved prompt placeholder")
@@ -729,7 +758,7 @@ def _parse_job(
         ),
         resolved_prompt=resolved_prompt,
         resolved_variables=variables,
-        reference_asset_id=asset.asset_id,
+        reference_asset_id=asset.asset_id if asset is not None else None,
         seed=_integer(data, "seed"),
     )
     return PersistedJob(

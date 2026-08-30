@@ -67,9 +67,13 @@ If a user later edits or replaces the Workflow Profile, historical Runs remain i
 
 ## Input Images
 
-Reference images are owned by batchcraft on the Mac. Their bytes are immutable in the Project's content-addressed asset store.
+Reference images selected by a Batch are owned by batchcraft on the Mac. Their bytes are immutable in
+the Project's content-addressed asset store. A Job may have no selected Reference Asset.
 
-Before execution, the ComfyUI integration uploads any required input asset to the remote ComfyUI instance and then rewrites the workflow input to the uploaded ComfyUI-visible filename/path expected by the node.
+Before execution, the ComfyUI integration uploads any required input asset to the remote ComfyUI
+instance and then rewrites the workflow input to the uploaded ComfyUI-visible filename/path expected
+by the node. When a Job has no Reference Asset, execution performs no upload and leaves the mapped
+input's base workflow value unchanged.
 
 The Job manifest retains the batchcraft asset identity and hash rather than treating the temporary ComfyUI filename as authoritative provenance. A Run does not duplicate each input asset by default, and the application cannot physically remove Project asset content referenced by a historical Run.
 
@@ -89,7 +93,7 @@ For each Job, the integration layer receives:
 
 - workflow snapshot/profile;
 - resolved prompt values;
-- uploaded reference mappings;
+- an uploaded reference mapping or an instruction to preserve the base workflow value;
 - seed;
 - resolved workflow parameters;
 - output prefix.
@@ -117,7 +121,10 @@ The first production integration boundary lives under `backend/src/batchcraft/co
 - authoritative history reconciliation and discovery of all distinct remote output files;
 - artifact download with preserved remote filename, subfolder, and type metadata.
 
-Workflow preparation deep-copies the imported API workflow and validates the snapshotted node ID, input name, and value type for every required friendly mapping. It rejects unresolved placeholders before transport.
+Workflow preparation deep-copies the imported API workflow and validates the snapshotted node ID,
+input name, and value type for every required friendly mapping. It rejects unresolved placeholders
+before transport. The reference-image mapping remains required and validated even when its per-Job
+value is absent; only assignment to that mapped input is skipped.
 
 The adapter does not own scheduling, retries, mutable Job state, Run filesystem updates, or result naming. The execution layer opens the WebSocket before submission, stores the accepted prompt ID in mutable execution state, observes WebSocket events concurrently as advisory signals, and begins authoritative history reconciliation immediately.
 

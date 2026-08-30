@@ -1,25 +1,47 @@
 import type { BatchcraftApi } from "../../api/client";
+import type { ProjectResponse } from "../../api/types";
 import { Field, TextAreaField } from "../../components/Field";
+import { ProjectSelector } from "../project/ProjectSelector";
 import {
   MAX_RANDOM_SEED_COUNT,
-  newPrompt,
   newVariableBinding,
   type BatchFormState,
-  type PromptForm,
   type VariableBindingForm,
 } from "./form";
+import { PromptLibraryEditor } from "./PromptLibraryEditor";
 import { ReferenceAssetPicker } from "./ReferenceAssetPicker";
 
 interface Props {
   form: BatchFormState;
   api: BatchcraftApi;
+  selectedProjectId: string | null;
+  projectVerified: boolean;
+  projectSwitchingBlocked: boolean;
   error: string | null;
   previewing: boolean;
   onChange(form: BatchFormState): void;
+  onPromptMetadataChange(prompts: BatchFormState["prompts"]): void;
+  onProjectReconnect(project: ProjectResponse): void;
+  onProjectUnresolved(): void;
+  onProjectSelect(project: ProjectResponse): void;
   onPreview(): void;
 }
 
-export function BatchEditor({ api, form, error, previewing, onChange, onPreview }: Props) {
+export function BatchEditor({
+  api,
+  form,
+  selectedProjectId,
+  projectVerified,
+  projectSwitchingBlocked,
+  error,
+  previewing,
+  onChange,
+  onPromptMetadataChange,
+  onProjectReconnect,
+  onProjectUnresolved,
+  onProjectSelect,
+  onPreview,
+}: Props) {
   function update<K extends keyof BatchFormState>(key: K, value: BatchFormState[K]) {
     onChange({ ...form, [key]: value });
   }
@@ -33,20 +55,6 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
     );
   }
 
-  function updatePrompt(key: number, patch: Partial<PromptForm>) {
-    update(
-      "prompts",
-      form.prompts.map((prompt) => prompt.key === key ? { ...prompt, ...patch } : prompt),
-    );
-  }
-
-  function movePrompt(index: number, offset: -1 | 1) {
-    const prompts = [...form.prompts];
-    const [prompt] = prompts.splice(index, 1);
-    prompts.splice(index + offset, 0, prompt);
-    update("prompts", prompts);
-  }
-
   return (
     <section className="section-card batch-editor" aria-labelledby="batch-heading">
       <div className="section-heading">
@@ -57,35 +65,21 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
         <p className="section-note">Working draft · this browser session only</p>
       </div>
 
-      <fieldset>
-        <legend>Project identity</legend>
-        <div className="field-grid three-columns">
-          <Field
-            id="project-id"
-            label="Project ID"
-            value={form.projectId}
-            onChange={(event) => update("projectId", event.target.value)}
-          />
-          <Field
-            id="project-key"
-            label="Filesystem key"
-            value={form.projectFilesystemKey}
-            onChange={(event) =>
-              onChange({
-                ...form,
-                projectFilesystemKey: event.target.value,
-                referenceAssetIds: [],
-              })
-            }
-          />
-          <Field
-            id="project-name"
-            label="Project name"
-            value={form.projectName}
-            onChange={(event) => update("projectName", event.target.value)}
-          />
-        </div>
-      </fieldset>
+      <ProjectSelector
+        api={api}
+        selectedProjectId={selectedProjectId}
+        projectVerified={projectVerified}
+        draftIdentity={{
+          id: form.projectId,
+          filesystemKey: form.projectFilesystemKey,
+          name: form.projectName,
+        }}
+        hasProjectScopedSelections={form.prompts.length > 0 || form.referenceAssetIds.length > 0}
+        switchingBlocked={projectSwitchingBlocked}
+        onReconnect={onProjectReconnect}
+        onUnresolved={onProjectUnresolved}
+        onSelect={onProjectSelect}
+      />
 
       <fieldset>
         <legend>Batch identity</legend>
@@ -111,75 +105,13 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>PromptVersions</legend>
-        <div className="fieldset-action">
-          <button
-            className="button-secondary compact"
-            type="button"
-            onClick={() => update("prompts", [...form.prompts, newPrompt(nextPromptNumber(form.prompts))])}
-          >
-            Add Prompt
-          </button>
-        </div>
-        <div className="repeater-stack">
-          {form.prompts.map((prompt, index) => (
-            <div className="repeater-card prompt-card" key={prompt.key}>
-              <div className="repeater-title">
-                <strong>Prompt {index + 1}</strong>
-                <div className="repeater-actions">
-                  <button
-                    className="button-link"
-                    type="button"
-                    disabled={index === 0}
-                    onClick={() => movePrompt(index, -1)}
-                  >
-                    Move up
-                  </button>
-                  <button
-                    className="button-link"
-                    type="button"
-                    disabled={index === form.prompts.length - 1}
-                    onClick={() => movePrompt(index, 1)}
-                  >
-                    Move down
-                  </button>
-                  <button
-                    className="button-link danger"
-                    type="button"
-                    disabled={form.prompts.length === 1}
-                    onClick={() => update("prompts", form.prompts.filter((item) => item.key !== prompt.key))}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-              <div className="field-grid two-columns">
-                <Field
-                  id={`prompt-version-id-${prompt.key}`}
-                  label="PromptVersion ID"
-                  value={prompt.versionId}
-                  onChange={(event) => updatePrompt(prompt.key, { versionId: event.target.value })}
-                />
-                <Field
-                  id={`prompt-name-${prompt.key}`}
-                  label="Prompt name"
-                  value={prompt.name}
-                  onChange={(event) => updatePrompt(prompt.key, { name: event.target.value })}
-                />
-              </div>
-              <TextAreaField
-                id={`prompt-text-${prompt.key}`}
-                className="prompt-editor"
-                label="Prompt template"
-                hint="Use named placeholders such as {{subject}}. The backend validates and resolves them."
-                value={prompt.text}
-                onChange={(event) => updatePrompt(prompt.key, { text: event.target.value })}
-              />
-            </div>
-          ))}
-        </div>
-      </fieldset>
+      <PromptLibraryEditor
+        api={api}
+        projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
+        prompts={form.prompts}
+        onChange={(prompts) => update("prompts", prompts)}
+        onMetadataChange={onPromptMetadataChange}
+      />
 
       <fieldset>
         <legend>Variable bindings</legend>
@@ -324,7 +256,11 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
         <legend>Reference Assets</legend>
         <ReferenceAssetPicker
           api={api}
-          projectKey={form.projectFilesystemKey}
+          projectKey={
+            projectVerified && selectedProjectId === form.projectId
+              ? form.projectFilesystemKey
+              : ""
+          }
           selectedAssetIds={form.referenceAssetIds}
           onSelectedAssetIdsChange={(referenceAssetIds) =>
             update("referenceAssetIds", referenceAssetIds)
@@ -366,16 +302,4 @@ export function BatchEditor({ api, form, error, previewing, onChange, onPreview 
       </div>
     </section>
   );
-}
-
-function nextPromptNumber(prompts: PromptForm[]): number {
-  let number = 1;
-  while (
-    prompts.some(
-      (prompt) => prompt.versionId === `prompt-v${number}` || prompt.name === `Prompt ${number}`,
-    )
-  ) {
-    number += 1;
-  }
-  return number;
 }

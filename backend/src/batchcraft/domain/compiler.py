@@ -135,11 +135,10 @@ def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
                 f"PromptVersion {prompt_version.id!r} has undefined placeholder bindings: {names}"
             )
 
-    if not batch.references:
-        raise CompilationError("Batch requires at least one reference selection")
     for reference in batch.references:
         if not reference.asset_id:
             raise CompilationError("reference selection has an empty asset ID")
+    references = batch.references or (None,)
 
     seeds = _seed_values(batch)
     globally_used_placeholders = {
@@ -172,7 +171,7 @@ def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
             resolved_variables = tuple(
                 ResolvedVariable(name=name, value=assignments[name]) for name in placeholder_names
             )
-            for reference in batch.references:
+            for selected_reference in references:
                 for seed in seeds:
                     jobs.append(
                         CompiledJob(
@@ -180,7 +179,11 @@ def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
                             prompt_version_id=prompt_version.id,
                             resolved_prompt=resolved_prompt,
                             resolved_variables=resolved_variables,
-                            reference_asset_id=reference.asset_id,
+                            reference_asset_id=(
+                                selected_reference.asset_id
+                                if selected_reference is not None
+                                else None
+                            ),
                             seed=seed,
                         )
                     )

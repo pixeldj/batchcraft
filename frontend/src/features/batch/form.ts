@@ -12,8 +12,12 @@ export interface VariableBindingForm {
 
 export interface PromptForm {
   key: number;
+  libraryProjectId: string | null;
+  promptId: string | null;
+  promptName: string;
   versionId: string;
-  name: string;
+  versionNumber: number | null;
+  snapshotName: string;
   text: string;
 }
 
@@ -55,17 +59,18 @@ export function newPrompt(promptNumber = 1): PromptForm {
   const key = nextPromptKey++;
   return {
     key,
+    libraryProjectId: null,
+    promptId: null,
+    promptName: `Prompt ${promptNumber}`,
     versionId: `prompt-v${promptNumber}`,
-    name: `Prompt ${promptNumber}`,
+    versionNumber: null,
+    snapshotName: `Prompt ${promptNumber}`,
     text: "",
   };
 }
 
 export function initialBatchForm(): BatchFormState {
   const binding = newVariableBinding();
-  const prompt = newPrompt(1);
-  prompt.name = "Portrait";
-  prompt.text = "A studio portrait of {{subject}}.";
   binding.placeholder = "subject";
   binding.variableListId = "subjects";
   binding.values = "cat\ndog";
@@ -73,13 +78,13 @@ export function initialBatchForm(): BatchFormState {
   binding.fixedValue = "cat";
 
   return {
-    projectId: "project-1",
-    projectFilesystemKey: "project_1",
-    projectName: "My Project",
+    projectId: "",
+    projectFilesystemKey: "",
+    projectName: "",
     batchId: "batch-1",
     batchFilesystemKey: "batch_1",
     batchName: "First experiment",
-    prompts: [prompt],
+    prompts: [],
     variableBindings: [binding],
     referenceAssetIds: [],
     seedMode: "fixed",
@@ -117,10 +122,16 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
   if (form.prompts.length === 0) {
     throw new FormBuildError("prompts", "Add at least one PromptVersion.");
   }
-  const references = form.referenceAssetIds;
-  if (references.length === 0) {
-    throw new FormBuildError("references", "Select at least one Project Reference Asset.");
+  const crossProjectPrompt = form.prompts.find(
+    (prompt) => prompt.libraryProjectId !== null && prompt.libraryProjectId !== form.projectId.trim(),
+  );
+  if (crossProjectPrompt) {
+    throw new FormBuildError(
+      "prompts",
+      `${crossProjectPrompt.promptName || crossProjectPrompt.snapshotName} belongs to another Project. Replace or remove it before Preview.`,
+    );
   }
+  const references = form.referenceAssetIds;
 
   const seedInput = form.seedMode === "random"
     ? { mode: "explicit" as const, values: generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)) }
@@ -139,7 +150,7 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
     },
     prompt_versions: form.prompts.map((prompt, index) => ({
       id: required(prompt.versionId, "prompts", `Prompt ${index + 1} ID`),
-      name: required(prompt.name, "prompts", `Prompt ${index + 1} name`),
+      name: required(prompt.snapshotName, "prompts", `Prompt ${index + 1} name`),
       text: prompt.text,
     })),
     variable_bindings: form.variableBindings.map((binding) => ({

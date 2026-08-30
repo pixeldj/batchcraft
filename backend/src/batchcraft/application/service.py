@@ -188,7 +188,11 @@ class BatchcraftService:
             creation.workflow_profile,
             WorkflowPreparationValues(
                 prompt=first_job.resolved_prompt,
-                reference_image="batchcraft-validation-reference.png",
+                reference_image=(
+                    "batchcraft-validation-reference.png"
+                    if first_job.reference_asset_id is not None
+                    else None
+                ),
                 seed=first_job.seed,
                 output_prefix="batchcraft/validation",
             ),
@@ -315,7 +319,9 @@ class BatchcraftService:
     def _resolve_assets(
         self, project_filesystem_key: str, plan: CompiledRunPlan
     ) -> dict[str, AssetRecord]:
-        needed = {job.reference_asset_id for job in plan.jobs}
+        needed = {job.reference_asset_id for job in plan.jobs if job.reference_asset_id is not None}
+        if not needed:
+            return {}
         project_path = self.projects_root / project_filesystem_key
         store = ProjectAssetStore(project_path)
         found: dict[str, AssetRecord] = {}

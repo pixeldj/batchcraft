@@ -5,6 +5,7 @@ import type {
   BatchRequest,
   ExecutionResponse,
   PreviewResponse,
+  ProjectResponse,
   ResultResponse,
   RunCreatedResponse,
   RunStatus,
@@ -54,6 +55,10 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "fai
 export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [initialSession] = useState(loadWorkingSession);
   const [form, setForm] = useState<BatchFormState>(initialSession.form);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    initialSession.selectedProjectId,
+  );
+  const [projectVerified, setProjectVerified] = useState(false);
   const [currentRunId, setCurrentRunId] = useState<string | null>(initialSession.currentRunId);
   const [sessionRunIds, setSessionRunIds] = useState<string[]>(initialSession.sessionRunIds);
   const [galleryRunsById, setGalleryRunsById] = useState<Record<string, BatchGalleryRun>>(() =>
@@ -88,11 +93,16 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   currentBatchIdentityRef.current = currentBatchIdentity;
 
   useEffect(() => {
-    saveWorkingSession(form, currentRunId, sessionRunIds);
-  }, [currentRunId, form, sessionRunIds]);
+    saveWorkingSession(form, currentRunId, sessionRunIds, selectedProjectId);
+  }, [currentRunId, form, selectedProjectId, sessionRunIds]);
 
   useEffect(() => {
-    if (batchIdentityChanged.current || currentBatchIdentity !== initialBatchIdentity.current) {
+    if (
+      !projectVerified ||
+      !selectedProjectId ||
+      batchIdentityChanged.current ||
+      currentBatchIdentity !== initialBatchIdentity.current
+    ) {
       return;
     }
     const historicalRunIds = initialSession.sessionRunIds.filter(
@@ -110,6 +120,11 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     async function restoreHistoricalGalleryRun(runId: string, signal: AbortSignal) {
       try {
         const restoredRun = await api.getRun(runId, signal);
+        if (!runMatchesBatch(restoredRun, currentBatchIdentityRef.current)) {
+          setSessionRunIds((current) => current.filter((candidate) => candidate !== runId));
+          setGalleryRunsById((current) => withoutGalleryRun(current, runId));
+          return;
+        }
         const restoredResults = await api.getResults(runId, signal);
         if (signal.aborted) {
           return;
@@ -145,11 +160,19 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     }
 
     return () => controller.abort();
-  }, [api, currentBatchIdentity, initialSession]);
+  }, [api, currentBatchIdentity, initialSession, projectVerified, selectedProjectId]);
 
   useEffect(() => {
     const restoredRunId = initialSession.currentRunId;
     if (!restoredRunId) {
+      setRestoringRun(false);
+      return;
+    }
+    if (!projectVerified) {
+      return;
+    }
+    if (!selectedProjectId) {
+      setRestoringRun(false);
       return;
     }
     const controller = new AbortController();
@@ -158,6 +181,13 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     async function restoreRun(runId: string) {
       try {
         const restoredRun = await api.getRun(runId, controller.signal);
+        if (!runMatchesBatch(restoredRun, currentBatchIdentityRef.current)) {
+          setCurrentRunId(null);
+          setSessionRunIds((current) => current.filter((candidate) => candidate !== runId));
+          setGalleryRunsById((current) => withoutGalleryRun(current, runId));
+          setSessionMessage("The previous Run belongs to another Project or Batch and was not restored.");
+          return;
+        }
         const execution = await api.getExecution(runId, controller.signal);
         let results: ResultResponse[] = [];
         let resultsError: string | null = null;
@@ -228,7 +258,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
     void restoreRun(restoredRunId);
     return () => controller.abort();
-  }, [api, initialSession]);
+  }, [api, initialSession, projectVerified, selectedProjectId]);
 
   function changeForm(next: BatchFormState) {
     formRevision.current += 1;
@@ -242,6 +272,61 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setPreviewRunAssociation(null);
     setBatchError(null);
     setCreateError(null);
+  }
+
+  function changePromptMetadata(prompts: BatchFormState["prompts"]) {
+    setForm((current) => ({ ...current, prompts }));
+  }
+
+  function reconnectProject(project: ProjectResponse) {
+    setSelectedProjectId(project.id);
+    setProjectVerified(true);
+    setForm((current) => ({
+      ...current,
+      projectId: project.id,
+      projectFilesystemKey: project.filesystem_key,
+      projectName: project.name,
+    }));
+  }
+
+  function markProjectUnresolved() {
+    setSelectedProjectId(null);
+    setProjectVerified(true);
+    if (initialSession.currentRunId) {
+      setRestoringRun(false);
+    }
+  }
+
+  function selectProject(project: ProjectResponse) {
+    if (
+      form.projectId.trim() === project.id &&
+      form.projectFilesystemKey.trim() === project.filesystem_key
+    ) {
+      reconnectProject(project);
+      return;
+    }
+
+    runRevision.current += 1;
+    setSelectedProjectId(project.id);
+    setProjectVerified(true);
+    setCurrentRunId(null);
+    setSessionRunIds([]);
+    setGalleryRunsById({});
+    setRun(null);
+    setRunStatus(null);
+    setRestoredRunSeed(null);
+    setRestoringRun(false);
+    setRunRestoreUnresolved(false);
+    setConsistencyError(null);
+    setSessionMessage(null);
+    changeForm({
+      ...form,
+      projectId: project.id,
+      projectFilesystemKey: project.filesystem_key,
+      projectName: project.name,
+      prompts: [],
+      referenceAssetIds: [],
+    });
   }
 
   async function previewBatch() {
@@ -342,6 +427,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }
 
   const currentRunIsTerminal = runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus);
+  const projectSwitchingBlocked =
+    restoringRun || runRestoreUnresolved || runStatus === "created" || runStatus === "running";
   const canCreateRun =
     previewSnapshot !== null &&
     !restoringRun &&
@@ -403,9 +490,16 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         <BatchEditor
           api={api}
           form={form}
+          selectedProjectId={selectedProjectId}
+          projectVerified={projectVerified}
+          projectSwitchingBlocked={projectSwitchingBlocked}
           error={batchError}
           previewing={previewing}
           onChange={changeForm}
+          onPromptMetadataChange={changePromptMetadata}
+          onProjectReconnect={reconnectProject}
+          onProjectUnresolved={markProjectUnresolved}
+          onProjectSelect={selectProject}
           onPreview={previewBatch}
         />
         <PreviewPanel
@@ -463,6 +557,11 @@ function batchRequestIdentity(request: BatchRequest): string {
     request.batch.id,
     request.batch.filesystem_key,
   ]);
+}
+
+function runMatchesBatch(run: RunCreatedResponse, identity: string): boolean {
+  const [projectId, , batchId] = JSON.parse(identity) as string[];
+  return run.project_id === projectId && run.batch_id === batchId;
 }
 
 function loadingGalleryRun(runId: string): BatchGalleryRun {

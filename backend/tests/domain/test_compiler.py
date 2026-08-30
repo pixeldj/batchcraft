@@ -311,9 +311,23 @@ def test_reference_order_is_preserved() -> None:
     ]
 
 
-def test_batch_requires_a_reference_selection() -> None:
-    with pytest.raises(CompilationError, match="at least one reference"):
-        compile_batch(batch_definition("Prompt", references=()))
+def test_empty_reference_axis_produces_jobs_without_a_reference_asset() -> None:
+    plan = compile_batch(
+        batch_definition(
+            "Prompt",
+            references=(),
+            seeds=SeedInput.explicit((9, 2, 7)),
+        )
+    )
+
+    assert plan.job_count == 3
+    assert [job.reference_asset_id for job in plan.jobs] == [None, None, None]
+    assert [job.seed for job in plan.jobs] == [9, 2, 7]
+
+
+def test_reference_selection_asset_id_must_not_be_empty() -> None:
+    with pytest.raises(CompilationError, match="empty asset ID"):
+        compile_batch(batch_definition("Prompt", references=("",)))
 
 
 def test_explicit_seed_order_is_preserved() -> None:

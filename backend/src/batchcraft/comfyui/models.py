@@ -81,6 +81,6 @@ class DownloadedArtifact:
 @dataclass(frozen=True, slots=True)
 class WorkflowPreparationValues:
     prompt: str
-    reference_image: str
+    reference_image: str | None
     seed: int
     output_prefix: str

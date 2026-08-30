@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from batchcraft.domain import CompiledJob, CompiledRunPlan
 
@@ -9,6 +10,14 @@ class ProjectIdentity:
     id: str
     filesystem_key: str
     name: str
+
+
+@dataclass(frozen=True, slots=True)
+class AdoptableProject:
+    filesystem_key: str
+    owner_state: Literal["owned", "ownerless"]
+    project_id: str | None
+    initial_name: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +42,7 @@ class AssetRecord:
 class PersistedJob:
     job_id: str
     compiled_job: CompiledJob
-    reference_asset: AssetRecord
+    reference_asset: AssetRecord | None
 
 
 @dataclass(frozen=True, slots=True)

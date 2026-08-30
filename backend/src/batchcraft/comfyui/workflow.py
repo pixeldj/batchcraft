@@ -21,7 +21,7 @@ def prepare_workflow(
 ) -> dict[str, object]:
     if "{{" in values.prompt or "}}" in values.prompt:
         raise WorkflowPreparationError("resolved prompt contains an unresolved placeholder")
-    if not values.reference_image:
+    if values.reference_image == "":
         raise WorkflowPreparationError("uploaded reference image value must not be empty")
     if not isinstance(values.seed, int) or isinstance(values.seed, bool):
         raise WorkflowPreparationError("seed must be an integer")
@@ -31,7 +31,7 @@ def prepare_workflow(
     workflow = copy.deepcopy(dict(base_workflow))
     profile = copy.deepcopy(dict(workflow_profile))
     mappings = _required_object(profile, "mappings", "Workflow Profile")
-    friendly_values: dict[str, str | int] = {
+    friendly_values: dict[str, str | int | None] = {
         "prompt": values.prompt,
         "reference_image": values.reference_image,
         "seed": values.seed,
@@ -74,7 +74,9 @@ def prepare_workflow(
                 f"Workflow Profile mapping {friendly_name!r} references missing input "
                 f"{input_name!r} on node {node_id!r}"
             )
-        input_object[input_name] = friendly_values[friendly_name]
+        value = friendly_values[friendly_name]
+        if friendly_name != "reference_image" or value is not None:
+            input_object[input_name] = value
 
     return workflow
 

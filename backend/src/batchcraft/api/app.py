@@ -25,6 +25,7 @@ from batchcraft.application import (
     InvalidProjectKeyError,
     LibraryService,
     ProjectAdoptionError,
+    ProjectDiscoveryError,
     ProjectPublicationError,
     ResultNotFoundError,
     RunCreationError,
@@ -56,6 +57,8 @@ from batchcraft.files import ProjectOwnerStore
 
 from .config import Settings
 from .schemas import (
+    AdoptableProjectResponse,
+    AdoptableProjectsResponse,
     AssetResponse,
     AssetsResponse,
     BatchRequest,
@@ -74,6 +77,7 @@ from .schemas import (
     ProjectUpdateRequest,
     PromptCreatedResponse,
     PromptCreateRequest,
+    PromptListResponse,
     PromptResponse,
     PromptsResponse,
     PromptUpdateRequest,
@@ -115,7 +119,6 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configured.database_path.parent.mkdir(parents=True, exist_ok=True)
-        configured.projects_root.mkdir(parents=True, exist_ok=True)
         with closing(open_connection(configured.database_path)) as connection:
             apply_migrations(connection)
         client = make_client(configured)
@@ -200,6 +203,15 @@ def create_app(
         )
         return ProjectResponse.from_record(project)
 
+    @app.get("/api/projects/adoptable", response_model=AdoptableProjectsResponse)
+    async def list_adoptable_projects(
+        library: LibraryDependency,
+    ) -> AdoptableProjectsResponse:
+        projects = await asyncio.to_thread(library.list_adoptable_projects)
+        return AdoptableProjectsResponse(
+            projects=[AdoptableProjectResponse.from_candidate(item) for item in projects]
+        )
+
     @app.get("/api/projects/{project_id}", response_model=ProjectResponse)
     async def get_project(project_id: str, library: LibraryDependency) -> ProjectResponse:
         return ProjectResponse.from_record(await asyncio.to_thread(library.get_project, project_id))
@@ -232,7 +244,9 @@ def create_app(
         prompts = await asyncio.to_thread(
             library.list_prompts, project_id, include_archived=include_archived
         )
-        return PromptsResponse(prompts=[PromptResponse.from_record(item) for item in prompts])
+        return PromptsResponse(
+            prompts=[PromptListResponse.from_list_record(item) for item in prompts]
+        )
 
     @app.post(
         "/api/projects/{project_id}/prompts",
@@ -528,6 +542,17 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def project_adoption_failed(_request: Request, error: Exception) -> JSONResponse:
         return _error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "project_adoption_failed", str(error)
+        )
+
+    @app.exception_handler(ProjectDiscoveryError)
+    async def project_discovery_failed(
+        _request: Request, error: ProjectDiscoveryError
+    ) -> JSONResponse:
+        logger.error("Project discovery failed: %s", error)
+        return _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "project_discovery_failed",
+            "Projects could not be discovered",
         )
 
     @app.exception_handler(CompilationError)

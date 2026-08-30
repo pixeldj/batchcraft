@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import shutil
 import threading
 import time
@@ -40,6 +41,7 @@ from batchcraft.files import (
     AssetRecord,
     ProjectAssetStore,
     ProjectIdentity,
+    ProjectOwnerDiscoveryError,
     ProjectOwnerStore,
     PublishedRun,
     RunFilesystemStore,
@@ -368,6 +370,64 @@ def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
         assert len(all_projects.json()["projects"]) == 1
 
 
+def test_prompt_list_returns_latest_active_version_and_preserves_prompt_filter(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project"}
+        ).json()
+        first_created = http.post(
+            f"/api/projects/{project['id']}/prompts",
+            json={"name": "Original name", "text": "First text"},
+        ).json()
+        prompt_id = first_created["prompt"]["id"]
+        first_version = first_created["version"]
+        assert (
+            http.patch(f"/api/prompts/{prompt_id}", json={"name": "Current name"}).status_code
+            == 200
+        )
+        second_version = http.post(
+            f"/api/prompts/{prompt_id}/versions", json={"text": "Second text"}
+        ).json()
+        archived_prompt = http.post(
+            f"/api/projects/{project['id']}/prompts",
+            json={"name": "Archived Prompt", "text": "Archived Prompt text"},
+        ).json()
+        assert (
+            http.post(f"/api/prompts/{archived_prompt['prompt']['id']}/archive").status_code == 200
+        )
+
+        active_list = http.get(f"/api/projects/{project['id']}/prompts").json()["prompts"]
+        all_list = http.get(
+            f"/api/projects/{project['id']}/prompts", params={"include_archived": True}
+        ).json()["prompts"]
+        direct = http.get(f"/api/prompts/{prompt_id}").json()
+
+        assert [item["id"] for item in active_list] == [prompt_id]
+        assert [item["id"] for item in all_list] == [
+            prompt_id,
+            archived_prompt["prompt"]["id"],
+        ]
+        assert active_list[0]["latest_active_version"] == second_version
+        assert active_list[0]["latest_active_version"]["name_snapshot"] == "Current name"
+        assert all_list[1]["latest_active_version"] == archived_prompt["version"]
+        assert "latest_active_version" not in direct
+
+        assert http.post(f"/api/prompt-versions/{second_version['id']}/archive").status_code == 200
+        fallback = http.get(f"/api/projects/{project['id']}/prompts").json()["prompts"][0]
+        assert fallback["latest_active_version"] == first_version
+        assert fallback["latest_active_version"]["name_snapshot"] == "Original name"
+
+        assert http.post(f"/api/prompt-versions/{first_version['id']}/archive").status_code == 200
+        all_archived = http.get(f"/api/projects/{project['id']}/prompts").json()["prompts"][0]
+        assert all_archived["latest_active_version"] is None
+
+
 def test_project_adoption_preserves_owner_identity_and_rejects_ownerless_directory(
     tmp_path: Path,
 ) -> None:
@@ -437,6 +497,109 @@ def test_project_adoption_preserves_owner_identity_and_rejects_ownerless_directo
         assert adopted_ownerless["id"] == "imported-assets-project"
         assert adopted_ownerless["name"] == "Imported assets"
         assert owner_store.read("ownerless").id == "imported-assets-project"
+
+
+def test_adoptable_project_discovery_filters_registered_projects_and_is_read_only(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    owner_store = ProjectOwnerStore(settings.projects_root)
+    owner_store.publish(
+        ProjectIdentity(id="available-id", filesystem_key="z_available", name="Available")
+    )
+    (settings.projects_root / "a_ownerless" / "assets").mkdir(parents=True)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        active = http.post(
+            "/api/projects", json={"name": "Active", "filesystem_key": "active"}
+        ).json()
+        archived = http.post(
+            "/api/projects", json={"name": "Archived", "filesystem_key": "archived"}
+        ).json()
+        assert http.post(f"/api/projects/{archived['id']}/archive").status_code == 200
+        owner_store.publish(
+            ProjectIdentity(
+                id=active["id"],
+                filesystem_key="conflicting_key",
+                name="Conflicting owner",
+            )
+        )
+        before = {
+            path.relative_to(settings.projects_root): (
+                path.read_bytes() if path.is_file() and not path.is_symlink() else None
+            )
+            for path in settings.projects_root.rglob("*")
+        }
+
+        response = http.get("/api/projects/adoptable")
+
+        after = {
+            path.relative_to(settings.projects_root): (
+                path.read_bytes() if path.is_file() and not path.is_symlink() else None
+            )
+            for path in settings.projects_root.rglob("*")
+        }
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "projects": [
+            {
+                "filesystem_key": "a_ownerless",
+                "owner_state": "ownerless",
+                "project_id": None,
+                "initial_name": None,
+            },
+            {
+                "filesystem_key": "z_available",
+                "owner_state": "owned",
+                "project_id": "available-id",
+                "initial_name": "Available",
+            },
+        ]
+    }
+    assert before == after
+
+
+def test_adoptable_project_discovery_failure_is_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+
+    def fail_discovery(_store: ProjectOwnerStore) -> NoReturn:
+        raise ProjectOwnerDiscoveryError("private filesystem detail")
+
+    monkeypatch.setattr(ProjectOwnerStore, "discover", fail_discovery)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient()),
+        raise_server_exceptions=False,
+    ) as http:
+        response = http.get("/api/projects/adoptable")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "project_discovery_failed",
+            "message": "Projects could not be discovered",
+        }
+    }
+    assert "private filesystem detail" not in response.text
+
+
+def test_adoptable_project_discovery_does_not_create_an_absent_projects_root(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.get("/api/projects/adoptable")
+
+    assert response.status_code == 200
+    assert response.json() == {"projects": []}
+    assert not settings.projects_root.exists()
 
 
 def test_invalid_project_input_does_not_publish_an_owner(tmp_path: Path) -> None:
@@ -693,6 +856,28 @@ def test_preview_uses_production_compiler_order_and_preserves_warnings(tmp_path:
         ("Portrait of cat", "asset-2", 3),
     ]
     assert body.warnings[0].code == "unused_binding"
+
+
+def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        preview = http.post("/api/batches/preview", json=request)
+        created = http.post("/api/runs", json=request)
+
+    assert preview.status_code == 200
+    body = PreviewResponse.model_validate(preview.json())
+    assert body.job_count == 4
+    assert [job.reference_asset_id for job in body.jobs] == [None, None, None, None]
+    assert created.status_code == 201
+
+    run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+    manifest = json.loads((run_path / "manifest.json").read_text())
+    assert all(job["reference_asset"] is None for job in manifest["jobs"])
+    assert not (settings.projects_root / "project_key" / "assets").exists()
 
 
 def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_path: Path) -> None:

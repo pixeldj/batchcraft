@@ -101,7 +101,7 @@ class PostRenameFailureStore(RunFilesystemStore):
         raise OSError("simulated directory sync failure")
 
 
-def _fixture_plan(asset_id: str, *, seeds: tuple[int, ...] = (9, 3)) -> CompiledRunPlan:
+def _fixture_plan(asset_id: str | None, *, seeds: tuple[int, ...] = (9, 3)) -> CompiledRunPlan:
     animals = VariableList(id="animals", values=("cat", "dog"))
     unused = VariableList(id="unused", values=("value",))
     return compile_batch(
@@ -125,7 +125,7 @@ def _fixture_plan(asset_id: str, *, seeds: tuple[int, ...] = (9, 3)) -> Compiled
                     fixed_value="value",
                 ),
             ),
-            references=(ReferenceSelection(asset_id=asset_id),),
+            references=(ReferenceSelection(asset_id=asset_id),) if asset_id is not None else (),
             seeds=SeedInput.explicit(seeds),
         )
     )
@@ -144,7 +144,7 @@ def _asset_fixture(projects_path: Path) -> AssetRecord:
 def _create(
     store: RunFilesystemStore,
     plan: CompiledRunPlan,
-    asset: AssetRecord,
+    asset: AssetRecord | None,
     *,
     project: ProjectIdentity = PROJECT,
     batch: BatchIdentity = BATCH,
@@ -153,7 +153,7 @@ def _create(
         project=project,
         batch=batch,
         plan=plan,
-        reference_assets={asset.asset_id: asset},
+        reference_assets={} if asset is None else {asset.asset_id: asset},
         workflow=WORKFLOW,
         workflow_profile=WORKFLOW_PROFILE,
     )
@@ -204,7 +204,7 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
             + "\n"
         ).encode()
     )
-    assert manifest["format_version"] == 2
+    assert manifest["format_version"] == 3
     assert manifest["prompt_versions"] == [
         {
             "prompt_version_id": "prompt-v3",
@@ -258,7 +258,7 @@ def test_published_run_reconstructs_without_sqlite(tmp_path: Path) -> None:
     assert loaded.jobs[0].reference_asset == asset
 
 
-def test_manifest_v2_round_trips_ordered_prompt_versions_and_job_associations(
+def test_manifest_v3_round_trips_ordered_prompt_versions_and_job_associations(
     tmp_path: Path,
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -295,7 +295,7 @@ def test_manifest_v2_round_trips_ordered_prompt_versions_and_job_associations(
 
 
 @pytest.mark.parametrize("corruption", ("duplicate_prompt", "unknown_job_prompt"))
-def test_manifest_v2_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
+def test_manifest_v3_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
     projects_path = tmp_path / "projects"
     asset = _asset_fixture(projects_path)
     created = _create(
@@ -347,6 +347,105 @@ def test_manifest_v1_loads_with_fallback_name_and_job_association(tmp_path: Path
     assert {job.prompt_version_id for job in loaded.compiled_plan.jobs} == {"prompt-v3"}
 
 
+def test_manifest_v2_loads_with_required_reference_asset_object(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    plan = _fixture_plan(asset.asset_id)
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        plan,
+        asset,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format_version"] = 2
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    loaded = RunFilesystemStore(projects_path).load_run(created.path)
+
+    assert loaded.compiled_plan == plan
+    assert loaded.jobs[0].reference_asset == asset
+
+
+def test_manifest_v3_round_trips_jobs_without_reference_assets(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    plan = _fixture_plan(None)
+    created = _create(
+        RunFilesystemStore(
+            projects_path,
+            id_factory=SequentialIds("run-id", "job-1", "job-2", "job-3", "job-4"),
+            clock=lambda: FIXED_TIME,
+        ),
+        plan,
+        None,
+    )
+
+    manifest = json.loads((created.path / "manifest.json").read_text())
+    with (created.path / "manifest.csv").open(newline="") as file:
+        rows = list(csv.DictReader(file))
+    loaded = RunFilesystemStore(projects_path).load_run(created.path)
+
+    assert manifest["format_version"] == 3
+    assert all("reference_asset" in job for job in manifest["jobs"])
+    assert all(job["reference_asset"] is None for job in manifest["jobs"])
+    assert all(
+        (
+            row["reference_asset_id"],
+            row["reference_original_filename"],
+            row["reference_sha256"],
+        )
+        == ("", "", "")
+        for row in rows
+    )
+    assert loaded.compiled_plan == plan
+    assert all(job.reference_asset is None for job in loaded.jobs)
+
+
+@pytest.mark.parametrize("manifest_version", (1, 2))
+def test_legacy_manifests_require_reference_asset_objects(
+    tmp_path: Path, manifest_version: int
+) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(asset.asset_id),
+        asset,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format_version"] = manifest_version
+    if manifest_version == 1:
+        version = manifest.pop("prompt_versions")[0]
+        manifest["prompt_version"] = {
+            "prompt_version_id": version["prompt_version_id"],
+            "prompt_template": version["prompt_template"],
+        }
+        for job in manifest["jobs"]:
+            job.pop("prompt_version_id")
+    manifest["jobs"][0]["reference_asset"] = None
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    with pytest.raises(RunStoreError, match="reference_asset must be a JSON object"):
+        RunFilesystemStore(projects_path).load_run(created.path)
+
+
+def test_manifest_v3_rejects_missing_reference_asset_key(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(None),
+        None,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["jobs"][0].pop("reference_asset")
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    with pytest.raises(RunStoreError, match="must define reference_asset"):
+        RunFilesystemStore(projects_path).load_run(created.path)
+
+
 def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     asset = _asset_fixture(projects_path)
@@ -357,7 +456,7 @@ def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
     )
     manifest_path = created.path / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["format_version"] = 3
+    manifest["format_version"] = 4
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
     with pytest.raises(RunStoreError, match="unsupported manifest.json format version"):

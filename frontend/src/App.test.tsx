@@ -6,16 +6,20 @@ import { ApiError, type BatchcraftApi } from "./api/client";
 import type {
   AssetResponse,
   ExecutionResponse,
+  LibraryPromptVersion,
   PreviewResponse,
+  ProjectResponse,
+  ProjectPrompt,
   ResultResponse,
   RunCreatedResponse,
   RunResponse,
 } from "./api/types";
-import { initialBatchForm } from "./features/batch/form";
+import { initialBatchForm, newPrompt } from "./features/batch/form";
 import { loadWorkingSession, saveWorkingSession } from "./features/session/workingSession";
 
 beforeEach(() => {
   sessionStorage.clear();
+  saveWorkingSession(populatedBatchForm(), null, [], "project-1");
 });
 
 describe("ComfyUI status", () => {
@@ -42,6 +46,20 @@ describe("ComfyUI status", () => {
     expect(await screen.findByText("ComfyUI Offline")).toBeInTheDocument();
     expect(screen.getByText("cannot connect to ComfyUI")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled();
+  });
+});
+
+describe("Project selection", () => {
+  it("starts unscoped and does not load Prompt or Asset libraries before selection", async () => {
+    sessionStorage.clear();
+    const api = makeApi({ listProjects: vi.fn(async () => ({ projects: [] })) });
+    render(<App api={api} />);
+
+    expect(await screen.findByRole("combobox", { name: "Active Project" })).toHaveValue("");
+    expect(screen.getByText("Select a Project to load its Prompt library.")).toBeInTheDocument();
+    expect(screen.getByText("Select a Project to load its image library.")).toBeInTheDocument();
+    expect(api.listPrompts).not.toHaveBeenCalled();
+    expect(api.listProjectAssets).not.toHaveBeenCalled();
   });
 });
 
@@ -75,6 +93,18 @@ describe("Batch preview", () => {
     expect(request.variable_bindings[0]).toEqual(
       expect.objectContaining({ placeholder: "subject", selected_values: ["cat", "dog"] }),
     );
+  });
+
+  it("previews the base workflow without Reference Assets", async () => {
+    const api = makeApi({ previewBatch: vi.fn(async () => previewResponse(2, null)) });
+    render(<App api={api} />);
+    await screen.findByRole("button", { name: "Select portrait.png" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].references).toEqual([]);
+    expect(screen.getAllByText("Base workflow")).toHaveLength(2);
   });
 
   it("renders backend validation errors near the Batch editor", async () => {
@@ -156,7 +186,14 @@ describe("Batch preview", () => {
   });
 
   it("materializes Random seeds once and consumes the Preview after successful Run creation", async () => {
+    const alternate = projectPrompt("prompt-2", "Editorial", promptVersion({
+      id: "prompt-v2",
+      prompt_id: "prompt-2",
+      name_snapshot: "Editorial",
+      text: "A second portrait of {{subject}}.",
+    }));
     const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [projectPrompt(), alternate] })),
       previewBatch: vi.fn(async () => previewResponse(3)),
       createRun: vi.fn(async () => runResponse("run-random", 4, 3)),
     });
@@ -164,9 +201,7 @@ describe("Batch preview", () => {
     await enterAsset();
     fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "random" } });
     fireEvent.change(screen.getByLabelText(/Random seed count/), { target: { value: "3" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
-    const promptTemplates = screen.getAllByLabelText(/Prompt template/);
-    fireEvent.change(promptTemplates[1], { target: { value: "A second portrait of {{subject}}." } });
+    await addExistingPrompt("Editorial");
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
@@ -244,46 +279,83 @@ describe("Batch preview", () => {
 });
 
 describe("PromptVersion editor", () => {
-  it("starts with one prompt and supports stable add, edit, reorder, remove, and final removal prevention", () => {
-    render(<App api={makeApi()} />);
+  it("supports stable library add, reorder, and removal to an empty selection", async () => {
+    const alternate = projectPrompt("prompt-2", "Editorial", promptVersion({
+      id: "prompt-v2",
+      prompt_id: "prompt-2",
+      name_snapshot: "Editorial snapshot",
+      text: "Editorial {{subject}}",
+    }));
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [projectPrompt(), alternate] })),
+    });
+    render(<App api={api} />);
 
-    expect(screen.getAllByLabelText("PromptVersion ID")).toHaveLength(1);
-    expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait");
-    expect(within(promptCards()[0]).getByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(screen.getByRole("group", { name: "Prompt Versions" })).toBeInTheDocument();
+    expect(screen.getByText("A studio portrait of {{subject}}.")).toBeInTheDocument();
+    expect(within(promptCards()[0]).getByRole("button", { name: "Remove" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
-    const ids = screen.getAllByLabelText("PromptVersion ID");
-    const names = screen.getAllByLabelText("Prompt name");
-    const templates = screen.getAllByLabelText(/Prompt template/);
-    expect(ids).toHaveLength(2);
-    expect(names[1]).toHaveValue("Prompt 2");
+    await addExistingPrompt("Editorial");
+    expect(promptCards()).toHaveLength(2);
+    const secondCard = promptCards()[1];
+    expect(within(secondCard).getByText("Editorial {{subject}}")).toBeInTheDocument();
+    expect(within(secondCard).getByText("Saved as Editorial snapshot")).toBeInTheDocument();
+    fireEvent.click(within(secondCard).getByRole("button", { name: "Move up" }));
 
-    fireEvent.change(ids[1], { target: { value: "prompt-alt" } });
-    fireEvent.change(names[1], { target: { value: "Alternate" } });
-    fireEvent.change(templates[1], { target: { value: "Alternate {{subject}}" } });
-    const secondCard = templates[1].closest(".prompt-card");
-    expect(secondCard).not.toBeNull();
-    fireEvent.click(within(secondCard as HTMLElement).getByRole("button", { name: "Move up" }));
-
-    expect(screen.getAllByLabelText("PromptVersion ID")[0]).toHaveValue("prompt-alt");
-    expect(screen.getAllByLabelText("Prompt name")[0]).toHaveValue("Alternate");
-    expect(screen.getAllByLabelText(/Prompt template/)[0]).toHaveValue("Alternate {{subject}}");
+    expect(within(promptCards()[0]).getByText("Editorial {{subject}}")).toBeInTheDocument();
 
     fireEvent.click(within(promptCards()[0]).getByRole("button", { name: "Remove" }));
-    expect(screen.getAllByLabelText("PromptVersion ID")).toHaveLength(1);
-    expect(within(promptCards()[0]).getByRole("button", { name: "Remove" })).toBeDisabled();
-    expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait");
+    expect(promptCards()).toHaveLength(1);
+    expect(within(promptCards()[0]).getByText("Portrait")).toBeInTheDocument();
+    fireEvent.click(within(promptCards()[0]).getByRole("button", { name: "Remove" }));
+
+    expect(promptCards()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Add Prompt" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    expect(await screen.findByText("Add at least one PromptVersion.")).toBeInTheDocument();
+    expect(api.previewBatch).not.toHaveBeenCalled();
   });
 
-  it("routes prompt edits through form change and invalidates Preview", async () => {
-    render(<App api={makeApi()} />);
+  it("creates a new PromptVersion through form change and invalidates Preview", async () => {
+    const nextVersion = promptVersion({
+      id: "prompt-v2",
+      version_number: 2,
+      text: "Changed {{subject}}",
+    });
+    const api = makeApi({ createPromptVersion: vi.fn(async () => nextVersion) });
+    render(<App api={api} />);
+    const edit = await screen.findByRole("button", { name: "Edit as new version" });
     await reachPreview();
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
 
-    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Changed" } });
+    fireEvent.click(edit);
+    fireEvent.change(screen.getByLabelText("Prompt template"), {
+      target: { value: "Changed {{subject}}" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create version" }));
 
-    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(await screen.findByText(/Preview required/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(api.createPromptVersion).toHaveBeenCalledWith("prompt-1", {
+      text: "Changed {{subject}}",
+      note: null,
+    });
+  });
+
+  it("retains Preview when only the logical Prompt name changes", async () => {
+    const renamed = { ...projectPrompt(), name: "Renamed" };
+    const api = makeApi({ updatePrompt: vi.fn(async () => renamed) });
+    render(<App api={api} />);
+    const rename = await screen.findByRole("button", { name: "Rename Prompt" });
+    await reachPreview();
+
+    fireEvent.click(rename);
+    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(await screen.findByText("Renamed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(screen.getByText("Saved as Portrait")).toBeInTheDocument();
   });
 });
 
@@ -291,45 +363,28 @@ describe("Browser working-session restoration", () => {
   it("restores the form and ordered references after remount but requires a new Preview", async () => {
     const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
     const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
-    const first = render(<App api={api} />);
-    fireEvent.change(screen.getByLabelText(/Prompt template/), {
-      target: { value: "Restored portrait of {{subject}}" },
+    const form = populatedBatchForm();
+    form.prompts[0].text = "Restored portrait of {{subject}}";
+    form.prompts.push({
+      ...newPrompt(2),
+      versionId: "prompt-editorial",
+      promptName: "Editorial",
+      snapshotName: "Editorial",
+      text: "Editorial image of {{subject}}",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
-    fireEvent.change(screen.getAllByLabelText("PromptVersion ID")[1], {
-      target: { value: "prompt-editorial" },
-    });
-    fireEvent.change(screen.getAllByLabelText("Prompt name")[1], {
-      target: { value: "Editorial" },
-    });
-    fireEvent.change(screen.getAllByLabelText(/Prompt template/)[1], {
-      target: { value: "Editorial image of {{subject}}" },
-    });
-    fireEvent.change(screen.getByLabelText(/Variable List values/), {
-      target: { value: "fox\nwolf" },
-    });
-    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "explicit" } });
-    fireEvent.change(screen.getByLabelText(/Explicit seeds/), { target: { value: "9, 3" } });
-    fireEvent.change(screen.getByLabelText("Workflow JSON"), {
-      target: { value: '{"workflow":true}' },
-    });
-    fireEvent.change(screen.getByLabelText("Workflow Profile JSON"), {
-      target: { value: '{"profile":true}' },
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Select b.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select a.png" }));
-    await waitFor(() => expect(sessionStorage.getItem("batchcraft.working-session")).not.toBeNull());
-    first.unmount();
+    form.variableBindings[0].values = "fox\nwolf";
+    form.seedMode = "explicit";
+    form.seedValues = "9, 3";
+    form.workflowJson = '{"workflow":true}';
+    form.workflowProfileJson = '{"profile":true}';
+    form.referenceAssetIds = ["asset-b", "asset-a"];
+    saveWorkingSession(form, null);
 
     render(<App api={api} />);
 
     expect(await screen.findByText(/Draft restored from this browser session/)).toBeInTheDocument();
-    expect(screen.getAllByLabelText("PromptVersion ID").map((field) => (field as HTMLInputElement).value))
-      .toEqual(["prompt-v1", "prompt-editorial"]);
-    expect(screen.getAllByLabelText("Prompt name").map((field) => (field as HTMLInputElement).value))
-      .toEqual(["Portrait", "Editorial"]);
-    expect(screen.getAllByLabelText(/Prompt template/).map((field) => (field as HTMLTextAreaElement).value))
-      .toEqual(["Restored portrait of {{subject}}", "Editorial image of {{subject}}"]);
+    expect(screen.getByText("Restored portrait of {{subject}}")).toBeInTheDocument();
+    expect(screen.getByText("Editorial image of {{subject}}")).toBeInTheDocument();
     expect(screen.getByLabelText(/Variable List values/)).toHaveValue("fox\nwolf");
     expect(screen.getByLabelText("Seed mode")).toHaveValue("explicit");
     expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("9, 3");
@@ -364,7 +419,7 @@ describe("Browser working-session restoration", () => {
   });
 
   it("surfaces a restored Reference Asset that no longer exists and blocks Preview", async () => {
-    const form = initialBatchForm();
+    const form = populatedBatchForm();
     form.referenceAssetIds = ["asset-missing"];
     saveWorkingSession(form, null);
     const api = makeApi();
@@ -374,7 +429,9 @@ describe("Browser working-session restoration", () => {
     expect(screen.queryByText("asset-missing (missing from Project)")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
     expect(await screen.findByText("asset-missing (missing from Project)")).toBeInTheDocument();
-    expect(screen.getByText("Remove missing Reference Assets before Previewing this Batch.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Remove missing Reference Assets before Previewing this Batch."),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
     expect(
@@ -386,7 +443,7 @@ describe("Browser working-session restoration", () => {
 
 describe("Reference Asset picker", () => {
   it("shows only the selected count while collapsed and toggles the Project library", async () => {
-    const form = initialBatchForm();
+    const form = populatedBatchForm();
     form.referenceAssetIds = ["asset-a"];
     saveWorkingSession(form, null);
     const api = makeApi({
@@ -407,7 +464,7 @@ describe("Reference Asset picker", () => {
   });
 
   it("Select All preserves selected order, appends display order, and Select None invalidates Preview", async () => {
-    const form = initialBatchForm();
+    const form = populatedBatchForm();
     form.referenceAssetIds = ["asset-c", "asset-a"];
     saveWorkingSession(form, null);
     const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png"), asset("asset-c", "c.png")];
@@ -488,30 +545,44 @@ describe("Reference Asset picker", () => {
     ]);
   });
 
-  it("clears selection and ignores a stale library response when the Project changes", async () => {
+  it("clears scoped selections and ignores an A-B-A stale library response", async () => {
     const oldLibrary = deferred<{ assets: AssetResponse[] }>();
+    const nextProject = projectResponse({ id: "project-2", filesystem_key: "project_2", name: "Next" });
+    let projectOneRequests = 0;
     const api = makeApi({
-      listProjectAssets: vi.fn((projectKey: string) =>
-        projectKey === "project_1"
-          ? oldLibrary.promise
-          : Promise.resolve({ assets: [asset("asset-new", "new.png")] }),
-      ),
+      listProjects: vi.fn(async () => ({
+        projects: [projectResponse(), nextProject],
+      })),
+      listProjectAssets: vi.fn((projectKey: string) => {
+        if (projectKey === "project_1") {
+          projectOneRequests += 1;
+          return projectOneRequests === 1
+            ? oldLibrary.promise
+            : Promise.resolve({ assets: [asset("asset-fresh", "fresh.png")] });
+        }
+        return Promise.resolve({ assets: [asset("asset-new", "new.png")] });
+      }),
     });
     render(<App api={api} />);
-    fireEvent.change(screen.getByLabelText("Filesystem key", { selector: "#project-key" }), {
-      target: { value: "new_project" },
-    });
+    const selector = await screen.findByRole("combobox", { name: "Active Project" });
+    fireEvent.change(selector, { target: { value: nextProject.id } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByRole("button", { name: "Select new.png" })).toBeInTheDocument();
+    expect(screen.queryByText("A studio portrait of {{subject}}.")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Batch ID")).toHaveValue("batch-1");
     fireEvent.click(screen.getByRole("button", { name: "Select new.png" }));
-    fireEvent.change(screen.getByLabelText("Filesystem key", { selector: "#project-key" }), {
-      target: { value: "final_project" },
+    fireEvent.change(screen.getByRole("combobox", { name: "Active Project" }), {
+      target: { value: "project-1" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("button", { name: "Select fresh.png" })).toBeInTheDocument();
     oldLibrary.resolve({ assets: [asset("asset-old", "old.png")] });
 
-    await waitFor(() => expect(api.listProjectAssets).toHaveBeenCalledWith("final_project", expect.any(AbortSignal)));
+    await waitFor(() => expect(api.listProjectAssets).toHaveBeenCalledTimes(3));
     expect(screen.queryByRole("button", { name: /old\.png/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Selected Reference Assets" })).not.toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().selectedProjectId).toBe("project-1"));
   });
 
   it("merges imported assets, deduplicates them, and selects new imports", async () => {
@@ -690,10 +761,6 @@ describe("Repeated Runs", () => {
       getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
     });
     render(<App api={api} pollIntervalMs={5} />);
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
-    fireEvent.change(screen.getAllByLabelText(/Prompt template/)[1], {
-      target: { value: "Alternate {{subject}}" },
-    });
     await createRunAndStart();
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
@@ -707,13 +774,8 @@ describe("Repeated Runs", () => {
     expect(createRun).toHaveBeenCalledTimes(2);
     expect(createRun.mock.calls[0][0]).toBe(previewRequest);
     expect(createRun.mock.calls[1][0]).toBe(previewRequest);
-    expect(previewRequest.prompt_versions.map((prompt) => prompt.name)).toEqual([
-      "Portrait",
-      "Prompt 2",
-    ]);
-    expect(screen.getAllByLabelText(/Prompt template/)[0]).toHaveValue(
-      "A studio portrait of {{subject}}.",
-    );
+    expect(previewRequest.prompt_versions.map((prompt) => prompt.name)).toEqual(["Portrait"]);
+    expect(screen.getByText("A studio portrait of {{subject}}.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
     expect(loadWorkingSession().currentRunId).toBe("run-2");
   });
@@ -857,6 +919,24 @@ describe("Current Run restoration", () => {
     expect(await screen.findByRole("button", { name: "Create Run" })).toBeEnabled();
   });
 
+  it("does not attach a restored Run from another Project or Batch", async () => {
+    seedWorkingSession("run-mismatch");
+    const api = makeApi({
+      getRun: vi.fn(async () => ({
+        ...runLookupResponse("succeeded", "run-mismatch", 14),
+        project_id: "another-project",
+      })),
+    });
+    render(<App api={api} />);
+
+    expect(
+      await screen.findByText("The previous Run belongs to another Project or Batch and was not restored."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().currentRunId).toBeNull());
+    expect(api.getExecution).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "Run 14" })).not.toBeInTheDocument();
+  });
+
   it("does not let an old Run Result response replace a newly created Run workspace", async () => {
     const oldResults = deferred<{ run_id: string; results: ResultResponse[] }>();
     const createRun = vi
@@ -992,7 +1072,7 @@ describe("Batch working-session Results gallery", () => {
   });
 
   it("restores multiple session Runs once without executing or duplicating the current Run", async () => {
-    const form = initialBatchForm();
+    const form = populatedBatchForm();
     form.referenceAssetIds = ["asset-1"];
     saveWorkingSession(form, "run-b", ["run-a", "run-b", "run-b"]);
     const api = makeApi({
@@ -1035,7 +1115,7 @@ describe("Batch working-session Results gallery", () => {
   });
 
   it("keeps healthy historical Results when another session Run is unavailable", async () => {
-    const form = initialBatchForm();
+    const form = populatedBatchForm();
     form.referenceAssetIds = ["asset-1"];
     saveWorkingSession(form, null, ["run-bad", "run-good"]);
     const api = makeApi({
@@ -1060,6 +1140,25 @@ describe("Batch working-session Results gallery", () => {
 });
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
+  const prompt = {
+    id: "prompt-1",
+    project_id: "project-1",
+    name: "Portrait",
+    description: null,
+    created_at: "2026-08-27T12:00:00Z",
+    updated_at: "2026-08-27T12:00:00Z",
+    archived_at: null,
+  };
+  const version = {
+    id: "prompt-v1",
+    prompt_id: "prompt-1",
+    version_number: 1,
+    name_snapshot: "Portrait",
+    text: "A studio portrait of {{subject}}.",
+    note: null,
+    created_at: "2026-08-27T12:00:00Z",
+    archived_at: null,
+  };
   return {
     getComfyUIStatus: vi.fn(async () => ({
       reachable: true,
@@ -1067,8 +1166,23 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
       devices: ["Test GPU"],
       diagnostic: null,
     })),
+    listProjects: vi.fn(async () => ({ projects: [projectResponse()] })),
+    createProject: vi.fn(async () => projectResponse()),
+    getProject: vi.fn(async () => projectResponse()),
+    updateProject: vi.fn(async () => projectResponse()),
+    adoptProject: vi.fn(async () => projectResponse()),
+    listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
     listProjectAssets: vi.fn(async () => ({ assets: [asset("asset-1", "portrait.png")] })),
     uploadProjectAssets: vi.fn(async () => ({ assets: [] })),
+    listPrompts: vi.fn(async () => ({
+      prompts: [{ ...prompt, latest_active_version: version }],
+    })),
+    createPrompt: vi.fn(async () => ({ prompt, version })),
+    getPrompt: vi.fn(async () => prompt),
+    updatePrompt: vi.fn(async () => prompt),
+    listPromptVersions: vi.fn(async () => ({ prompt_versions: [version] })),
+    createPromptVersion: vi.fn(async () => version),
+    getPromptVersion: vi.fn(async () => version),
     previewBatch: vi.fn(async () => previewResponse()),
     createRun: vi.fn(async () => runResponse()),
     getRun: vi.fn(async () => runLookupResponse()),
@@ -1081,7 +1195,7 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   };
 }
 
-function previewResponse(jobCount = 2): PreviewResponse {
+function previewResponse(jobCount = 2, referenceAssetId: string | null = "asset-1"): PreviewResponse {
   const subjects = ["cat", "dog", "bird"];
   return {
     job_count: jobCount,
@@ -1096,7 +1210,7 @@ function previewResponse(jobCount = 2): PreviewResponse {
         prompt_version_name: "Portrait",
         resolved_prompt: `A studio portrait of ${subject}.`,
         resolved_variables: [{ name: "subject", value: subject }],
-        reference_asset_id: "asset-1",
+        reference_asset_id: referenceAssetId,
         seed: 1,
       };
     }),
@@ -1206,10 +1320,36 @@ function asset(assetId: string, filename: string): AssetResponse {
   };
 }
 
-function seedWorkingSession(runId: string) {
+function projectResponse(overrides: Partial<ProjectResponse> = {}): ProjectResponse {
+  return {
+    id: "project-1",
+    filesystem_key: "project_1",
+    name: "My Project",
+    description: null,
+    created_at: "2026-08-27T12:00:00Z",
+    updated_at: "2026-08-27T12:00:00Z",
+    archived_at: null,
+    ...overrides,
+  };
+}
+
+function populatedBatchForm() {
   const form = initialBatchForm();
+  const prompt = newPrompt(1);
+  form.projectId = "project-1";
+  form.projectFilesystemKey = "project_1";
+  form.projectName = "My Project";
+  prompt.promptName = "Portrait";
+  prompt.snapshotName = "Portrait";
+  prompt.text = "A studio portrait of {{subject}}.";
+  form.prompts = [prompt];
+  return form;
+}
+
+function seedWorkingSession(runId: string) {
+  const form = populatedBatchForm();
   form.referenceAssetIds = ["asset-1"];
-  saveWorkingSession(form, runId, [runId]);
+  saveWorkingSession(form, runId, [runId], "project-1");
 }
 
 function batchResultsSection(): HTMLElement {
@@ -1226,6 +1366,51 @@ function currentRunSection(): HTMLElement {
     throw new Error("Current Run section was not rendered");
   }
   return section;
+}
+
+function promptVersion(
+  overrides: Partial<LibraryPromptVersion> = {},
+): LibraryPromptVersion {
+  return {
+    id: "prompt-v1",
+    prompt_id: "prompt-1",
+    version_number: 1,
+    name_snapshot: "Portrait",
+    text: "A studio portrait of {{subject}}.",
+    note: null,
+    created_at: "2026-08-27T12:00:00Z",
+    archived_at: null,
+    ...overrides,
+  };
+}
+
+function projectPrompt(
+  id = "prompt-1",
+  name = "Portrait",
+  version = promptVersion({ prompt_id: id }),
+): ProjectPrompt {
+  return {
+    id,
+    project_id: "project-1",
+    name,
+    description: null,
+    created_at: "2026-08-27T12:00:00Z",
+    updated_at: "2026-08-27T12:00:00Z",
+    archived_at: null,
+    latest_active_version: version,
+  };
+}
+
+async function addExistingPrompt(name: string) {
+  const add = screen.getByRole("button", { name: "Add Prompt" });
+  await waitFor(() => expect(add).toBeEnabled());
+  fireEvent.click(add);
+  fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
+  const dialog = screen.getByRole("dialog", { name: "Add Prompt" });
+  const nameNode = within(dialog).getByText(name, { selector: "strong" });
+  const card = nameNode.closest(".repeater-card");
+  if (!card) throw new Error(`Prompt card was not rendered for ${name}`);
+  fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Use latest version" }));
 }
 
 function promptCards(): HTMLElement[] {

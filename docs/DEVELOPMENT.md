@@ -153,9 +153,12 @@ durable Run creation, repeated terminal Run creation, execution start and pollin
 Result rendering, and a tab-scoped Batch Results gallery across session Runs. The browser uses only
 the FastAPI endpoints documented in `docs/API.md`.
 
-Batch editing includes an ordered repeatable list of ephemeral PromptVersions. Prompt additions,
-removals, edits, and ordering changes invalidate Preview. The browser session schema stores this list
-without UI keys and migrates older singular-prompt drafts; it is not a persistent Prompt library.
+Batch editing includes an ordered repeatable list of immutable PromptVersion snapshots. The current
+Project's persistent Prompt library supplies new selections, version history, immutable version
+creation, and mutable logical Prompt names. Snapshot additions, removals, version changes, and ordering
+changes invalidate Preview; logical renames and exact library reconciliation do not. The browser
+session schema stores both library linkage and the exact snapshot without UI keys, and migrates older
+drafts to detached snapshots.
 
 This phase does not add durable editable Batch persistence, Reference Collections, asset deletion,
 Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
@@ -163,14 +166,16 @@ Profile mapping.
 
 ### Phase 2.2: SQLite foundation, Projects, and Prompt library
 
-Completed for the backend. Production code under `backend/src/batchcraft/db/` uses stdlib `sqlite3`,
+Completed. Production code under `backend/src/batchcraft/db/` uses stdlib `sqlite3`,
 one connection per operation, explicit checksummed SQL migrations, and feature-specific Project and
 Prompt stores. FastAPI migrates before serving requests. Project creation publishes `project.json`
 before SQLite insertion, and explicit adoption recovers valid owner bindings or binds an explicitly
 selected ownerless asset directory using a user-supplied Project ID and name.
 
-This phase does not persist Batches, index filesystem Runs or Assets, add scheduler state, or wire the
-browser Batch editor to the Prompt library.
+The frontend consumes the Project-scoped library without changing the compiler contract. It preserves
+ordered concrete PromptVersion snapshots, loads history lazily, and keeps unavailable or unverifiable
+snapshots detached instead of silently substituting another version. This phase does not persist
+Batches, index filesystem Runs or Assets, or add scheduler state.
 
 ## Python Conventions
 
@@ -225,16 +230,20 @@ Keep API access in `src/api/`, feature components in `src/features/`, and small 
 execution transitions, and Result provenance on the backend.
 
 Browser `sessionStorage` is a best-effort refresh aid, not application persistence. Store semantic
-form values, the current Run ID, and ordered unique Run IDs for the current Batch working session.
-Restore Run, execution, and Result state from the backend, and require a fresh compiler Preview after
-restoring a form draft. Never store Result metadata or bytes as browser truth. Changing stable Project
-or Batch identity resets the session gallery; editing prompts, references, seeds, or display names does
-not.
+form values, the selected Project ID, current Run ID, and ordered unique Run IDs for the current Batch
+working session. Reconnect a saved Project only by exact Project ID and filesystem-key match. Keep
+Project-scoped Prompt and Asset requests blank until that verification succeeds. Restore Run,
+execution, and Result state from the backend only when the Run matches the current Project and Batch,
+and require a fresh compiler Preview after restoring a form draft. Never store Result metadata or
+bytes as browser truth. Switching Project clears PromptVersion and Reference Asset selections and the
+session gallery while retaining Batch identity, variables, seeds, and workflow inputs. Changing Batch
+identity resets the session gallery; editing prompts, references, seeds, or display names does not.
 
 The Reference Asset picker starts expanded with no selection and may start collapsed when a restored
 selection exists. Its collapsed state renders only the selected count. Select All preserves current
 selection order and appends unselected Project assets in deterministic picker order; Select None
-clears the selection. Both are semantic form changes and must invalidate Preview.
+clears the selection. Both are semantic form changes and must invalidate Preview. An empty selection
+is valid and compiles Jobs that preserve the base workflow's mapped reference-image value.
 
 Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it
 once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact
@@ -243,7 +252,9 @@ Explicit Previews remain reusable; a failed Random Run creation keeps its inspec
 
 PromptVersion is the compiler's first dimension. The frontend preserves PromptVersion request order
 and displays backend-returned PromptVersion identity in Preview. It does not calculate prompt products
-or infer provenance from resolved prompt text.
+or infer provenance from resolved prompt text. Prompt library refresh and logical Prompt rename must
+never replace a selected immutable snapshot. Archived or missing selections detach while retaining
+their exact stored identity, name snapshot, and text; known cross-Project selections block Preview.
 
 From `frontend/`, install and run the development server:
 

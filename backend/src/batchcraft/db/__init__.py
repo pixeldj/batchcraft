@@ -5,7 +5,7 @@ from batchcraft.db.migrations import (
     apply_migrations,
     discover_migrations,
 )
-from batchcraft.db.models import ProjectRecord, PromptRecord, PromptVersionRecord
+from batchcraft.db.models import ProjectRecord, PromptListRecord, PromptRecord, PromptVersionRecord
 from batchcraft.db.projects import (
     ProjectConflictError,
     ProjectFilesystemKeyConflictError,
@@ -44,6 +44,7 @@ __all__ = [
     "ProjectValidationError",
     "PromptConflictError",
     "PromptIdConflictError",
+    "PromptListRecord",
     "PromptNameConflictError",
     "PromptNotFoundError",
     "PromptProjectNotFoundError",

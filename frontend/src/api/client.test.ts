@@ -100,7 +100,208 @@ describe("BatchcraftApiClient", () => {
       signal: undefined,
     });
   });
+
+  it("lists active Projects without an archived query by default", async () => {
+    const fetchMock = successfulFetch({ projects: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").listProjects(false, signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects", { signal });
+  });
+
+  it("lists archived Projects only when requested", async () => {
+    const fetchMock = successfulFetch({ projects: [] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new BatchcraftApiClient("http://api.test").listProjects(true);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/projects?include_archived=true",
+      { signal: undefined },
+    );
+  });
+
+  it("creates a Project with a JSON body", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const body = {
+      name: "Portrait studies",
+      filesystem_key: "portrait-studies",
+      description: null,
+    };
+
+    await new BatchcraftApiClient("http://api.test").createProject(body);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("gets a Project with an encoded ID and AbortSignal", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").getProject("project/one", signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects/project%2Fone", { signal });
+  });
+
+  it("updates a Project with PATCH and a JSON body", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const body = { name: "Updated Project", description: "Revised" };
+
+    await new BatchcraftApiClient("http://api.test").updateProject("project one", body);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects/project%20one", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("adopts a Project with a JSON body", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const body = {
+      filesystem_key: "existing-project",
+      project_id: "project-id",
+      name: "Existing Project",
+    };
+
+    await new BatchcraftApiClient("http://api.test").adoptProject(body);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects/adopt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("lists adoptable Projects with an AbortSignal", async () => {
+    const fetchMock = successfulFetch({ projects: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").listAdoptableProjects(signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects/adoptable", { signal });
+  });
+
+  it("lists Project Prompts with an encoded ID and AbortSignal", async () => {
+    const fetchMock = successfulFetch({ prompts: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").listPrompts("project/one", signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/projects/project%2Fone/prompts",
+      { signal },
+    );
+  });
+
+  it("creates a Prompt with a JSON body", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const body = {
+      name: "Portrait",
+      description: "Studio portraits",
+      text: "A portrait of {{subject}}",
+      note: "Initial version",
+    };
+
+    await new BatchcraftApiClient("http://api.test").createPrompt("project one", body);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects/project%20one/prompts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("gets a logical Prompt with an encoded ID and AbortSignal", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").getPrompt("prompt/one", signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/prompts/prompt%2Fone", { signal });
+  });
+
+  it("updates a Prompt with PATCH and a JSON body", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const body = { name: "Updated portrait", description: null };
+
+    await new BatchcraftApiClient("http://api.test").updatePrompt("prompt one", body);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/prompts/prompt%20one", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("lists archived PromptVersion history with the query and AbortSignal", async () => {
+    const fetchMock = successfulFetch({ prompt_versions: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").listPromptVersions(
+      "prompt/one",
+      true,
+      signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/prompts/prompt%2Fone/versions?include_archived=true",
+      { signal },
+    );
+  });
+
+  it("creates a PromptVersion with a JSON body", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const body = { text: "A revised portrait", note: null };
+
+    await new BatchcraftApiClient("http://api.test").createPromptVersion("prompt one", body);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/prompts/prompt%20one/versions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("gets a PromptVersion with an encoded ID and AbortSignal", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    await new BatchcraftApiClient("http://api.test").getPromptVersion("version/one", signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/prompt-versions/version%2Fone",
+      { signal },
+    );
+  });
 });
+
+function successfulFetch(body: unknown) {
+  return vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
 
 function batchRequest() {
   return {

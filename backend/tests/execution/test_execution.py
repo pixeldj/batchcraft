@@ -33,6 +33,7 @@ from batchcraft.execution import (
     execute_run,
 )
 from batchcraft.files import (
+    AssetRecord,
     BatchIdentity,
     ProjectAssetStore,
     ProjectIdentity,
@@ -225,23 +226,30 @@ class FakeExecutionClient:
         )
 
 
-def _published_run(tmp_path: Path, *, job_count: int = 2) -> tuple[PublishedRun, tuple[bytes, ...]]:
+def _published_run(
+    tmp_path: Path, *, job_count: int = 2, with_references: bool = True
+) -> tuple[PublishedRun, tuple[bytes, ...]]:
     projects_path = tmp_path / "projects"
     project_path = projects_path / PROJECT.filesystem_key
-    sources = (tmp_path / "first.png", tmp_path / "second.webp")
-    contents = (b"first reference", b"second reference")
-    for source, content in zip(sources, contents, strict=True):
-        source.write_bytes(content)
-    asset_ids = SequentialValues("asset-1", "asset-2")
-    asset_store = ProjectAssetStore(project_path, id_factory=asset_ids, clock=lambda: FIXED_TIME)
-    assets = tuple(asset_store.import_file(source) for source in sources)
+    contents: tuple[bytes, ...] = ()
+    assets: tuple[AssetRecord, ...] = ()
+    if with_references:
+        sources = (tmp_path / "first.png", tmp_path / "second.webp")
+        contents = (b"first reference", b"second reference")
+        for source, content in zip(sources, contents, strict=True):
+            source.write_bytes(content)
+        asset_ids = SequentialValues("asset-1", "asset-2")
+        asset_store = ProjectAssetStore(
+            project_path, id_factory=asset_ids, clock=lambda: FIXED_TIME
+        )
+        assets = tuple(asset_store.import_file(source) for source in sources)
     jobs = tuple(
         CompiledJob(
             ordinal=index,
             prompt_version_id="prompt-version",
             resolved_prompt=f"resolved prompt {index}",
             resolved_variables=(),
-            reference_asset_id=assets[index - 1].asset_id,
+            reference_asset_id=assets[index - 1].asset_id if with_references else None,
             seed=100 + index,
         )
         for index in range(1, job_count + 1)
@@ -379,8 +387,12 @@ def test_two_jobs_execute_sequentially_with_frozen_inputs_and_ingested_results(
     assert [call[2].seed for call in preparation_calls] == [101, 102]
     assert all(call[0] is run.workflow for call in preparation_calls)
     assert all(call[1] is run.workflow_profile for call in preparation_calls)
-    assert preparation_calls[0][2].reference_image.endswith("/reference.png")
-    assert preparation_calls[1][2].reference_image.endswith("/reference.webp")
+    first_reference = preparation_calls[0][2].reference_image
+    second_reference = preparation_calls[1][2].reference_image
+    assert first_reference is not None
+    assert second_reference is not None
+    assert first_reference.endswith("/reference.png")
+    assert second_reference.endswith("/reference.webp")
     assert preparation_calls[0][2].output_prefix == "batchcraft/run-id/job-1/result"
     assert preparation_calls[1][2].output_prefix == "batchcraft/run-id/job-2/result"
     assert client.call_log.index("history:prompt-1") < client.call_log.index("submit:prompt-2")
@@ -414,6 +426,34 @@ def test_two_jobs_execute_sequentially_with_frozen_inputs_and_ingested_results(
     assert all(
         (run.path / name).read_bytes() == content for name, content in immutable_files.items()
     )
+
+
+def test_job_without_reference_skips_upload_and_preserves_base_workflow_image(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, with_references=False)
+    client = FakeExecutionClient(
+        submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+        histories={"prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED)]},
+    )
+    preparation_values: list[WorkflowPreparationValues] = []
+
+    def observing_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        preparation_values.append(values)
+        return prepare_workflow(workflow, profile, values)
+
+    state = _run(run, client, preparer=observing_preparer)
+
+    assert state.status is RunExecutionStatus.SUCCEEDED
+    assert state.jobs[0].status is JobExecutionStatus.SUCCEEDED
+    assert client.uploads == []
+    assert [values.reference_image for values in preparation_values] == [None]
+    assert len(client.submitted_workflows) == 1
+    assert client.submitted_workflows[0]["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
 
 
 @pytest.mark.parametrize(

@@ -83,6 +83,60 @@ def test_prepare_workflow_maps_values_without_mutating_snapshots() -> None:
     assert prepared is not workflow
 
 
+def test_prepare_workflow_without_reference_preserves_base_image_value() -> None:
+    workflow = _workflow()
+    values = _values()
+
+    prepared = prepare_workflow(
+        workflow,
+        _profile(),
+        WorkflowPreparationValues(
+            prompt=values.prompt,
+            reference_image=None,
+            seed=values.seed,
+            output_prefix=values.output_prefix,
+        ),
+    )
+
+    assert prepared["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
+    assert prepared["34"]["inputs"]["prompt"] == values.prompt  # type: ignore[index]
+    assert workflow["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
+
+
+def test_prepare_workflow_without_reference_still_validates_reference_mapping() -> None:
+    profile = _profile()
+    profile["mappings"]["reference_image"]["input_name"] = "missing"  # type: ignore[index]
+    values = _values()
+
+    with pytest.raises(WorkflowPreparationError, match="reference_image.*missing input 'missing'"):
+        prepare_workflow(
+            _workflow(),
+            profile,
+            WorkflowPreparationValues(
+                prompt=values.prompt,
+                reference_image=None,
+                seed=values.seed,
+                output_prefix=values.output_prefix,
+            ),
+        )
+
+
+def test_prepare_workflow_rejects_empty_reference_image_value() -> None:
+    values = _values()
+
+    with pytest.raises(WorkflowPreparationError, match="reference image value must not be empty"):
+        prepare_workflow(
+            _workflow(),
+            _profile(),
+            WorkflowPreparationValues(
+                prompt=values.prompt,
+                reference_image="",
+                seed=values.seed,
+                output_prefix=values.output_prefix,
+            ),
+        )
+
+
 def test_prepare_workflow_rejects_missing_mapped_node() -> None:
     profile = _profile()
     profile["mappings"]["prompt"]["node_id"] = "missing"  # type: ignore[index]

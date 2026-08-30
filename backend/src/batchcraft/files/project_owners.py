@@ -1,4 +1,5 @@
 import os
+import stat
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,7 +10,7 @@ from batchcraft.files._io import (
     read_json_object,
     write_json,
 )
-from batchcraft.files.models import ProjectIdentity
+from batchcraft.files.models import AdoptableProject, ProjectIdentity
 
 PROJECT_OWNER_FORMAT_VERSION = 1
 
@@ -20,6 +21,10 @@ class ProjectOwnerError(ValueError):
 
 class ProjectOwnerMissingError(ProjectOwnerError):
     """An existing Project directory has no owner binding."""
+
+
+class ProjectOwnerDiscoveryError(ProjectOwnerError):
+    """The configured Projects root cannot be enumerated safely."""
 
 
 class ProjectOwnerStore:
@@ -149,6 +154,60 @@ class ProjectOwnerStore:
         if stored_key != filesystem_key:
             raise ProjectOwnerError("Project owner file has a mismatched key")
         return ProjectIdentity(id=project_id, filesystem_key=stored_key, name=name)
+
+    def discover(self) -> tuple[AdoptableProject, ...]:
+        """List valid immediate Project directories without modifying or traversing them."""
+        if self.projects_path.is_symlink():
+            raise ProjectOwnerDiscoveryError("Projects root must not be a symlink")
+        try:
+            entries = tuple(self.projects_path.iterdir())
+        except FileNotFoundError:
+            return ()
+        except OSError as error:
+            raise ProjectOwnerDiscoveryError("failed to enumerate Projects root") from error
+
+        candidates: list[AdoptableProject] = []
+        for entry in entries:
+            if not is_safe_filesystem_key(entry.name):
+                continue
+            try:
+                entry_status = entry.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISDIR(entry_status.st_mode):
+                continue
+
+            owner_path = entry / "project.json"
+            try:
+                owner_status = owner_path.lstat()
+            except FileNotFoundError:
+                candidates.append(
+                    AdoptableProject(
+                        filesystem_key=entry.name,
+                        owner_state="ownerless",
+                        project_id=None,
+                        initial_name=None,
+                    )
+                )
+                continue
+            except OSError:
+                continue
+            if not stat.S_ISREG(owner_status.st_mode):
+                continue
+
+            try:
+                owner = self.read(entry.name)
+            except ProjectOwnerError:
+                continue
+            candidates.append(
+                AdoptableProject(
+                    filesystem_key=entry.name,
+                    owner_state="owned",
+                    project_id=owner.id,
+                    initial_name=owner.name,
+                )
+            )
+        return tuple(sorted(candidates, key=lambda candidate: candidate.filesystem_key))
 
 
 def _validate_identity(project: ProjectIdentity) -> None:

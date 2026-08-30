@@ -91,6 +91,40 @@ def test_prompt_metadata_archive_and_project_scoped_name_conflict(tmp_path: Path
     assert store.get(first.id) == archived
 
 
+def test_prompt_list_includes_latest_active_version_with_stable_order(tmp_path: Path) -> None:
+    store = PromptStore(_database(tmp_path), clock=lambda: CREATED_AT)
+    _, first_version = store.create(
+        "project-1",
+        "Original name",
+        "First text",
+        prompt_id="prompt-b",
+        version_id="version-b1",
+    )
+    store.update_metadata("prompt-b", name="Current name")
+    second_version = store.create_version("prompt-b", "Second text", version_id="version-b2")
+    store.create(
+        "project-1",
+        "Sorted first",
+        "Other text",
+        prompt_id="prompt-a",
+        version_id="version-a1",
+    )
+
+    listed = store.list("project-1")
+
+    assert tuple(item.id for item in listed) == ("prompt-a", "prompt-b")
+    assert listed[1].latest_active_version == second_version
+    assert listed[1].latest_active_version.name_snapshot == "Current name"
+
+    store.archive_version(second_version.id)
+    fallback = store.list("project-1")[1].latest_active_version
+    assert fallback == first_version
+    assert fallback.name_snapshot == "Original name"
+
+    store.archive_version(first_version.id)
+    assert store.list("project-1")[1].latest_active_version is None
+
+
 def test_next_version_snapshots_current_name_and_restore_copies_content(tmp_path: Path) -> None:
     ids = iter(("version-2", "version-3"))
     store = PromptStore(_database(tmp_path), id_factory=lambda: next(ids), clock=lambda: CREATED_AT)

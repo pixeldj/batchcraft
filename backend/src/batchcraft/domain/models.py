@@ -84,7 +84,7 @@ class CompiledJob:
     prompt_version_id: str
     resolved_prompt: str
     resolved_variables: tuple[ResolvedVariable, ...]
-    reference_asset_id: str
+    reference_asset_id: str | None
     seed: int
 
 

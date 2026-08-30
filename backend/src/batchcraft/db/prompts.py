@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from batchcraft.db.connection import open_connection
-from batchcraft.db.models import PromptRecord, PromptVersionRecord
+from batchcraft.db.models import PromptListRecord, PromptRecord, PromptVersionRecord
 
 
 class PromptStoreError(ValueError):
@@ -132,22 +132,35 @@ class PromptStore:
                 ) from error
             return _get_prompt(connection, prompt_id), _get_version(connection, version_id)
 
-    def list(self, project_id: str, *, include_archived: bool = False) -> tuple[PromptRecord, ...]:
+    def list(
+        self, project_id: str, *, include_archived: bool = False
+    ) -> tuple[PromptListRecord, ...]:
         _validate_nonempty(project_id, "Project ID")
-        archived_filter = "" if include_archived else "AND archived_at IS NULL"
+        archived_filter = "" if include_archived else "AND p.archived_at IS NULL"
         with closing(open_connection(self.database_path)) as connection:
             if not _project_exists(connection, project_id):
                 raise PromptProjectNotFoundError(f"Project not found: {project_id}")
             rows = connection.execute(
                 f"""
-                SELECT id, project_id, name, description, created_at, updated_at, archived_at
-                FROM prompt
-                WHERE project_id = ? {archived_filter}
-                ORDER BY created_at, id
+                SELECT p.id, p.project_id, p.name, p.description, p.created_at, p.updated_at,
+                       p.archived_at,
+                       pv.id, pv.prompt_id, pv.version_number, pv.name_snapshot, pv.text,
+                       pv.note, pv.created_at, pv.archived_at
+                FROM prompt AS p
+                LEFT JOIN prompt_version AS pv
+                  ON pv.prompt_id = p.id
+                 AND pv.archived_at IS NULL
+                 AND pv.version_number = (
+                     SELECT MAX(candidate.version_number)
+                     FROM prompt_version AS candidate
+                     WHERE candidate.prompt_id = p.id AND candidate.archived_at IS NULL
+                 )
+                WHERE p.project_id = ? {archived_filter}
+                ORDER BY p.created_at, p.id
                 """,
                 (project_id,),
             ).fetchall()
-        return tuple(_prompt_from_row(row) for row in rows)
+        return tuple(_prompt_list_from_row(row) for row in rows)
 
     def get(self, prompt_id: str) -> PromptRecord:
         _validate_nonempty(prompt_id, "Prompt ID")
@@ -531,6 +544,23 @@ def _version_from_row(row: sqlite3.Row | tuple[object, ...]) -> PromptVersionRec
         note=note,
         created_at=_parse_datetime(row[6], "prompt_version.created_at"),
         archived_at=_parse_optional_datetime(row[7], "prompt_version.archived_at"),
+    )
+
+
+def _prompt_list_from_row(row: sqlite3.Row | tuple[object, ...]) -> PromptListRecord:
+    prompt = _prompt_from_row(tuple(row[index] for index in range(7)))
+    latest_active_version = (
+        None if row[7] is None else _version_from_row(tuple(row[index] for index in range(7, 15)))
+    )
+    return PromptListRecord(
+        id=prompt.id,
+        project_id=prompt.project_id,
+        name=prompt.name,
+        description=prompt.description,
+        created_at=prompt.created_at,
+        updated_at=prompt.updated_at,
+        archived_at=prompt.archived_at,
+        latest_active_version=latest_active_version,
     )
 
 

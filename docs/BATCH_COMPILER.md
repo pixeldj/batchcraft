@@ -141,6 +141,10 @@ sum(prompt-variable combinations for each PromptVersion)
 × parameter sweep combinations
 ```
 
+An empty Reference Asset selection is an identity dimension with one combination, not a zero-sized
+dimension. Jobs compiled from it record no Reference Asset and retain the base workflow's mapped
+reference-image input during execution.
+
 The UI should prominently display the resulting count.
 
 Large job counts should produce a warning threshold rather than an arbitrary hard limit initially.
@@ -152,7 +156,7 @@ Before execution, users should be able to preview at least:
 - total Job count;
 - source PromptVersion identity and name;
 - resolved prompt;
-- reference filename or thumbnail;
+- reference filename or thumbnail, or that the base workflow value will be used;
 - seed;
 - swept parameters.
 
@@ -180,7 +184,10 @@ The browser supports Random seed intent without adding randomness to the pure lo
 
 ## Reference Dimensions
 
-The first version requires one exposed reference-image slot.
+The first version requires one exposed reference-image slot in the Workflow Profile, but selecting a
+Reference Asset is optional. A non-empty selection expands in user order. An empty selection produces
+one no-reference combination, records `null` reference provenance on each Job, and does not overwrite
+the mapped input in the base workflow.
 
 The data model should allow future Workflow Profiles with multiple reference slots, such as:
 

@@ -245,7 +245,7 @@ A Batch also owns configuration such as:
 
 - an ordered, non-empty collection of selected PromptVersions;
 - VariableBindings;
-- reference bindings;
+- zero or more ordered reference bindings;
 - seed policy;
 - exposed workflow parameter values or dimensions;
 - output naming configuration.
@@ -296,7 +296,7 @@ The Run snapshot must include effective copies of:
 - Workflow Profile/workflow;
 - PromptVersions;
 - variable bindings and values;
-- selected references;
+- selected references, which may be empty;
 - seed policy and resolved seeds;
 - exposed workflow parameters;
 - output naming configuration;
@@ -333,7 +333,7 @@ A Job additionally records:
 
 - the PromptVersion ID that produced it;
 - resolved variable name/value pairs;
-- bound reference assets;
+- an optional bound Reference Asset;
 - resolved workflow parameters;
 - expected output prefix;
 - workflow hash.
@@ -342,6 +342,10 @@ The compiler orders Job dimensions as PromptVersion, prompt variables, reference
 then parameter sweeps. PromptVersion order is the Batch's selected order. Each PromptVersion expands
 only the bindings it references, in placeholder first-occurrence order. The rightmost dimension varies
 fastest, and each dimension preserves user selection order.
+
+The empty reference dimension has one identity value. It therefore does not reduce the Job count;
+the compiled Job records no Reference Asset, and execution preserves the mapped reference-image value
+from the base workflow.
 
 A Job must never contain unresolved prompt variables.
 

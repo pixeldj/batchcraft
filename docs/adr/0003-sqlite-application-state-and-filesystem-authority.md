@@ -389,7 +389,7 @@ No Run may be created by silently rereading newer mutable Batch contents after t
 
 ## Manifest Batch snapshot
 
-Current manifest v2 preserves concrete compiled Jobs and Prompt snapshots but does not preserve all editable Batch intent.
+Current manifest v3 preserves concrete compiled Jobs and Prompt snapshots but does not preserve all editable Batch intent. Manifest v3 adds explicit nullable per-Job Reference Asset provenance; v1 and v2 require a Reference Asset object.
 
 It cannot faithfully reconstruct:
 
@@ -399,7 +399,7 @@ It cannot faithfully reconstruct:
 * original Random seed intent;
 * all future editable parameter-sweep intent.
 
-Before batchcraft claims faithful `Load as Batch` restoration, a future manifest v3 will add a versioned frozen Batch intent snapshot.
+Before batchcraft claims faithful `Load as Batch` restoration, a future manifest v4 will add a versioned frozen Batch intent snapshot.
 
 Historical v1/v2 Runs remain valid.
 
@@ -668,7 +668,7 @@ The database schema will be introduced incrementally.
 
 * saved Batches and ordered child state;
 * optimistic Batch revision handling;
-* manifest v3 Batch intent snapshot.
+* manifest v4 Batch intent snapshot.
 
 ### Phase 5
 

@@ -51,6 +51,7 @@ GET  /api/comfyui/status
 GET  /api/projects
 POST /api/projects
 POST /api/projects/adopt
+GET  /api/projects/adoptable
 GET  /api/projects/{project_id}
 PATCH /api/projects/{project_id}
 POST /api/projects/{project_id}/archive
@@ -91,6 +92,14 @@ its stable owner binding. Normal creation refuses to claim a pre-existing ownerl
 Project rename and description changes update SQLite without rewriting the owner file or historical
 Runs.
 
+`GET /api/projects/adoptable` performs a read-only scan of immediate directories under the configured
+Projects root. It returns valid owner bindings with their Project ID and initial name, plus ownerless
+directories with both fields set to `null`. The response is ordered by filesystem key. It omits files,
+symlinks, unsafe names, malformed owners, and any candidate whose key is already registered in SQLite.
+An owned candidate is also omitted when its Project ID is registered under another key. Active and
+archived SQLite Projects apply to both filters. Discovery does not inspect assets or Runs and does not
+create the Projects root, owner files, or SQLite rows.
+
 Creating a Prompt atomically creates PromptVersion 1. Prompt names and descriptions are mutable;
 PromptVersion text, name snapshot, note, version number, and creation timestamp are immutable.
 Saving text creates the next monotonic version. Archiving hides records from lists by default, and
@@ -98,11 +107,18 @@ restoring an older version creates a new version with the current Prompt name sn
 `include_archived=true` to Project, Prompt, or PromptVersion list requests when archived records are
 needed.
 
+`GET /api/projects/{project_id}/prompts` returns each Prompt with `latest_active_version`. This field
+contains the complete highest-numbered non-archived PromptVersion, including its `name_snapshot`, or
+`null` when every version is archived. The Prompt's `include_archived` filter is independent: an
+archived Prompt included by that option can still have a non-archived latest version. Direct Prompt
+responses do not include this list-only field.
+
 `POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape. The
 request carries Project and Batch identity, an ordered non-empty `prompt_versions` array with stable
-ID, frozen name, and template text, Variable List bindings, Reference Asset IDs, concrete seed input,
-the API-format workflow, and its Workflow Profile mapping. The singular `prompt_version` field is not
-accepted.
+ID, frozen name, and template text, Variable List bindings, an ordered `references` array, concrete
+seed input, the API-format workflow, and its Workflow Profile mapping. `references` may be empty; in
+that case each compiled Job returns `reference_asset_id: null` and execution retains the base
+workflow's mapped reference-image input. The singular `prompt_version` field is not accepted.
 
 Preview calls the production Batch compiler and returns every resolved Job in deterministic order.
 Each Preview Job includes `prompt_version_id` and `prompt_version_name`; clients do not infer source

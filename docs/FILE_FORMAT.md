@@ -112,7 +112,7 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded separately from t
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The current v2 manifest contains:
+The current v3 manifest contains:
 
 - Run ID, number, creation timestamp, and Project/Batch identity snapshots;
 - ordered PromptVersion snapshots containing ID, name, and exact Prompt Template text;
@@ -122,15 +122,20 @@ The current v2 manifest contains:
 - each Job's source PromptVersion ID;
 - resolved variables;
 - resolved final prompt;
-- Reference Asset ID, original filename, MIME type, byte size, Project-relative content path, creation timestamp, and SHA-256;
+- either `null` or Reference Asset ID, original filename, MIME type, byte size, Project-relative
+  content path, creation timestamp, and SHA-256;
 - seed;
 - per-Job workflow and Workflow Profile hashes.
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v2 creation manifest contains immutable plan and
+`manifest.json` is authoritative for exact replay. The v3 creation manifest contains immutable plan and
 provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
 versioned execution representation.
+
+Manifest v3 requires every Job to contain a `reference_asset` key. Its value is the complete Reference
+Asset object when selected or explicit JSON `null` when the Job preserves the base workflow's mapped
+reference-image input. Manifest v1 and v2 continue to require the object and remain readable.
 
 ## `manifest.csv`
 
@@ -142,7 +147,7 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-The columns emitted alongside a v2 JSON manifest are:
+The columns emitted alongside a v3 JSON manifest are:
 
 ```text
 job_ordinal
@@ -163,6 +168,10 @@ workflow_profile_sha256
 The legacy CSV emitted alongside a v1 JSON manifest used the same order without
 `prompt_version_name`. `manifest.json`'s `format_version` identifies which CSV schema accompanies
 the Run; the CSV has no independent version field.
+
+For a v3 Job without a Reference Asset, `reference_asset_id`, `reference_original_filename`, and
+`reference_sha256` are empty strings. The JSON `null` remains authoritative and distinguishes this
+valid case from incomplete provenance.
 
 For structures that do not map naturally to flat columns, encode compact JSON in a column rather than losing information.
 
@@ -239,7 +248,9 @@ Human-readable suffixes may be added later, but path length and unsafe character
 
 ## Input Provenance
 
-A Run records the stable identity and hash of each input Reference Asset.
+A Run records the stable identity and hash of each selected input Reference Asset. A Job without one
+records explicit `null` provenance and relies on the immutable base workflow snapshot for the mapped
+input value.
 
 Reference Asset bytes live immutably in the Project's content-addressed asset store. Runs do not copy every input asset into their own directories by default.
 
@@ -285,11 +296,13 @@ Modified reruns can be added later.
 
 Loading a published Run requires `run.json`, canonical `manifest.json`, `manifest.csv`, both snapshot files, and `outputs/`. It validates format versions, Run/Project/Batch identity consistency, one-based contiguous Job ordinals, unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata, size, and content hash.
 
-Manifest v2 additionally validates a non-empty ordered PromptVersion collection, unique PromptVersion
-IDs, required names, and every Job's association with a known PromptVersion. The loader explicitly
-supports manifest v1 as a single-PromptVersion historical format: it assigns the one stored
-PromptVersion ID to every Job and uses that ID as the unavailable historical display-name fallback.
-Existing Run directories are never rewritten. Unknown manifest versions are rejected.
+Manifest v2 and v3 additionally validate a non-empty ordered PromptVersion collection, unique
+PromptVersion IDs, required names, and every Job's association with a known PromptVersion. Manifest
+v3 accepts either a complete Reference Asset object or explicit `null`; a missing key is invalid.
+Manifest v1 and v2 require a complete Reference Asset object. The loader explicitly supports manifest
+v1 as a single-PromptVersion historical format: it assigns the one stored PromptVersion ID to every
+Job and uses that ID as the unavailable historical display-name fallback. Existing Run directories
+are never rewritten. Unknown manifest versions are rejected.
 
 The loader reconstructs the original `CompiledRunPlan`, compiler warnings, execution identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be present in a complete v1 Run, but reformatting its line endings or quoting does not override or invalidate canonical JSON provenance.
 
@@ -307,8 +320,8 @@ Example:
 }
 ```
 
-Future migrations should preserve old Run readability whenever practical. New Runs use manifest v2;
-manifest v1 remains safely readable through its explicit parser.
+Future migrations should preserve old Run readability whenever practical. New Runs use manifest v3;
+manifest v1 and v2 remain safely readable through explicit compatibility parsing.
 
 ## Filesystem Publication and SQLite Indexing
 

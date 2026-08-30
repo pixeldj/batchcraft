@@ -37,6 +37,7 @@ export function ReferenceAssetPicker({
     message: string;
   } | null>(null);
   const activeProjectKey = useRef(normalizedProjectKey);
+  const loadTag = useRef(0);
   const previousProjectKey = useRef(normalizedProjectKey);
   const currentSelection = useRef(selectedAssetIds);
 
@@ -47,12 +48,16 @@ export function ReferenceAssetPicker({
 
   useEffect(() => {
     if (previousProjectKey.current !== normalizedProjectKey) {
+      const changedBetweenProjects = Boolean(previousProjectKey.current && normalizedProjectKey);
       previousProjectKey.current = normalizedProjectKey;
-      setExpanded(selectedAssetIds.length === 0);
+      if (changedBetweenProjects) {
+        setExpanded(selectedAssetIds.length === 0);
+      }
     }
   }, [normalizedProjectKey, selectedAssetIds.length]);
 
   useEffect(() => {
+    const tag = ++loadTag.current;
     if (!normalizedProjectKey) {
       return;
     }
@@ -60,7 +65,7 @@ export function ReferenceAssetPicker({
     api
       .listProjectAssets(normalizedProjectKey, controller.signal)
       .then((response) => {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && tag === loadTag.current) {
           setLibrary({
             projectKey: normalizedProjectKey,
             assets: mergeAssets([], response.assets),
@@ -69,7 +74,10 @@ export function ReferenceAssetPicker({
         }
       })
       .catch((caught: unknown) => {
-        if (!(caught instanceof DOMException && caught.name === "AbortError")) {
+        if (
+          tag === loadTag.current &&
+          !(caught instanceof DOMException && caught.name === "AbortError")
+        ) {
           setLibrary({ projectKey: normalizedProjectKey, assets: [], error: errorMessage(caught) });
         }
       });
@@ -235,7 +243,7 @@ export function ReferenceAssetPicker({
           ) : null}
 
           {!normalizedProjectKey ? (
-            <p className="empty-note">Enter a Project filesystem key to load its image library.</p>
+            <p className="empty-note">Select a Project to load its image library.</p>
           ) : loading ? (
             <p className="empty-note" aria-live="polite">Loading Project images...</p>
           ) : currentLibrary?.error ? (

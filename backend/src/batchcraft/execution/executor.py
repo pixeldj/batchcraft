@@ -191,26 +191,31 @@ async def _execute_job(
     state = _persist_job(run, store, state, preparing)
 
     try:
-        asset = ProjectAssetStore(run.path.parents[2]).validate_record(
-            persisted_job.reference_asset
-        )
-        asset_path = run.path.parents[2] / asset.stored_path
-        content = asset_path.read_bytes()
-        reference_filename = f"reference{safe_extension(asset.original_filename, asset.mime_type)}"
-        uploaded = await client.upload_input(
-            filename=reference_filename,
-            content=content,
-            mime_type=asset.mime_type
-            or mimetypes.guess_type(reference_filename)[0]
-            or "application/octet-stream",
-            subfolder=f"batchcraft/{run.run_id}/{persisted_job.job_id}/input",
-        )
+        reference_image = None
+        if persisted_job.reference_asset is not None:
+            asset = ProjectAssetStore(run.path.parents[2]).validate_record(
+                persisted_job.reference_asset
+            )
+            asset_path = run.path.parents[2] / asset.stored_path
+            content = asset_path.read_bytes()
+            reference_filename = (
+                f"reference{safe_extension(asset.original_filename, asset.mime_type)}"
+            )
+            uploaded = await client.upload_input(
+                filename=reference_filename,
+                content=content,
+                mime_type=asset.mime_type
+                or mimetypes.guess_type(reference_filename)[0]
+                or "application/octet-stream",
+                subfolder=f"batchcraft/{run.run_id}/{persisted_job.job_id}/input",
+            )
+            reference_image = uploaded.workflow_value
         prepared = workflow_preparer(
             run.workflow,
             run.workflow_profile,
             WorkflowPreparationValues(
                 prompt=persisted_job.compiled_job.resolved_prompt,
-                reference_image=uploaded.workflow_value,
+                reference_image=reference_image,
                 seed=persisted_job.compiled_job.seed,
                 output_prefix=f"batchcraft/{run.run_id}/{persisted_job.job_id}/result",
             ),

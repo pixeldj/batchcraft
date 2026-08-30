@@ -37,9 +37,24 @@ def test_server_info_and_websocket_url_use_explicit_base_url() -> None:
     asyncio.run(scenario())
 
 
+def test_base_url_ignores_surrounding_whitespace() -> None:
+    async def scenario() -> None:
+        async with ComfyUIClient("  http://gpu:8188/comfy/  ") as client:
+            assert client.base_url == "http://gpu:8188/comfy"
+            assert client.websocket_url("client-1") == ("ws://gpu:8188/comfy/ws?clientId=client-1")
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "base_url",
-    ["gpu:8188", "ftp://gpu:8188", "http://gpu:8188?token=secret", "http://gpu:8188#ws"],
+    [
+        "gpu:8188",
+        "ftp://gpu:8188",
+        "http://gpu:8188?token=secret",
+        "http://gpu:8188#ws",
+        "http://gpu:not-a-port",
+    ],
 )
 def test_invalid_base_url_is_rejected(base_url: str) -> None:
     with pytest.raises(ValueError, match="base URL"):

@@ -1,10 +1,17 @@
 import json
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from batchcraft.files import ProjectIdentity, ProjectOwnerError, ProjectOwnerStore
+from batchcraft.files import (
+    AdoptableProject,
+    ProjectIdentity,
+    ProjectOwnerDiscoveryError,
+    ProjectOwnerError,
+    ProjectOwnerStore,
+)
 
 PROJECT = ProjectIdentity(id="project-id", filesystem_key="project_key", name="Initial name")
 
@@ -185,3 +192,69 @@ def test_read_rejects_symlinked_project_directory_or_owner_file(
 
     with pytest.raises(ProjectOwnerError, match="must not be a symlink"):
         ProjectOwnerStore(projects_path).read("project_key")
+
+
+def test_discover_returns_only_safe_owned_and_ownerless_immediate_directories(
+    tmp_path: Path,
+) -> None:
+    projects_path = tmp_path / "projects"
+    store = ProjectOwnerStore(projects_path)
+    store.publish(ProjectIdentity(id="owned-id", filesystem_key="z_owned", name="Initial"))
+    (projects_path / "a_ownerless" / "assets").mkdir(parents=True)
+    malformed_owner = projects_path / "malformed" / "project.json"
+    malformed_owner.parent.mkdir()
+    malformed_owner.write_text("not json")
+    (projects_path / "ordinary-file").write_text("ignored")
+    (projects_path / "unsafe name").mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (projects_path / "linked").symlink_to(external, target_is_directory=True)
+    external_owner = external / "owner.json"
+    external_owner.write_text("{}")
+    symlinked_owner = projects_path / "symlinked_owner"
+    symlinked_owner.mkdir()
+    (symlinked_owner / "project.json").symlink_to(external_owner)
+
+    before = sorted(path.relative_to(projects_path) for path in projects_path.rglob("*"))
+    candidates = store.discover()
+
+    assert candidates == (
+        AdoptableProject(
+            filesystem_key="a_ownerless",
+            owner_state="ownerless",
+            project_id=None,
+            initial_name=None,
+        ),
+        AdoptableProject(
+            filesystem_key="z_owned",
+            owner_state="owned",
+            project_id="owned-id",
+            initial_name="Initial",
+        ),
+    )
+    assert sorted(path.relative_to(projects_path) for path in projects_path.rglob("*")) == before
+
+
+def test_discover_absent_root_is_empty_without_creating_it(tmp_path: Path) -> None:
+    projects_path = tmp_path / "missing"
+
+    assert ProjectOwnerStore(projects_path).discover() == ()
+    assert not projects_path.exists()
+
+
+def test_discover_reports_root_enumeration_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    projects_path = tmp_path / "projects"
+    projects_path.mkdir()
+    real_iterdir = Path.iterdir
+
+    def fail_target(path: Path) -> Iterator[Path]:
+        if path == projects_path:
+            raise PermissionError("private path detail")
+        return real_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_target)
+
+    with pytest.raises(ProjectOwnerDiscoveryError, match="failed to enumerate Projects root"):
+        ProjectOwnerStore(projects_path).discover()

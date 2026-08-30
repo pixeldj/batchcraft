@@ -12,14 +12,16 @@ Early production development.
 
 The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, sequential Run executor, thin FastAPI application boundary, and first React workflow are complete.
 
-The browser now supports ComfyUI status, Project image import and collapsible ordered Reference Asset
-selection, ordered multi-prompt Batch editing, deterministic Job preview, durable Run creation,
+The browser now supports ComfyUI status, SQLite-backed Project selection with create and explicit
+filesystem adoption, Project image import and collapsible ordered Reference Asset selection,
+Project-scoped Prompt library selection and immutable version history, ordered multi-prompt Batch
+editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, frontend Random seed
 materialization, repeated Run creation, and a Batch Results gallery restored within the current tab
 session. The backend now includes the SQLite foundation, mutable Project metadata, explicit Project
-owner adoption, and an immutable-version Prompt library. Durable editable Batch persistence, Prompt
-library frontend integration, a Project-wide historical gallery, a global scheduler, and automatic
-backend recovery remain unimplemented.
+owner adoption, and an immutable-version Prompt library. Durable editable Batch persistence, a
+Project-wide historical gallery, a global scheduler, and automatic backend recovery remain
+unimplemented.
 
 ## Run The API
 
