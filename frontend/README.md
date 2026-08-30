@@ -1,16 +1,16 @@
 # batchcraft frontend
 
 The frontend is the first browser workflow for importing and ordering Project Reference Assets,
-configuring an ephemeral ordered multi-prompt Batch, previewing its compiled Jobs, creating durable
+selecting and configuring a saved or new Saved Batch, previewing its compiled Jobs, creating durable
 Runs, watching Job state, viewing the current Run's Results, and reviewing accumulated Batch Results
 from this browser working session. It communicates only with the batchcraft FastAPI application.
 
 The current tab stores a versioned working draft, selected Project ID, current Run ID, and ordered
-unique session Run IDs in `sessionStorage`. Version 6 stores the selected Project separately from the
-draft identity and safely migrates version-1 through version-5 state. It retains existing Run IDs,
-migrates older singular prompt state to one `Prompt 1` entry, and defaults Random seed count when
-needed. A refresh restores the form and ordered prompt list, then reloads Run, execution, and Result
-data from FastAPI. Result metadata
+unique session Run IDs in `sessionStorage`. Version 8 replaces manual Batch identity fields with the
+Saved Batch selector and stores the `batch_snapshot` required by Preview and Run creation. It
+retains existing Run IDs, migrates older singular prompt state to one `Prompt 1` entry, and defaults
+Random seed count when needed. A refresh restores the form and ordered prompt list, then reloads
+Run, execution, and Result data from FastAPI. Result metadata
 and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
 the restored draft again. Closing the tab or browser session may remove this working state.
 
@@ -46,8 +46,14 @@ list of exact PromptVersion snapshots. The working selection may be empty, but P
 least one PromptVersion. It supports logical Prompt creation and rename,
 immutable version creation, lazy history, older active version selection, and explicit detached-state
 warnings. Add, Remove, Move up, and Move down controls make the outermost Batch dimension explicit.
-Preview identifies each Job's source PromptVersion. The Batch selection remains working-session state;
-the Prompt library is persistent.
+Preview identifies each Job's source PromptVersion. The Batch selection may be saved as a SQLite
+Saved Batch or remain working-session state; the Prompt library is persistent.
+
+The Workflow editor selects Project-scoped immutable WorkflowVersions and exact compatible
+ProfileVersions. Selecting another WorkflowVersion clears an incompatible Profile selection and
+blocks Preview until a compatible version is chosen. Library reconciliation never rewrites a restored
+snapshot with different content; unavailable or legacy pairs remain detached and are validated by the
+backend during Preview. ComfyUI remains the workflow editor.
 
 ## Requirements
 
@@ -94,7 +100,8 @@ Frontend tests mock the typed API client. They do not require FastAPI or ComfyUI
 ## Current limits
 
 - Batch form state, current Run ID, and Batch gallery Run IDs live only in the browser session.
-- Browser working-session restoration is not a saved Batch and is not durable application state.
+- Browser working-session restoration is not a saved Batch; Saved Batch persistence lives in
+  SQLite through the Saved Batch selector.
 - Reference image import currently accepts PNG, JPEG, and WebP. Selection order controls Reference
   Asset expansion order in the compiled Batch.
 - Workflow and Workflow Profile configuration use JSON textareas. ComfyUI remains the workflow

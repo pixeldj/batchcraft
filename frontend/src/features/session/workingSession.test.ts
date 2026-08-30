@@ -20,10 +20,20 @@ describe("browser working session", () => {
     expect(restored.selectedProjectId).toBe("restored-project");
   });
 
-  it("round-trips v6 Project selection and v5 prompt metadata without UI keys", () => {
+  it("round-trips v7 Project and Workflow library metadata without UI keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
+    form.workflowLibraryProjectId = "library-project";
+    form.workflowId = "workflow-1";
+    form.workflowName = "Portrait workflow";
+    form.workflowVersionId = "workflow-v2";
+    form.workflowVersionNumber = 2;
+    form.workflowProfileId = "profile-1";
+    form.workflowProfileName = "Default mapping";
+    form.workflowProfileVersionId = "profile-v3";
+    form.workflowProfileVersionNumber = 3;
+    form.workflowProfileWorkflowVersionId = "workflow-v2";
     form.prompts.push({
       key: 999,
       libraryProjectId: null,
@@ -45,7 +55,7 @@ describe("browser working session", () => {
     const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<string, unknown>;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.version).toBe(6);
+    expect(stored.version).toBe(8);
     expect(stored.selected_project_id).toBe("selected-project");
     expect((stored.form as { prompts: unknown[] }).prompts).toEqual([
       {
@@ -72,6 +82,15 @@ describe("browser working session", () => {
     expect(restored.currentRunId).toBe("run-42");
     expect(restored.sessionRunIds).toEqual(["run-40", "run-42"]);
     expect(restored.selectedProjectId).toBe("selected-project");
+    expect(restored.form).toMatchObject({
+      workflowLibraryProjectId: "library-project",
+      workflowId: "workflow-1",
+      workflowVersionId: "workflow-v2",
+      workflowProfileId: "profile-1",
+      workflowProfileVersionId: "profile-v3",
+      workflowJson: '{"workflow":true}',
+      workflowProfileJson: '{"profile":true}',
+    });
     expect(restored.draftRestored).toBe(true);
   });
 
@@ -106,6 +125,30 @@ describe("browser working session", () => {
       promptId: "prompt-logical",
       versionId: "prompt-restored",
       text: "Restored {{subject}}",
+    });
+  });
+
+  it("migrates version 6 Workflow snapshots as detached without rewriting raw JSON", () => {
+    const storage = new MemoryStorage();
+    saveWorkingSession(populatedForm(), null, [], "restored-project", storage);
+    const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as {
+      version: number;
+      form: Record<string, unknown>;
+    };
+    envelope.version = 6;
+    for (const field of workflowLinkFields) delete envelope.form[field];
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
+
+    const restored = loadWorkingSession(storage).form;
+
+    expect(restored.workflowJson).toBe('{"workflow":true}');
+    expect(restored.workflowProfileJson).toBe('{"profile":true}');
+    expect(restored).toMatchObject({
+      workflowLibraryProjectId: null,
+      workflowId: null,
+      workflowVersionId: null,
+      workflowProfileId: null,
+      workflowProfileVersionId: null,
     });
   });
 
@@ -416,3 +459,16 @@ class ThrowingStorage implements Storage {
     throw new DOMException("Quota exceeded");
   }
 }
+
+const workflowLinkFields = [
+  "workflowLibraryProjectId",
+  "workflowId",
+  "workflowName",
+  "workflowVersionId",
+  "workflowVersionNumber",
+  "workflowProfileId",
+  "workflowProfileName",
+  "workflowProfileVersionId",
+  "workflowProfileVersionNumber",
+  "workflowProfileWorkflowVersionId",
+] as const;

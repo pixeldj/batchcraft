@@ -267,6 +267,7 @@ def _published_run(
     ).create_run(
         project=PROJECT,
         batch=BATCH,
+        batch_snapshot={"snapshot_version": 1},
         plan=plan,
         reference_assets={asset.asset_id: asset for asset in assets},
         workflow=WORKFLOW,

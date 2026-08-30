@@ -33,6 +33,32 @@ export interface BatchRequest {
   };
   workflow: JsonObject;
   workflow_profile: JsonObject;
+  batch_snapshot: EditableBatchSnapshot;
+}
+
+export interface EditableBatchSnapshot {
+  snapshot_version: 1;
+  project: IdentityRequest;
+  source_saved_batch: { id: string; revision: number } | null;
+  batch: IdentityRequest & { description: string | null };
+  prompt_versions: Array<{
+    id: string;
+    prompt_id: string | null;
+    version_number: number | null;
+    name: string;
+    text: string;
+  }>;
+  variable_bindings: VariableBindingRequest[];
+  references: Array<{ asset_id: string }>;
+  seed_intent: SavedBatchSeedIntent;
+  workflow_selection: {
+    workflow_id: string | null;
+    workflow_version_id: string | null;
+    workflow_profile_id: string | null;
+    workflow_profile_version_id: string | null;
+    workflow: JsonObject;
+    workflow_profile: JsonObject;
+  };
 }
 
 export interface ComfyUIStatusResponse {
@@ -99,6 +125,124 @@ export interface AdoptableProjectsResponse {
   projects: AdoptableProject[];
 }
 
+export interface SavedBatchPromptSelection {
+  prompt_version_id: string;
+  name_snapshot: string;
+  text: string;
+  prompt_id: string | null;
+  prompt_name: string | null;
+  version_number: number | null;
+  prompt_archived_at: string | null;
+  version_archived_at: string | null;
+}
+
+export interface SavedBatchVariableBinding {
+  placeholder: string;
+  variable_list_id: string;
+  values: string[];
+  selected_values: string[];
+  mode: "all" | "fixed";
+  fixed_value: string | null;
+}
+
+export interface SavedBatchSeedIntent {
+  mode: "fixed" | "explicit" | "random";
+  values: number[];
+  random_seed_count: number | null;
+}
+
+export interface SavedBatchWorkflowVersion {
+  id: string;
+  content_sha256: string;
+  workflow: JsonObject;
+  workflow_id: string | null;
+  workflow_name: string | null;
+  version_number: number | null;
+  name_snapshot: string | null;
+  workflow_archived_at: string | null;
+  version_archived_at: string | null;
+}
+
+export interface SavedBatchWorkflowProfileVersion {
+  id: string;
+  workflow_profile_id: string;
+  workflow_version_id: string;
+  content_sha256: string;
+  profile: JsonObject;
+  workflow_profile_name: string | null;
+  version_number: number | null;
+  name_snapshot: string | null;
+  workflow_profile_archived_at: string | null;
+  version_archived_at: string | null;
+}
+
+export interface SavedBatchDefinitionRequest {
+  name: string;
+  description: string | null;
+  prompt_selections: SavedBatchPromptSelection[];
+  variable_bindings: SavedBatchVariableBinding[];
+  reference_selections: Array<{ asset_id: string }>;
+  seed_intent: SavedBatchSeedIntent;
+  selected_workflow_version: SavedBatchWorkflowVersion | null;
+  selected_workflow_profile_id: string | null;
+  selected_workflow_profile_version: SavedBatchWorkflowProfileVersion | null;
+}
+
+export interface SavedBatchCreateRequest extends SavedBatchDefinitionRequest {
+  filesystem_key: string;
+}
+
+export interface SavedBatchAdoptRequest extends SavedBatchCreateRequest {
+  batch_id: string | null;
+}
+
+export interface SavedBatchUpdateRequest extends SavedBatchDefinitionRequest {
+  expected_revision: number;
+}
+
+export interface SavedBatchListItem {
+  id: string;
+  project_id: string;
+  filesystem_key: string;
+  name: string;
+  revision: number;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface SavedBatchDetail extends SavedBatchListItem {
+  description: string | null;
+  seed_mode: SavedBatchSeedIntent["mode"];
+  seed_values: number[];
+  random_seed_count: number | null;
+  selected_workflow_version_id: string | null;
+  selected_workflow_profile_id: string | null;
+  selected_workflow_profile_version_id: string | null;
+  selected_workflow_profile_name: string | null;
+  selected_workflow_profile_archived_at: string | null;
+  created_at: string;
+  prompt_selections: SavedBatchPromptSelection[];
+  variable_bindings: SavedBatchVariableBinding[];
+  reference_selections: Array<{ asset_id: string }>;
+  selected_workflow_version: SavedBatchWorkflowVersion | null;
+  selected_workflow_profile_version: SavedBatchWorkflowProfileVersion | null;
+}
+
+export interface SavedBatchesResponse {
+  batches: SavedBatchListItem[];
+}
+
+export interface AdoptableBatch {
+  filesystem_key: string;
+  owner_state: "owned" | "ownerless";
+  batch_id: string | null;
+  initial_name: string | null;
+}
+
+export interface AdoptableBatchesResponse {
+  batches: AdoptableBatch[];
+}
+
 export interface Prompt {
   id: string;
   project_id: string;
@@ -154,6 +298,125 @@ export type CreatePromptVersionResponse = LibraryPromptVersion;
 export interface PromptUpdateRequest {
   name?: string;
   description?: string | null;
+}
+
+export interface Workflow {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface LibraryWorkflowVersion {
+  id: string;
+  workflow_id: string;
+  project_id: string;
+  version_number: number;
+  name_snapshot: string;
+  workflow: JsonObject;
+  content_sha256: string;
+  note: string | null;
+  created_at: string;
+  archived_at: string | null;
+}
+
+export interface ProjectWorkflow extends Workflow {
+  latest_active_version: LibraryWorkflowVersion | null;
+}
+
+export interface WorkflowsResponse {
+  workflows: ProjectWorkflow[];
+}
+
+export interface CreateWorkflowRequest {
+  name: string;
+  description?: string | null;
+  workflow: JsonObject;
+  note?: string | null;
+}
+
+export interface CreateWorkflowResponse {
+  workflow: Workflow;
+  version: LibraryWorkflowVersion;
+}
+
+export interface CreateWorkflowVersionRequest {
+  workflow: JsonObject;
+  note?: string | null;
+}
+
+export interface WorkflowUpdateRequest {
+  name?: string;
+  description?: string | null;
+}
+
+export interface WorkflowVersionsResponse {
+  workflow_versions: LibraryWorkflowVersion[];
+}
+
+export interface WorkflowProfile {
+  id: string;
+  workflow_id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface LibraryWorkflowProfileVersion {
+  id: string;
+  workflow_profile_id: string;
+  workflow_id: string;
+  project_id: string;
+  workflow_version_id: string;
+  version_number: number;
+  name_snapshot: string;
+  profile: JsonObject;
+  content_sha256: string;
+  note: string | null;
+  created_at: string;
+  archived_at: string | null;
+}
+
+export interface ProjectWorkflowProfile extends WorkflowProfile {
+  latest_compatible_version: LibraryWorkflowProfileVersion | null;
+}
+
+export interface WorkflowProfilesResponse {
+  workflow_profiles: ProjectWorkflowProfile[];
+}
+
+export interface CreateWorkflowProfileRequest {
+  name: string;
+  description?: string | null;
+  workflow_version_id: string;
+  mappings: JsonObject;
+  note?: string | null;
+}
+
+export interface CreateWorkflowProfileResponse {
+  workflow_profile: WorkflowProfile;
+  version: LibraryWorkflowProfileVersion;
+}
+
+export interface CreateWorkflowProfileVersionRequest {
+  workflow_version_id: string;
+  mappings: JsonObject;
+  note?: string | null;
+}
+
+export interface WorkflowProfileUpdateRequest {
+  name?: string;
+  description?: string | null;
+}
+
+export interface WorkflowProfileVersionsResponse {
+  workflow_profile_versions: LibraryWorkflowProfileVersion[];
 }
 
 export interface CompilationWarningResponse {

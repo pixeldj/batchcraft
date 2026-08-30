@@ -61,6 +61,67 @@ describe("Project selection", () => {
     expect(api.listPrompts).not.toHaveBeenCalled();
     expect(api.listProjectAssets).not.toHaveBeenCalled();
   });
+
+  it("clears Workflow links and snapshots when switching Project", async () => {
+    const form = populatedBatchForm();
+    form.workflowLibraryProjectId = "project-1";
+    form.workflowId = "workflow-1";
+    form.workflowName = "Portrait";
+    form.workflowVersionId = "workflow-v1";
+    form.workflowVersionNumber = 1;
+    form.workflowProfileId = "profile-1";
+    form.workflowProfileName = "Default";
+    form.workflowProfileVersionId = "profile-v1";
+    form.workflowProfileVersionNumber = 1;
+    form.workflowProfileWorkflowVersionId = "workflow-v1";
+    form.workflowJson = '{"project":"a"}';
+    form.workflowProfileJson = '{"profile":"a"}';
+    saveWorkingSession(form, null, [], "project-1");
+    const next = projectResponse({ id: "project-2", filesystem_key: "project_2", name: "Next" });
+    const api = makeApi({ listProjects: vi.fn(async () => ({ projects: [projectResponse(), next] })) });
+    render(<App api={api} />);
+
+    const selector = await screen.findByRole("combobox", { name: "Active Project" });
+    fireEvent.change(selector, { target: { value: next.id } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(loadWorkingSession().selectedProjectId).toBe("project-2"));
+    const restored = loadWorkingSession().form;
+    expect(restored.workflowId).toBeNull();
+    expect(restored.workflowProfileId).toBeNull();
+    expect(restored.workflowJson).toBe("{}");
+    expect(restored.workflowProfileJson).toBe("{}");
+  });
+
+  it("confirms before clearing detached legacy Workflow snapshots", async () => {
+    const form = populatedBatchForm();
+    form.prompts = [];
+    form.referenceAssetIds = [];
+    form.workflowLibraryProjectId = null;
+    form.workflowId = null;
+    form.workflowVersionId = null;
+    form.workflowProfileId = null;
+    form.workflowProfileVersionId = null;
+    form.workflowJson = '{"legacy":"workflow"}';
+    form.workflowProfileJson = '{"legacy":"profile"}';
+    saveWorkingSession(form, null, [], "project-1");
+    const next = projectResponse({ id: "project-2", filesystem_key: "project_2", name: "Next" });
+    const api = makeApi({ listProjects: vi.fn(async () => ({ projects: [projectResponse(), next] })) });
+    render(<App api={api} />);
+
+    const selector = await screen.findByRole("combobox", { name: "Active Project" });
+    fireEvent.change(selector, { target: { value: next.id } });
+    expect(screen.getByRole("dialog", { name: "Change Project?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(loadWorkingSession().form.workflowJson).toBe('{"legacy":"workflow"}');
+    expect(loadWorkingSession().form.workflowProfileJson).toBe('{"legacy":"profile"}');
+
+    fireEvent.change(selector, { target: { value: next.id } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(loadWorkingSession().selectedProjectId).toBe(next.id));
+    expect(loadWorkingSession().form.workflowJson).toBe("{}");
+    expect(loadWorkingSession().form.workflowProfileJson).toBe("{}");
+  });
 });
 
 describe("Batch preview", () => {
@@ -79,6 +140,7 @@ describe("Batch preview", () => {
     render(<App api={api} />);
     await enterAsset();
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
     expect(await screen.findByText("Compiler warnings")).toBeInTheDocument();
@@ -471,6 +533,7 @@ describe("Reference Asset picker", () => {
     const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
     render(<App api={api} />);
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
     fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
@@ -570,7 +633,7 @@ describe("Reference Asset picker", () => {
 
     expect(await screen.findByRole("button", { name: "Select new.png" })).toBeInTheDocument();
     expect(screen.queryByText("A studio portrait of {{subject}}.")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Batch ID")).toHaveValue("batch-1");
+    expect(screen.getByLabelText("Batch name")).toHaveValue("First experiment");
     fireEvent.click(screen.getByRole("button", { name: "Select new.png" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Active Project" }), {
       target: { value: "project-1" },
@@ -646,9 +709,8 @@ describe("Run creation", () => {
 
     expect(await screen.findByRole("heading", { name: "Run 9" })).toBeInTheDocument();
     expect(within(currentRunSection()).getByText("run-mismatch")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Run 9 was created with 3 Jobs, but the inspected Preview has 2",
-    );
+    expect(screen.getByText(/Run 9 was created with 3 Jobs, but the inspected Preview has 2/))
+      .toHaveClass("consistency-error");
     expect(screen.getByText("Run 9 was created but does not match this Preview.")).toBeInTheDocument();
   });
 });
@@ -1101,17 +1163,67 @@ describe("Batch working-session Results gallery", () => {
     const api = makeApi({
       getExecution: vi.fn(async () => execution("succeeded")),
       getResults: vi.fn(async () => ({ run_id: "run-123", results: [artifact] })),
+      listSavedBatches: vi.fn(async () => ({
+        batches: [
+          {
+            id: "batch-1",
+            project_id: "project-1",
+            filesystem_key: "batch_1",
+            name: "First experiment",
+            revision: 1,
+            updated_at: "2026-08-27T12:00:00Z",
+            archived_at: null,
+          },
+          {
+            id: "batch-2",
+            project_id: "project-1",
+            filesystem_key: "batch_2",
+            name: "Other experiment",
+            revision: 1,
+            updated_at: "2026-08-27T12:00:00Z",
+            archived_at: null,
+          },
+        ],
+      })),
+      getSavedBatch: vi.fn(async () => ({
+        id: "batch-2",
+        project_id: "project-1",
+        filesystem_key: "batch_2",
+        name: "Other experiment",
+        description: null,
+        revision: 1,
+        seed_mode: "fixed" as const,
+        seed_values: [1],
+        random_seed_count: null,
+        selected_workflow_version_id: null,
+        selected_workflow_profile_id: null,
+        selected_workflow_profile_version_id: null,
+        created_at: "2026-08-27T12:00:00Z",
+        updated_at: "2026-08-27T12:00:00Z",
+        archived_at: null,
+        prompt_selections: [],
+        variable_bindings: [],
+        reference_selections: [],
+        selected_workflow_version: null,
+        selected_workflow_profile_name: null,
+        selected_workflow_profile_archived_at: null,
+        selected_workflow_profile_version: null,
+      })),
     });
     render(<App api={api} pollIntervalMs={5} />);
     await createRunAndStart();
     const gallery = batchResultsSection();
     expect(await within(gallery).findByText("old-batch.png")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Batch ID"), { target: { value: "different-batch" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: "Saved Batch" }), {
+      target: { value: "batch-2" },
+    });
+    await screen.findByRole("dialog", { name: "Switch Batch?" });
+    fireEvent.click(screen.getByRole("button", { name: "Discard and switch" }));
+    await waitFor(() => expect(loadWorkingSession().sessionRunIds).toEqual([]));
 
     expect(within(gallery).queryByText("old-batch.png")).not.toBeInTheDocument();
     expect(within(gallery).getByText(/will accumulate here/)).toBeInTheDocument();
-    expect(loadWorkingSession().sessionRunIds).toEqual([]);
   });
 
   it("keeps healthy historical Results when another session Run is unavailable", async () => {
@@ -1172,6 +1284,13 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     updateProject: vi.fn(async () => projectResponse()),
     adoptProject: vi.fn(async () => projectResponse()),
     listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
+    listSavedBatches: vi.fn(async () => ({ batches: [] })),
+    createSavedBatch: vi.fn(),
+    getSavedBatch: vi.fn(async () => { throw new ApiError("Saved Batch was not found", "saved_batch_not_found", 404); }),
+    updateSavedBatch: vi.fn(),
+    archiveSavedBatch: vi.fn(),
+    listAdoptableSavedBatches: vi.fn(async () => ({ batches: [] })),
+    adoptSavedBatch: vi.fn(),
     listProjectAssets: vi.fn(async () => ({ assets: [asset("asset-1", "portrait.png")] })),
     uploadProjectAssets: vi.fn(async () => ({ assets: [] })),
     listPrompts: vi.fn(async () => ({
@@ -1183,6 +1302,24 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     listPromptVersions: vi.fn(async () => ({ prompt_versions: [version] })),
     createPromptVersion: vi.fn(async () => version),
     getPromptVersion: vi.fn(async () => version),
+    listWorkflows: vi.fn(async () => ({ workflows: [] })),
+    createWorkflow: vi.fn(),
+    getWorkflow: vi.fn(),
+    updateWorkflow: vi.fn(),
+    archiveWorkflow: vi.fn(),
+    listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [] })),
+    createWorkflowVersion: vi.fn(),
+    getWorkflowVersion: vi.fn(),
+    archiveWorkflowVersion: vi.fn(),
+    listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })),
+    createWorkflowProfile: vi.fn(),
+    getWorkflowProfile: vi.fn(),
+    updateWorkflowProfile: vi.fn(),
+    archiveWorkflowProfile: vi.fn(),
+    listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [] })),
+    createWorkflowProfileVersion: vi.fn(),
+    getWorkflowProfileVersion: vi.fn(),
+    archiveWorkflowProfileVersion: vi.fn(),
     previewBatch: vi.fn(async () => previewResponse()),
     createRun: vi.fn(async () => runResponse()),
     getRun: vi.fn(async () => runLookupResponse()),

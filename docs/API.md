@@ -4,7 +4,7 @@
 
 The first application boundary exposes the production compiler, Run filesystem store, execution state, sequential executor, and ComfyUI adapter through FastAPI.
 
-The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. SQLite owns current Project metadata and the Prompt library. Authentication, a global scheduler, restart recovery, and cancellation remain deferred.
+The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. SQLite owns current Project metadata plus the Prompt, Workflow, and Workflow Profile libraries. Authentication, a global scheduler, restart recovery, and cancellation remain deferred.
 
 ## Local Startup
 
@@ -65,9 +65,34 @@ POST /api/prompts/{prompt_id}/versions
 GET  /api/prompt-versions/{version_id}
 POST /api/prompt-versions/{version_id}/archive
 POST /api/prompt-versions/{version_id}/restore
+GET  /api/projects/{project_id}/workflows
+POST /api/projects/{project_id}/workflows
+GET  /api/workflows/{workflow_id}
+PATCH /api/workflows/{workflow_id}
+POST /api/workflows/{workflow_id}/archive
+GET  /api/workflows/{workflow_id}/versions
+POST /api/workflows/{workflow_id}/versions
+GET  /api/workflow-versions/{version_id}
+POST /api/workflow-versions/{version_id}/archive
+GET  /api/workflows/{workflow_id}/profiles
+POST /api/workflows/{workflow_id}/profiles
+GET  /api/workflow-profiles/{profile_id}
+PATCH /api/workflow-profiles/{profile_id}
+POST /api/workflow-profiles/{profile_id}/archive
+GET  /api/workflow-profiles/{profile_id}/versions
+POST /api/workflow-profiles/{profile_id}/versions
+GET  /api/workflow-profile-versions/{version_id}
+POST /api/workflow-profile-versions/{version_id}/archive
 GET  /api/projects/{project_key}/assets
 POST /api/projects/{project_key}/assets
 GET  /api/projects/{project_key}/assets/{asset_id}/content
+GET  /api/projects/{project_id}/batches
+POST /api/projects/{project_id}/batches
+GET  /api/projects/{project_id}/batches/adoptable
+POST /api/projects/{project_id}/batches/adopt
+GET  /api/batches/{batch_id}
+PATCH /api/batches/{batch_id}
+POST /api/batches/{batch_id}/archive
 POST /api/batches/preview
 POST /api/runs
 GET  /api/runs/{run_id}
@@ -113,17 +138,39 @@ contains the complete highest-numbered non-archived PromptVersion, including its
 archived Prompt included by that option can still have a non-archived latest version. Direct Prompt
 responses do not include this list-only field.
 
-`POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape. The
-request carries Project and Batch identity, an ordered non-empty `prompt_versions` array with stable
-ID, frozen name, and template text, Variable List bindings, an ordered `references` array, concrete
-seed input, the API-format workflow, and its Workflow Profile mapping. `references` may be empty; in
-that case each compiled Job returns `reference_asset_id: null` and execution retains the base
-workflow's mapped reference-image input. The singular `prompt_version` field is not accepted.
+## Workflows And Profiles
 
-Preview calls the production Batch compiler and returns every resolved Job in deterministic order.
+Creating a Workflow atomically creates WorkflowVersion 1 from validated API-format JSON. Workflow
+names and descriptions are mutable; version JSON, hash, parent identities, name snapshot, note,
+version number, and creation time are immutable. Explicit duplicate saves allocate another monotonic
+version. `GET /api/projects/{project_id}/workflows` includes the latest non-archived version.
+
+A Workflow Profile belongs to one Workflow and Project. Creating a Profile atomically creates its
+first immutable ProfileVersion against one exact WorkflowVersion. Create requests accept a `mappings`
+object. Version responses return a complete Run-compatible `profile` snapshot with `id`, `name`, and
+`mappings`, plus `content_sha256` and all parent identities. A target from another logical Workflow is
+rejected. Filtering `GET /api/workflows/{workflow_id}/profiles` by `workflow_version_id` retains every
+logical Profile for the Workflow and exposes its latest compatible version as
+`latest_compatible_version`, or `null` when no version targets that WorkflowVersion. A client can use
+an earlier ProfileVersion's mappings to create a new immutable version under the same logical Profile;
+the API validates those mappings against the new target WorkflowVersion.
+
+Archive operations set archive timestamps through `POST .../archive`; they do not delete historical
+versions. Canonical JSON and stored hashes are checked when versions are read.
+
+`POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape plus a
+required `batch_snapshot` object containing the full editable Saved Batch state. The request carries
+Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
+template text, Variable List bindings, an ordered `references` array, seed input, the API-format
+workflow, and its Workflow Profile mapping. The singular `prompt_version` field is not accepted.
+The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
+a Random seed intent that stores only `mode` and `count`.
+
+Preview calls the production Batch compiler, validates the exact workflow/Profile pair through the
+same preparation logic as Run creation, and returns every resolved Job in deterministic order.
 Each Preview Job includes `prompt_version_id` and `prompt_version_name`; clients do not infer source
-identity from resolved text. Run creation compiles the request again, validates the Workflow Profile
-against the workflow, resolves existing Project assets, and publishes through `RunFilesystemStore`.
+identity from resolved text. Run creation compiles and validates the request again, resolves existing
+Project assets, and publishes through `RunFilesystemStore`.
 The compact Run creation response is unchanged. `GET /api/runs/{run_id}` additionally returns the
 ordered frozen PromptVersion snapshots and each Job ordinal's PromptVersion ID association.
 
@@ -150,25 +197,21 @@ A missing Project has an empty asset listing. Import may create its content-addr
 hierarchy, but it does not manufacture `project.json`; SQLite-backed Project creation/adoption or
 successful Run publication binds a Project filesystem key to Project identity.
 
-## Batch Persistence
+## Saved Batch Persistence
 
-This slice does not create a mutable Batch file format. The frontend keeps a versioned, best-effort
-working draft, current Run ID, and ordered unique session Run IDs in browser `sessionStorage` so a
-refresh in the same tab can restore the current workflow and its Batch working-session gallery. It
-does not persist Preview output, execution state, Result metadata, or Result bytes. The browser
-reloads Run, execution, and Result data through the API because backend data remains authoritative.
+SQLite now owns mutable Saved Batches under Projects. Each Saved Batch has a stable root record with
+a monotonic `revision`; concurrent conflicting saves return
+`409 { "error": { "code": "saved_batch_revision_conflict" } }` rather than silently overwriting.
+Structural integrity violations return `422 { "error": { "code": "saved_batch_integrity_error" } }`.
 
-The session Run list is scoped to the stable Project and Batch IDs plus their filesystem keys. A
-change to any of those identity fields resets the accumulated gallery; prompt, reference, seed, and
-display-name edits retain it. The gallery is not durable Project-wide Run history and does not add a
-Run query endpoint.
+`GET /api/projects/{project_id}/batches` lists a Project's Saved Batches; `POST` creates one.
+`GET /api/projects/{project_id}/batches/adoptable` scans for unregistered Batch filesystem keys, and
+`POST /api/projects/{project_id}/batches/adopt` explicitly binds one. `GET /api/batches/{batch_id}`
+returns a single Saved Batch; `PATCH` updates it with the client-held `revision`; and
+`POST /api/batches/{batch_id}/archive` sets its archive timestamp.
 
-Run creation uses the exact complete Batch request stored with the visible successful Preview. Any
-form edit invalidates that Preview pair. The frontend's Random seed intent is materialized with Web
-Crypto into an explicit ordered seed list before Preview, so the API and compiler remain deterministic.
-A successful Run creation consumes a Random Preview and requires fresh materialization before another
-Run; failed creation retains it for retry. Fixed and Explicit Previews remain reusable after a terminal
-Run. Durable mutable Batch persistence remains part of the later SQLite application-state milestone.
+Random seed intent stores `mode` and `count` in the `batch_snapshot`; the frontend materializes the
+concrete ordered seed list before Preview or Run creation.
 
 ## Run Lookup
 
@@ -217,5 +260,6 @@ API errors use:
 Defined cases include invalid requests and Batches, Project/Prompt validation and conflicts,
 Project adoption/publication failures, invalid Workflow Profile mappings, unsafe Project keys,
 invalid image uploads, missing or invalid Project assets, missing Runs or Results, active or
-ineligible execution, asset or Run publication failure, invalid durable Run data, and unexpected
+ineligible execution, Saved Batch revision conflicts, Saved Batch integrity violations, missing or
+invalid Saved Batches, asset or Run publication failure, invalid durable Run data, and unexpected
 internal errors. Python stack traces are logged server-side rather than returned to clients.

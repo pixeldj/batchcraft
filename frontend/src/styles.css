@@ -145,6 +145,14 @@ pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; over
 .project-selector details { margin-top: 0.65rem; color: var(--muted); font-size: 0.75rem; }
 .project-selector details p { margin-bottom: 0; }
 .project-selector > .action-row { justify-content: flex-start; margin-top: 0.9rem; padding-top: 0.9rem; }
+.workflow-library-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.9rem; }
+.workflow-empty { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: 1rem; border: 1px dashed var(--line-strong); }
+.workflow-empty .empty-note { margin: 0; }
+.workflow-link-status { display: flex; gap: 0.55rem; flex-direction: column; margin-top: 0.9rem; padding: 0.75rem; border-left: 4px solid var(--line-strong); background: rgba(255, 255, 255, 0.28); font-size: 0.78rem; }
+.workflow-link-status span { color: var(--muted); }
+.workflow-link-status.linked { border-color: var(--accent); }
+.workflow-link-status.integrity { border-color: var(--danger); background: var(--danger-bg); }
+.workflow-actions { margin-top: 0.9rem; flex-wrap: wrap; }
 
 .asset-picker { display: grid; gap: 0.9rem; }
 .asset-picker-summary { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
@@ -261,7 +269,7 @@ progress::-webkit-progress-value { background: var(--accent); }
   .app-header { position: static; align-items: flex-start; }
   .comfy-status { max-width: 50%; }
   main { width: min(100% - 1.2rem, 1440px); }
-  .three-columns, .two-columns, .run-metadata { grid-template-columns: 1fr; }
+  .three-columns, .two-columns, .run-metadata, .workflow-library-grid { grid-template-columns: 1fr; }
   .action-row { align-items: flex-end; flex-direction: column; }
   .action-row .button-primary { width: 100%; }
   textarea.json-editor { min-height: 15rem; }
@@ -293,4 +301,38 @@ progress::-webkit-progress-value { background: var(--accent); }
   .warning-box { color: #ffe09a; }
   .blocked-note { color: #d8b9f6; background: #39294a; }
   .artifact-placeholder { background: repeating-linear-gradient(-45deg, #2b332e, #2b332e 10px, #242b27 10px, #242b27 20px); }
+}
+
+.saved-batch-selector {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.saved-batch-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.saved-batch-details {
+  display: grid;
+  justify-items: end;
+  gap: 0.25rem;
+}
+
+.saved-batch-status {
+  font-size: 0.85rem;
+  color: var(--color-muted, #666);
+}
+
+.saved-batch-status.dirty {
+  color: var(--color-warning, #a35d00);
+}
+
+.saved-batch-key {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  color: var(--color-muted, #666);
 }

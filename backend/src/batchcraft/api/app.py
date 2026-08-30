@@ -34,6 +34,11 @@ from batchcraft.application import (
     RunNotFoundError,
     RunPublicationError,
     RunTaskRegistry,
+    SavedBatchAdoptionError,
+    SavedBatchDiscoveryError,
+    SavedBatchOwnershipError,
+    SavedBatchPublicationError,
+    SavedBatchRevisionConflictError,
 )
 from batchcraft.comfyui import ComfyUIClient, WorkflowPreparationError
 from batchcraft.db import (
@@ -48,6 +53,27 @@ from batchcraft.db import (
     PromptValidationError,
     PromptVersionConflictError,
     PromptVersionNotFoundError,
+    SavedBatchConflictError,
+    SavedBatchIntegrityError,
+    SavedBatchNotFoundError,
+    SavedBatchStore,
+    SavedBatchValidationError,
+    WorkflowConflictError,
+    WorkflowNotFoundError,
+    WorkflowProfileConflictError,
+    WorkflowProfileNotFoundError,
+    WorkflowProfileOwnershipError,
+    WorkflowProfileStore,
+    WorkflowProfileValidationError,
+    WorkflowProfileVersionConflictError,
+    WorkflowProfileVersionNotFoundError,
+    WorkflowProfileWorkflowNotFoundError,
+    WorkflowProfileWorkflowVersionNotFoundError,
+    WorkflowProjectNotFoundError,
+    WorkflowStore,
+    WorkflowValidationError,
+    WorkflowVersionConflictError,
+    WorkflowVersionNotFoundError,
     apply_migrations,
     open_connection,
 )
@@ -57,6 +83,8 @@ from batchcraft.files import ProjectOwnerStore
 
 from .config import Settings
 from .schemas import (
+    AdoptableBatchesResponse,
+    AdoptableBatchResponse,
     AdoptableProjectResponse,
     AdoptableProjectsResponse,
     AssetResponse,
@@ -87,6 +115,30 @@ from .schemas import (
     ResultsResponse,
     RunCreatedResponse,
     RunResponse,
+    SavedBatchAdoptRequest,
+    SavedBatchCreateRequest,
+    SavedBatchDetailResponse,
+    SavedBatchesResponse,
+    SavedBatchListResponse,
+    SavedBatchUpdateRequest,
+    WorkflowCreatedResponse,
+    WorkflowCreateRequest,
+    WorkflowListResponse,
+    WorkflowProfileCreatedResponse,
+    WorkflowProfileCreateRequest,
+    WorkflowProfileListResponse,
+    WorkflowProfileResponse,
+    WorkflowProfilesResponse,
+    WorkflowProfileUpdateRequest,
+    WorkflowProfileVersionCreateRequest,
+    WorkflowProfileVersionResponse,
+    WorkflowProfileVersionsResponse,
+    WorkflowResponse,
+    WorkflowsResponse,
+    WorkflowUpdateRequest,
+    WorkflowVersionCreateRequest,
+    WorkflowVersionResponse,
+    WorkflowVersionsResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,6 +185,9 @@ def create_app(
         app.state.library_service = LibraryService(
             project_store=ProjectStore(configured.database_path),
             prompt_store=PromptStore(configured.database_path),
+            workflow_store=WorkflowStore(configured.database_path),
+            workflow_profile_store=WorkflowProfileStore(configured.database_path),
+            saved_batch_store=SavedBatchStore(configured.database_path),
             owner_store=ProjectOwnerStore(configured.projects_root),
         )
         try:
@@ -233,6 +288,98 @@ def create_app(
     async def archive_project(project_id: str, library: LibraryDependency) -> ProjectResponse:
         return ProjectResponse.from_record(
             await asyncio.to_thread(library.archive_project, project_id)
+        )
+
+    @app.get(
+        "/api/projects/{project_id}/batches/adoptable",
+        response_model=AdoptableBatchesResponse,
+    )
+    async def list_adoptable_saved_batches(
+        project_id: str, library: LibraryDependency
+    ) -> AdoptableBatchesResponse:
+        batches = await asyncio.to_thread(library.list_adoptable_saved_batches, project_id)
+        return AdoptableBatchesResponse(
+            batches=[AdoptableBatchResponse.from_candidate(item) for item in batches]
+        )
+
+    @app.get("/api/projects/{project_id}/batches", response_model=SavedBatchesResponse)
+    async def list_saved_batches(
+        project_id: str,
+        library: LibraryDependency,
+        include_archived: bool = False,
+    ) -> SavedBatchesResponse:
+        batches = await asyncio.to_thread(
+            library.list_saved_batches, project_id, include_archived=include_archived
+        )
+        return SavedBatchesResponse(
+            batches=[SavedBatchListResponse.from_record(item) for item in batches]
+        )
+
+    @app.post(
+        "/api/projects/{project_id}/batches",
+        response_model=SavedBatchDetailResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_saved_batch(
+        project_id: str,
+        request: SavedBatchCreateRequest,
+        library: LibraryDependency,
+    ) -> SavedBatchDetailResponse:
+        batch = await asyncio.to_thread(
+            library.create_saved_batch,
+            project_id,
+            filesystem_key=request.filesystem_key,
+            definition=request.to_definition(),
+        )
+        return SavedBatchDetailResponse.from_detail(batch)
+
+    @app.post(
+        "/api/projects/{project_id}/batches/adopt",
+        response_model=SavedBatchDetailResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def adopt_saved_batch(
+        project_id: str,
+        request: SavedBatchAdoptRequest,
+        library: LibraryDependency,
+    ) -> SavedBatchDetailResponse:
+        batch = await asyncio.to_thread(
+            library.adopt_saved_batch,
+            project_id,
+            filesystem_key=request.filesystem_key,
+            batch_id=request.batch_id,
+            definition=request.to_definition(),
+        )
+        return SavedBatchDetailResponse.from_detail(batch)
+
+    @app.get("/api/batches/{batch_id}", response_model=SavedBatchDetailResponse)
+    async def get_saved_batch(
+        batch_id: str, library: LibraryDependency
+    ) -> SavedBatchDetailResponse:
+        return SavedBatchDetailResponse.from_detail(
+            await asyncio.to_thread(library.get_saved_batch, batch_id)
+        )
+
+    @app.patch("/api/batches/{batch_id}", response_model=SavedBatchDetailResponse)
+    async def update_saved_batch(
+        batch_id: str,
+        request: SavedBatchUpdateRequest,
+        library: LibraryDependency,
+    ) -> SavedBatchDetailResponse:
+        batch = await asyncio.to_thread(
+            library.update_saved_batch,
+            batch_id,
+            definition=request.to_definition(),
+            expected_revision=request.expected_revision,
+        )
+        return SavedBatchDetailResponse.from_detail(batch)
+
+    @app.post("/api/batches/{batch_id}/archive", response_model=SavedBatchDetailResponse)
+    async def archive_saved_batch(
+        batch_id: str, library: LibraryDependency
+    ) -> SavedBatchDetailResponse:
+        return SavedBatchDetailResponse.from_detail(
+            await asyncio.to_thread(library.archive_saved_batch, batch_id)
         )
 
     @app.get("/api/projects/{project_id}/prompts", response_model=PromptsResponse)
@@ -354,6 +501,262 @@ def create_app(
             await asyncio.to_thread(library.restore_prompt_version, version_id)
         )
 
+    @app.get("/api/projects/{project_id}/workflows", response_model=WorkflowsResponse)
+    async def list_workflows(
+        project_id: str,
+        library: LibraryDependency,
+        include_archived: bool = False,
+    ) -> WorkflowsResponse:
+        workflows = await asyncio.to_thread(
+            library.list_workflows, project_id, include_archived=include_archived
+        )
+        return WorkflowsResponse(
+            workflows=[WorkflowListResponse.from_list_record(item) for item in workflows]
+        )
+
+    @app.post(
+        "/api/projects/{project_id}/workflows",
+        response_model=WorkflowCreatedResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_workflow(
+        project_id: str,
+        request: WorkflowCreateRequest,
+        library: LibraryDependency,
+    ) -> WorkflowCreatedResponse:
+        workflow, workflow_version = await asyncio.to_thread(
+            library.create_workflow,
+            project_id,
+            name=request.name,
+            description=request.description,
+            workflow=request.workflow,
+            note=request.note,
+        )
+        return WorkflowCreatedResponse(
+            workflow=WorkflowResponse.from_record(workflow),
+            version=WorkflowVersionResponse.from_record(workflow_version),
+        )
+
+    @app.get("/api/workflows/{workflow_id}", response_model=WorkflowResponse)
+    async def get_workflow(workflow_id: str, library: LibraryDependency) -> WorkflowResponse:
+        return WorkflowResponse.from_record(
+            await asyncio.to_thread(library.get_workflow, workflow_id)
+        )
+
+    @app.patch("/api/workflows/{workflow_id}", response_model=WorkflowResponse)
+    async def update_workflow(
+        workflow_id: str,
+        request: WorkflowUpdateRequest,
+        library: LibraryDependency,
+    ) -> WorkflowResponse:
+        workflow = await asyncio.to_thread(
+            library.update_workflow,
+            workflow_id,
+            name=request.name,
+            description=request.description,
+            update_description="description" in request.model_fields_set,
+        )
+        return WorkflowResponse.from_record(workflow)
+
+    @app.post("/api/workflows/{workflow_id}/archive", response_model=WorkflowResponse)
+    async def archive_workflow(workflow_id: str, library: LibraryDependency) -> WorkflowResponse:
+        return WorkflowResponse.from_record(
+            await asyncio.to_thread(library.archive_workflow, workflow_id)
+        )
+
+    @app.get("/api/workflows/{workflow_id}/versions", response_model=WorkflowVersionsResponse)
+    async def list_workflow_versions(
+        workflow_id: str,
+        library: LibraryDependency,
+        include_archived: bool = False,
+    ) -> WorkflowVersionsResponse:
+        versions = await asyncio.to_thread(
+            library.list_workflow_versions,
+            workflow_id,
+            include_archived=include_archived,
+        )
+        return WorkflowVersionsResponse(
+            workflow_versions=[WorkflowVersionResponse.from_record(item) for item in versions]
+        )
+
+    @app.post(
+        "/api/workflows/{workflow_id}/versions",
+        response_model=WorkflowVersionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_workflow_version(
+        workflow_id: str,
+        request: WorkflowVersionCreateRequest,
+        library: LibraryDependency,
+    ) -> WorkflowVersionResponse:
+        version = await asyncio.to_thread(
+            library.create_workflow_version,
+            workflow_id,
+            workflow=request.workflow,
+            note=request.note,
+        )
+        return WorkflowVersionResponse.from_record(version)
+
+    @app.get("/api/workflow-versions/{version_id}", response_model=WorkflowVersionResponse)
+    async def get_workflow_version(
+        version_id: str, library: LibraryDependency
+    ) -> WorkflowVersionResponse:
+        return WorkflowVersionResponse.from_record(
+            await asyncio.to_thread(library.get_workflow_version, version_id)
+        )
+
+    @app.post(
+        "/api/workflow-versions/{version_id}/archive",
+        response_model=WorkflowVersionResponse,
+    )
+    async def archive_workflow_version(
+        version_id: str, library: LibraryDependency
+    ) -> WorkflowVersionResponse:
+        return WorkflowVersionResponse.from_record(
+            await asyncio.to_thread(library.archive_workflow_version, version_id)
+        )
+
+    @app.get(
+        "/api/workflows/{workflow_id}/profiles",
+        response_model=WorkflowProfilesResponse,
+    )
+    async def list_workflow_profiles(
+        workflow_id: str,
+        library: LibraryDependency,
+        workflow_version_id: str | None = None,
+        include_archived: bool = False,
+    ) -> WorkflowProfilesResponse:
+        profiles = await asyncio.to_thread(
+            library.list_workflow_profiles,
+            workflow_id,
+            workflow_version_id=workflow_version_id,
+            include_archived=include_archived,
+        )
+        return WorkflowProfilesResponse(
+            workflow_profiles=[
+                WorkflowProfileListResponse.from_list_record(item) for item in profiles
+            ]
+        )
+
+    @app.post(
+        "/api/workflows/{workflow_id}/profiles",
+        response_model=WorkflowProfileCreatedResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_workflow_profile(
+        workflow_id: str,
+        request: WorkflowProfileCreateRequest,
+        library: LibraryDependency,
+    ) -> WorkflowProfileCreatedResponse:
+        profile, profile_version = await asyncio.to_thread(
+            library.create_workflow_profile,
+            workflow_id,
+            name=request.name,
+            description=request.description,
+            workflow_version_id=request.workflow_version_id,
+            mappings=request.mappings,
+            note=request.note,
+        )
+        return WorkflowProfileCreatedResponse(
+            workflow_profile=WorkflowProfileResponse.from_record(profile),
+            version=WorkflowProfileVersionResponse.from_record(profile_version),
+        )
+
+    @app.get("/api/workflow-profiles/{profile_id}", response_model=WorkflowProfileResponse)
+    async def get_workflow_profile(
+        profile_id: str, library: LibraryDependency
+    ) -> WorkflowProfileResponse:
+        return WorkflowProfileResponse.from_record(
+            await asyncio.to_thread(library.get_workflow_profile, profile_id)
+        )
+
+    @app.patch("/api/workflow-profiles/{profile_id}", response_model=WorkflowProfileResponse)
+    async def update_workflow_profile(
+        profile_id: str,
+        request: WorkflowProfileUpdateRequest,
+        library: LibraryDependency,
+    ) -> WorkflowProfileResponse:
+        profile = await asyncio.to_thread(
+            library.update_workflow_profile,
+            profile_id,
+            name=request.name,
+            description=request.description,
+            update_description="description" in request.model_fields_set,
+        )
+        return WorkflowProfileResponse.from_record(profile)
+
+    @app.post(
+        "/api/workflow-profiles/{profile_id}/archive",
+        response_model=WorkflowProfileResponse,
+    )
+    async def archive_workflow_profile(
+        profile_id: str, library: LibraryDependency
+    ) -> WorkflowProfileResponse:
+        return WorkflowProfileResponse.from_record(
+            await asyncio.to_thread(library.archive_workflow_profile, profile_id)
+        )
+
+    @app.get(
+        "/api/workflow-profiles/{profile_id}/versions",
+        response_model=WorkflowProfileVersionsResponse,
+    )
+    async def list_workflow_profile_versions(
+        profile_id: str,
+        library: LibraryDependency,
+        include_archived: bool = False,
+    ) -> WorkflowProfileVersionsResponse:
+        versions = await asyncio.to_thread(
+            library.list_workflow_profile_versions,
+            profile_id,
+            include_archived=include_archived,
+        )
+        return WorkflowProfileVersionsResponse(
+            workflow_profile_versions=[
+                WorkflowProfileVersionResponse.from_record(item) for item in versions
+            ]
+        )
+
+    @app.post(
+        "/api/workflow-profiles/{profile_id}/versions",
+        response_model=WorkflowProfileVersionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_workflow_profile_version(
+        profile_id: str,
+        request: WorkflowProfileVersionCreateRequest,
+        library: LibraryDependency,
+    ) -> WorkflowProfileVersionResponse:
+        version = await asyncio.to_thread(
+            library.create_workflow_profile_version,
+            profile_id,
+            workflow_version_id=request.workflow_version_id,
+            mappings=request.mappings,
+            note=request.note,
+        )
+        return WorkflowProfileVersionResponse.from_record(version)
+
+    @app.get(
+        "/api/workflow-profile-versions/{version_id}",
+        response_model=WorkflowProfileVersionResponse,
+    )
+    async def get_workflow_profile_version(
+        version_id: str, library: LibraryDependency
+    ) -> WorkflowProfileVersionResponse:
+        return WorkflowProfileVersionResponse.from_record(
+            await asyncio.to_thread(library.get_workflow_profile_version, version_id)
+        )
+
+    @app.post(
+        "/api/workflow-profile-versions/{version_id}/archive",
+        response_model=WorkflowProfileVersionResponse,
+    )
+    async def archive_workflow_profile_version(
+        version_id: str, library: LibraryDependency
+    ) -> WorkflowProfileVersionResponse:
+        return WorkflowProfileVersionResponse.from_record(
+            await asyncio.to_thread(library.archive_workflow_profile_version, version_id)
+        )
+
     @app.get("/api/projects/{project_key}/assets", response_model=AssetsResponse)
     async def list_project_assets(
         project_key: str,
@@ -402,7 +805,7 @@ def create_app(
         service: ServiceDependency,
     ) -> PreviewResponse:
         creation = request.to_creation_input()
-        return PreviewResponse.from_plan(service.preview_batch(creation.definition))
+        return PreviewResponse.from_plan(service.preview_batch(creation))
 
     @app.post(
         "/api/runs",
@@ -497,6 +900,9 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProjectValidationError)
     @app.exception_handler(PromptValidationError)
+    @app.exception_handler(WorkflowValidationError)
+    @app.exception_handler(WorkflowProfileValidationError)
+    @app.exception_handler(SavedBatchValidationError)
     async def invalid_library_input(_request: Request, error: Exception) -> JSONResponse:
         return _error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_library_input", str(error)
@@ -509,6 +915,7 @@ def _register_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(PromptProjectNotFoundError)
+    @app.exception_handler(WorkflowProjectNotFoundError)
     async def missing_prompt_project(_request: Request, _error: Exception) -> JSONResponse:
         return _error_response(
             status.HTTP_404_NOT_FOUND, "project_not_found", "Project was not found"
@@ -528,15 +935,92 @@ def _register_error_handlers(app: FastAPI) -> None:
             "PromptVersion was not found",
         )
 
+    @app.exception_handler(WorkflowNotFoundError)
+    @app.exception_handler(WorkflowProfileWorkflowNotFoundError)
+    async def missing_workflow(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND, "workflow_not_found", "Workflow was not found"
+        )
+
+    @app.exception_handler(WorkflowVersionNotFoundError)
+    @app.exception_handler(WorkflowProfileWorkflowVersionNotFoundError)
+    async def missing_workflow_version(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND,
+            "workflow_version_not_found",
+            "WorkflowVersion was not found",
+        )
+
+    @app.exception_handler(WorkflowProfileNotFoundError)
+    async def missing_workflow_profile(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND,
+            "workflow_profile_not_found",
+            "Workflow Profile was not found",
+        )
+
+    @app.exception_handler(WorkflowProfileVersionNotFoundError)
+    async def missing_workflow_profile_version(
+        _request: Request, _error: Exception
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND,
+            "workflow_profile_version_not_found",
+            "Workflow Profile version was not found",
+        )
+
+    @app.exception_handler(SavedBatchNotFoundError)
+    async def missing_saved_batch(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND, "saved_batch_not_found", "Saved Batch was not found"
+        )
+
+    @app.exception_handler(SavedBatchIntegrityError)
+    @app.exception_handler(SavedBatchOwnershipError)
+    @app.exception_handler(SavedBatchAdoptionError)
+    async def invalid_saved_batch_integrity(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "saved_batch_integrity_error",
+            str(error),
+        )
+
+    @app.exception_handler(SavedBatchRevisionConflictError)
+    async def saved_batch_revision_conflict(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT, "saved_batch_revision_conflict", str(error)
+        )
+
+    @app.exception_handler(WorkflowProfileOwnershipError)
+    async def invalid_workflow_profile_ownership(
+        _request: Request, error: Exception
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_workflow_profile_target",
+            str(error),
+        )
+
     @app.exception_handler(ProjectConflictError)
     @app.exception_handler(PromptConflictError)
     @app.exception_handler(PromptVersionConflictError)
+    @app.exception_handler(WorkflowConflictError)
+    @app.exception_handler(WorkflowVersionConflictError)
+    @app.exception_handler(WorkflowProfileConflictError)
+    @app.exception_handler(WorkflowProfileVersionConflictError)
+    @app.exception_handler(SavedBatchConflictError)
     async def library_conflict(_request: Request, error: Exception) -> JSONResponse:
         return _error_response(status.HTTP_409_CONFLICT, "library_conflict", str(error))
 
     @app.exception_handler(ProjectPublicationError)
     async def project_publication_failed(_request: Request, error: Exception) -> JSONResponse:
         return _error_response(status.HTTP_409_CONFLICT, "project_publication_failed", str(error))
+
+    @app.exception_handler(SavedBatchPublicationError)
+    async def saved_batch_publication_failed(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT, "saved_batch_publication_conflict", str(error)
+        )
 
     @app.exception_handler(ProjectAdoptionError)
     async def project_adoption_failed(_request: Request, error: Exception) -> JSONResponse:
@@ -553,6 +1037,17 @@ def _register_error_handlers(app: FastAPI) -> None:
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "project_discovery_failed",
             "Projects could not be discovered",
+        )
+
+    @app.exception_handler(SavedBatchDiscoveryError)
+    async def saved_batch_discovery_failed(
+        _request: Request, error: SavedBatchDiscoveryError
+    ) -> JSONResponse:
+        logger.error("Saved Batch discovery failed: %s", error)
+        return _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "saved_batch_discovery_failed",
+            "Saved Batches could not be discovered",
         )
 
     @app.exception_handler(CompilationError)

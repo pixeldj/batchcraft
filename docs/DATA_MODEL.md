@@ -11,7 +11,13 @@ This document describes domain semantics rather than a final SQL schema.
 ```text
 Project
  |
- +-- WorkflowProfile
+ +-- Workflow
+ |     |
+ |     +-- WorkflowVersion
+ |     |
+ |     +-- WorkflowProfile
+ |           |
+ |           +-- WorkflowProfileVersion
  |
  +-- Prompt
  |     |
@@ -182,23 +188,46 @@ updated_at
 
 Membership should preserve deterministic ordering.
 
+## Workflow
+
+A stable Project-scoped library identity for an imported ComfyUI API workflow. Editable name,
+description, and archive state belong to the logical Workflow.
+
+## WorkflowVersion
+
+An immutable canonical API-format workflow snapshot. It stores its logical Workflow and Project IDs,
+monotonic version number, name snapshot, canonical JSON, SHA-256, optional note, and timestamps.
+Explicitly saving duplicate JSON creates another version.
+
 ## WorkflowProfile
 
-A ComfyUI API workflow plus friendly exposed input mappings.
+A stable Project-scoped logical mapping identity belonging to one Workflow. Editable name,
+description, and archive state belong to the logical Profile.
 
 Suggested fields:
 
 ```text
 id
+workflow_id
+project_id
 name
 description
-workflow_version
-workflow_json
-workflow_hash
-mapping_definition
 created_at
 updated_at
+archived_at
 ```
+
+## WorkflowProfileVersion
+
+An immutable mapping snapshot targeting one exact WorkflowVersion of the Profile's Workflow. It stores
+the parent Profile, Workflow, Project, and target WorkflowVersion IDs; a monotonic version number; the
+Profile name snapshot; canonical profile JSON; its SHA-256; an optional note; and timestamps. The
+canonical JSON has the Run-compatible shape `{ "id": ..., "name": ..., "mappings": {...} }`.
+
+Compatibility is version-specific rather than a property of the logical Profile. Listing Profiles for
+a target WorkflowVersion therefore retains the logical Profile even when no compatible version exists.
+Creating compatibility for a newer WorkflowVersion appends a new validated ProfileVersion under the
+same logical Profile; it never retargets an existing version or creates a replacement logical Profile.
 
 Exposed inputs may conceptually resemble:
 
@@ -222,7 +251,9 @@ Exposed inputs may conceptually resemble:
 }
 ```
 
-Workflow Profiles should be versioned or snapshotted when used by a Run. Each Run retains the imported base workflow snapshot and a separate mapping snapshot.
+Preview and Run creation receive the selected WorkflowVersion and ProfileVersion snapshots directly.
+Each Run retains those exact workflow and profile snapshots, so later library edits or SQLite loss do
+not alter or invalidate historical provenance.
 
 ## Batch
 
@@ -251,6 +282,29 @@ A Batch also owns configuration such as:
 - output naming configuration.
 
 Changing a Batch does not alter previous Runs.
+
+### Saved Batch aggregate
+
+The Saved Batch aggregate is the SQLite-persisted mutable Batch. Its root `batch` record stores the
+stable identity (`id`, `project_id`, `filesystem_key`), editable `name` and `description`, a
+monotonic `revision` counter for optimistic-concurrency saves, the seed intent, workflow/profile
+selection IDs, creation/update timestamps, and archive state.
+
+Ordered child tables complete the aggregate:
+
+- `batch_prompt_selection` — ordered `prompt_version_id` foreign keys.
+- `batch_variable_binding` — ordered embedded binding snapshots carrying the placeholder,
+  `variable_list_id`, ordered `values` snapshot, ordered `selected_values`, `mode`, and
+  `fixed_value`.
+- `batch_reference_selection` — ordered `asset_id` strings with no foreign key.
+
+Saved Batches may be intentionally incomplete: they may have zero prompt selections, no
+workflow/profile selection, and zero reference selections. Preview remains the executable
+specification validator.
+
+Editing a Saved Batch increments its `revision`; concurrent conflicting saves fail rather than
+silently overwrite. Detached Prompt or Workflow-Profile snapshots must be explicitly imported or
+linked before the Saved Batch can be saved.
 
 ## VariableBinding
 

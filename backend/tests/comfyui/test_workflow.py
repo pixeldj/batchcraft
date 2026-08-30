@@ -29,7 +29,10 @@ def _workflow() -> dict[str, object]:
             "inputs": {"filename_prefix": "original", "images": ["8", 0]},
             "class_type": "SaveImage",
         },
-        "unrelated": {"inputs": {"value": {"nested": [1, 2, 3]}}},
+        "unrelated": {
+            "inputs": {"value": {"nested": [1, 2, 3]}},
+            "class_type": "Unrelated",
+        },
     }
 
 
@@ -178,3 +181,23 @@ def test_prepare_workflow_rejects_non_integer_runtime_seed(seed: object) -> None
 def test_prepare_workflow_rejects_unresolved_prompt() -> None:
     with pytest.raises(WorkflowPreparationError, match="unresolved placeholder"):
         prepare_workflow(_workflow(), _profile(), _values("A {{animal}} portrait"))
+
+
+def test_prepare_workflow_rejects_non_api_workflow_node() -> None:
+    workflow = _workflow()
+    workflow["34"] = {"inputs": {"prompt": "original"}}
+
+    with pytest.raises(WorkflowPreparationError, match="node '34'.*class_type"):
+        prepare_workflow(workflow, _profile(), _values())
+
+
+def test_prepare_workflow_requires_exactly_the_four_supported_mappings() -> None:
+    profile = _profile()
+    profile["mappings"]["extra"] = {  # type: ignore[index]
+        "node_id": "7",
+        "input_name": "steps",
+        "value_type": "integer",
+    }
+
+    with pytest.raises(WorkflowPreparationError, match="must contain exactly"):
+        prepare_workflow(_workflow(), profile, _values())

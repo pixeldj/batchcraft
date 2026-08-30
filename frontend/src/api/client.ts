@@ -1,5 +1,6 @@
 import type {
   AdoptableProjectsResponse,
+  AdoptableBatchesResponse,
   ApiErrorEnvelope,
   AssetsResponse,
   BatchRequest,
@@ -8,6 +9,12 @@ import type {
   CreatePromptResponse,
   CreatePromptVersionRequest,
   CreatePromptVersionResponse,
+  CreateWorkflowProfileRequest,
+  CreateWorkflowProfileResponse,
+  CreateWorkflowProfileVersionRequest,
+  CreateWorkflowRequest,
+  CreateWorkflowResponse,
+  CreateWorkflowVersionRequest,
   ExecutionResponse,
   ExecutionStartedResponse,
   LibraryPromptVersion,
@@ -24,6 +31,21 @@ import type {
   ResultsResponse,
   RunCreatedResponse,
   RunResponse,
+  SavedBatchAdoptRequest,
+  SavedBatchCreateRequest,
+  SavedBatchDetail,
+  SavedBatchesResponse,
+  SavedBatchUpdateRequest,
+  LibraryWorkflowProfileVersion,
+  LibraryWorkflowVersion,
+  Workflow,
+  WorkflowProfile,
+  WorkflowProfileUpdateRequest,
+  WorkflowProfileVersionsResponse,
+  WorkflowProfilesResponse,
+  WorkflowUpdateRequest,
+  WorkflowVersionsResponse,
+  WorkflowsResponse,
 } from "./types";
 
 const DEFAULT_API_URL = "http://127.0.0.1:8000";
@@ -48,6 +70,13 @@ export interface BatchcraftApi {
   adoptProject(body: ProjectAdoptRequest): Promise<ProjectResponse>;
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse>;
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse>;
+  listSavedBatches(projectId: string, includeArchived?: boolean, signal?: AbortSignal): Promise<SavedBatchesResponse>;
+  createSavedBatch(projectId: string, body: SavedBatchCreateRequest): Promise<SavedBatchDetail>;
+  getSavedBatch(batchId: string, signal?: AbortSignal): Promise<SavedBatchDetail>;
+  updateSavedBatch(batchId: string, body: SavedBatchUpdateRequest): Promise<SavedBatchDetail>;
+  archiveSavedBatch(batchId: string): Promise<SavedBatchDetail>;
+  listAdoptableSavedBatches(projectId: string, signal?: AbortSignal): Promise<AdoptableBatchesResponse>;
+  adoptSavedBatch(projectId: string, body: SavedBatchAdoptRequest): Promise<SavedBatchDetail>;
   uploadProjectAssets(
     projectKey: string,
     files: File[],
@@ -67,6 +96,24 @@ export interface BatchcraftApi {
     body: CreatePromptVersionRequest,
   ): Promise<CreatePromptVersionResponse>;
   getPromptVersion(versionId: string, signal?: AbortSignal): Promise<LibraryPromptVersion>;
+  listWorkflows(projectId: string, signal?: AbortSignal): Promise<WorkflowsResponse>;
+  createWorkflow(projectId: string, body: CreateWorkflowRequest): Promise<CreateWorkflowResponse>;
+  getWorkflow(workflowId: string, signal?: AbortSignal): Promise<Workflow>;
+  updateWorkflow(workflowId: string, body: WorkflowUpdateRequest): Promise<Workflow>;
+  archiveWorkflow(workflowId: string): Promise<Workflow>;
+  listWorkflowVersions(workflowId: string, includeArchived?: boolean, signal?: AbortSignal): Promise<WorkflowVersionsResponse>;
+  createWorkflowVersion(workflowId: string, body: CreateWorkflowVersionRequest): Promise<LibraryWorkflowVersion>;
+  getWorkflowVersion(versionId: string, signal?: AbortSignal): Promise<LibraryWorkflowVersion>;
+  archiveWorkflowVersion(versionId: string): Promise<LibraryWorkflowVersion>;
+  listWorkflowProfiles(workflowId: string, workflowVersionId?: string, signal?: AbortSignal): Promise<WorkflowProfilesResponse>;
+  createWorkflowProfile(workflowId: string, body: CreateWorkflowProfileRequest): Promise<CreateWorkflowProfileResponse>;
+  getWorkflowProfile(profileId: string, signal?: AbortSignal): Promise<WorkflowProfile>;
+  updateWorkflowProfile(profileId: string, body: WorkflowProfileUpdateRequest): Promise<WorkflowProfile>;
+  archiveWorkflowProfile(profileId: string): Promise<WorkflowProfile>;
+  listWorkflowProfileVersions(profileId: string, includeArchived?: boolean, signal?: AbortSignal): Promise<WorkflowProfileVersionsResponse>;
+  createWorkflowProfileVersion(profileId: string, body: CreateWorkflowProfileVersionRequest): Promise<LibraryWorkflowProfileVersion>;
+  getWorkflowProfileVersion(versionId: string, signal?: AbortSignal): Promise<LibraryWorkflowProfileVersion>;
+  archiveWorkflowProfileVersion(versionId: string): Promise<LibraryWorkflowProfileVersion>;
   previewBatch(batch: BatchRequest): Promise<PreviewResponse>;
   createRun(batch: BatchRequest): Promise<RunCreatedResponse>;
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse>;
@@ -118,6 +165,35 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse> {
     return this.request(`/api/projects/${encodeURIComponent(projectKey)}/assets`, { signal });
+  }
+
+  listSavedBatches(projectId: string, includeArchived = false, signal?: AbortSignal): Promise<SavedBatchesResponse> {
+    const query = includeArchived ? "?include_archived=true" : "";
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/batches${query}`, { signal });
+  }
+
+  createSavedBatch(projectId: string, body: SavedBatchCreateRequest): Promise<SavedBatchDetail> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/batches`, this.jsonRequest(body, "POST"));
+  }
+
+  getSavedBatch(batchId: string, signal?: AbortSignal): Promise<SavedBatchDetail> {
+    return this.request(`/api/batches/${encodeURIComponent(batchId)}`, { signal });
+  }
+
+  updateSavedBatch(batchId: string, body: SavedBatchUpdateRequest): Promise<SavedBatchDetail> {
+    return this.request(`/api/batches/${encodeURIComponent(batchId)}`, this.jsonRequest(body, "PATCH"));
+  }
+
+  archiveSavedBatch(batchId: string): Promise<SavedBatchDetail> {
+    return this.request(`/api/batches/${encodeURIComponent(batchId)}/archive`, { method: "POST" });
+  }
+
+  listAdoptableSavedBatches(projectId: string, signal?: AbortSignal): Promise<AdoptableBatchesResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/batches/adoptable`, { signal });
+  }
+
+  adoptSavedBatch(projectId: string, body: SavedBatchAdoptRequest): Promise<SavedBatchDetail> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/batches/adopt`, this.jsonRequest(body, "POST"));
   }
 
   uploadProjectAssets(
@@ -182,6 +258,83 @@ export class BatchcraftApiClient implements BatchcraftApi {
     signal?: AbortSignal,
   ): Promise<LibraryPromptVersion> {
     return this.request(`/api/prompt-versions/${encodeURIComponent(versionId)}`, { signal });
+  }
+
+  listWorkflows(projectId: string, signal?: AbortSignal): Promise<WorkflowsResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/workflows`, { signal });
+  }
+
+  createWorkflow(projectId: string, body: CreateWorkflowRequest): Promise<CreateWorkflowResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/workflows`, this.jsonRequest(body, "POST"));
+  }
+
+  getWorkflow(workflowId: string, signal?: AbortSignal): Promise<Workflow> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}`, { signal });
+  }
+
+  updateWorkflow(workflowId: string, body: WorkflowUpdateRequest): Promise<Workflow> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}`, this.jsonRequest(body, "PATCH"));
+  }
+
+  archiveWorkflow(workflowId: string): Promise<Workflow> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/archive`, { method: "POST" });
+  }
+
+  listWorkflowVersions(workflowId: string, includeArchived = false, signal?: AbortSignal): Promise<WorkflowVersionsResponse> {
+    const query = includeArchived ? "?include_archived=true" : "";
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/versions${query}`, { signal });
+  }
+
+  createWorkflowVersion(workflowId: string, body: CreateWorkflowVersionRequest): Promise<LibraryWorkflowVersion> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/versions`, this.jsonRequest(body, "POST"));
+  }
+
+  getWorkflowVersion(versionId: string, signal?: AbortSignal): Promise<LibraryWorkflowVersion> {
+    return this.request(`/api/workflow-versions/${encodeURIComponent(versionId)}`, { signal });
+  }
+
+  archiveWorkflowVersion(versionId: string): Promise<LibraryWorkflowVersion> {
+    return this.request(`/api/workflow-versions/${encodeURIComponent(versionId)}/archive`, { method: "POST" });
+  }
+
+  listWorkflowProfiles(workflowId: string, workflowVersionId?: string, signal?: AbortSignal): Promise<WorkflowProfilesResponse> {
+    const query = workflowVersionId
+      ? `?workflow_version_id=${encodeURIComponent(workflowVersionId)}`
+      : "";
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/profiles${query}`, { signal });
+  }
+
+  createWorkflowProfile(workflowId: string, body: CreateWorkflowProfileRequest): Promise<CreateWorkflowProfileResponse> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/profiles`, this.jsonRequest(body, "POST"));
+  }
+
+  getWorkflowProfile(profileId: string, signal?: AbortSignal): Promise<WorkflowProfile> {
+    return this.request(`/api/workflow-profiles/${encodeURIComponent(profileId)}`, { signal });
+  }
+
+  updateWorkflowProfile(profileId: string, body: WorkflowProfileUpdateRequest): Promise<WorkflowProfile> {
+    return this.request(`/api/workflow-profiles/${encodeURIComponent(profileId)}`, this.jsonRequest(body, "PATCH"));
+  }
+
+  archiveWorkflowProfile(profileId: string): Promise<WorkflowProfile> {
+    return this.request(`/api/workflow-profiles/${encodeURIComponent(profileId)}/archive`, { method: "POST" });
+  }
+
+  listWorkflowProfileVersions(profileId: string, includeArchived = false, signal?: AbortSignal): Promise<WorkflowProfileVersionsResponse> {
+    const query = includeArchived ? "?include_archived=true" : "";
+    return this.request(`/api/workflow-profiles/${encodeURIComponent(profileId)}/versions${query}`, { signal });
+  }
+
+  createWorkflowProfileVersion(profileId: string, body: CreateWorkflowProfileVersionRequest): Promise<LibraryWorkflowProfileVersion> {
+    return this.request(`/api/workflow-profiles/${encodeURIComponent(profileId)}/versions`, this.jsonRequest(body, "POST"));
+  }
+
+  getWorkflowProfileVersion(versionId: string, signal?: AbortSignal): Promise<LibraryWorkflowProfileVersion> {
+    return this.request(`/api/workflow-profile-versions/${encodeURIComponent(versionId)}`, { signal });
+  }
+
+  archiveWorkflowProfileVersion(versionId: string): Promise<LibraryWorkflowProfileVersion> {
+    return this.request(`/api/workflow-profile-versions/${encodeURIComponent(versionId)}/archive`, { method: "POST" });
   }
 
   previewBatch(batch: BatchRequest): Promise<PreviewResponse> {

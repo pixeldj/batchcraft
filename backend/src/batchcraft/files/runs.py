@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import io
+import json
 import os
 import shutil
 from collections.abc import Callable, Mapping
@@ -41,7 +42,7 @@ from batchcraft.files.models import (
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 
 RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 3
+MANIFEST_FORMAT_VERSION = 4
 OWNER_FORMAT_VERSION = 1
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
@@ -82,6 +83,7 @@ class RunFilesystemStore:
         *,
         project: ProjectIdentity,
         batch: BatchIdentity,
+        batch_snapshot: Mapping[str, object],
         plan: CompiledRunPlan,
         reference_assets: Mapping[str, AssetRecord],
         workflow: Mapping[str, object],
@@ -90,6 +92,8 @@ class RunFilesystemStore:
         self._validate_owner(project.id, project.filesystem_key, project.name, "Project")
         self._validate_owner(batch.id, batch.filesystem_key, batch.name, "Batch")
         self._validate_plan(plan)
+        batch_snapshot_object = _canonical_json_object(batch_snapshot, "batch_snapshot")
+        _validate_batch_snapshot(batch_snapshot_object)
         project_path = self.projects_path / project.filesystem_key
         batch_path = project_path / "batches" / batch.filesystem_key
         try:
@@ -155,6 +159,7 @@ class RunFilesystemStore:
             )
             manifest = _manifest(
                 run_metadata=run_metadata,
+                batch_snapshot=batch_snapshot_object,
                 plan=plan,
                 jobs=persisted_jobs,
                 workflow_sha256=workflow_sha256,
@@ -177,6 +182,8 @@ class RunFilesystemStore:
             staged_run = self._load_run(staging_path, project_path, validate_csv=True)
             if staged_run.compiled_plan != plan:
                 raise RunStoreError("staged manifest does not reconstruct the compiled plan")
+            if staged_run.batch_snapshot != batch_snapshot_object:
+                raise RunStoreError("staged manifest does not match the supplied Batch snapshot")
             if staged_run.workflow != workflow_object:
                 raise RunStoreError("staged workflow snapshot does not match the input workflow")
             if staged_run.workflow_profile != workflow_profile_object:
@@ -303,6 +310,7 @@ class RunFilesystemStore:
             path=run_path,
             project=loaded.project,
             batch=loaded.batch,
+            batch_snapshot=loaded.batch_snapshot,
             compiled_plan=loaded.compiled_plan,
             jobs=loaded.jobs,
             workflow=workflow,
@@ -490,6 +498,7 @@ def _run_metadata(
 def _manifest(
     *,
     run_metadata: dict[str, object],
+    batch_snapshot: dict[str, object],
     plan: CompiledRunPlan,
     jobs: tuple[PersistedJob, ...],
     workflow_sha256: str,
@@ -504,6 +513,7 @@ def _manifest(
             "project": run_metadata["project"],
             "batch": run_metadata["batch"],
         },
+        "batch_snapshot": batch_snapshot,
         "prompt_versions": [
             {
                 "prompt_version_id": version.id,
@@ -602,8 +612,13 @@ def _parse_run(
     if run_data.get("format_version") != RUN_FORMAT_VERSION:
         raise RunStoreError("unsupported run.json format version")
     manifest_version = manifest_data.get("format_version")
-    if manifest_version not in {1, 2, MANIFEST_FORMAT_VERSION}:
+    if manifest_version not in {1, 2, 3, MANIFEST_FORMAT_VERSION}:
         raise RunStoreError("unsupported manifest.json format version")
+
+    batch_snapshot: dict[str, object] | None = None
+    if manifest_version == MANIFEST_FORMAT_VERSION:
+        batch_snapshot = _required_object(manifest_data, "batch_snapshot")
+        _validate_batch_snapshot(batch_snapshot)
 
     run_id = _required_string(run_data, "run_id")
     run_number = _positive_integer(run_data, "run_number")
@@ -700,6 +715,7 @@ def _parse_run(
         path=run_path,
         project=project,
         batch=batch,
+        batch_snapshot=batch_snapshot,
         compiled_plan=compiled_plan,
         jobs=persisted_jobs,
         workflow={},
@@ -843,6 +859,19 @@ def _asset_data(asset: AssetRecord) -> dict[str, object]:
         "stored_path": asset.stored_path,
         "created_at": asset.created_at,
     }
+
+
+def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, object]:
+    try:
+        loaded: object = json.loads(canonical_json_bytes(dict(value)))
+    except (TypeError, ValueError) as error:
+        raise RunStoreError(f"{name} must be a JSON object: {error}") from error
+    return _object_item(loaded, name)
+
+
+def _validate_batch_snapshot(snapshot: dict[str, object]) -> None:
+    if _integer(snapshot, "snapshot_version") != 1:
+        raise RunStoreError("unsupported Batch snapshot version")
 
 
 def _required_object(data: dict[str, object], name: str) -> dict[str, object]:

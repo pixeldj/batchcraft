@@ -15,6 +15,11 @@ from .errors import (
     RunDataError,
     RunNotFoundError,
     RunPublicationError,
+    SavedBatchAdoptionError,
+    SavedBatchDiscoveryError,
+    SavedBatchOwnershipError,
+    SavedBatchPublicationError,
+    SavedBatchRevisionConflictError,
 )
 from .library import LibraryService
 from .service import (
@@ -51,5 +56,10 @@ __all__ = [
     "RunExecutor",
     "RunNotFoundError",
     "RunPublicationError",
+    "SavedBatchAdoptionError",
+    "SavedBatchDiscoveryError",
+    "SavedBatchOwnershipError",
+    "SavedBatchPublicationError",
+    "SavedBatchRevisionConflictError",
     "RunTaskRegistry",
 ]

@@ -137,6 +137,10 @@ Manifest v3 requires every Job to contain a `reference_asset` key. Its value is 
 Asset object when selected or explicit JSON `null` when the Job preserves the base workflow's mapped
 reference-image input. Manifest v1 and v2 continue to require the object and remain readable.
 
+Manifest v4 adds a required top-level `batch_snapshot` object with `snapshot_version: 1`, containing
+the editable Saved Batch intent that produced the Run. Manifest v4 is otherwise identical to v3;
+v1-v3 remain readable unchanged.
+
 ## `manifest.csv`
 
 The CSV manifest is a human-friendly tabular representation intended for:
@@ -299,9 +303,11 @@ Loading a published Run requires `run.json`, canonical `manifest.json`, `manifes
 Manifest v2 and v3 additionally validate a non-empty ordered PromptVersion collection, unique
 PromptVersion IDs, required names, and every Job's association with a known PromptVersion. Manifest
 v3 accepts either a complete Reference Asset object or explicit `null`; a missing key is invalid.
-Manifest v1 and v2 require a complete Reference Asset object. The loader explicitly supports manifest
-v1 as a single-PromptVersion historical format: it assigns the one stored PromptVersion ID to every
-Job and uses that ID as the unavailable historical display-name fallback. Existing Run directories
+Manifest v1 and v2 require a complete Reference Asset object. Manifest v4 requires the top-level
+`batch_snapshot` object with `snapshot_version: 1` containing the editable Saved Batch intent.
+The loader explicitly supports manifest v1 as a single-PromptVersion historical format: it assigns
+the one stored PromptVersion ID to every Job and uses that ID as the unavailable historical
+display-name fallback. v1-v3 remain readable unchanged. Existing Run directories
 are never rewritten. Unknown manifest versions are rejected.
 
 The loader reconstructs the original `CompiledRunPlan`, compiler warnings, execution identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be present in a complete v1 Run, but reformatting its line endings or quoting does not override or invalidate canonical JSON provenance.
@@ -320,8 +326,10 @@ Example:
 }
 ```
 
-Future migrations should preserve old Run readability whenever practical. New Runs use manifest v3;
-manifest v1 and v2 remain safely readable through explicit compatibility parsing.
+Future migrations should preserve old Run readability whenever practical. New Runs use manifest v4;
+manifest v1, v2, and v3 remain safely readable through explicit compatibility parsing. Manifest v4
+adds a required top-level `batch_snapshot` with `snapshot_version: 1`, containing the editable Saved
+Batch intent that produced the Run. The CSV format is unchanged from v3.
 
 ## Filesystem Publication and SQLite Indexing
 

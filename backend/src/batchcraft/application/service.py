@@ -83,6 +83,7 @@ class RunCreationInput:
     definition: BatchDefinition
     workflow: Mapping[str, object]
     workflow_profile: Mapping[str, object]
+    batch_snapshot: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,8 +118,8 @@ class BatchcraftService:
         self.run_store = run_store or RunFilesystemStore(projects_root)
         self._executor = executor
 
-    def preview_batch(self, definition: BatchDefinition) -> CompiledRunPlan:
-        return compile_batch(definition)
+    def preview_batch(self, creation: RunCreationInput) -> CompiledRunPlan:
+        return self._compile_and_validate(creation)
 
     def list_project_assets(self, project_filesystem_key: str) -> tuple[AssetRecord, ...]:
         store = self._project_asset_store(project_filesystem_key)
@@ -181,6 +182,29 @@ class BatchcraftService:
             creation.project.filesystem_key,
             creation.batch.filesystem_key,
         )
+        plan = self._compile_and_validate(creation)
+
+        assets = self._resolve_assets(creation.project.filesystem_key, plan)
+        try:
+            return self.run_store.create_run(
+                project=creation.project,
+                batch=creation.batch,
+                batch_snapshot=creation.batch_snapshot,
+                plan=plan,
+                reference_assets=assets,
+                workflow=creation.workflow,
+                workflow_profile=creation.workflow_profile,
+            )
+        except OSError as error:
+            raise RunPublicationError("Run publication failed") from error
+        except RunStoreError as error:
+            if _has_os_error_cause(error):
+                raise RunPublicationError("Run publication failed") from error
+            raise RunCreationError(f"Run could not be published: {error}") from error
+        except AssetStoreError as error:
+            raise RunCreationError(f"Run could not be published: {error}") from error
+
+    def _compile_and_validate(self, creation: RunCreationInput) -> CompiledRunPlan:
         plan = compile_batch(creation.definition)
         first_job = plan.jobs[0]
         prepare_workflow(
@@ -197,24 +221,7 @@ class BatchcraftService:
                 output_prefix="batchcraft/validation",
             ),
         )
-        assets = self._resolve_assets(creation.project.filesystem_key, plan)
-        try:
-            return self.run_store.create_run(
-                project=creation.project,
-                batch=creation.batch,
-                plan=plan,
-                reference_assets=assets,
-                workflow=creation.workflow,
-                workflow_profile=creation.workflow_profile,
-            )
-        except OSError as error:
-            raise RunPublicationError("Run publication failed") from error
-        except RunStoreError as error:
-            if _has_os_error_cause(error):
-                raise RunPublicationError("Run publication failed") from error
-            raise RunCreationError(f"Run could not be published: {error}") from error
-        except AssetStoreError as error:
-            raise RunCreationError(f"Run could not be published: {error}") from error
+        return plan
 
     def get_run(self, run_id: str) -> PublishedRun:
         matches: list[Path] = []

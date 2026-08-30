@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hashlib
 import json
 import shutil
@@ -15,7 +16,7 @@ from fastapi.testclient import TestClient
 
 import batchcraft.execution.state as execution_state_module
 from batchcraft.api import Settings, create_app
-from batchcraft.api.schemas import ExecutionResponse, PreviewResponse, ResultsResponse
+from batchcraft.api.schemas import BatchRequest, ExecutionResponse, PreviewResponse, ResultsResponse
 from batchcraft.comfyui import (
     ComfyUIConnectionError,
     DownloadedArtifact,
@@ -39,6 +40,8 @@ from batchcraft.execution import (
 )
 from batchcraft.files import (
     AssetRecord,
+    BatchIdentity,
+    BatchOwnerStore,
     ProjectAssetStore,
     ProjectIdentity,
     ProjectOwnerDiscoveryError,
@@ -241,29 +244,129 @@ def _batch_request(
         mappings = profile["mappings"]
         assert isinstance(mappings, dict)
         mappings.pop("output_prefix")
-    return {
-        "project": {"id": "project-id", "filesystem_key": "project_key", "name": "Project"},
-        "batch": {"id": "batch-id", "filesystem_key": "batch_key", "name": "Batch"},
-        "prompt_versions": [
-            {"id": "prompt-v1", "name": "Portrait prompt", "text": "Portrait of {{animal}}"}
-        ],
-        "variable_bindings": bindings,
-        "references": [{"asset_id": asset_id} for asset_id in asset_ids],
-        "seeds": {"mode": "explicit", "values": [9, 3]},
-        "workflow": {
-            "7": {"class_type": "KSampler", "inputs": {"seed": 0}},
-            "25": {"class_type": "LoadImage", "inputs": {"image": "original.png"}},
-            "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
-            "41": {"class_type": "SaveImage", "inputs": {"filename_prefix": "original"}},
-        },
-        "workflow_profile": profile,
+    project = {"id": "project-id", "filesystem_key": "project_key", "name": "Project"}
+    batch = {"id": "batch-id", "filesystem_key": "batch_key", "name": "Batch"}
+    prompt_versions = [
+        {"id": "prompt-v1", "name": "Portrait prompt", "text": "Portrait of {{animal}}"}
+    ]
+    references = [{"asset_id": asset_id} for asset_id in asset_ids]
+    seeds = {"mode": "explicit", "values": [9, 3]}
+    workflow = {
+        "7": {"class_type": "KSampler", "inputs": {"seed": 0}},
+        "25": {"class_type": "LoadImage", "inputs": {"image": "original.png"}},
+        "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
+        "41": {"class_type": "SaveImage", "inputs": {"filename_prefix": "original"}},
     }
+    return {
+        "project": project,
+        "batch": batch,
+        "prompt_versions": prompt_versions,
+        "variable_bindings": bindings,
+        "references": references,
+        "seeds": seeds,
+        "workflow": workflow,
+        "workflow_profile": profile,
+        "batch_snapshot": {
+            "snapshot_version": 1,
+            "project": copy.deepcopy(project),
+            "source_saved_batch": None,
+            "batch": {**batch, "description": None},
+            "prompt_versions": copy.deepcopy(prompt_versions),
+            "variable_bindings": copy.deepcopy(bindings),
+            "references": copy.deepcopy(references),
+            "seed_intent": {**seeds, "random_seed_count": None},
+            "workflow_selection": {
+                "workflow_id": None,
+                "workflow_version_id": None,
+                "workflow_profile_id": None,
+                "workflow_profile_version_id": None,
+                "workflow": copy.deepcopy(workflow),
+                "workflow_profile": copy.deepcopy(profile),
+            },
+        },
+    }
+
+
+def _sync_batch_snapshot(request: dict[str, object]) -> None:
+    snapshot = request["batch_snapshot"]
+    assert isinstance(snapshot, dict)
+    snapshot["prompt_versions"] = request["prompt_versions"]
+    snapshot["variable_bindings"] = request["variable_bindings"]
+    snapshot["references"] = request["references"]
+    workflow_selection = snapshot["workflow_selection"]
+    assert isinstance(workflow_selection, dict)
+    workflow_selection["workflow"] = request["workflow"]
+    workflow_selection["workflow_profile"] = request["workflow_profile"]
 
 
 def _create_run(http: TestClient, request: dict[str, object]) -> str:
     response = http.post("/api/runs", json=request)
     assert response.status_code == 201, response.text
     return str(response.json()["run_id"])
+
+
+def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, object]:
+    request = _batch_request(())
+    workflow = request["workflow"]
+    profile = request["workflow_profile"]
+    assert isinstance(workflow, dict)
+    assert isinstance(profile, dict)
+    mappings = profile["mappings"]
+    assert isinstance(mappings, dict)
+    prompt = http.post(
+        f"/api/projects/{project_id}/prompts",
+        json={"name": "Saved prompt", "text": "Portrait of {{animal}}"},
+    ).json()
+    workflow_created = http.post(
+        f"/api/projects/{project_id}/workflows",
+        json={"name": "Saved workflow", "workflow": workflow},
+    ).json()
+    workflow_version = workflow_created["version"]
+    profile_created = http.post(
+        f"/api/workflows/{workflow_created['workflow']['id']}/profiles",
+        json={
+            "name": "Saved profile",
+            "workflow_version_id": workflow_version["id"],
+            "mappings": mappings,
+        },
+    ).json()
+    profile_version = profile_created["version"]
+    return {
+        "name": "Saved experiment",
+        "description": "Editable definition",
+        "prompt_selections": [
+            {
+                "prompt_version_id": prompt["version"]["id"],
+                "name_snapshot": prompt["version"]["name_snapshot"],
+                "text": prompt["version"]["text"],
+            }
+        ],
+        "variable_bindings": [
+            {
+                "placeholder": "animal",
+                "variable_list_id": "animals",
+                "values": ["cat", "dog"],
+                "selected_values": ["dog", "cat"],
+                "mode": "all",
+                "fixed_value": None,
+            }
+        ],
+        "reference_selections": [{"asset_id": "asset-2"}, {"asset_id": "asset-1"}],
+        "seed_intent": {"mode": "explicit", "values": [9, 3], "random_seed_count": None},
+        "selected_workflow_version": {
+            "id": workflow_version["id"],
+            "content_sha256": workflow_version["content_sha256"],
+            "workflow": workflow_version["workflow"],
+        },
+        "selected_workflow_profile_id": profile_created["workflow_profile"]["id"],
+        "selected_workflow_profile_version": {
+            "id": profile_version["id"],
+            "workflow_profile_id": profile_version["workflow_profile_id"],
+            "workflow_version_id": profile_version["workflow_version_id"],
+            "content_sha256": profile_version["content_sha256"],
+            "profile": profile_version["profile"],
+        },
+    }
 
 
 def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
@@ -426,6 +529,206 @@ def test_prompt_list_returns_latest_active_version_and_preserves_prompt_filter(
         assert http.post(f"/api/prompt-versions/{first_version['id']}/archive").status_code == 200
         all_archived = http.get(f"/api/projects/{project['id']}/prompts").json()["prompts"][0]
         assert all_archived["latest_active_version"] is None
+
+
+def test_workflow_and_profile_library_lifecycle_persists_across_restart(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+    workflow_data = request["workflow"]
+    profile_data = request["workflow_profile"]
+    assert isinstance(workflow_data, dict)
+    assert isinstance(profile_data, dict)
+    mappings = profile_data["mappings"]
+    assert isinstance(mappings, dict)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project"}
+        ).json()
+        workflow_created_response = http.post(
+            f"/api/projects/{project['id']}/workflows",
+            json={
+                "name": "Imported workflow",
+                "description": "Initial",
+                "workflow": workflow_data,
+                "note": "v1",
+            },
+        )
+        assert workflow_created_response.status_code == 201
+        workflow_created = workflow_created_response.json()
+        workflow_id = workflow_created["workflow"]["id"]
+        workflow_version_one = workflow_created["version"]
+
+        assert (
+            http.patch(
+                f"/api/workflows/{workflow_id}", json={"name": "Renamed workflow"}
+            ).status_code
+            == 200
+        )
+        duplicate_workflow_version = http.post(
+            f"/api/workflows/{workflow_id}/versions",
+            json={"workflow": dict(reversed(tuple(workflow_data.items())))},
+        )
+        assert duplicate_workflow_version.status_code == 201
+        workflow_version_two = duplicate_workflow_version.json()
+        assert workflow_version_two["version_number"] == 2
+        assert workflow_version_two["name_snapshot"] == "Renamed workflow"
+        assert workflow_version_two["content_sha256"] == workflow_version_one["content_sha256"]
+
+        listed_workflow = http.get(f"/api/projects/{project['id']}/workflows").json()["workflows"][
+            0
+        ]
+        assert listed_workflow["latest_active_version"]["id"] == workflow_version_two["id"]
+        assert listed_workflow["latest_active_version"]["workflow"] == workflow_data
+        assert (
+            http.get(f"/api/workflow-versions/{workflow_version_one['id']}").json()["workflow"]
+            == workflow_data
+        )
+
+        profile_created_response = http.post(
+            f"/api/workflows/{workflow_id}/profiles",
+            json={
+                "name": "Default profile",
+                "workflow_version_id": workflow_version_one["id"],
+                "mappings": mappings,
+            },
+        )
+        assert profile_created_response.status_code == 201
+        profile_created = profile_created_response.json()
+        profile_id = profile_created["workflow_profile"]["id"]
+        profile_version_one = profile_created["version"]
+        assert profile_created["workflow_profile"]["project_id"] == project["id"]
+        assert profile_version_one["project_id"] == project["id"]
+        assert profile_version_one["workflow_id"] == workflow_id
+        assert profile_version_one["profile"] == {
+            "id": profile_id,
+            "name": "Default profile",
+            "mappings": mappings,
+        }
+
+        assert (
+            http.patch(
+                f"/api/workflow-profiles/{profile_id}", json={"name": "Renamed profile"}
+            ).status_code
+            == 200
+        )
+        without_compatible_version = http.get(
+            f"/api/workflows/{workflow_id}/profiles",
+            params={"workflow_version_id": workflow_version_two["id"]},
+        ).json()["workflow_profiles"]
+        assert [item["id"] for item in without_compatible_version] == [profile_id]
+        assert without_compatible_version[0]["latest_compatible_version"] is None
+
+        profile_version_two_response = http.post(
+            f"/api/workflow-profiles/{profile_id}/versions",
+            json={
+                "workflow_version_id": workflow_version_two["id"],
+                "mappings": mappings,
+            },
+        )
+        assert profile_version_two_response.status_code == 201
+        profile_version_two = profile_version_two_response.json()
+        assert profile_version_two["name_snapshot"] == "Renamed profile"
+        assert (
+            len(http.get(f"/api/workflows/{workflow_id}/profiles").json()["workflow_profiles"]) == 1
+        )
+
+        compatible = http.get(
+            f"/api/workflows/{workflow_id}/profiles",
+            params={"workflow_version_id": workflow_version_one["id"]},
+        ).json()["workflow_profiles"]
+        assert compatible[0]["latest_compatible_version"]["id"] == profile_version_one["id"]
+
+        assert (
+            http.post(
+                f"/api/workflow-profile-versions/{profile_version_two['id']}/archive"
+            ).status_code
+            == 200
+        )
+        assert http.post(f"/api/workflow-profiles/{profile_id}/archive").status_code == 200
+        assert (
+            http.post(f"/api/workflow-versions/{workflow_version_two['id']}/archive").status_code
+            == 200
+        )
+        assert http.post(f"/api/workflows/{workflow_id}/archive").status_code == 200
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as restarted:
+        assert (
+            restarted.get(f"/api/workflow-versions/{workflow_version_one['id']}").status_code == 200
+        )
+        assert (
+            restarted.get(f"/api/workflow-profile-versions/{profile_version_one['id']}").status_code
+            == 200
+        )
+        assert restarted.get(f"/api/projects/{project['id']}/workflows").json() == {"workflows": []}
+        assert (
+            len(
+                restarted.get(
+                    f"/api/projects/{project['id']}/workflows",
+                    params={"include_archived": True},
+                ).json()["workflows"]
+            )
+            == 1
+        )
+
+
+def test_workflow_profile_api_rejects_invalid_mapping_and_cross_project_target(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+    workflow = request["workflow"]
+    profile = request["workflow_profile"]
+    assert isinstance(workflow, dict)
+    assert isinstance(profile, dict)
+    mappings = profile["mappings"]
+    assert isinstance(mappings, dict)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        first = http.post("/api/projects", json={"name": "First", "filesystem_key": "first"}).json()
+        second = http.post(
+            "/api/projects", json={"name": "Second", "filesystem_key": "second"}
+        ).json()
+        target = http.post(
+            f"/api/projects/{first['id']}/workflows",
+            json={"name": "Workflow", "workflow": workflow},
+        ).json()["version"]
+        foreign_target = http.post(
+            f"/api/projects/{second['id']}/workflows",
+            json={"name": "Foreign workflow", "workflow": workflow},
+        ).json()["version"]
+
+        invalid_mappings = dict(mappings)
+        invalid_mappings.pop("reference_image")
+        invalid = http.post(
+            f"/api/workflows/{target['workflow_id']}/profiles",
+            json={
+                "name": "Invalid",
+                "workflow_version_id": target["id"],
+                "mappings": invalid_mappings,
+            },
+        )
+        foreign = http.post(
+            f"/api/workflows/{target['workflow_id']}/profiles",
+            json={
+                "name": "Foreign",
+                "workflow_version_id": foreign_target["id"],
+                "mappings": mappings,
+            },
+        )
+
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_library_input"
+    assert foreign.status_code == 422
+    assert foreign.json()["error"]["code"] == "invalid_workflow_profile_target"
 
 
 def test_project_adoption_preserves_owner_identity_and_rejects_ownerless_directory(
@@ -659,6 +962,193 @@ def test_project_and_prompt_conflicts_use_stable_error_envelope(tmp_path: Path) 
         assert prompt_conflict.json()["error"]["code"] == "library_conflict"
 
 
+def test_saved_batch_lifecycle_is_durable_lightweight_and_project_scoped(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        first_project = http.post(
+            "/api/projects", json={"name": "First", "filesystem_key": "first"}
+        ).json()
+        second_project = http.post(
+            "/api/projects", json={"name": "Second", "filesystem_key": "second"}
+        ).json()
+        definition = _saved_batch_definition(http, first_project["id"])
+        created = http.post(
+            f"/api/projects/{first_project['id']}/batches",
+            json={"filesystem_key": "shared_key", **definition},
+        )
+        assert created.status_code == 201, created.text
+        batch = created.json()
+        assert batch["revision"] == 1
+        assert [item["asset_id"] for item in batch["reference_selections"]] == [
+            "asset-2",
+            "asset-1",
+        ]
+        assert batch["prompt_selections"][0]["prompt_name"] == "Saved prompt"
+        assert batch["prompt_selections"][0]["version_number"] == 1
+        assert batch["selected_workflow_version"]["workflow_name"] == "Saved workflow"
+        assert (
+            batch["selected_workflow_profile_version"]["workflow_profile_name"] == "Saved profile"
+        )
+        assert batch["selected_workflow_profile_name"] == "Saved profile"
+
+        listed = http.get(f"/api/projects/{first_project['id']}/batches").json()["batches"]
+        assert [item["id"] for item in listed] == [batch["id"]]
+        for omitted in (
+            "prompt_selections",
+            "variable_bindings",
+            "reference_selections",
+            "selected_workflow_version",
+        ):
+            assert omitted not in listed[0]
+
+        incomplete: dict[str, object] = {
+            "filesystem_key": "shared_key",
+            "name": "Incomplete",
+            "description": None,
+            "prompt_selections": [],
+            "variable_bindings": [
+                {
+                    "placeholder": "",
+                    "variable_list_id": "",
+                    "values": [],
+                    "selected_values": [],
+                    "mode": "all",
+                    "fixed_value": None,
+                }
+            ],
+            "reference_selections": [],
+            "seed_intent": {"mode": "random", "values": [], "random_seed_count": 3},
+            "selected_workflow_version": None,
+            "selected_workflow_profile_id": None,
+            "selected_workflow_profile_version": None,
+        }
+        other = http.post(f"/api/projects/{second_project['id']}/batches", json=incomplete)
+        assert other.status_code == 201, other.text
+
+        update = {**definition, "name": "Updated", "expected_revision": 1}
+        updated = http.patch(f"/api/batches/{batch['id']}", json=update)
+        stale = http.patch(f"/api/batches/{batch['id']}", json=update)
+        assert updated.status_code == 200
+        assert updated.json()["revision"] == 2
+        assert stale.status_code == 409
+        assert stale.json()["error"]["code"] == "saved_batch_revision_conflict"
+        archived = http.post(f"/api/batches/{batch['id']}/archive")
+        assert archived.status_code == 200
+        assert archived.json()["archived_at"] is not None
+        assert http.get(f"/api/projects/{first_project['id']}/batches").json() == {"batches": []}
+        assert (
+            len(
+                http.get(
+                    f"/api/projects/{first_project['id']}/batches",
+                    params={"include_archived": True},
+                ).json()["batches"]
+            )
+            == 1
+        )
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as restarted:
+        persisted = restarted.get(f"/api/batches/{batch['id']}")
+        assert persisted.status_code == 200
+        assert persisted.json()["name"] == "Updated"
+
+
+def test_saved_batch_owner_orphans_and_explicit_adoption(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project"}
+        ).json()
+        definition = _saved_batch_definition(http, project["id"])
+        invalid = copy.deepcopy(definition)
+        invalid_prompts = invalid["prompt_selections"]
+        assert isinstance(invalid_prompts, list)
+        invalid_prompts[0]["text"] = "not the immutable library text"
+        rejected = http.post(
+            f"/api/projects/{project['id']}/batches",
+            json={"filesystem_key": "orphan", **invalid},
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "saved_batch_integrity_error"
+        orphan_owner = BatchOwnerStore(settings.projects_root / "project").read("orphan")
+        assert orphan_owner.name == "Saved experiment"
+        publication_conflict = http.post(
+            f"/api/projects/{project['id']}/batches",
+            json={"filesystem_key": "orphan", **definition},
+        )
+        assert publication_conflict.status_code == 409
+        assert publication_conflict.json()["error"]["code"] == "saved_batch_publication_conflict"
+        assert http.get("/api/batches/missing").json()["error"]["code"] == ("saved_batch_not_found")
+
+        owners = BatchOwnerStore(settings.projects_root / "project")
+        owners.publish(BatchIdentity("owned-id", "owned", "Initial owned name"))
+        (settings.projects_root / "project" / "batches" / "ownerless").mkdir()
+        adoptable = http.get(f"/api/projects/{project['id']}/batches/adoptable").json()["batches"]
+        assert [(item["filesystem_key"], item["owner_state"]) for item in adoptable] == [
+            ("orphan", "owned"),
+            ("owned", "owned"),
+            ("ownerless", "ownerless"),
+        ]
+
+        owned = http.post(
+            f"/api/projects/{project['id']}/batches/adopt",
+            json={"filesystem_key": "owned", **definition},
+        )
+        assert owned.status_code == 201, owned.text
+        assert owned.json()["id"] == "owned-id"
+        missing_identity = http.post(
+            f"/api/projects/{project['id']}/batches/adopt",
+            json={"filesystem_key": "ownerless", **definition},
+        )
+        assert missing_identity.status_code == 422
+        adopted = http.post(
+            f"/api/projects/{project['id']}/batches/adopt",
+            json={"filesystem_key": "ownerless", "batch_id": "ownerless-id", **definition},
+        )
+        assert adopted.status_code == 201, adopted.text
+        assert adopted.json()["id"] == "ownerless-id"
+        remaining = http.get(f"/api/projects/{project['id']}/batches/adoptable").json()["batches"]
+        assert [item["filesystem_key"] for item in remaining] == ["orphan"]
+
+
+@pytest.mark.parametrize(
+    "seed_intent",
+    (
+        {"mode": "fixed", "values": [7], "random_seed_count": None},
+        {"mode": "explicit", "values": [7, 11], "random_seed_count": None},
+        {"mode": "random", "values": [], "random_seed_count": 4},
+    ),
+)
+def test_saved_batch_accepts_all_seed_intents(
+    tmp_path: Path, seed_intent: dict[str, object]
+) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project"}
+        ).json()
+        response = http.post(
+            f"/api/projects/{project['id']}/batches",
+            json={
+                "filesystem_key": f"batch_{seed_intent['mode']}",
+                "name": "Seed draft",
+                "description": None,
+                "seed_intent": seed_intent,
+            },
+        )
+    assert response.status_code == 201, response.text
+    assert response.json()["seed_mode"] == seed_intent["mode"]
+
+
 def _wait_for_status(http: TestClient, run_id: str, expected: str) -> ExecutionResponse:
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
@@ -858,6 +1348,102 @@ def test_preview_uses_production_compiler_order_and_preserves_warnings(tmp_path:
     assert body.warnings[0].code == "unused_binding"
 
 
+@pytest.mark.parametrize(
+    "mismatch",
+    ("project", "batch", "prompts", "bindings", "references", "workflow", "profile", "seeds"),
+)
+def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(("asset-1", "asset-2"))
+    snapshot = request["batch_snapshot"]
+    assert isinstance(snapshot, dict)
+    if mismatch == "project":
+        snapshot_project = snapshot["project"]
+        assert isinstance(snapshot_project, dict)
+        snapshot_project["name"] = "Other Project"
+    elif mismatch == "batch":
+        snapshot_batch = snapshot["batch"]
+        assert isinstance(snapshot_batch, dict)
+        snapshot_batch["name"] = "Other Batch"
+    elif mismatch == "prompts":
+        prompts = snapshot["prompt_versions"]
+        assert isinstance(prompts, list)
+        prompts[0] = {**prompts[0], "text": "Changed"}
+    elif mismatch == "bindings":
+        bindings = snapshot["variable_bindings"]
+        assert isinstance(bindings, list)
+        bindings[0] = {**bindings[0], "selected_values": ["cat"]}
+    elif mismatch == "references":
+        references = snapshot["references"]
+        assert isinstance(references, list)
+        references.reverse()
+    elif mismatch in {"workflow", "profile"}:
+        selection = snapshot["workflow_selection"]
+        assert isinstance(selection, dict)
+        selection["workflow" if mismatch == "workflow" else "workflow_profile"] = {}
+    else:
+        intent = snapshot["seed_intent"]
+        assert isinstance(intent, dict)
+        intent["values"] = [9]
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v4(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+    request["seeds"] = {"mode": "explicit", "values": [101, 202, 303]}
+    snapshot = request["batch_snapshot"]
+    assert isinstance(snapshot, dict)
+    snapshot["source_saved_batch"] = {"id": "saved-batch", "revision": 7}
+    snapshot["seed_intent"] = {
+        "mode": "random",
+        "values": [],
+        "random_seed_count": 3,
+    }
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        preview = http.post("/api/batches/preview", json=request)
+        created = http.post("/api/runs", json=request)
+
+    assert preview.status_code == 200
+    assert created.status_code == 201
+    run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+    manifest = json.loads((run_path / "manifest.json").read_text())
+    assert manifest["format_version"] == 4
+    expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
+    assert manifest["batch_snapshot"] == expected_snapshot
+    assert [job["seed"] for job in manifest["jobs"]] == [
+        101,
+        202,
+        303,
+        101,
+        202,
+        303,
+    ]
+
+    invalid = copy.deepcopy(request)
+    invalid["seeds"] = {"mode": "explicit", "values": [101, 202]}
+    with TestClient(
+        create_app(
+            _settings(tmp_path / "invalid"), client_factory=lambda _settings: FakeComfyUIClient()
+        )
+    ) as http:
+        mismatch = http.post("/api/batches/preview", json=invalid)
+    assert mismatch.status_code == 422
+    assert mismatch.json()["error"]["code"] == "invalid_request"
+
+
 def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     request = _batch_request(())
@@ -888,6 +1474,7 @@ def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_
         {"id": "animal", "name": "Animal", "text": "Portrait of {{animal}}"},
         {"id": "fixed", "name": "Fixed", "text": "A fixed portrait"},
     ]
+    _sync_batch_snapshot(request)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -955,6 +1542,7 @@ def test_api_rejects_duplicate_prompt_version_ids_as_an_invalid_batch(tmp_path: 
         {"id": "duplicate", "name": "One", "text": "One"},
         {"id": "duplicate", "name": "Two", "text": "Two"},
     ]
+    _sync_batch_snapshot(request)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -972,6 +1560,7 @@ def test_invalid_binding_returns_api_error(tmp_path: Path) -> None:
     bindings = request["variable_bindings"]
     assert isinstance(bindings, list)
     bindings[0]["selected_values"] = ["horse"]
+    _sync_batch_snapshot(request)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -1019,6 +1608,7 @@ def test_repeated_multi_prompt_run_creation_freezes_identical_plans_with_new_ide
         {"id": "animal", "name": "Animal", "text": "Portrait of {{animal}}"},
         {"id": "fixed", "name": "Fixed", "text": "A fixed portrait"},
     ]
+    _sync_batch_snapshot(request)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -1132,6 +1722,23 @@ def test_invalid_workflow_fails_without_partial_run_publication(tmp_path: Path) 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_workflow_profile"
     assert not tuple(settings.projects_root.glob("*/batches/*/run-*"))
+
+
+def test_preview_validates_the_same_workflow_profile_pair_as_run_creation(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request((), invalid_profile=True)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        preview = http.post("/api/batches/preview", json=request)
+        creation = http.post("/api/runs", json=request)
+
+    assert preview.status_code == creation.status_code == 422
+    assert preview.json()["error"]["code"] == "invalid_workflow_profile"
+    assert creation.json()["error"]["code"] == "invalid_workflow_profile"
 
 
 def test_run_creation_ignores_corrupt_unrelated_project_asset(

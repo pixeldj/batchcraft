@@ -292,6 +292,48 @@ describe("BatchcraftApiClient", () => {
       { signal },
     );
   });
+
+  it("uses the Project-scoped Workflow and Workflow Profile routes", async () => {
+    const fetchMock = repeatedSuccessfulFetch({ workflows: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient("http://api.test");
+    const signal = new AbortController().signal;
+
+    await client.listWorkflows("project/one", signal);
+    await client.createWorkflow("project one", { name: "Portrait", workflow: { node: 1 } });
+    await client.createWorkflowVersion("workflow one", { workflow: { node: 2 }, note: null });
+    await client.listWorkflowProfiles("workflow/one", undefined, signal);
+    await client.createWorkflowProfile("workflow one", { name: "Default", workflow_version_id: "version-1", mappings: { prompt: {} } });
+    await client.createWorkflowProfileVersion("profile one", { workflow_version_id: "version-2", mappings: { prompt: {} } });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://api.test/api/projects/project%2Fone/workflows",
+      "http://api.test/api/projects/project%20one/workflows",
+      "http://api.test/api/workflows/workflow%20one/versions",
+      "http://api.test/api/workflows/workflow%2Fone/profiles",
+      "http://api.test/api/workflows/workflow%20one/profiles",
+      "http://api.test/api/workflow-profiles/profile%20one/versions",
+    ]);
+    expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("archives logical and immutable Workflow records with POST subresources", async () => {
+    const fetchMock = repeatedSuccessfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient("http://api.test");
+
+    await client.archiveWorkflow("workflow/one");
+    await client.archiveWorkflowVersion("workflow-version/one");
+    await client.archiveWorkflowProfile("profile/one");
+    await client.archiveWorkflowProfileVersion("profile-version/one");
+
+    expect(fetchMock.mock.calls).toEqual([
+      ["http://api.test/api/workflows/workflow%2Fone/archive", { method: "POST" }],
+      ["http://api.test/api/workflow-versions/workflow-version%2Fone/archive", { method: "POST" }],
+      ["http://api.test/api/workflow-profiles/profile%2Fone/archive", { method: "POST" }],
+      ["http://api.test/api/workflow-profile-versions/profile-version%2Fone/archive", { method: "POST" }],
+    ]);
+  });
 });
 
 function successfulFetch(body: unknown) {
@@ -303,15 +345,51 @@ function successfulFetch(body: unknown) {
   );
 }
 
+function repeatedSuccessfulFetch(body: unknown) {
+  return vi.fn().mockImplementation(async () => new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  }));
+}
+
 function batchRequest() {
+  const project = { id: "project", filesystem_key: "project", name: "Project" };
+  const batch = { id: "batch", filesystem_key: "batch", name: "Batch" };
+  const promptVersions = [{ id: "prompt", name: "Portrait", text: "Portrait" }];
+  const references = [{ asset_id: "asset" }];
+  const seeds = { mode: "fixed" as const, values: [1] };
+  const workflow = {};
+  const workflowProfile = {};
   return {
-    project: { id: "project", filesystem_key: "project", name: "Project" },
-    batch: { id: "batch", filesystem_key: "batch", name: "Batch" },
-    prompt_versions: [{ id: "prompt", name: "Portrait", text: "Portrait" }],
+    project,
+    batch,
+    prompt_versions: promptVersions,
     variable_bindings: [],
-    references: [{ asset_id: "asset" }],
-    seeds: { mode: "fixed" as const, values: [1] },
-    workflow: {},
-    workflow_profile: {},
+    references,
+    seeds,
+    workflow,
+    workflow_profile: workflowProfile,
+    batch_snapshot: {
+      snapshot_version: 1 as const,
+      project,
+      source_saved_batch: null,
+      batch: { ...batch, description: null },
+      prompt_versions: promptVersions.map((prompt) => ({
+        ...prompt,
+        prompt_id: null,
+        version_number: null,
+      })),
+      variable_bindings: [],
+      references,
+      seed_intent: { mode: "fixed" as const, values: [1], random_seed_count: null },
+      workflow_selection: {
+        workflow_id: null,
+        workflow_version_id: null,
+        workflow_profile_id: null,
+        workflow_profile_version_id: null,
+        workflow,
+        workflow_profile: workflowProfile,
+      },
+    },
   };
 }

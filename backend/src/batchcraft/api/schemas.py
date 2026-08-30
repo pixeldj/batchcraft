@@ -1,11 +1,34 @@
+from dataclasses import asdict
 from datetime import datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
-from batchcraft.db import ProjectRecord, PromptListRecord, PromptRecord, PromptVersionRecord
+from batchcraft.db import (
+    ProjectRecord,
+    PromptListRecord,
+    PromptRecord,
+    PromptVersionRecord,
+    SavedBatchDefinition,
+    SavedBatchDetailRecord,
+    SavedBatchListRecord,
+    SavedBatchPromptSelection,
+    SavedBatchReferenceSelection,
+    SavedBatchSeedIntent,
+    SavedBatchSeedMode,
+    SavedBatchVariableBinding,
+    SavedBatchVariableBindingMode,
+    SavedBatchWorkflowProfileVersionSnapshot,
+    SavedBatchWorkflowVersionSnapshot,
+    WorkflowListRecord,
+    WorkflowProfileListRecord,
+    WorkflowProfileRecord,
+    WorkflowProfileVersionRecord,
+    WorkflowRecord,
+    WorkflowVersionRecord,
+)
 from batchcraft.domain import (
     BatchDefinition,
     CompilationWarning,
@@ -21,6 +44,7 @@ from batchcraft.domain import (
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
 from batchcraft.files import (
+    AdoptableBatch,
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
@@ -62,9 +86,81 @@ class ReferenceRequest(ApiModel):
     asset_id: str = Field(min_length=1)
 
 
+SafeSeed = Annotated[int, Field(strict=True, ge=0, le=2**53 - 1)]
+
+
 class SeedRequest(ApiModel):
     mode: SeedMode
-    values: list[int]
+    values: list[SafeSeed]
+
+
+class EditableSnapshotSourceSavedBatch(ApiModel):
+    id: str = Field(min_length=1)
+    revision: int = Field(strict=True, ge=1)
+
+
+class EditableSnapshotBatch(ApiModel):
+    id: str = Field(min_length=1)
+    filesystem_key: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str | None = None
+
+
+class EditableSnapshotPromptVersion(ApiModel):
+    id: str = Field(min_length=1)
+    prompt_id: str | None = Field(default=None, min_length=1)
+    version_number: int | None = Field(default=None, strict=True, ge=1)
+    name: str = Field(min_length=1)
+    text: str
+
+
+class EditableSnapshotVariableBinding(ApiModel):
+    placeholder: str = Field(min_length=1)
+    variable_list: VariableListRequest
+    mode: VariableBindingMode
+    selected_values: list[str] = Field(default_factory=list)
+    fixed_value: str | None = None
+
+
+class EditableSnapshotReference(ApiModel):
+    asset_id: str = Field(min_length=1)
+
+
+class EditableSnapshotSeedIntent(ApiModel):
+    mode: Literal["fixed", "explicit", "random"]
+    values: list[SafeSeed]
+    random_seed_count: int | None = Field(default=None, strict=True, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> Self:
+        if self.mode == "fixed" and (len(self.values) != 1 or self.random_seed_count is not None):
+            raise ValueError("fixed seed intent requires one value and no random count")
+        if self.mode == "explicit" and (not self.values or self.random_seed_count is not None):
+            raise ValueError("explicit seed intent requires values and no random count")
+        if self.mode == "random" and (self.values or self.random_seed_count is None):
+            raise ValueError("random seed intent requires a count and no values")
+        return self
+
+
+class EditableSnapshotWorkflowSelection(ApiModel):
+    workflow_id: str | None = Field(default=None, min_length=1)
+    workflow_version_id: str | None = Field(default=None, min_length=1)
+    workflow_profile_id: str | None = Field(default=None, min_length=1)
+    workflow_profile_version_id: str | None = Field(default=None, min_length=1)
+    workflow: dict[str, object]
+    workflow_profile: dict[str, object]
+
+
+class EditableBatchSnapshot(ApiModel):
+    snapshot_version: Literal[1]
+    project: IdentityRequest
+    source_saved_batch: EditableSnapshotSourceSavedBatch | None
+    batch: EditableSnapshotBatch
+    prompt_versions: list[EditableSnapshotPromptVersion]
+    variable_bindings: list[EditableSnapshotVariableBinding]
+    references: list[EditableSnapshotReference]
+    seed_intent: EditableSnapshotSeedIntent
+    workflow_selection: EditableSnapshotWorkflowSelection
 
 
 class BatchRequest(ApiModel):
@@ -76,6 +172,64 @@ class BatchRequest(ApiModel):
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
+    batch_snapshot: EditableBatchSnapshot
+
+    @model_validator(mode="after")
+    def validate_snapshot_consistency(self) -> Self:
+        snapshot = self.batch_snapshot
+        if snapshot.project != self.project:
+            raise ValueError("Batch snapshot Project identity does not match the request")
+        if (
+            snapshot.batch.id != self.batch.id
+            or snapshot.batch.filesystem_key != self.batch.filesystem_key
+            or snapshot.batch.name != self.batch.name
+        ):
+            raise ValueError("Batch snapshot identity does not match the request")
+        snapshot_prompts = [(item.id, item.name, item.text) for item in snapshot.prompt_versions]
+        request_prompts = [(item.id, item.name, item.text) for item in self.prompt_versions]
+        if snapshot_prompts != request_prompts:
+            raise ValueError("Batch snapshot PromptVersion order or content does not match")
+        snapshot_bindings = [
+            (
+                item.placeholder,
+                item.variable_list.id,
+                item.variable_list.values,
+                item.mode,
+                item.selected_values,
+                item.fixed_value,
+            )
+            for item in snapshot.variable_bindings
+        ]
+        request_bindings = [
+            (
+                item.placeholder,
+                item.variable_list.id,
+                item.variable_list.values,
+                item.mode,
+                item.selected_values,
+                item.fixed_value,
+            )
+            for item in self.variable_bindings
+        ]
+        if snapshot_bindings != request_bindings:
+            raise ValueError("Batch snapshot variable bindings do not match")
+        if [item.asset_id for item in snapshot.references] != [
+            item.asset_id for item in self.references
+        ]:
+            raise ValueError("Batch snapshot Reference Asset order does not match")
+        workflow = snapshot.workflow_selection
+        if workflow.workflow != self.workflow or workflow.workflow_profile != self.workflow_profile:
+            raise ValueError("Batch snapshot Workflow selection does not match")
+        intent = snapshot.seed_intent
+        if intent.mode == "random":
+            if (
+                self.seeds.mode is not SeedMode.EXPLICIT
+                or len(self.seeds.values) != intent.random_seed_count
+            ):
+                raise ValueError("Random seed intent does not match materialized request seeds")
+        elif intent.mode != self.seeds.mode.value or intent.values != self.seeds.values:
+            raise ValueError("Batch snapshot seed intent does not match request seeds")
+        return self
 
     def to_creation_input(self) -> RunCreationInput:
         return RunCreationInput(
@@ -114,6 +268,7 @@ class BatchRequest(ApiModel):
             ),
             workflow=self.workflow,
             workflow_profile=self.workflow_profile,
+            batch_snapshot=self.batch_snapshot.model_dump(mode="json"),
         )
 
 
@@ -192,6 +347,278 @@ class AdoptableProjectResponse(ApiModel):
 
 class AdoptableProjectsResponse(ApiModel):
     projects: list[AdoptableProjectResponse]
+
+
+class SavedBatchPromptSelectionRequest(ApiModel):
+    prompt_version_id: str = Field(min_length=1)
+    name_snapshot: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    prompt_id: str | None = Field(default=None, min_length=1)
+    prompt_name: str | None = Field(default=None, min_length=1)
+    version_number: int | None = Field(default=None, strict=True, ge=1)
+    prompt_archived_at: datetime | None = None
+    version_archived_at: datetime | None = None
+
+
+class SavedBatchVariableBindingRequest(ApiModel):
+    placeholder: str
+    variable_list_id: str
+    values: list[str]
+    selected_values: list[str]
+    mode: SavedBatchVariableBindingMode
+    fixed_value: str | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> Self:
+        if self.mode is SavedBatchVariableBindingMode.ALL and self.fixed_value is not None:
+            raise ValueError("all-mode binding cannot define a fixed value")
+        if self.mode is SavedBatchVariableBindingMode.FIXED and (
+            self.fixed_value is None or self.selected_values
+        ):
+            raise ValueError("fixed-mode binding requires a fixed value and no selected values")
+        return self
+
+
+class SavedBatchReferenceSelectionRequest(ApiModel):
+    asset_id: str = Field(min_length=1)
+
+
+class SavedBatchSeedIntentRequest(ApiModel):
+    mode: SavedBatchSeedMode
+    values: list[SafeSeed]
+    random_seed_count: int | None = Field(default=None, strict=True, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> Self:
+        if self.mode is SavedBatchSeedMode.FIXED and (
+            len(self.values) != 1 or self.random_seed_count is not None
+        ):
+            raise ValueError("fixed seed intent requires one value and no random count")
+        if self.mode is SavedBatchSeedMode.EXPLICIT and (
+            not self.values or self.random_seed_count is not None
+        ):
+            raise ValueError("explicit seed intent requires values and no random count")
+        if self.mode is SavedBatchSeedMode.RANDOM and (
+            self.values or self.random_seed_count is None
+        ):
+            raise ValueError("random seed intent requires a count and no values")
+        return self
+
+
+class SavedBatchWorkflowVersionRequest(ApiModel):
+    id: str = Field(min_length=1)
+    content_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    workflow: dict[str, object]
+    workflow_id: str | None = Field(default=None, min_length=1)
+    workflow_name: str | None = Field(default=None, min_length=1)
+    version_number: int | None = Field(default=None, strict=True, ge=1)
+    name_snapshot: str | None = Field(default=None, min_length=1)
+    workflow_archived_at: datetime | None = None
+    version_archived_at: datetime | None = None
+
+
+class SavedBatchWorkflowProfileVersionRequest(ApiModel):
+    id: str = Field(min_length=1)
+    workflow_profile_id: str = Field(min_length=1)
+    workflow_version_id: str = Field(min_length=1)
+    content_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    profile: dict[str, object]
+    workflow_profile_name: str | None = Field(default=None, min_length=1)
+    version_number: int | None = Field(default=None, strict=True, ge=1)
+    name_snapshot: str | None = Field(default=None, min_length=1)
+    workflow_profile_archived_at: datetime | None = None
+    version_archived_at: datetime | None = None
+
+
+class SavedBatchDefinitionRequest(ApiModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    prompt_selections: list[SavedBatchPromptSelectionRequest] = Field(default_factory=list)
+    variable_bindings: list[SavedBatchVariableBindingRequest] = Field(default_factory=list)
+    reference_selections: list[SavedBatchReferenceSelectionRequest] = Field(default_factory=list)
+    seed_intent: SavedBatchSeedIntentRequest
+    selected_workflow_version: SavedBatchWorkflowVersionRequest | None = None
+    selected_workflow_profile_id: str | None = Field(default=None, min_length=1)
+    selected_workflow_profile_version: SavedBatchWorkflowProfileVersionRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_definition(self) -> Self:
+        if not self.name.strip():
+            raise ValueError("Saved Batch name must be nonblank")
+        if self.description is not None and not self.description.strip():
+            raise ValueError("Saved Batch description must be nonblank when provided")
+        profile = self.selected_workflow_profile_version
+        if profile is not None and profile.workflow_profile_id != self.selected_workflow_profile_id:
+            raise ValueError("Workflow Profile version must match the selected logical Profile")
+        return self
+
+    def to_definition(self) -> SavedBatchDefinition:
+        workflow = self.selected_workflow_version
+        profile = self.selected_workflow_profile_version
+        return SavedBatchDefinition(
+            name=self.name,
+            description=self.description,
+            seed_intent=SavedBatchSeedIntent(
+                mode=self.seed_intent.mode,
+                values=tuple(self.seed_intent.values),
+                random_seed_count=self.seed_intent.random_seed_count,
+            ),
+            prompt_selections=tuple(
+                SavedBatchPromptSelection(item.prompt_version_id, item.name_snapshot, item.text)
+                for item in self.prompt_selections
+            ),
+            variable_bindings=tuple(
+                SavedBatchVariableBinding(
+                    placeholder=item.placeholder,
+                    variable_list_id=item.variable_list_id,
+                    values=tuple(item.values),
+                    selected_values=tuple(item.selected_values),
+                    mode=item.mode,
+                    fixed_value=item.fixed_value,
+                )
+                for item in self.variable_bindings
+            ),
+            reference_selections=tuple(
+                SavedBatchReferenceSelection(item.asset_id) for item in self.reference_selections
+            ),
+            selected_workflow_version=(
+                None
+                if workflow is None
+                else SavedBatchWorkflowVersionSnapshot(
+                    id=workflow.id,
+                    content_sha256=workflow.content_sha256,
+                    workflow=workflow.workflow,
+                )
+            ),
+            selected_workflow_profile_id=self.selected_workflow_profile_id,
+            selected_workflow_profile_version=(
+                None
+                if profile is None
+                else SavedBatchWorkflowProfileVersionSnapshot(
+                    id=profile.id,
+                    workflow_profile_id=profile.workflow_profile_id,
+                    workflow_version_id=profile.workflow_version_id,
+                    content_sha256=profile.content_sha256,
+                    profile=profile.profile,
+                )
+            ),
+        )
+
+
+class SavedBatchCreateRequest(SavedBatchDefinitionRequest):
+    filesystem_key: str = Field(min_length=1)
+
+
+class SavedBatchAdoptRequest(SavedBatchCreateRequest):
+    batch_id: str | None = Field(default=None, min_length=1)
+
+
+class SavedBatchUpdateRequest(SavedBatchDefinitionRequest):
+    expected_revision: int = Field(strict=True, ge=1)
+
+
+class SavedBatchListResponse(ApiModel):
+    id: str
+    project_id: str
+    filesystem_key: str
+    name: str
+    revision: int
+    updated_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, batch: SavedBatchListRecord | SavedBatchDetailRecord) -> Self:
+        return cls(
+            id=batch.id,
+            project_id=batch.project_id,
+            filesystem_key=batch.filesystem_key,
+            name=batch.name,
+            revision=batch.revision,
+            updated_at=batch.updated_at,
+            archived_at=batch.archived_at,
+        )
+
+
+class SavedBatchDetailResponse(SavedBatchListResponse):
+    description: str | None
+    seed_mode: SavedBatchSeedMode
+    seed_values: list[int]
+    random_seed_count: int | None
+    selected_workflow_version_id: str | None
+    selected_workflow_profile_id: str | None
+    selected_workflow_profile_version_id: str | None
+    created_at: datetime
+    prompt_selections: list[SavedBatchPromptSelectionRequest]
+    variable_bindings: list[SavedBatchVariableBindingRequest]
+    reference_selections: list[SavedBatchReferenceSelectionRequest]
+    selected_workflow_version: SavedBatchWorkflowVersionRequest | None
+    selected_workflow_profile_name: str | None
+    selected_workflow_profile_archived_at: datetime | None
+    selected_workflow_profile_version: SavedBatchWorkflowProfileVersionRequest | None
+
+    @classmethod
+    def from_detail(cls, batch: SavedBatchDetailRecord) -> Self:
+        return cls.model_validate(
+            {
+                **SavedBatchListResponse.from_record(batch).model_dump(),
+                "description": batch.description,
+                "seed_mode": batch.seed_mode,
+                "seed_values": list(batch.seed_values),
+                "random_seed_count": batch.random_seed_count,
+                "selected_workflow_version_id": batch.selected_workflow_version_id,
+                "selected_workflow_profile_id": batch.selected_workflow_profile_id,
+                "selected_workflow_profile_version_id": (
+                    batch.selected_workflow_profile_version_id
+                ),
+                "created_at": batch.created_at,
+                "prompt_selections": [asdict(item) for item in batch.prompt_selections],
+                "variable_bindings": [
+                    {
+                        "placeholder": item.placeholder,
+                        "variable_list_id": item.variable_list_id,
+                        "values": list(item.values),
+                        "selected_values": list(item.selected_values),
+                        "mode": item.mode,
+                        "fixed_value": item.fixed_value,
+                    }
+                    for item in batch.variable_bindings
+                ],
+                "reference_selections": [asdict(item) for item in batch.reference_selections],
+                "selected_workflow_version": (
+                    None
+                    if batch.selected_workflow_version is None
+                    else asdict(batch.selected_workflow_version)
+                ),
+                "selected_workflow_profile_name": batch.selected_workflow_profile_name,
+                "selected_workflow_profile_archived_at": (
+                    batch.selected_workflow_profile_archived_at
+                ),
+                "selected_workflow_profile_version": (
+                    None
+                    if batch.selected_workflow_profile_version is None
+                    else asdict(batch.selected_workflow_profile_version)
+                ),
+            }
+        )
+
+
+class SavedBatchesResponse(ApiModel):
+    batches: list[SavedBatchListResponse]
+
+
+class AdoptableBatchResponse(ApiModel):
+    filesystem_key: str
+    owner_state: Literal["owned", "ownerless"]
+    batch_id: str | None
+    initial_name: str | None
+
+    @classmethod
+    def from_candidate(cls, batch: AdoptableBatch) -> Self:
+        return cls(**{field: getattr(batch, field) for field in cls.model_fields})
+
+
+class AdoptableBatchesResponse(ApiModel):
+    batches: list[AdoptableBatchResponse]
 
 
 class PromptCreateRequest(ApiModel):
@@ -297,6 +724,179 @@ class PromptVersionsResponse(ApiModel):
 class PromptCreatedResponse(ApiModel):
     prompt: PromptResponse
     version: LibraryPromptVersionResponse
+
+
+class WorkflowCreateRequest(ApiModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    workflow: dict[str, object]
+    note: str | None = None
+
+
+class WorkflowUpdateRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("at least one Workflow field is required")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Workflow name cannot be null")
+        return self
+
+
+class WorkflowVersionCreateRequest(ApiModel):
+    workflow: dict[str, object]
+    note: str | None = None
+
+
+class WorkflowResponse(ApiModel):
+    id: str
+    project_id: str
+    name: str
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, workflow: WorkflowRecord) -> Self:
+        return cls(**{field: getattr(workflow, field) for field in cls.model_fields})
+
+
+class WorkflowVersionResponse(ApiModel):
+    id: str
+    workflow_id: str
+    project_id: str
+    version_number: int
+    name_snapshot: str
+    workflow: dict[str, object]
+    content_sha256: str
+    note: str | None
+    created_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, version: WorkflowVersionRecord) -> Self:
+        return cls(**{field: getattr(version, field) for field in cls.model_fields})
+
+
+class WorkflowListResponse(WorkflowResponse):
+    latest_active_version: WorkflowVersionResponse | None
+
+    @classmethod
+    def from_list_record(cls, workflow: WorkflowListRecord) -> Self:
+        return cls(
+            **{field: getattr(workflow, field) for field in WorkflowResponse.model_fields},
+            latest_active_version=(
+                None
+                if workflow.latest_active_version is None
+                else WorkflowVersionResponse.from_record(workflow.latest_active_version)
+            ),
+        )
+
+
+class WorkflowsResponse(ApiModel):
+    workflows: list[WorkflowListResponse]
+
+
+class WorkflowVersionsResponse(ApiModel):
+    workflow_versions: list[WorkflowVersionResponse]
+
+
+class WorkflowCreatedResponse(ApiModel):
+    workflow: WorkflowResponse
+    version: WorkflowVersionResponse
+
+
+class WorkflowProfileCreateRequest(ApiModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    workflow_version_id: str = Field(min_length=1)
+    mappings: dict[str, object]
+    note: str | None = None
+
+
+class WorkflowProfileUpdateRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("at least one Workflow Profile field is required")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Workflow Profile name cannot be null")
+        return self
+
+
+class WorkflowProfileVersionCreateRequest(ApiModel):
+    workflow_version_id: str = Field(min_length=1)
+    mappings: dict[str, object]
+    note: str | None = None
+
+
+class WorkflowProfileResponse(ApiModel):
+    id: str
+    workflow_id: str
+    project_id: str
+    name: str
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, profile: WorkflowProfileRecord) -> Self:
+        return cls(**{field: getattr(profile, field) for field in cls.model_fields})
+
+
+class WorkflowProfileVersionResponse(ApiModel):
+    id: str
+    workflow_profile_id: str
+    workflow_id: str
+    project_id: str
+    workflow_version_id: str
+    version_number: int
+    name_snapshot: str
+    profile: dict[str, object]
+    content_sha256: str
+    note: str | None
+    created_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, version: WorkflowProfileVersionRecord) -> Self:
+        return cls(**{field: getattr(version, field) for field in cls.model_fields})
+
+
+class WorkflowProfileListResponse(WorkflowProfileResponse):
+    latest_compatible_version: WorkflowProfileVersionResponse | None
+
+    @classmethod
+    def from_list_record(cls, profile: WorkflowProfileListRecord) -> Self:
+        return cls(
+            **{field: getattr(profile, field) for field in WorkflowProfileResponse.model_fields},
+            latest_compatible_version=(
+                None
+                if profile.latest_compatible_version is None
+                else WorkflowProfileVersionResponse.from_record(profile.latest_compatible_version)
+            ),
+        )
+
+
+class WorkflowProfilesResponse(ApiModel):
+    workflow_profiles: list[WorkflowProfileListResponse]
+
+
+class WorkflowProfileVersionsResponse(ApiModel):
+    workflow_profile_versions: list[WorkflowProfileVersionResponse]
+
+
+class WorkflowProfileCreatedResponse(ApiModel):
+    workflow_profile: WorkflowProfileResponse
+    version: WorkflowProfileVersionResponse
 
 
 class ComfyUIStatusResponse(ApiModel):

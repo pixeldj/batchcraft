@@ -28,6 +28,7 @@ export interface BatchFormState {
   batchId: string;
   batchFilesystemKey: string;
   batchName: string;
+  batchDescription: string;
   prompts: PromptForm[];
   variableBindings: VariableBindingForm[];
   referenceAssetIds: string[];
@@ -36,6 +37,22 @@ export interface BatchFormState {
   randomSeedCount: string;
   workflowJson: string;
   workflowProfileJson: string;
+  workflowLibraryProjectId: string | null;
+  workflowId: string | null;
+  workflowName: string;
+  workflowVersionId: string | null;
+  workflowVersionNumber: number | null;
+  workflowContentSha256: string | null;
+  workflowProfileId: string | null;
+  workflowProfileName: string;
+  workflowProfileVersionId: string | null;
+  workflowProfileVersionNumber: number | null;
+  workflowProfileWorkflowVersionId: string | null;
+  workflowProfileContentSha256: string | null;
+}
+
+export interface BatchRequestContext {
+  sourceSavedBatch: { id: string; revision: number } | null;
 }
 
 export const MAX_RANDOM_SEED_COUNT = 100;
@@ -84,6 +101,7 @@ export function initialBatchForm(): BatchFormState {
     batchId: "batch-1",
     batchFilesystemKey: "batch_1",
     batchName: "First experiment",
+    batchDescription: "",
     prompts: [],
     variableBindings: [binding],
     referenceAssetIds: [],
@@ -105,6 +123,18 @@ export function initialBatchForm(): BatchFormState {
       null,
       2,
     ),
+    workflowLibraryProjectId: null,
+    workflowId: null,
+    workflowName: "",
+    workflowVersionId: null,
+    workflowVersionNumber: null,
+    workflowContentSha256: null,
+    workflowProfileId: null,
+    workflowProfileName: "",
+    workflowProfileVersionId: null,
+    workflowProfileVersionNumber: null,
+    workflowProfileWorkflowVersionId: null,
+    workflowProfileContentSha256: null,
   };
 }
 
@@ -118,7 +148,10 @@ export class FormBuildError extends Error {
   }
 }
 
-export function buildBatchRequest(form: BatchFormState): BatchRequest {
+export function buildBatchRequest(
+  form: BatchFormState,
+  context: BatchRequestContext = { sourceSavedBatch: null },
+): BatchRequest {
   if (form.prompts.length === 0) {
     throw new FormBuildError("prompts", "Add at least one PromptVersion.");
   }
@@ -131,46 +164,107 @@ export function buildBatchRequest(form: BatchFormState): BatchRequest {
       `${crossProjectPrompt.promptName || crossProjectPrompt.snapshotName} belongs to another Project. Replace or remove it before Preview.`,
     );
   }
+  if (form.workflowLibraryProjectId !== null) {
+    if (form.workflowLibraryProjectId !== form.projectId.trim()) {
+      throw new FormBuildError(
+        "workflow",
+        "The selected Workflow belongs to another Project. Replace it before Preview.",
+      );
+    }
+    if (
+      !form.workflowId ||
+      !form.workflowVersionId ||
+      !form.workflowProfileId ||
+      !form.workflowProfileVersionId ||
+      form.workflowProfileWorkflowVersionId !== form.workflowVersionId
+    ) {
+      throw new FormBuildError(
+        "workflow_profile",
+        "Choose a compatible ProfileVersion for the selected WorkflowVersion before Preview.",
+      );
+    }
+  }
   const references = form.referenceAssetIds;
 
   const seedInput = form.seedMode === "random"
     ? { mode: "explicit" as const, values: generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)) }
     : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
 
+  const project = {
+    id: required(form.projectId, "project", "Project ID"),
+    filesystem_key: required(form.projectFilesystemKey, "project", "Project filesystem key"),
+    name: required(form.projectName, "project", "Project name"),
+  };
+  const batch = {
+    id: required(form.batchId, "batch", "Batch ID"),
+    filesystem_key: required(form.batchFilesystemKey, "batch", "Batch filesystem key"),
+    name: required(form.batchName, "batch", "Batch name"),
+  };
+  const promptVersions = form.prompts.map((prompt, index) => ({
+    id: required(prompt.versionId, "prompts", `Prompt ${index + 1} ID`),
+    name: required(prompt.snapshotName, "prompts", `Prompt ${index + 1} name`),
+    text: prompt.text,
+  }));
+  const variableBindings = form.variableBindings.map((binding) => ({
+    placeholder: required(binding.placeholder, "variables", "Placeholder"),
+    variable_list: {
+      id: required(binding.variableListId, "variables", "Variable List ID"),
+      values: splitListValues(binding.values),
+    },
+    mode: binding.mode,
+    selected_values: binding.mode === "all" ? splitListValues(binding.selectedValues) : [],
+    fixed_value: binding.mode === "fixed" ? binding.fixedValue : null,
+  }));
+  const referenceRequests = references.map((assetId) => ({ asset_id: assetId }));
+  const workflow = parseJsonObject(form.workflowJson, "workflow", "Workflow");
+  const workflowProfile = parseJsonObject(
+    form.workflowProfileJson,
+    "workflow_profile",
+    "Workflow Profile",
+  );
+  const seedIntent = form.seedMode === "random"
+    ? {
+      mode: "random" as const,
+      values: [],
+      random_seed_count: parseRandomSeedCount(form.randomSeedCount),
+    }
+    : {
+      mode: form.seedMode,
+      values: seedInput.values,
+      random_seed_count: null,
+    };
+
   return {
-    project: {
-      id: required(form.projectId, "project", "Project ID"),
-      filesystem_key: required(form.projectFilesystemKey, "project", "Project filesystem key"),
-      name: required(form.projectName, "project", "Project name"),
-    },
-    batch: {
-      id: required(form.batchId, "batch", "Batch ID"),
-      filesystem_key: required(form.batchFilesystemKey, "batch", "Batch filesystem key"),
-      name: required(form.batchName, "batch", "Batch name"),
-    },
-    prompt_versions: form.prompts.map((prompt, index) => ({
-      id: required(prompt.versionId, "prompts", `Prompt ${index + 1} ID`),
-      name: required(prompt.snapshotName, "prompts", `Prompt ${index + 1} name`),
-      text: prompt.text,
-    })),
-    variable_bindings: form.variableBindings.map((binding) => ({
-      placeholder: required(binding.placeholder, "variables", "Placeholder"),
-      variable_list: {
-        id: required(binding.variableListId, "variables", "Variable List ID"),
-        values: splitListValues(binding.values),
-      },
-      mode: binding.mode,
-      selected_values: binding.mode === "all" ? splitListValues(binding.selectedValues) : [],
-      fixed_value: binding.mode === "fixed" ? binding.fixedValue : null,
-    })),
-    references: references.map((assetId) => ({ asset_id: assetId })),
+    project,
+    batch,
+    prompt_versions: promptVersions,
+    variable_bindings: variableBindings,
+    references: referenceRequests,
     seeds: seedInput,
-    workflow: parseJsonObject(form.workflowJson, "workflow", "Workflow"),
-    workflow_profile: parseJsonObject(
-      form.workflowProfileJson,
-      "workflow_profile",
-      "Workflow Profile",
-    ),
+    workflow,
+    workflow_profile: workflowProfile,
+    batch_snapshot: {
+      snapshot_version: 1,
+      project,
+      source_saved_batch: context.sourceSavedBatch,
+      batch: { ...batch, description: form.batchDescription.trim() || null },
+      prompt_versions: promptVersions.map((prompt, index) => ({
+        ...prompt,
+        prompt_id: form.prompts[index].promptId,
+        version_number: form.prompts[index].versionNumber,
+      })),
+      variable_bindings: variableBindings,
+      references: referenceRequests,
+      seed_intent: seedIntent,
+      workflow_selection: {
+        workflow_id: form.workflowId,
+        workflow_version_id: form.workflowVersionId,
+        workflow_profile_id: form.workflowProfileId,
+        workflow_profile_version_id: form.workflowProfileVersionId,
+        workflow,
+        workflow_profile: workflowProfile,
+      },
+    },
   };
 }
 
@@ -208,8 +302,8 @@ function parseSeedValues(value: string): number[] {
       throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is not an integer.`);
     }
     const seed = Number(item);
-    if (!Number.isSafeInteger(seed)) {
-      throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is outside the safe integer range.`);
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} must be a nonnegative safe integer.`);
     }
     return seed;
   });

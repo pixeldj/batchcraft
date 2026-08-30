@@ -125,16 +125,17 @@ This layout is illustrative, not mandatory. Avoid creating abstractions before b
 
 The first application slice follows this split. `api/` owns HTTP DTOs, routes, status codes, CORS, configuration, and lifecycle. `application/` coordinates the existing production packages and provides narrow Run/asset discovery plus an in-process Run task registry. It contains no generic repository, command bus, event bus, or scheduler framework.
 
-Mutable Batch definitions are not durably persisted in this slice. The browser may retain a
-best-effort working draft and ordered Run identities in tab-scoped `sessionStorage`, but it must
-compile that restored draft again before Run creation. The Run identities rebuild a Batch-scoped
-working-session Results gallery from backend-authoritative Run and Result data; they are not a
-Project-wide history index. Preview and Run creation use the same complete Batch request snapshot.
-Frontend Random seed intent is materialized before that snapshot reaches the API; the backend and pure
-compiler receive only concrete Fixed or Explicit seed input. Successful Run publication freezes the
-durable execution plan and provenance. SQLite now owns current Project metadata and the immutable-
-version Prompt library; mutable Batch persistence and searchable filesystem-derived indexes remain
-later slices.
+Saved Batch definitions are durably persisted in SQLite with a monotonic `revision`; the browser may
+additionally retain a best-effort working draft and ordered Run identities in tab-scoped
+`sessionStorage`, but it must compile that restored draft again before Run creation. The Run
+identities rebuild a Batch-scoped working-session Results gallery from backend-authoritative Run and
+Result data; they are not a Project-wide history index. Preview and Run creation use the same complete
+Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
+materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
+Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
+provenance into manifest v4. SQLite now owns current Project metadata, the immutable-version Prompt,
+Workflow, and Workflow Profile libraries, and mutable Saved Batches; searchable filesystem-derived
+indexes remain a later slice.
 
 ## Application Queue
 
@@ -204,14 +205,26 @@ No prompt expansion should occur inside ComfyUI for core batchcraft functionalit
 
 ## Workflow Profile Boundary
 
-A Workflow Profile stores:
+A logical Workflow Profile belongs to one Project-scoped Workflow. Its immutable versions each target
+one exact immutable WorkflowVersion and store a complete `{id, name, mappings}` snapshot. Changing a
+WorkflowVersion never edits or retargets an existing ProfileVersion.
+
+Logical Profiles remain discoverable when the selected WorkflowVersion has no compatible
+ProfileVersion. The frontend may copy mappings from the latest active prior version into a new version
+under the same logical Profile. That copy is validated against the new WorkflowVersion, and invalid
+mappings must be repaired before the immutable version is created.
+A Workflow Profile snapshot stores:
 
 - an API-format ComfyUI workflow snapshot or version reference;
 - friendly exposed input definitions;
 - mappings from those inputs to node IDs and input fields;
 - metadata describing required input types.
 
-A Run stores both the imported base API workflow and a separate snapshot of the Workflow Profile mappings used to compile it. Per-Job resolved friendly values remain in the canonical JSON manifest.
+A Workflow/Profile pair may be the active selection on a mutable Saved Batch; that mutable selection
+state does not change how the immutable version snapshots are stored or validated.
+
+A Run stores both the imported base API workflow and a separate snapshot of the Workflow Profile
+mappings used to compile it. Per-Job resolved friendly values remain in the canonical JSON manifest.
 
 Example mapping:
 
@@ -232,6 +245,14 @@ Example mapping:
 
 Jobs refer to friendly exposed fields. ComfyUI-specific node mutation happens inside the workflow adapter.
 
+## Saved Batch vs Run Boundary
+
+Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
+boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
+Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
+the plan and provenance into manifest v4. Editing a Saved Batch after Run creation never alters the
+existing Run.
+
 ## Persistence Strategy
 
 ### SQLite
@@ -239,14 +260,15 @@ Jobs refer to friendly exposed fields. ComfyUI-specific node mutation happens in
 SQLite currently stores:
 
 - projects;
-- logical Prompts and immutable PromptVersions.
+- logical Prompts and immutable PromptVersions;
+- logical Workflows and immutable WorkflowVersions;
+- logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
+- mutable Saved Batches with ordered prompt, variable-binding, and reference selections.
 
 Later migrations may add:
 
 - Variable Lists;
 - reference metadata;
-- Workflow Profiles;
-- Batch definitions;
 - Run index/status;
 - Job index/status;
 - Result index;

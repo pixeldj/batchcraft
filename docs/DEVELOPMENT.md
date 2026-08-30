@@ -5,8 +5,8 @@
 This document defines the expected development workflow for **batchcraft**.
 
 The project has entered production application development. The backend has a thin FastAPI boundary,
-the first React browser workflow is implemented, and SQLite Phase 1 provides migrations, Projects,
-and the Prompt library.
+the first React browser workflow is implemented, and SQLite provides migrations, Projects, and the
+immutable-version Prompt, Workflow, and Workflow Profile libraries.
 
 ## Supported Development Environment
 
@@ -177,6 +177,25 @@ ordered concrete PromptVersion snapshots, loads history lazily, and keeps unavai
 snapshots detached instead of silently substituting another version. This phase does not persist
 Batches, index filesystem Runs or Assets, or add scheduler state.
 
+### Phase 2.3: Workflow and Workflow Profile libraries
+
+Completed. SQLite stores Project-scoped logical Workflows and Workflow Profiles plus immutable,
+canonical, hashed versions. Each ProfileVersion targets one exact WorkflowVersion and contains a
+Run-compatible profile snapshot. Preview and Run creation still receive complete effective snapshots;
+library IDs never replace frozen Run provenance.
+
+The frontend session schema is version 8. It replaces manual Batch identity fields with the Saved
+Batch selector, preserves exact Workflow/Profile snapshots alongside optional library linkage, and
+stores the `batch_snapshot` required by Preview and Run creation. The selector lists active SQLite
+Saved Batches keyed to the verified Project; selection loads the Batch's stored prompt, variable,
+reference, seed, and workflow intent. Manual Batch identity fields are no longer editable. Deliberately selecting an
+incompatible WorkflowVersion clears the effective Profile snapshot and blocks Preview until a
+compatible ProfileVersion is selected. The logical Profile remains selected and visible. The editor
+can copy mappings from its latest active prior version to create a new immutable version for the
+selected WorkflowVersion; validation failures open the copied mappings for repair. Switching back
+restores an existing compatible version. Missing or legacy library records detach without rewriting
+their exact snapshots.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -255,6 +274,11 @@ and displays backend-returned PromptVersion identity in Preview. It does not cal
 or infer provenance from resolved prompt text. Prompt library refresh and logical Prompt rename must
 never replace a selected immutable snapshot. Archived or missing selections detach while retaining
 their exact stored identity, name snapshot, and text; known cross-Project selections block Preview.
+
+Workflow and Workflow Profile selectors follow the same snapshot rule. Logical metadata changes do
+not invalidate Preview, while selecting another immutable version does. Linked selections must belong
+to the verified Project and target the exact selected WorkflowVersion. Detached legacy snapshots
+remain usable after backend workflow/Profile validation.
 
 From `frontend/`, install and run the development server:
 

@@ -9,13 +9,22 @@ import type {
   ResultResponse,
   RunCreatedResponse,
   RunStatus,
+  SavedBatchDetail,
 } from "./api/types";
 import { BatchEditor } from "./features/batch/BatchEditor";
 import { PreviewPanel } from "./features/batch/PreviewPanel";
 import {
   buildBatchRequest,
+  initialBatchForm,
   type BatchFormState,
 } from "./features/batch/form";
+import {
+  buildSavedBatchCreate,
+  buildSavedBatchUpdate,
+  canonicalBatchIntent,
+  savedBatchToForm,
+} from "./features/batch/savedBatch";
+import type { SavedBatchCreateInput } from "./features/batch/SavedBatchSelector";
 import {
   BatchResultsGallery,
   type BatchGalleryRun,
@@ -48,6 +57,17 @@ interface PreviewRunAssociation {
   runId: string;
   runNumber: number;
   consistent: boolean;
+}
+
+interface SavedBatchLink {
+  id: string;
+  revision: number;
+  baseline: string;
+}
+
+interface SavedBatchConflict {
+  kind: "save" | "session";
+  batchId: string;
 }
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked"]);
@@ -84,6 +104,14 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [batchError, setBatchError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [consistencyError, setConsistencyError] = useState<string | null>(null);
+  const [savedBatchLink, setSavedBatchLink] = useState<SavedBatchLink | null>(null);
+  const [savedBatchConflict, setSavedBatchConflict] = useState<SavedBatchConflict | null>(null);
+  const [savingBatch, setSavingBatch] = useState(false);
+  const [savedBatchListRefresh, setSavedBatchListRefresh] = useState(0);
+  const [saveAsRequest, setSaveAsRequest] = useState(false);
+  const [savedBatchRestorePending, setSavedBatchRestorePending] = useState(
+    initialSession.selectedSavedBatchId !== null,
+  );
   const formRevision = useRef(0);
   const runRevision = useRef(0);
   const initialBatchIdentity = useRef(batchIdentity(initialSession.form));
@@ -93,8 +121,69 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   currentBatchIdentityRef.current = currentBatchIdentity;
 
   useEffect(() => {
-    saveWorkingSession(form, currentRunId, sessionRunIds, selectedProjectId);
-  }, [currentRunId, form, selectedProjectId, sessionRunIds]);
+    saveWorkingSession(
+      form,
+      currentRunId,
+      sessionRunIds,
+      selectedProjectId,
+      undefined,
+      savedBatchLink?.id ?? null,
+      savedBatchLink?.revision ?? null,
+    );
+  }, [currentRunId, form, savedBatchLink, selectedProjectId, sessionRunIds]);
+
+  const formRef = useRef(form);
+  formRef.current = form;
+
+  useEffect(() => {
+    if (!savedBatchRestorePending) return;
+    if (!projectVerified || !selectedProjectId) return;
+    if (selectedProjectId !== formRef.current.projectId) return;
+    const batchId = initialSession.selectedSavedBatchId;
+    if (!batchId) {
+      setSavedBatchRestorePending(false);
+      return;
+    }
+    const baseRevision = initialSession.savedBatchBaseRevision;
+    const project = projectSnapshot(formRef.current);
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const detail = await api.getSavedBatch(batchId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (
+          detail.project_id === project.id &&
+          baseRevision !== null &&
+          detail.revision === baseRevision
+        ) {
+          const baselineForm = savedBatchToForm(detail, project);
+          setSavedBatchLink({
+            id: detail.id,
+            revision: detail.revision,
+            baseline: canonicalBatchIntent(baselineForm),
+          });
+        } else {
+          setSavedBatchConflict({ kind: "session", batchId });
+        }
+      } catch (caught) {
+        if (isAbort(caught) || controller.signal.aborted) return;
+        if (caught instanceof ApiError && caught.code === "saved_batch_not_found") {
+          setSessionMessage(
+            "The Saved Batch for this browser draft was not found. The draft remains unsaved; use Save As to keep it.",
+          );
+        } else {
+          setSessionMessage(
+            `The Saved Batch for this browser draft could not be verified. ${errorMessage(caught)}`,
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setSavedBatchRestorePending(false);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [api, initialSession, projectVerified, savedBatchRestorePending, selectedProjectId]);
 
   useEffect(() => {
     if (
@@ -278,6 +367,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setForm((current) => ({ ...current, prompts }));
   }
 
+  function changeWorkflowMetadata(next: BatchFormState) {
+    setForm(next);
+  }
+
   function reconnectProject(project: ProjectResponse) {
     setSelectedProjectId(project.id);
     setProjectVerified(true);
@@ -319,13 +412,140 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setRunRestoreUnresolved(false);
     setConsistencyError(null);
     setSessionMessage(null);
+    setSavedBatchLink(null);
+    setSavedBatchConflict(null);
+    setSavedBatchRestorePending(false);
+    const fresh = initialBatchForm();
     changeForm({
       ...form,
       projectId: project.id,
       projectFilesystemKey: project.filesystem_key,
       projectName: project.name,
+      batchId: fresh.batchId,
+      batchFilesystemKey: fresh.batchFilesystemKey,
+      batchName: fresh.batchName,
+      batchDescription: fresh.batchDescription,
       prompts: [],
       referenceAssetIds: [],
+      workflowJson: "{}",
+      workflowProfileJson: "{}",
+      workflowLibraryProjectId: null,
+      workflowId: null,
+      workflowName: "",
+      workflowVersionId: null,
+      workflowVersionNumber: null,
+      workflowContentSha256: null,
+      workflowProfileId: null,
+      workflowProfileName: "",
+      workflowProfileVersionId: null,
+      workflowProfileVersionNumber: null,
+      workflowProfileWorkflowVersionId: null,
+      workflowProfileContentSha256: null,
+    });
+  }
+
+  function loadSavedBatchDetail(detail: SavedBatchDetail) {
+    runRevision.current += 1;
+    setRun(null);
+    setRunStatus(null);
+    setCurrentRunId(null);
+    setRestoredRunSeed(null);
+    setRestoringRun(false);
+    setRunRestoreUnresolved(false);
+    setPreviewRunAssociation(null);
+    setConsistencyError(null);
+    const nextForm = savedBatchToForm(detail, projectSnapshot(form));
+    setSavedBatchLink({
+      id: detail.id,
+      revision: detail.revision,
+      baseline: canonicalBatchIntent(nextForm),
+    });
+    setSavedBatchConflict(null);
+    changeForm(nextForm);
+  }
+
+  async function selectSavedBatch(batchId: string) {
+    const detail = await api.getSavedBatch(batchId);
+    if (detail.project_id !== formRef.current.projectId) {
+      throw new Error("That Saved Batch belongs to another Project.");
+    }
+    loadSavedBatchDetail(detail);
+  }
+
+  async function createEmptySavedBatch(input: SavedBatchCreateInput) {
+    const base: BatchFormState = {
+      ...initialBatchForm(),
+      projectId: form.projectId,
+      projectFilesystemKey: form.projectFilesystemKey,
+      projectName: form.projectName,
+      batchName: input.name,
+      batchDescription: input.description ?? "",
+    };
+    const detail = await api.createSavedBatch(
+      form.projectId,
+      buildSavedBatchCreate(base, input.filesystemKey),
+    );
+    setSavedBatchListRefresh((token) => token + 1);
+    loadSavedBatchDetail(detail);
+  }
+
+  async function createFromCurrentSavedBatch(input: SavedBatchCreateInput) {
+    const source: BatchFormState = {
+      ...form,
+      batchName: input.name,
+      batchDescription: input.description ?? "",
+    };
+    const detail = await api.createSavedBatch(
+      form.projectId,
+      buildSavedBatchCreate(source, input.filesystemKey),
+    );
+    setSavedBatchListRefresh((token) => token + 1);
+    loadSavedBatchDetail(detail);
+  }
+
+  async function saveCurrentSavedBatch() {
+    const link = savedBatchLink;
+    if (!link) return;
+    const sentForm = form;
+    setSavingBatch(true);
+    setBatchError(null);
+    try {
+      const detail = await api.updateSavedBatch(
+        link.id,
+        buildSavedBatchUpdate(sentForm, link.revision),
+      );
+      setSavedBatchLink({
+        id: detail.id,
+        revision: detail.revision,
+        baseline: canonicalBatchIntent(sentForm),
+      });
+      setSavedBatchConflict(null);
+      setSavedBatchListRefresh((token) => token + 1);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.code === "saved_batch_revision_conflict") {
+        setSavedBatchConflict({ kind: "save", batchId: link.id });
+        return;
+      }
+      throw caught;
+    } finally {
+      setSavingBatch(false);
+    }
+  }
+
+  async function archiveSavedBatch() {
+    const link = savedBatchLink;
+    if (!link) return;
+    await api.archiveSavedBatch(link.id);
+    setSavedBatchLink(null);
+    setSavedBatchListRefresh((token) => token + 1);
+    setSessionMessage("Saved Batch archived. The current editor content remains as an unsaved draft.");
+  }
+
+  function reloadConflictBatch() {
+    const conflict = savedBatchConflict;
+    if (!conflict) return;
+    void selectSavedBatch(conflict.batchId).catch((caught) => {
+      setBatchError(errorMessage(caught));
     });
   }
 
@@ -334,7 +554,14 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setPreviewing(true);
     setBatchError(null);
     try {
-      const request = buildBatchRequest(form);
+      if (!projectVerified || selectedProjectId !== form.projectId) {
+        throw new Error("Reconnect or select the exact Project before Preview.");
+      }
+      const request = buildBatchRequest(form, {
+        sourceSavedBatch: savedBatchLink
+          ? { id: savedBatchLink.id, revision: savedBatchLink.revision }
+          : null,
+      });
       const availableAssets = await api.listProjectAssets(request.project.filesystem_key);
       const availableAssetIds = new Set(availableAssets.assets.map((asset) => asset.asset_id));
       const missingAssetIds = request.references
@@ -383,27 +610,28 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setConsistencyError(null);
     try {
       const nextRun = await api.createRun(snapshot.request);
+      if (requestedBatchIdentity !== currentBatchIdentityRef.current) {
+        return;
+      }
       const consistent = nextRun.job_count === snapshot.response.job_count;
       runRevision.current += 1;
       setRun(nextRun);
       setRunStatus("created");
       setRestoredRunSeed(null);
       setCurrentRunId(nextRun.run_id);
-      if (requestedBatchIdentity === currentBatchIdentityRef.current) {
-        setSessionRunIds((current) =>
-          current.includes(nextRun.run_id) ? current : [...current, nextRun.run_id],
-        );
-        setGalleryRunsById((current) => ({
-          ...current,
-          [nextRun.run_id]: {
-            runId: nextRun.run_id,
-            runNumber: nextRun.run_number,
-            results: [],
-            loading: false,
-            error: null,
-          },
-        }));
-      }
+      setSessionRunIds((current) =>
+        current.includes(nextRun.run_id) ? current : [...current, nextRun.run_id],
+      );
+      setGalleryRunsById((current) => ({
+        ...current,
+        [nextRun.run_id]: {
+          runId: nextRun.run_id,
+          runNumber: nextRun.run_number,
+          results: [],
+          loading: false,
+          error: null,
+        },
+      }));
       if (snapshot.singleUse) {
         setPreviewSnapshot((current) => current === snapshot ? null : current);
         setPreviewRunAssociation(null);
@@ -427,8 +655,18 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }
 
   const currentRunIsTerminal = runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus);
+  const currentIntent = canonicalBatchIntent(form);
+  const pristineIntent = useRef(canonicalBatchIntent(initialBatchForm()));
+  const savedBatchDirty = savedBatchLink !== null && currentIntent !== savedBatchLink.baseline;
+  const hasUnsavedChanges = savedBatchLink
+    ? savedBatchDirty
+    : currentIntent !== pristineIntent.current;
   const projectSwitchingBlocked =
-    restoringRun || runRestoreUnresolved || runStatus === "created" || runStatus === "running";
+    restoringRun ||
+    runRestoreUnresolved ||
+    savingBatch ||
+    runStatus === "created" ||
+    runStatus === "running";
   const canCreateRun =
     previewSnapshot !== null &&
     !restoringRun &&
@@ -487,20 +725,57 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           <span>Browser working session</span>
         </div>
         {sessionMessage ? <p className="session-note" role="status">{sessionMessage}</p> : null}
+        {savedBatchConflict ? (
+          <div className="operation-error" role="alert">
+            <p>
+              {savedBatchConflict.kind === "session"
+                ? "This Batch changed since this browser draft was saved."
+                : "This Batch changed in another session."}
+            </p>
+            <div className="action-row">
+              <button className="button-secondary compact" type="button" onClick={reloadConflictBatch}>
+                {savedBatchConflict.kind === "session" ? "Use saved Batch" : "Reload saved version"}
+              </button>
+              <button
+                className="button-secondary compact"
+                type="button"
+                onClick={() => setSaveAsRequest(true)}
+              >
+                {savedBatchConflict.kind === "session"
+                  ? "Recover browser draft as new Batch"
+                  : "Save as new Batch"}
+              </button>
+            </div>
+          </div>
+        ) : null}
         <BatchEditor
           api={api}
           form={form}
           selectedProjectId={selectedProjectId}
           projectVerified={projectVerified}
           projectSwitchingBlocked={projectSwitchingBlocked}
+          hasUnsavedChanges={hasUnsavedChanges}
+          savedBatchDirty={savedBatchDirty}
+          savedBatchId={savedBatchLink?.id ?? null}
+          savedBatchRevision={savedBatchLink?.revision ?? null}
+          savedBatchListRefresh={savedBatchListRefresh}
+          savingBatch={savingBatch}
+          saveAsRequest={saveAsRequest}
           error={batchError}
           previewing={previewing}
           onChange={changeForm}
           onPromptMetadataChange={changePromptMetadata}
+          onWorkflowMetadataChange={changeWorkflowMetadata}
           onProjectReconnect={reconnectProject}
           onProjectUnresolved={markProjectUnresolved}
           onProjectSelect={selectProject}
           onPreview={previewBatch}
+          onSavedBatchSelect={selectSavedBatch}
+          onSavedBatchCreateEmpty={createEmptySavedBatch}
+          onSavedBatchCreateFromCurrent={createFromCurrentSavedBatch}
+          onSavedBatchSave={saveCurrentSavedBatch}
+          onSavedBatchArchive={archiveSavedBatch}
+          onSaveAsRequestHandled={() => setSaveAsRequest(false)}
         />
         <PreviewPanel
           preview={previewSnapshot?.response ?? null}
@@ -539,6 +814,18 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function projectSnapshot(form: BatchFormState): ProjectResponse {
+  return {
+    id: form.projectId,
+    name: form.projectName,
+    filesystem_key: form.projectFilesystemKey,
+    description: null,
+    created_at: "",
+    updated_at: "",
+    archived_at: null,
+  };
 }
 
 function batchIdentity(form: BatchFormState): string {

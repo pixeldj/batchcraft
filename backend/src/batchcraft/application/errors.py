@@ -42,6 +42,26 @@ class ProjectDiscoveryError(ApplicationError):
     pass
 
 
+class SavedBatchPublicationError(ApplicationError):
+    pass
+
+
+class SavedBatchAdoptionError(ApplicationError):
+    pass
+
+
+class SavedBatchDiscoveryError(ApplicationError):
+    pass
+
+
+class SavedBatchOwnershipError(ApplicationError):
+    pass
+
+
+class SavedBatchRevisionConflictError(ApplicationError):
+    pass
+
+
 class RunDataError(ApplicationError):
     pass
 

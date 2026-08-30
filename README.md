@@ -14,12 +14,14 @@ The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run file
 
 The browser now supports ComfyUI status, SQLite-backed Project selection with create and explicit
 filesystem adoption, Project image import and collapsible ordered Reference Asset selection,
-Project-scoped Prompt library selection and immutable version history, ordered multi-prompt Batch
+Project-scoped Prompt, Workflow, and Workflow Profile libraries with immutable version history,
+SQLite-backed Saved Batches with the Saved Batch selector, ordered multi-prompt Batch
 editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, frontend Random seed
 materialization, repeated Run creation, and a Batch Results gallery restored within the current tab
 session. The backend now includes the SQLite foundation, mutable Project metadata, explicit Project
-owner adoption, and an immutable-version Prompt library. Durable editable Batch persistence, a
+owner adoption, immutable-version Prompt, Workflow, and Workflow Profile libraries, and durable
+Saved Batch persistence. A
 Project-wide historical gallery, a global scheduler, and automatic backend recovery remain
 unimplemented.
 
@@ -182,8 +184,8 @@ The first technical milestone was a disposable ComfyUI integration spike that pr
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects and Prompts, a thin FastAPI boundary under `backend/`, and the first browser workflow under `frontend/`.
+Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects, Prompts, and Saved Batches, a thin FastAPI boundary under `backend/`, and the first browser workflow under `frontend/`.
 
-Later application slices will add durable editable Batches, filesystem-derived indexes, scheduler selection, and deeper Result review.
+Later application slices will add filesystem-derived indexes, scheduler selection, and deeper Result review.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.

@@ -10,6 +10,8 @@ import {
 } from "./form";
 import { PromptLibraryEditor } from "./PromptLibraryEditor";
 import { ReferenceAssetPicker } from "./ReferenceAssetPicker";
+import { SavedBatchSelector, type SavedBatchCreateInput } from "./SavedBatchSelector";
+import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
 interface Props {
   form: BatchFormState;
@@ -17,14 +19,28 @@ interface Props {
   selectedProjectId: string | null;
   projectVerified: boolean;
   projectSwitchingBlocked: boolean;
+  hasUnsavedChanges: boolean;
+  savedBatchDirty: boolean;
+  savedBatchId: string | null;
+  savedBatchRevision: number | null;
+  savedBatchListRefresh: number;
+  savingBatch: boolean;
+  saveAsRequest: boolean;
   error: string | null;
   previewing: boolean;
   onChange(form: BatchFormState): void;
   onPromptMetadataChange(prompts: BatchFormState["prompts"]): void;
+  onWorkflowMetadataChange(form: BatchFormState): void;
   onProjectReconnect(project: ProjectResponse): void;
   onProjectUnresolved(): void;
   onProjectSelect(project: ProjectResponse): void;
   onPreview(): void;
+  onSavedBatchSelect(batchId: string): Promise<void>;
+  onSavedBatchCreateEmpty(input: SavedBatchCreateInput): Promise<void>;
+  onSavedBatchCreateFromCurrent(input: SavedBatchCreateInput): Promise<void>;
+  onSavedBatchSave(): Promise<void>;
+  onSavedBatchArchive(): Promise<void>;
+  onSaveAsRequestHandled(): void;
 }
 
 export function BatchEditor({
@@ -33,15 +49,37 @@ export function BatchEditor({
   selectedProjectId,
   projectVerified,
   projectSwitchingBlocked,
+  hasUnsavedChanges,
+  savedBatchDirty,
+  savedBatchId,
+  savedBatchRevision,
+  savedBatchListRefresh,
+  savingBatch,
+  saveAsRequest,
   error,
   previewing,
   onChange,
   onPromptMetadataChange,
+  onWorkflowMetadataChange,
   onProjectReconnect,
   onProjectUnresolved,
   onProjectSelect,
   onPreview,
+  onSavedBatchSelect,
+  onSavedBatchCreateEmpty,
+  onSavedBatchCreateFromCurrent,
+  onSavedBatchSave,
+  onSavedBatchArchive,
+  onSaveAsRequestHandled,
 }: Props) {
+  const workflowSelectionIncomplete = Boolean(form.workflowLibraryProjectId) && (
+    !form.workflowId ||
+    !form.workflowVersionId ||
+    !form.workflowProfileId ||
+    !form.workflowProfileVersionId ||
+    form.workflowProfileWorkflowVersionId !== form.workflowVersionId
+  );
+  const previewUnavailable = previewing || !projectVerified || selectedProjectId !== form.projectId || workflowSelectionIncomplete;
   function update<K extends keyof BatchFormState>(key: K, value: BatchFormState[K]) {
     onChange({ ...form, [key]: value });
   }
@@ -74,7 +112,16 @@ export function BatchEditor({
           filesystemKey: form.projectFilesystemKey,
           name: form.projectName,
         }}
-        hasProjectScopedSelections={form.prompts.length > 0 || form.referenceAssetIds.length > 0}
+        hasProjectScopedSelections={
+          hasUnsavedChanges ||
+          form.prompts.length > 0 ||
+          form.referenceAssetIds.length > 0 ||
+          Boolean(form.workflowId) ||
+          form.workflowJson.trim() !== "{}"
+        }
+        unsavedChangesNote={
+          hasUnsavedChanges ? "The current Batch draft has unsaved changes." : null
+        }
         switchingBlocked={projectSwitchingBlocked}
         onReconnect={onProjectReconnect}
         onUnresolved={onProjectUnresolved}
@@ -82,25 +129,40 @@ export function BatchEditor({
       />
 
       <fieldset>
-        <legend>Batch identity</legend>
-        <div className="field-grid three-columns">
-          <Field
-            id="batch-id"
-            label="Batch ID"
-            value={form.batchId}
-            onChange={(event) => update("batchId", event.target.value)}
-          />
-          <Field
-            id="batch-key"
-            label="Filesystem key"
-            value={form.batchFilesystemKey}
-            onChange={(event) => update("batchFilesystemKey", event.target.value)}
-          />
+        <legend>Batch</legend>
+        <SavedBatchSelector
+          api={api}
+          projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
+          refreshToken={savedBatchListRefresh}
+          selectedBatchId={savedBatchId}
+          revision={savedBatchRevision}
+          filesystemKey={form.batchFilesystemKey}
+          currentName={form.batchName}
+          currentDescription={form.batchDescription}
+          dirty={savedBatchDirty}
+          hasUnsavedChanges={hasUnsavedChanges}
+          disabled={projectSwitchingBlocked}
+          saving={savingBatch}
+          dialogRequest={saveAsRequest ? "save-as" : null}
+          onDialogRequestHandled={onSaveAsRequestHandled}
+          onSelectBatch={onSavedBatchSelect}
+          onCreateEmpty={onSavedBatchCreateEmpty}
+          onCreateFromCurrent={onSavedBatchCreateFromCurrent}
+          onSave={onSavedBatchSave}
+          onArchive={onSavedBatchArchive}
+        />
+        <div className="field-grid two-columns">
           <Field
             id="batch-name"
             label="Batch name"
             value={form.batchName}
             onChange={(event) => update("batchName", event.target.value)}
+          />
+          <Field
+            id="batch-description"
+            label="Description (optional)"
+            value={form.batchDescription}
+            onChange={(event) => update("batchDescription", event.target.value)}
           />
         </div>
       </fieldset>
@@ -268,35 +330,17 @@ export function BatchEditor({
         />
       </fieldset>
 
-      <fieldset>
-        <legend>ComfyUI workflow</legend>
-        <p className="limitation-note">
-          Paste the complete API-format workflow exported from ComfyUI. This is not the UI-format
-          workflow.
-        </p>
-        <div className="field-grid two-columns align-start">
-          <TextAreaField
-            id="workflow-json"
-            className="json-editor"
-            label="Workflow JSON"
-            spellCheck={false}
-            value={form.workflowJson}
-            onChange={(event) => update("workflowJson", event.target.value)}
-          />
-          <TextAreaField
-            id="workflow-profile-json"
-            className="json-editor"
-            label="Workflow Profile JSON"
-            spellCheck={false}
-            value={form.workflowProfileJson}
-            onChange={(event) => update("workflowProfileJson", event.target.value)}
-          />
-        </div>
-      </fieldset>
+      <WorkflowLibraryEditor
+        api={api}
+        projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
+        form={form}
+        onChange={onChange}
+        onMetadataChange={onWorkflowMetadataChange}
+      />
 
       {error ? <p className="operation-error" role="alert">{error}</p> : null}
       <div className="action-row">
-        <button className="button-primary" type="button" disabled={previewing} onClick={onPreview}>
+        <button className="button-primary" type="button" disabled={previewUnavailable} onClick={onPreview}>
           {previewing ? "Previewing..." : "Preview Batch"}
         </button>
       </div>

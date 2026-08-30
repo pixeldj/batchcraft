@@ -22,7 +22,11 @@ from batchcraft.comfyui.models import (
     UploadedInput,
     WorkflowPreparationValues,
 )
-from batchcraft.comfyui.workflow import prepare_workflow
+from batchcraft.comfyui.workflow import (
+    prepare_workflow,
+    validate_workflow,
+    validate_workflow_profile,
+)
 
 __all__ = [
     "ArtifactDownloadError",
@@ -48,4 +52,6 @@ __all__ = [
     "correlated_execution_events",
     "parse_execution_event",
     "prepare_workflow",
+    "validate_workflow",
+    "validate_workflow_profile",
 ]

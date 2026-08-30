@@ -105,6 +105,7 @@ async def verify() -> dict[str, object]:
     run = RunFilesystemStore(projects_path).create_run(
         project=project,
         batch=batch,
+        batch_snapshot={"snapshot_version": 1},
         plan=plan,
         reference_assets={asset.asset_id: asset},
         workflow=_load_json_object(workflow_path),

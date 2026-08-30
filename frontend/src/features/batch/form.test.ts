@@ -56,7 +56,43 @@ describe("buildBatchRequest", () => {
       seeds: { mode: "explicit", values: [9, 3] },
       workflow: { "7": { class_type: "KSampler", inputs: { seed: 0 } } },
       workflow_profile: expect.objectContaining({ id: "workflow-profile-1" }),
+      batch_snapshot: expect.objectContaining({
+        snapshot_version: 1,
+        source_saved_batch: null,
+      }),
     });
+  });
+
+  it("serializes exact effective snapshots and never sends library IDs", () => {
+    const form = populatedBatchForm();
+    form.workflowJson = '{ "node": { "inputs": [1, 2] } }';
+    form.workflowProfileJson = '{ "mappings": { "prompt": "7.text" } }';
+    form.workflowLibraryProjectId = "project-1";
+    form.workflowId = "workflow-1";
+    form.workflowVersionId = "workflow-v3";
+    form.workflowProfileId = "profile-1";
+    form.workflowProfileVersionId = "profile-v5";
+    form.workflowProfileWorkflowVersionId = "workflow-v3";
+
+    const request = buildBatchRequest(form);
+
+    expect(request.workflow).toEqual({ node: { inputs: [1, 2] } });
+    expect(request.workflow_profile).toEqual({ mappings: { prompt: "7.text" } });
+    expect(request).not.toHaveProperty("workflow_id");
+    expect(request).not.toHaveProperty("workflow_version_id");
+    expect(request).not.toHaveProperty("workflow_profile_version_id");
+  });
+
+  it("requires an exact compatible ProfileVersion for a library WorkflowVersion", () => {
+    const form = populatedBatchForm();
+    form.workflowLibraryProjectId = "project-1";
+    form.workflowId = "workflow-1";
+    form.workflowVersionId = "workflow-v2";
+    form.workflowProfileJson = "{}";
+
+    expect(() => buildBatchRequest(form)).toThrow(
+      "Choose a compatible ProfileVersion for the selected WorkflowVersion before Preview.",
+    );
   });
 
   it("serializes an empty Reference Asset selection", () => {

@@ -23,6 +23,7 @@ interface Props {
   projectVerified: boolean;
   draftIdentity: { id: string; filesystemKey: string; name: string };
   hasProjectScopedSelections: boolean;
+  unsavedChangesNote?: string | null;
   switchingBlocked: boolean;
   onReconnect(project: ProjectResponse): void;
   onUnresolved(): void;
@@ -59,6 +60,7 @@ export function ProjectSelector({
   projectVerified,
   draftIdentity,
   hasProjectScopedSelections,
+  unsavedChangesNote,
   switchingBlocked,
   onReconnect,
   onUnresolved,
@@ -482,6 +484,7 @@ export function ProjectSelector({
         <dialog open aria-labelledby="confirm-project-change-title" onCancel={() => setPending(null)} onKeyDown={cancelOnEscape}>
           <h2 id="confirm-project-change-title">Change Project?</h2>
           <p>Changing Project clears the current Project-scoped selections.</p>
+          {unsavedChangesNote ? <p>{unsavedChangesNote}</p> : null}
           <div className="action-row">
             <button autoFocus className="button-primary" type="button" onClick={() => void runTransition(pending)}>Continue</button>
             <button className="button-link" type="button" onClick={() => setPending(null)}>Cancel</button>
