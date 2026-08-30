@@ -36,7 +36,14 @@ from batchcraft.execution import (
     RunExecutionState,
     RunExecutionStatus,
 )
-from batchcraft.files import AssetRecord, ProjectAssetStore, PublishedRun, RunFilesystemStore
+from batchcraft.files import (
+    AssetRecord,
+    ProjectAssetStore,
+    ProjectIdentity,
+    ProjectOwnerStore,
+    PublishedRun,
+    RunFilesystemStore,
+)
 
 PNG_A = b"\x89PNG\r\n\x1a\nimage-a"
 PNG_B = b"\x89PNG\r\n\x1a\nimage-b"
@@ -172,6 +179,8 @@ def _settings(tmp_path: Path) -> Settings:
         frontend_origin="http://localhost:5173",
         server_host="127.0.0.1",
         server_port=8000,
+        data_root=tmp_path,
+        database_path=tmp_path / "batchcraft.sqlite3",
     )
 
 
@@ -253,6 +262,238 @@ def _create_run(http: TestClient, request: dict[str, object]) -> str:
     response = http.post("/api/runs", json=request)
     assert response.status_code == 201, response.text
     return str(response.json()["run_id"])
+
+
+def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = FakeComfyUIClient()
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        project_response = http.post(
+            "/api/projects",
+            json={
+                "name": "Portrait studies",
+                "filesystem_key": "portrait_studies",
+                "description": "Initial description",
+            },
+        )
+        assert project_response.status_code == 201
+        project = project_response.json()
+        project_id = project["id"]
+        assert project["description"] == "Initial description"
+
+        update_project_response = http.patch(
+            f"/api/projects/{project_id}",
+            json={"name": "Portrait archive"},
+        )
+        assert update_project_response.status_code == 200
+        assert update_project_response.json()["name"] == "Portrait archive"
+        assert update_project_response.json()["description"] == "Initial description"
+        clear_project_description = http.patch(
+            f"/api/projects/{project_id}", json={"description": None}
+        )
+        assert clear_project_description.status_code == 200
+        assert clear_project_description.json()["name"] == "Portrait archive"
+        assert clear_project_description.json()["description"] is None
+        assert http.patch(f"/api/projects/{project_id}", json={}).status_code == 422
+        owner = ProjectOwnerStore(settings.projects_root).read("portrait_studies")
+        assert owner.name == "Portrait studies"
+
+        prompt_response = http.post(
+            f"/api/projects/{project_id}/prompts",
+            json={
+                "name": "Studio portrait",
+                "description": "Lighting baseline",
+                "text": "portrait of {{subject}}",
+                "note": "Initial",
+            },
+        )
+        assert prompt_response.status_code == 201
+        created = prompt_response.json()
+        prompt_id = created["prompt"]["id"]
+        version_one = created["version"]
+        assert version_one["version_number"] == 1
+        assert version_one["name_snapshot"] == "Studio portrait"
+
+        update_prompt_response = http.patch(
+            f"/api/prompts/{prompt_id}",
+            json={"name": "Editorial portrait"},
+        )
+        assert update_prompt_response.status_code == 200
+        assert update_prompt_response.json()["description"] == "Lighting baseline"
+        description_only_response = http.patch(
+            f"/api/prompts/{prompt_id}", json={"description": "Updated"}
+        )
+        assert description_only_response.status_code == 200
+        assert description_only_response.json()["name"] == "Editorial portrait"
+        assert description_only_response.json()["description"] == "Updated"
+        assert http.patch(f"/api/prompts/{prompt_id}", json={"name": None}).status_code == 422
+
+        version_two_response = http.post(
+            f"/api/prompts/{prompt_id}/versions",
+            json={"text": "editorial portrait of {{subject}}", "note": "Editorial pass"},
+        )
+        assert version_two_response.status_code == 201
+        version_two = version_two_response.json()
+        assert version_two["version_number"] == 2
+        assert version_two["name_snapshot"] == "Editorial portrait"
+
+        archive_version_response = http.post(f"/api/prompt-versions/{version_one['id']}/archive")
+        assert archive_version_response.status_code == 200
+        assert archive_version_response.json()["archived_at"] is not None
+
+        versions_response = http.get(f"/api/prompts/{prompt_id}/versions")
+        assert versions_response.status_code == 200
+        assert [item["version_number"] for item in versions_response.json()["prompt_versions"]] == [
+            2
+        ]
+
+        restore_response = http.post(f"/api/prompt-versions/{version_one['id']}/restore")
+        assert restore_response.status_code == 201
+        restored = restore_response.json()
+        assert restored["version_number"] == 3
+        assert restored["name_snapshot"] == "Editorial portrait"
+        assert restored["text"] == version_one["text"]
+
+        assert http.post(f"/api/prompts/{prompt_id}/archive").status_code == 200
+        assert http.get(f"/api/projects/{project_id}/prompts").json() == {"prompts": []}
+        all_prompts = http.get(
+            f"/api/projects/{project_id}/prompts", params={"include_archived": True}
+        )
+        assert len(all_prompts.json()["prompts"]) == 1
+
+        assert http.post(f"/api/projects/{project_id}/archive").status_code == 200
+        assert http.get("/api/projects").json() == {"projects": []}
+        all_projects = http.get("/api/projects", params={"include_archived": True})
+        assert len(all_projects.json()["projects"]) == 1
+
+
+def test_project_adoption_preserves_owner_identity_and_rejects_ownerless_directory(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    owner_store = ProjectOwnerStore(settings.projects_root)
+    owner_store.publish(
+        ProjectIdentity(id="existing-project", filesystem_key="existing", name="Initial name")
+    )
+    (settings.projects_root / "ownerless" / "assets").mkdir(parents=True)
+    client = FakeComfyUIClient()
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        create_ownerless_response = http.post(
+            "/api/projects",
+            json={"name": "Ownerless", "filesystem_key": "ownerless"},
+        )
+        assert create_ownerless_response.status_code == 409
+        assert create_ownerless_response.json()["error"]["code"] == ("project_publication_failed")
+        assert not (settings.projects_root / "ownerless" / "project.json").exists()
+
+        response = http.post(
+            "/api/projects/adopt",
+            json={
+                "filesystem_key": "existing",
+                "project_id": "existing-project",
+                "name": "Current name",
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["id"] == "existing-project"
+        assert response.json()["name"] == "Current name"
+        assert owner_store.read("existing").name == "Initial name"
+
+        mismatched_id_response = http.post(
+            "/api/projects/adopt",
+            json={
+                "filesystem_key": "existing",
+                "project_id": "different-project",
+                "name": "Current name",
+            },
+        )
+        assert mismatched_id_response.status_code == 422
+        assert mismatched_id_response.json()["error"]["code"] == "project_adoption_failed"
+
+        ownerless_response = http.post("/api/projects/adopt", json={"filesystem_key": "ownerless"})
+        assert ownerless_response.status_code == 422
+        assert ownerless_response.json()["error"]["code"] == "project_adoption_failed"
+
+        missing_id_response = http.post(
+            "/api/projects/adopt",
+            json={"filesystem_key": "ownerless", "name": "Imported assets"},
+        )
+        assert missing_id_response.status_code == 422
+        assert missing_id_response.json()["error"]["code"] == "project_adoption_failed"
+        assert not (settings.projects_root / "ownerless" / "project.json").exists()
+
+        adopted_ownerless_response = http.post(
+            "/api/projects/adopt",
+            json={
+                "filesystem_key": "ownerless",
+                "project_id": "imported-assets-project",
+                "name": "Imported assets",
+            },
+        )
+        assert adopted_ownerless_response.status_code == 201
+        adopted_ownerless = adopted_ownerless_response.json()
+        assert adopted_ownerless["id"] == "imported-assets-project"
+        assert adopted_ownerless["name"] == "Imported assets"
+        assert owner_store.read("ownerless").id == "imported-assets-project"
+
+
+def test_invalid_project_input_does_not_publish_an_owner(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = FakeComfyUIClient()
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        unsafe = http.post("/api/projects", json={"name": "Unsafe", "filesystem_key": "../unsafe"})
+        assert unsafe.status_code == 422
+        assert unsafe.json()["error"]["code"] == "invalid_library_input"
+
+        blank_description = http.post(
+            "/api/projects",
+            json={"name": "Project", "filesystem_key": "project", "description": " "},
+        )
+        assert blank_description.status_code == 422
+        assert blank_description.json()["error"]["code"] == "invalid_library_input"
+        assert not (settings.projects_root / "project").exists()
+
+
+def test_project_and_prompt_conflicts_use_stable_error_envelope(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = FakeComfyUIClient()
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        first = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project_one"}
+        )
+        assert first.status_code == 201
+        project_id = first.json()["id"]
+
+        conflict = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project_two"}
+        )
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["code"] == "library_conflict"
+        assert ProjectOwnerStore(settings.projects_root).read("project_two").filesystem_key == (
+            "project_two"
+        )
+
+        missing = http.get("/api/prompts/missing")
+        assert missing.status_code == 404
+        assert missing.json() == {
+            "error": {"code": "prompt_not_found", "message": "Prompt was not found"}
+        }
+
+        first_prompt = http.post(
+            f"/api/projects/{project_id}/prompts",
+            json={"name": "Prompt", "text": "first"},
+        )
+        assert first_prompt.status_code == 201
+        prompt_conflict = http.post(
+            f"/api/projects/{project_id}/prompts",
+            json={"name": "Prompt", "text": "second"},
+        )
+        assert prompt_conflict.status_code == 409
+        assert prompt_conflict.json()["error"]["code"] == "library_conflict"
 
 
 def _wait_for_status(http: TestClient, run_id: str, expected: str) -> ExecutionResponse:

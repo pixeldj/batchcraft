@@ -16,12 +16,15 @@ class Settings:
     frontend_origin: str
     server_host: str
     server_port: int
+    data_root: Path = Path("data")
+    database_path: Path = Path("data/batchcraft.sqlite3")
 
     @classmethod
     def from_env(cls) -> "Settings":
+        data_root = Path(os.environ.get("BATCHCRAFT_DATA_ROOT", "data")).expanduser()
         return cls(
             projects_root=Path(
-                os.environ.get("BATCHCRAFT_PROJECTS_ROOT", "data/projects")
+                os.environ.get("BATCHCRAFT_PROJECTS_ROOT", str(data_root / "projects"))
             ).expanduser(),
             comfyui_base_url=os.environ.get("BATCHCRAFT_COMFYUI_BASE_URL", "http://127.0.0.1:8188"),
             comfyui_timeout_seconds=_positive_float("BATCHCRAFT_COMFYUI_TIMEOUT", 30.0),
@@ -31,6 +34,10 @@ class Settings:
             frontend_origin=os.environ.get("BATCHCRAFT_FRONTEND_ORIGIN", "http://localhost:5173"),
             server_host=os.environ.get("BATCHCRAFT_SERVER_HOST", "127.0.0.1"),
             server_port=_port("BATCHCRAFT_SERVER_PORT", 8000),
+            data_root=data_root,
+            database_path=Path(
+                os.environ.get("BATCHCRAFT_DATABASE_PATH", str(data_root / "batchcraft.sqlite3"))
+            ).expanduser(),
         )
 
     @property

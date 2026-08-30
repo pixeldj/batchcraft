@@ -132,8 +132,9 @@ working-session Results gallery from backend-authoritative Run and Result data; 
 Project-wide history index. Preview and Run creation use the same complete Batch request snapshot.
 Frontend Random seed intent is materialized before that snapshot reaches the API; the backend and pure
 compiler receive only concrete Fixed or Explicit seed input. Successful Run publication freezes the
-durable execution plan and provenance. SQLite remains the intended later home for mutable Batch and
-searchable application state.
+durable execution plan and provenance. SQLite now owns current Project metadata and the immutable-
+version Prompt library; mutable Batch persistence and searchable filesystem-derived indexes remain
+later slices.
 
 ## Application Queue
 
@@ -235,10 +236,13 @@ Jobs refer to friendly exposed fields. ComfyUI-specific node mutation happens in
 
 ### SQLite
 
-SQLite stores searchable, mutable application state such as:
+SQLite currently stores:
 
 - projects;
-- Prompt Templates and versions;
+- logical Prompts and immutable PromptVersions.
+
+Later migrations may add:
+
 - Variable Lists;
 - reference metadata;
 - Workflow Profiles;
@@ -264,7 +268,9 @@ For completed Runs, the filesystem artifacts must contain enough information to 
 
 ### Publication order
 
-Run creation publishes a complete filesystem Run before adding its SQLite index records. The scheduler cannot submit Jobs until publication and indexing both succeed.
+Run creation currently publishes a complete filesystem Run before execution; Phase 1 does not add a
+SQLite Run index. When that derived index is implemented, indexing must follow filesystem publication,
+and the scheduler must not submit Jobs until both steps succeed.
 
 If SQLite state is lost or incomplete, batchcraft can scan complete filesystem Runs and re-index them. Incomplete staging data is not a valid Run and must not be scheduled or presented as one.
 

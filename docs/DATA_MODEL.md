@@ -13,7 +13,7 @@ Project
  |
  +-- WorkflowProfile
  |
- +-- PromptTemplate
+ +-- Prompt
  |     |
  |     +-- PromptVersion
  |
@@ -48,9 +48,11 @@ project_path
 filesystem_key
 ```
 
-## PromptTemplate
+## Prompt
 
-A stable library identity for a reusable prompt.
+A stable, Project-scoped library identity for a reusable Prompt Template. ADR 0003 and the SQLite
+schema use `Prompt` for this logical record; the pure compiler continues receiving immutable
+`PromptVersion` snapshots and does not depend on persistence records.
 
 Suggested fields:
 
@@ -58,28 +60,28 @@ Suggested fields:
 id
 name
 description
-tags
 created_at
 updated_at
-current_version_id
+archived_at
 ```
 
 The editable text itself belongs to PromptVersion.
 
 ## PromptVersion
 
-An immutable revision of a PromptTemplate.
+An immutable revision of a Prompt.
 
 Suggested fields:
 
 ```text
 id
-prompt_template_id
+prompt_id
 version_number
-name
+name_snapshot
 text
-notes
+note
 created_at
+archived_at
 ```
 
 The name is a human-readable label snapshotted with the immutable PromptVersion. It is not an
@@ -91,7 +93,8 @@ Example text:
 A cinematic photograph of {{subject}} in {{environment}}.
 ```
 
-Editing a saved prompt creates a new version rather than mutating historical versions.
+The latest version is derived from version history. Editing saved text or restoring an old version
+creates the next monotonic version rather than mutating historical versions.
 
 ## VariableList
 

@@ -7,12 +7,15 @@ from .errors import (
     ExecutionAlreadyActiveError,
     ExecutionNotEligibleError,
     InvalidProjectKeyError,
+    ProjectAdoptionError,
+    ProjectPublicationError,
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
     RunNotFoundError,
     RunPublicationError,
 )
+from .library import LibraryService
 from .service import (
     ApplicationComfyUIClient,
     AssetImportInput,
@@ -36,6 +39,9 @@ __all__ = [
     "ExecutionAlreadyActiveError",
     "ExecutionNotEligibleError",
     "InvalidProjectKeyError",
+    "LibraryService",
+    "ProjectAdoptionError",
+    "ProjectPublicationError",
     "ResultNotFoundError",
     "RunCreationError",
     "RunCreationInput",

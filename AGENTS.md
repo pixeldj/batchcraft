@@ -161,8 +161,8 @@ The production ComfyUI adapter is implemented under `backend/`, including pure W
 
 The sequential Run executor is implemented under `backend/`, including versioned mutable execution state, queue-depth-1 Job orchestration, history reconciliation, and Result ingestion. It executes one published Run against one ComfyUI client and does not provide global scheduling or automatic recovery.
 
-The first FastAPI application boundary is implemented under `backend/`. It exposes ComfyUI status, ephemeral Batch preview, durable Run creation and filesystem lookup, in-process background execution start, execution polling, and safe Result retrieval through a narrow application service layer.
+The first FastAPI application boundary is implemented under `backend/`. It exposes SQLite-backed Project and Prompt library operations, ComfyUI status, ephemeral Batch preview, durable Run creation and filesystem lookup, in-process background execution start, execution polling, and safe Result retrieval through narrow application services.
 
 The first React frontend is implemented under `frontend/`. It provides one browser screen for ComfyUI status, ephemeral Batch configuration, deterministic Job preview, durable Run creation, execution polling, and Result rendering. It uses the FastAPI application as its only backend boundary.
 
-SQLite, durable editable Batch persistence, global scheduling, cancellation, retry, and automatic recovery remain deferred. Keep frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, and execution rules.
+SQLite Phase 1 is implemented under `backend/`, including explicit migrations, Project owner publication/adoption, mutable Project metadata, logical Prompts, and immutable PromptVersions. Durable editable Batch persistence, filesystem-derived indexes, global scheduling, cancellation, retry, and automatic recovery remain deferred. Keep frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and persistence rules.

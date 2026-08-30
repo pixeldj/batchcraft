@@ -4,7 +4,9 @@
 
 This document defines the expected development workflow for **batchcraft**.
 
-The project has entered production application development. The backend has a thin FastAPI boundary, and the first React browser workflow is implemented. The SQLite application index remains unscaffolded.
+The project has entered production application development. The backend has a thin FastAPI boundary,
+the first React browser workflow is implemented, and SQLite Phase 1 provides migrations, Projects,
+and the Prompt library.
 
 ## Supported Development Environment
 
@@ -159,6 +161,17 @@ This phase does not add durable editable Batch persistence, Reference Collection
 Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
 Profile mapping.
 
+### Phase 2.2: SQLite foundation, Projects, and Prompt library
+
+Completed for the backend. Production code under `backend/src/batchcraft/db/` uses stdlib `sqlite3`,
+one connection per operation, explicit checksummed SQL migrations, and feature-specific Project and
+Prompt stores. FastAPI migrates before serving requests. Project creation publishes `project.json`
+before SQLite insertion, and explicit adoption recovers valid owner bindings or binds an explicitly
+selected ownerless asset directory using a user-supplied Project ID and name.
+
+This phase does not persist Batches, index filesystem Runs or Assets, add scheduler state, or wire the
+browser Batch editor to the Prompt library.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -189,11 +202,16 @@ From `backend/`, start the local API with explicit storage and ComfyUI configura
 
 ```bash
 BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
+BATCHCRAFT_DATABASE_PATH="/path/to/batchcraft.sqlite3" \
 BATCHCRAFT_COMFYUI_BASE_URL="http://<windows-host>:8188" \
 uv run batchcraft-api
 ```
 
 The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATCHCRAFT_SERVER_PORT` override it. See `docs/API.md` for all application settings and endpoint behavior.
+
+SQL migrations live under `backend/src/batchcraft/db/migrations/`. Add only the next contiguous
+`NNNN_name.sql` file; applied migration bytes are immutable because startup verifies their SHA-256
+checksums. Test migration behavior against file-backed temporary databases rather than only `:memory:`.
 
 ## Frontend Conventions
 

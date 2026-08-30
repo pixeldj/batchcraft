@@ -30,6 +30,14 @@ class InvalidProjectKeyError(ApplicationError):
     pass
 
 
+class ProjectPublicationError(ApplicationError):
+    pass
+
+
+class ProjectAdoptionError(ApplicationError):
+    pass
+
+
 class RunDataError(ApplicationError):
     pass
 

@@ -7,6 +7,11 @@ from batchcraft.files.models import (
     ProjectIdentity,
     PublishedRun,
 )
+from batchcraft.files.project_owners import (
+    ProjectOwnerError,
+    ProjectOwnerMissingError,
+    ProjectOwnerStore,
+)
 from batchcraft.files.runs import RunFilesystemStore, RunStoreError
 
 __all__ = [
@@ -16,6 +21,9 @@ __all__ = [
     "PersistedJob",
     "ProjectAssetStore",
     "ProjectIdentity",
+    "ProjectOwnerError",
+    "ProjectOwnerMissingError",
+    "ProjectOwnerStore",
     "PublishedRun",
     "RunFilesystemStore",
     "RunStoreError",

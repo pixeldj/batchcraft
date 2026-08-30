@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import tempfile
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, cast
@@ -22,6 +23,9 @@ from batchcraft.application import (
     ExecutionAlreadyActiveError,
     ExecutionNotEligibleError,
     InvalidProjectKeyError,
+    LibraryService,
+    ProjectAdoptionError,
+    ProjectPublicationError,
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
@@ -31,8 +35,24 @@ from batchcraft.application import (
     RunTaskRegistry,
 )
 from batchcraft.comfyui import ComfyUIClient, WorkflowPreparationError
+from batchcraft.db import (
+    ProjectConflictError,
+    ProjectNotFoundError,
+    ProjectStore,
+    ProjectValidationError,
+    PromptConflictError,
+    PromptNotFoundError,
+    PromptProjectNotFoundError,
+    PromptStore,
+    PromptValidationError,
+    PromptVersionConflictError,
+    PromptVersionNotFoundError,
+    apply_migrations,
+    open_connection,
+)
 from batchcraft.domain import CompilationError
 from batchcraft.execution import execute_run
+from batchcraft.files import ProjectOwnerStore
 
 from .config import Settings
 from .schemas import (
@@ -45,7 +65,20 @@ from .schemas import (
     ExecutionResponse,
     ExecutionStartedResponse,
     HealthResponse,
+    LibraryPromptVersionResponse,
     PreviewResponse,
+    ProjectAdoptRequest,
+    ProjectCreateRequest,
+    ProjectResponse,
+    ProjectsResponse,
+    ProjectUpdateRequest,
+    PromptCreatedResponse,
+    PromptCreateRequest,
+    PromptResponse,
+    PromptsResponse,
+    PromptUpdateRequest,
+    PromptVersionCreateRequest,
+    PromptVersionsResponse,
     ResultResponse,
     ResultsResponse,
     RunCreatedResponse,
@@ -63,6 +96,13 @@ def _service(request: Request) -> BatchcraftService:
 ServiceDependency = Annotated[BatchcraftService, Depends(_service)]
 
 
+def _library(request: Request) -> LibraryService:
+    return cast(LibraryService, request.app.state.library_service)
+
+
+LibraryDependency = Annotated[LibraryService, Depends(_library)]
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -74,7 +114,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        configured.database_path.parent.mkdir(parents=True, exist_ok=True)
         configured.projects_root.mkdir(parents=True, exist_ok=True)
+        with closing(open_connection(configured.database_path)) as connection:
+            apply_migrations(connection)
         client = make_client(configured)
         registry = RunTaskRegistry()
         app.state.service = BatchcraftService(
@@ -83,6 +126,11 @@ def create_app(
             task_registry=registry,
             execution_config=configured.execution_config,
             executor=executor,
+        )
+        app.state.library_service = LibraryService(
+            project_store=ProjectStore(configured.database_path),
+            prompt_store=PromptStore(configured.database_path),
+            owner_store=ProjectOwnerStore(configured.projects_root),
         )
         try:
             yield
@@ -99,7 +147,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[configured.frontend_origin],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH"],
         allow_headers=["Content-Type"],
     )
     _register_error_handlers(app)
@@ -111,6 +159,186 @@ def create_app(
     @app.get("/api/comfyui/status", response_model=ComfyUIStatusResponse)
     async def comfyui_status(service: ServiceDependency) -> ComfyUIStatusResponse:
         return ComfyUIStatusResponse.from_status(await service.get_comfyui_status())
+
+    @app.get("/api/projects", response_model=ProjectsResponse)
+    async def list_projects(
+        library: LibraryDependency, include_archived: bool = False
+    ) -> ProjectsResponse:
+        projects = await asyncio.to_thread(library.list_projects, include_archived=include_archived)
+        return ProjectsResponse(projects=[ProjectResponse.from_record(item) for item in projects])
+
+    @app.post(
+        "/api/projects",
+        response_model=ProjectResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_project(
+        request: ProjectCreateRequest, library: LibraryDependency
+    ) -> ProjectResponse:
+        project = await asyncio.to_thread(
+            library.create_project,
+            name=request.name,
+            filesystem_key=request.filesystem_key,
+            description=request.description,
+        )
+        return ProjectResponse.from_record(project)
+
+    @app.post(
+        "/api/projects/adopt",
+        response_model=ProjectResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def adopt_project(
+        request: ProjectAdoptRequest, library: LibraryDependency
+    ) -> ProjectResponse:
+        project = await asyncio.to_thread(
+            library.adopt_project,
+            filesystem_key=request.filesystem_key,
+            project_id=request.project_id,
+            name=request.name,
+            description=request.description,
+        )
+        return ProjectResponse.from_record(project)
+
+    @app.get("/api/projects/{project_id}", response_model=ProjectResponse)
+    async def get_project(project_id: str, library: LibraryDependency) -> ProjectResponse:
+        return ProjectResponse.from_record(await asyncio.to_thread(library.get_project, project_id))
+
+    @app.patch("/api/projects/{project_id}", response_model=ProjectResponse)
+    async def update_project(
+        project_id: str, request: ProjectUpdateRequest, library: LibraryDependency
+    ) -> ProjectResponse:
+        project = await asyncio.to_thread(
+            library.update_project,
+            project_id,
+            name=request.name,
+            description=request.description,
+            update_description="description" in request.model_fields_set,
+        )
+        return ProjectResponse.from_record(project)
+
+    @app.post("/api/projects/{project_id}/archive", response_model=ProjectResponse)
+    async def archive_project(project_id: str, library: LibraryDependency) -> ProjectResponse:
+        return ProjectResponse.from_record(
+            await asyncio.to_thread(library.archive_project, project_id)
+        )
+
+    @app.get("/api/projects/{project_id}/prompts", response_model=PromptsResponse)
+    async def list_prompts(
+        project_id: str,
+        library: LibraryDependency,
+        include_archived: bool = False,
+    ) -> PromptsResponse:
+        prompts = await asyncio.to_thread(
+            library.list_prompts, project_id, include_archived=include_archived
+        )
+        return PromptsResponse(prompts=[PromptResponse.from_record(item) for item in prompts])
+
+    @app.post(
+        "/api/projects/{project_id}/prompts",
+        response_model=PromptCreatedResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_prompt(
+        project_id: str, request: PromptCreateRequest, library: LibraryDependency
+    ) -> PromptCreatedResponse:
+        prompt, prompt_version = await asyncio.to_thread(
+            library.create_prompt,
+            project_id,
+            name=request.name,
+            description=request.description,
+            text=request.text,
+            note=request.note,
+        )
+        return PromptCreatedResponse(
+            prompt=PromptResponse.from_record(prompt),
+            version=LibraryPromptVersionResponse.from_record(prompt_version),
+        )
+
+    @app.get("/api/prompts/{prompt_id}", response_model=PromptResponse)
+    async def get_prompt(prompt_id: str, library: LibraryDependency) -> PromptResponse:
+        return PromptResponse.from_record(await asyncio.to_thread(library.get_prompt, prompt_id))
+
+    @app.patch("/api/prompts/{prompt_id}", response_model=PromptResponse)
+    async def update_prompt(
+        prompt_id: str, request: PromptUpdateRequest, library: LibraryDependency
+    ) -> PromptResponse:
+        prompt = await asyncio.to_thread(
+            library.update_prompt,
+            prompt_id,
+            name=request.name,
+            description=request.description,
+            update_description="description" in request.model_fields_set,
+        )
+        return PromptResponse.from_record(prompt)
+
+    @app.post("/api/prompts/{prompt_id}/archive", response_model=PromptResponse)
+    async def archive_prompt(prompt_id: str, library: LibraryDependency) -> PromptResponse:
+        return PromptResponse.from_record(
+            await asyncio.to_thread(library.archive_prompt, prompt_id)
+        )
+
+    @app.get("/api/prompts/{prompt_id}/versions", response_model=PromptVersionsResponse)
+    async def list_prompt_versions(
+        prompt_id: str,
+        library: LibraryDependency,
+        include_archived: bool = False,
+    ) -> PromptVersionsResponse:
+        versions = await asyncio.to_thread(
+            library.list_prompt_versions, prompt_id, include_archived=include_archived
+        )
+        return PromptVersionsResponse(
+            prompt_versions=[LibraryPromptVersionResponse.from_record(item) for item in versions]
+        )
+
+    @app.post(
+        "/api/prompts/{prompt_id}/versions",
+        response_model=LibraryPromptVersionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_prompt_version(
+        prompt_id: str,
+        request: PromptVersionCreateRequest,
+        library: LibraryDependency,
+    ) -> LibraryPromptVersionResponse:
+        prompt_version = await asyncio.to_thread(
+            library.create_prompt_version,
+            prompt_id,
+            text=request.text,
+            note=request.note,
+        )
+        return LibraryPromptVersionResponse.from_record(prompt_version)
+
+    @app.get("/api/prompt-versions/{version_id}", response_model=LibraryPromptVersionResponse)
+    async def get_prompt_version(
+        version_id: str, library: LibraryDependency
+    ) -> LibraryPromptVersionResponse:
+        return LibraryPromptVersionResponse.from_record(
+            await asyncio.to_thread(library.get_prompt_version, version_id)
+        )
+
+    @app.post(
+        "/api/prompt-versions/{version_id}/archive",
+        response_model=LibraryPromptVersionResponse,
+    )
+    async def archive_prompt_version(
+        version_id: str, library: LibraryDependency
+    ) -> LibraryPromptVersionResponse:
+        return LibraryPromptVersionResponse.from_record(
+            await asyncio.to_thread(library.archive_prompt_version, version_id)
+        )
+
+    @app.post(
+        "/api/prompt-versions/{version_id}/restore",
+        response_model=LibraryPromptVersionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def restore_prompt_version(
+        version_id: str, library: LibraryDependency
+    ) -> LibraryPromptVersionResponse:
+        return LibraryPromptVersionResponse.from_record(
+            await asyncio.to_thread(library.restore_prompt_version, version_id)
+        )
 
     @app.get("/api/projects/{project_key}/assets", response_model=AssetsResponse)
     async def list_project_assets(
@@ -251,6 +479,55 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def invalid_request(_request: Request, _error: RequestValidationError) -> JSONResponse:
         return _error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_request", "Request data is invalid"
+        )
+
+    @app.exception_handler(ProjectValidationError)
+    @app.exception_handler(PromptValidationError)
+    async def invalid_library_input(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_library_input", str(error)
+        )
+
+    @app.exception_handler(ProjectNotFoundError)
+    async def missing_project(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND, "project_not_found", "Project was not found"
+        )
+
+    @app.exception_handler(PromptProjectNotFoundError)
+    async def missing_prompt_project(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND, "project_not_found", "Project was not found"
+        )
+
+    @app.exception_handler(PromptNotFoundError)
+    async def missing_prompt(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND, "prompt_not_found", "Prompt was not found"
+        )
+
+    @app.exception_handler(PromptVersionNotFoundError)
+    async def missing_prompt_version(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND,
+            "prompt_version_not_found",
+            "PromptVersion was not found",
+        )
+
+    @app.exception_handler(ProjectConflictError)
+    @app.exception_handler(PromptConflictError)
+    @app.exception_handler(PromptVersionConflictError)
+    async def library_conflict(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(status.HTTP_409_CONFLICT, "library_conflict", str(error))
+
+    @app.exception_handler(ProjectPublicationError)
+    async def project_publication_failed(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(status.HTTP_409_CONFLICT, "project_publication_failed", str(error))
+
+    @app.exception_handler(ProjectAdoptionError)
+    async def project_adoption_failed(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "project_adoption_failed", str(error)
         )
 
     @app.exception_handler(CompilationError)

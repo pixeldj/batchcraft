@@ -226,7 +226,10 @@ A partially compiled Run should not be presented as a valid executable Run.
 
 Run and Job IDs belong to later execution identity, not logical compilation.
 
-Successful Run creation completes after the filesystem Run has been published and SQLite has indexed it. At that point the plan and provenance freeze, before scheduling begins. Execution status, timestamps, ComfyUI IDs, errors, and Results may then advance separately.
+Successful Run creation currently completes after the filesystem Run has been published. At that
+point the plan and provenance freeze, before scheduling begins. A future SQLite Run index must be
+written only after filesystem publication and before scheduling. Execution status, timestamps,
+ComfyUI IDs, errors, and Results may then advance separately.
 
 ## Reproducibility
 

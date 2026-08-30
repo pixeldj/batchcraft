@@ -1,9 +1,11 @@
+from datetime import datetime
 from typing import Self
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
+from batchcraft.db import ProjectRecord, PromptRecord, PromptVersionRecord
 from batchcraft.domain import (
     BatchDefinition,
     CompilationWarning,
@@ -112,6 +114,142 @@ class BatchRequest(ApiModel):
 class HealthResponse(ApiModel):
     status: str
     version: str
+
+
+class ProjectCreateRequest(ApiModel):
+    name: str = Field(min_length=1)
+    filesystem_key: str = Field(min_length=1)
+    description: str | None = None
+
+
+class ProjectAdoptRequest(ApiModel):
+    filesystem_key: str = Field(min_length=1)
+    project_id: str | None = Field(default=None, min_length=1)
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+
+class ProjectUpdateRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("at least one Project field is required")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Project name cannot be null")
+        return self
+
+
+class ProjectResponse(ApiModel):
+    id: str
+    name: str
+    filesystem_key: str
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, project: ProjectRecord) -> Self:
+        return cls(
+            id=project.id,
+            name=project.name,
+            filesystem_key=project.filesystem_key,
+            description=project.description,
+            created_at=project.created_at,
+            updated_at=project.updated_at,
+            archived_at=project.archived_at,
+        )
+
+
+class ProjectsResponse(ApiModel):
+    projects: list[ProjectResponse]
+
+
+class PromptCreateRequest(ApiModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    text: str = Field(min_length=1)
+    note: str | None = None
+
+
+class PromptUpdateRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("at least one Prompt field is required")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Prompt name cannot be null")
+        return self
+
+
+class PromptVersionCreateRequest(ApiModel):
+    text: str = Field(min_length=1)
+    note: str | None = None
+
+
+class PromptResponse(ApiModel):
+    id: str
+    project_id: str
+    name: str
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, prompt: PromptRecord) -> Self:
+        return cls(
+            id=prompt.id,
+            project_id=prompt.project_id,
+            name=prompt.name,
+            description=prompt.description,
+            created_at=prompt.created_at,
+            updated_at=prompt.updated_at,
+            archived_at=prompt.archived_at,
+        )
+
+
+class PromptsResponse(ApiModel):
+    prompts: list[PromptResponse]
+
+
+class LibraryPromptVersionResponse(ApiModel):
+    id: str
+    prompt_id: str
+    version_number: int
+    name_snapshot: str
+    text: str
+    note: str | None
+    created_at: datetime
+    archived_at: datetime | None
+
+    @classmethod
+    def from_record(cls, version: PromptVersionRecord) -> Self:
+        return cls(
+            id=version.id,
+            prompt_id=version.prompt_id,
+            version_number=version.version_number,
+            name_snapshot=version.name_snapshot,
+            text=version.text,
+            note=version.note,
+            created_at=version.created_at,
+            archived_at=version.archived_at,
+        )
+
+
+class PromptVersionsResponse(ApiModel):
+    prompt_versions: list[LibraryPromptVersionResponse]
+
+
+class PromptCreatedResponse(ApiModel):
+    prompt: PromptResponse
+    version: LibraryPromptVersionResponse
 
 
 class ComfyUIStatusResponse(ApiModel):

@@ -4,7 +4,7 @@
 
 The first application boundary exposes the production compiler, Run filesystem store, execution state, sequential executor, and ComfyUI adapter through FastAPI.
 
-The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. The API does not add SQLite, authentication, a global scheduler, restart recovery, or cancellation.
+The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. SQLite owns current Project metadata and the Prompt library. Authentication, a global scheduler, restart recovery, and cancellation remain deferred.
 
 ## Local Startup
 
@@ -12,6 +12,7 @@ From `backend/`:
 
 ```bash
 BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
+BATCHCRAFT_DATABASE_PATH="/path/to/batchcraft.sqlite3" \
 BATCHCRAFT_COMFYUI_BASE_URL="http://<windows-host>:8188" \
 uv run batchcraft-api
 ```
@@ -24,7 +25,9 @@ Configuration is read centrally from environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BATCHCRAFT_PROJECTS_ROOT` | `data/projects` | Project and Run filesystem root |
+| `BATCHCRAFT_DATA_ROOT` | `data` | Default root for application data |
+| `BATCHCRAFT_DATABASE_PATH` | `<data-root>/batchcraft.sqlite3` | SQLite application-state database |
+| `BATCHCRAFT_PROJECTS_ROOT` | `<data-root>/projects` | Project and Run filesystem root; independently configurable |
 | `BATCHCRAFT_COMFYUI_BASE_URL` | `http://127.0.0.1:8188` | Backend-owned ComfyUI endpoint |
 | `BATCHCRAFT_COMFYUI_TIMEOUT` | `30` | ComfyUI HTTP timeout in seconds |
 | `BATCHCRAFT_WEBSOCKET_TIMEOUT` | `21600` | Advisory WebSocket observation bound |
@@ -45,6 +48,22 @@ match `BATCHCRAFT_FRONTEND_ORIGIN` for browser API requests.
 ```text
 GET  /api/health
 GET  /api/comfyui/status
+GET  /api/projects
+POST /api/projects
+POST /api/projects/adopt
+GET  /api/projects/{project_id}
+PATCH /api/projects/{project_id}
+POST /api/projects/{project_id}/archive
+GET  /api/projects/{project_id}/prompts
+POST /api/projects/{project_id}/prompts
+GET  /api/prompts/{prompt_id}
+PATCH /api/prompts/{prompt_id}
+POST /api/prompts/{prompt_id}/archive
+GET  /api/prompts/{prompt_id}/versions
+POST /api/prompts/{prompt_id}/versions
+GET  /api/prompt-versions/{version_id}
+POST /api/prompt-versions/{version_id}/archive
+POST /api/prompt-versions/{version_id}/restore
 GET  /api/projects/{project_key}/assets
 POST /api/projects/{project_key}/assets
 GET  /api/projects/{project_key}/assets/{asset_id}/content
@@ -56,6 +75,28 @@ GET  /api/runs/{run_id}/execution
 GET  /api/runs/{run_id}/results
 GET  /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}
 ```
+
+The API applies all bundled SQL migrations before accepting requests. Startup fails on migration
+errors, newer database schemas, gaps, or changed checksums. Request handlers run each synchronous
+SQLite store operation through a worker thread rather than blocking the event loop.
+
+## Projects And Prompts
+
+Project creation publishes the immutable `project.json` owner binding before inserting current
+metadata into SQLite. If the insert fails, the owner remains available for explicit adoption through
+`POST /api/projects/adopt`. Adoption preserves a valid existing owner. An ownerless asset directory
+requires an explicit adoption request containing a user-supplied Project ID and name; batchcraft does
+not infer or generate that identity from the directory, assets, or history. Only that action creates
+its stable owner binding. Normal creation refuses to claim a pre-existing ownerless directory.
+Project rename and description changes update SQLite without rewriting the owner file or historical
+Runs.
+
+Creating a Prompt atomically creates PromptVersion 1. Prompt names and descriptions are mutable;
+PromptVersion text, name snapshot, note, version number, and creation timestamp are immutable.
+Saving text creates the next monotonic version. Archiving hides records from lists by default, and
+restoring an older version creates a new version with the current Prompt name snapshot. Add
+`include_archived=true` to Project, Prompt, or PromptVersion list requests when archived records are
+needed.
 
 `POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape. The
 request carries Project and Batch identity, an ordered non-empty `prompt_versions` array with stable
@@ -90,8 +131,8 @@ unsafe files, and verifies the selected image signature before serving it. Arbit
 never accepted.
 
 A missing Project has an empty asset listing. Import may create its content-addressed asset
-hierarchy, but it does not manufacture `project.json`; successful Run publication remains
-responsible for binding a Project filesystem key to Project identity.
+hierarchy, but it does not manufacture `project.json`; SQLite-backed Project creation/adoption or
+successful Run publication binds a Project filesystem key to Project identity.
 
 ## Batch Persistence
 
@@ -157,8 +198,8 @@ API errors use:
 }
 ```
 
-Defined cases include invalid requests and Batches, invalid Workflow Profile mappings, unsafe
-Project keys, invalid image uploads, missing or invalid Project assets, missing Runs or Results,
-active or ineligible execution, asset or Run publication failure, invalid durable Run data, and
-unexpected internal errors. Python stack traces are logged server-side rather than returned to
-clients.
+Defined cases include invalid requests and Batches, Project/Prompt validation and conflicts,
+Project adoption/publication failures, invalid Workflow Profile mappings, unsafe Project keys,
+invalid image uploads, missing or invalid Project assets, missing Runs or Results, active or
+ineligible execution, asset or Run publication failure, invalid durable Run data, and unexpected
+internal errors. Python stack traces are logged server-side rather than returned to clients.

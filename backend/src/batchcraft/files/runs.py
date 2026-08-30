@@ -38,6 +38,7 @@ from batchcraft.files.models import (
     ProjectIdentity,
     PublishedRun,
 )
+from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 
 RUN_FORMAT_VERSION = 1
 MANIFEST_FORMAT_VERSION = 2
@@ -91,15 +92,11 @@ class RunFilesystemStore:
         self._validate_plan(plan)
         project_path = self.projects_path / project.filesystem_key
         batch_path = project_path / "batches" / batch.filesystem_key
-        ensure_directory(project_path)
+        try:
+            ProjectOwnerStore(self.projects_path).publish(project)
+        except ProjectOwnerError as error:
+            raise RunStoreError(str(error)) from error
         ensure_directory(batch_path)
-        self._ensure_owner_file(
-            project_path / "project.json",
-            "project",
-            project.id,
-            project.filesystem_key,
-            project.name,
-        )
         self._ensure_owner_file(
             batch_path / "batch.json",
             "batch",
