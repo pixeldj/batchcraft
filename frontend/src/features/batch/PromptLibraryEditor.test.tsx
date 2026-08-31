@@ -267,6 +267,111 @@ describe("PromptLibraryEditor version operations", () => {
     });
   });
 
+  it("prefills Duplicate from the selected PromptVersion rather than the latest version", async () => {
+    const latest = version({
+      id: "portrait-v5",
+      version_number: 5,
+      name_snapshot: "Portrait",
+      text: "latest v5 template",
+    });
+    const logicalPrompt = {
+      ...libraryPrompt("prompt-1", "Portrait", latest),
+      description: "Portrait starting point",
+    };
+    const selected = formPrompt({
+      promptName: "Portrait",
+      snapshotName: "Portrait",
+      versionId: "portrait-v2",
+      versionNumber: 2,
+      text: "selected v2 template",
+    });
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [logicalPrompt] })),
+    });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbackProps()} />);
+
+    await expandPromptEditor();
+    fireEvent.click(await screen.findByRole("button", { name: "Duplicate Prompt" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Duplicate Prompt" });
+    expect(within(dialog).getByLabelText("Prompt name")).toHaveValue("Portrait copy");
+    expect(within(dialog).getByLabelText("Prompt template")).toHaveValue("selected v2 template");
+    expect(within(dialog).getByLabelText("Prompt template")).not.toHaveValue("latest v5 template");
+    expect(within(dialog).getByLabelText("Description (optional)"))
+      .toHaveValue("Portrait starting point");
+  });
+
+  it("creates an editable-named logical Prompt at v1, refreshes the library, and leaves the source selected", async () => {
+    const latest = version({
+      id: "portrait-v5",
+      version_number: 5,
+      name_snapshot: "Portrait",
+      text: "latest v5 template",
+    });
+    const sourcePrompt = libraryPrompt("prompt-1", "Portrait", latest);
+    const selected = formPrompt({
+      promptName: "Portrait",
+      snapshotName: "Portrait",
+      versionId: "portrait-v2",
+      versionNumber: 2,
+      text: "selected v2 template",
+    });
+    const createdVersion = version({
+      id: "copy-v1",
+      prompt_id: "prompt-copy",
+      version_number: 1,
+      name_snapshot: "Portrait study",
+      text: "edited duplicate template",
+    });
+    const createdPrompt = prompt("prompt-copy", "Portrait study");
+    const duplicatedLibraryPrompt = {
+      ...createdPrompt,
+      latest_active_version: createdVersion,
+    };
+    const listPrompts = vi.fn<BatchcraftApi["listPrompts"]>()
+      .mockResolvedValueOnce({ prompts: [sourcePrompt] })
+      .mockResolvedValueOnce({ prompts: [sourcePrompt, duplicatedLibraryPrompt] });
+    const createPrompt = vi.fn<BatchcraftApi["createPrompt"]>(async () => ({
+      prompt: createdPrompt,
+      version: createdVersion,
+    }));
+    const callbacks = callbackProps();
+    const api = makeApi({ listPrompts, createPrompt });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbacks} />);
+
+    await expandPromptEditor();
+    fireEvent.click(await screen.findByRole("button", { name: "Duplicate Prompt" }));
+    const dialog = screen.getByRole("dialog", { name: "Duplicate Prompt" });
+    fireEvent.change(within(dialog).getByLabelText("Prompt name"), {
+      target: { value: "Portrait study" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Prompt template"), {
+      target: { value: "edited duplicate template" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Description (optional)"), {
+      target: { value: "A separate study" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Duplicate Prompt" }));
+
+    await waitFor(() => expect(createPrompt).toHaveBeenCalledWith("project-1", {
+      name: "Portrait study",
+      text: "edited duplicate template",
+      description: "A separate study",
+    }));
+    await waitFor(() => expect(listPrompts).toHaveBeenCalledTimes(2));
+    expect(api.createPromptVersion).not.toHaveBeenCalled();
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+    expect(callbacks.onMetadataChange).not.toHaveBeenCalled();
+    expect(screen.getByText("selected v2 template")).toBeInTheDocument();
+    expect(screen.getByText("v2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
+    const duplicatedCard = screen.getByText("Portrait study").closest(".repeater-card");
+    expect(within(duplicatedCard as HTMLElement).getByText("Latest active version: v1"))
+      .toBeInTheDocument();
+  });
+
   it("renames through metadata without changing snapshot fields", async () => {
     const original = formPrompt({ promptName: "Current name", snapshotName: "Saved name", text: "frozen text" });
     const callbacks = callbackProps();

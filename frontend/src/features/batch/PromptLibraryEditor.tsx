@@ -25,11 +25,20 @@ type AddView = "choice" | "existing" | "create";
 type PromptDialog =
   | { kind: "history"; key: number; promptId: string }
   | { kind: "edit"; key: number; promptId: string }
-  | { kind: "rename"; promptId: string };
+  | { kind: "rename"; promptId: string }
+  | { kind: "duplicate" };
 
 interface DraftState {
   text: string;
   note: string;
+  error: string | null;
+  saving: boolean;
+}
+
+interface DuplicateDraft {
+  name: string;
+  text: string;
+  description: string;
   error: string | null;
   saving: boolean;
 }
@@ -73,6 +82,7 @@ export function PromptLibraryEditor({
     error: null as string | null,
     saving: false,
   });
+  const [duplicateDraft, setDuplicateDraft] = useState<DuplicateDraft | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [detachedState, setDetachedState] = useState<Record<number, "checking" | "integrity">>({});
   const loadTag = useRef(0);
@@ -146,6 +156,7 @@ export function PromptLibraryEditor({
     setCreateDraft({ name: "", text: "", description: "", error: null, saving: false });
     setEditDraft(null);
     setRenameDraft({ name: "", error: null, saving: false });
+    setDuplicateDraft(null);
     setHistoryCache({});
     setHistoryState(null);
 
@@ -404,6 +415,47 @@ export function PromptLibraryEditor({
     }
   }
 
+  function openDuplicate(
+    selectedVersion: PromptForm,
+    logicalPrompt: ProjectPrompt,
+    trigger: HTMLButtonElement,
+  ) {
+    dialogTrigger.current = trigger;
+    setDuplicateDraft({
+      name: `${logicalPrompt.name} copy`,
+      text: selectedVersion.text,
+      description: logicalPrompt.description ?? "",
+      error: null,
+      saving: false,
+    });
+    setPromptDialog({ kind: "duplicate" });
+  }
+
+  async function duplicatePrompt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (promptDialog?.kind !== "duplicate" || !duplicateDraft || duplicateDraft.saving) return;
+    setDuplicateDraft((current) => current && ({ ...current, saving: true, error: null }));
+    const requestedProjectId = normalizedProjectId;
+    try {
+      await api.createPrompt(requestedProjectId, {
+        name: duplicateDraft.name,
+        text: duplicateDraft.text,
+        description: duplicateDraft.description.trim() || null,
+      });
+      if (projectIdRef.current !== requestedProjectId) return;
+      closeDialogs();
+      setDuplicateDraft(null);
+      setLoadAttempt((current) => current + 1);
+    } catch (caught) {
+      if (projectIdRef.current !== requestedProjectId) return;
+      setDuplicateDraft((current) => current && ({
+        ...current,
+        saving: false,
+        error: errorMessage(caught),
+      }));
+    }
+  }
+
   function move(index: number, offset: -1 | 1) {
     const updated = [...prompts];
     const [prompt] = updated.splice(index, 1);
@@ -518,6 +570,7 @@ export function PromptLibraryEditor({
                     History / change version
                   </button>
                   <button className="button-link" type="button" onClick={(event) => openEdit(prompt, event.currentTarget)}>Edit as new version</button>
+                  <button className="button-link" type="button" onClick={(event) => openDuplicate(prompt, currentPrompt, event.currentTarget)}>Duplicate Prompt</button>
                   <button className="button-link" type="button" onClick={(event) => openRename(currentPrompt.id, currentPrompt.name, event.currentTarget)}>Rename Prompt</button>
                 </div>
               ) : null}
@@ -656,6 +709,31 @@ export function PromptLibraryEditor({
             </label>
             {renameDraft.error ? <p className="operation-error" role="alert">{renameDraft.error}</p> : null}
             <button className="button-primary" type="submit" disabled={renameDraft.saving}>{renameDraft.saving ? "Renaming..." : "Rename"}</button>
+          </form>
+          <button className="button-link" type="button" onClick={() => cancelDialog()}>Cancel</button>
+        </dialog>
+      ) : null}
+
+      {promptDialog?.kind === "duplicate" && duplicateDraft ? (
+        <dialog className="prompt-dialog" open aria-labelledby="duplicate-prompt-title" onCancel={cancelDialog} onKeyDown={cancelOnEscape}>
+          <h2 id="duplicate-prompt-title">Duplicate Prompt</h2>
+          <form onSubmit={duplicatePrompt}>
+            <label className="field">
+              <span className="field-label">Prompt name</span>
+              <input autoFocus required value={duplicateDraft.name} onChange={(event) => setDuplicateDraft((current) => current && ({ ...current, name: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span className="field-label">Prompt template</span>
+              <textarea required value={duplicateDraft.text} onChange={(event) => setDuplicateDraft((current) => current && ({ ...current, text: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span className="field-label">Description (optional)</span>
+              <textarea value={duplicateDraft.description} onChange={(event) => setDuplicateDraft((current) => current && ({ ...current, description: event.target.value }))} />
+            </label>
+            {duplicateDraft.error ? <p className="operation-error" role="alert">{duplicateDraft.error}</p> : null}
+            <button className="button-primary" type="submit" disabled={duplicateDraft.saving}>
+              {duplicateDraft.saving ? "Duplicating..." : "Duplicate Prompt"}
+            </button>
           </form>
           <button className="button-link" type="button" onClick={() => cancelDialog()}>Cancel</button>
         </dialog>
