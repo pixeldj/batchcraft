@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiClient, type BatchcraftApi } from "./api/client";
 import type {
@@ -115,11 +115,45 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   );
   const formRevision = useRef(0);
   const runRevision = useRef(0);
+  const frozenRunCache = useRef(new Map<string, RunResponse>());
+  const frozenRunRequests = useRef(new Map<string, Promise<RunResponse>>());
   const initialBatchIdentity = useRef(batchIdentity(initialSession.form));
   const batchIdentityChanged = useRef(false);
   const currentBatchIdentity = batchIdentity(form);
   const currentBatchIdentityRef = useRef(currentBatchIdentity);
   currentBatchIdentityRef.current = currentBatchIdentity;
+
+  const cacheFrozenRun = useCallback((frozenRun: RunResponse) => {
+    frozenRunCache.current.set(frozenRun.run_id, frozenRun);
+    return frozenRun;
+  }, []);
+
+  const getCachedFrozenRun = useCallback((runId: string) => {
+    return frozenRunCache.current.get(runId) ?? null;
+  }, []);
+
+  const loadFrozenRun = useCallback((runId: string) => {
+    const cached = frozenRunCache.current.get(runId);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+    const pending = frozenRunRequests.current.get(runId);
+    if (pending) {
+      return pending;
+    }
+    const request = api.getRun(runId).then(
+      (frozenRun) => {
+        frozenRunRequests.current.delete(runId);
+        return cacheFrozenRun(frozenRun);
+      },
+      (error: unknown) => {
+        frozenRunRequests.current.delete(runId);
+        throw error;
+      },
+    );
+    frozenRunRequests.current.set(runId, request);
+    return request;
+  }, [api, cacheFrozenRun]);
 
   useEffect(() => {
     saveWorkingSession(
@@ -209,7 +243,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
     async function restoreHistoricalGalleryRun(runId: string, signal: AbortSignal) {
       try {
-        const restoredRun = await api.getRun(runId, signal);
+        const restoredRun = cacheFrozenRun(await api.getRun(runId, signal));
         if (!runMatchesBatch(restoredRun, currentBatchIdentityRef.current)) {
           setSessionRunIds((current) => current.filter((candidate) => candidate !== runId));
           setGalleryRunsById((current) => withoutGalleryRun(current, runId));
@@ -250,7 +284,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     }
 
     return () => controller.abort();
-  }, [api, currentBatchIdentity, initialSession, projectVerified, selectedProjectId]);
+  }, [api, cacheFrozenRun, currentBatchIdentity, initialSession, projectVerified, selectedProjectId]);
 
   useEffect(() => {
     const restoredRunId = initialSession.currentRunId;
@@ -270,7 +304,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
     async function restoreRun(runId: string) {
       try {
-        const restoredRun = await api.getRun(runId, controller.signal);
+        const restoredRun = cacheFrozenRun(await api.getRun(runId, controller.signal));
         if (!runMatchesBatch(restoredRun, currentBatchIdentityRef.current)) {
           setCurrentRunId(null);
           setSessionRunIds((current) => current.filter((candidate) => candidate !== runId));
@@ -348,7 +382,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
     void restoreRun(restoredRunId);
     return () => controller.abort();
-  }, [api, initialSession, projectVerified, selectedProjectId]);
+  }, [api, cacheFrozenRun, initialSession, projectVerified, selectedProjectId]);
 
   function changeForm(next: BatchFormState) {
     formRevision.current += 1;
@@ -649,7 +683,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         );
       }
       try {
-        const frozenRun = await api.getRun(nextRun.run_id);
+        const frozenRun = await loadFrozenRun(nextRun.run_id);
         if (
           frozenRun.run_id !== nextRun.run_id ||
           frozenRun.run_number !== nextRun.run_number ||
@@ -815,11 +849,15 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           initialResultsError={matchingRestoredRunSeed?.resultsError ?? null}
           onStatusChange={setRunStatus}
           onResultsChange={updateCurrentRunGalleryResults}
+          getCachedRun={getCachedFrozenRun}
+          loadRun={loadFrozenRun}
         />
         <BatchResultsGallery
           api={api}
           runIds={sessionRunIds}
           runsById={galleryRunsById}
+          getCachedRun={getCachedFrozenRun}
+          loadRun={loadFrozenRun}
         />
       </main>
     </>

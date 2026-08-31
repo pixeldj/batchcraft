@@ -1,6 +1,6 @@
 import type { BatchcraftApi } from "../../api/client";
-import type { ResultResponse } from "../../api/types";
-import { ResultCard } from "./ResultCard";
+import type { ResultResponse, RunResponse } from "../../api/types";
+import { ResultGallery } from "./ResultGallery";
 
 export interface BatchGalleryRun {
   runId: string;
@@ -14,9 +14,17 @@ interface Props {
   api: BatchcraftApi;
   runIds: string[];
   runsById: Record<string, BatchGalleryRun>;
+  getCachedRun(runId: string): RunResponse | null;
+  loadRun(runId: string): Promise<RunResponse>;
 }
 
-export function BatchResultsGallery({ api, runIds, runsById }: Props) {
+export function BatchResultsGallery({
+  api,
+  runIds,
+  runsById,
+  getCachedRun,
+  loadRun,
+}: Props) {
   const artifactCount = runIds.reduce(
     (count, runId) => count + (runsById[runId]?.results.length ?? 0),
     0,
@@ -68,16 +76,14 @@ export function BatchResultsGallery({ api, runIds, runsById }: Props) {
                 <p className="empty-note">No Results have been ingested for this Run yet.</p>
               ) : null}
               {orderedResults.length > 0 ? (
-                <div className="results-grid">
-                  {orderedResults.map((result) => (
-                    <ResultCard
-                      api={api}
-                      result={result}
-                      runLabel={runLabel}
-                      key={`${result.job_ordinal}-${result.artifact_ordinal}`}
-                    />
-                  ))}
-                </div>
+                <ResultGallery
+                  api={api}
+                  runId={runId}
+                  results={orderedResults}
+                  runLabel={runLabel}
+                  getCachedRun={getCachedRun}
+                  loadRun={loadRun}
+                />
               ) : null}
             </section>
           );

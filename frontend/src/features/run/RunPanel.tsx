@@ -156,8 +156,14 @@ function formatVersion(version: number | null): string {
 }
 
 function summarizeDimensions(run: RunResponse): string {
-  const variableValues = new Set(
-    run.plan.jobs.flatMap((job) => job.resolved_variables.map((variable) => `${variable.name}\u0000${variable.value}`)),
+  const variableCombinations = new Set(
+    run.plan.jobs
+      .filter((job) => job.resolved_variables.length > 0)
+      .map((job) => JSON.stringify(
+        [...job.resolved_variables]
+          .sort((left, right) => left.name.localeCompare(right.name))
+          .map((variable) => [variable.name, variable.value]),
+      )),
   );
   const references = new Set(
     run.plan.jobs.flatMap((job) => job.reference_asset_id === null ? [] : [job.reference_asset_id]),
@@ -165,7 +171,9 @@ function summarizeDimensions(run: RunResponse): string {
   const seeds = new Set(run.plan.jobs.map((job) => job.seed));
   return [
     countLabel(run.prompt_versions.length, "prompt"),
-    countLabel(variableValues.size, "variable value"),
+    variableCombinations.size
+      ? countLabel(variableCombinations.size, "variable combination")
+      : "No variables",
     references.size ? countLabel(references.size, "reference") : "Base workflow",
     countLabel(seeds.size, "seed"),
   ].join(" · ");

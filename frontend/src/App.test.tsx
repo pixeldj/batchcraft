@@ -790,7 +790,10 @@ describe("Run creation", () => {
         prompt_version_id: "prompt-b",
         prompt_version_name: "Editorial",
         resolved_prompt: "Editorial cat",
-        resolved_variables: [{ name: "subject", value: "cat" }],
+        resolved_variables: [
+          { name: "subject", value: "cat" },
+          { name: "style", value: "editorial" },
+        ],
         reference_asset_id: null,
         reference_filename: null,
         seed: 123,
@@ -800,7 +803,10 @@ describe("Run creation", () => {
         prompt_version_id: "prompt-a",
         prompt_version_name: "Portrait",
         resolved_prompt: "Portrait dog",
-        resolved_variables: [{ name: "subject", value: "dog" }],
+        resolved_variables: [
+          { name: "subject", value: "dog" },
+          { name: "style", value: "editorial" },
+        ],
         reference_asset_id: null,
         reference_filename: null,
         seed: 456,
@@ -821,6 +827,8 @@ describe("Run creation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await screen.findByRole("button", { name: "View Run Plan" });
+    expect(screen.getByText(/2 prompts · 2 variable combinations · Base workflow · 2 seeds/))
+      .toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Edited afterward" } });
     fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
 
@@ -1103,7 +1111,8 @@ describe("Current Run restoration", () => {
     render(<App api={api} />);
 
     expect(await screen.findByRole("heading", { name: "Run 13" })).toBeInTheDocument();
-    expect(await screen.findAllByAltText("Result 1 from Job 1: restored.png")).toHaveLength(2);
+    expect(await screen.findAllByAltText("Result 1 from Job 1: restored.png")).toHaveLength(1);
+    expect(await screen.findAllByAltText("Result 1 from Job 1: Run 13 / restored.png")).toHaveLength(1);
     expect(api.getResults).toHaveBeenCalledOnce();
     expect(api.startRun).not.toHaveBeenCalled();
   });
@@ -1171,13 +1180,13 @@ describe("Current Run restoration", () => {
     });
     await pause(0);
 
-    expect(screen.queryByText("old-run.png")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("Result 1 from Job 1: old-run.png")).not.toBeInTheDocument();
     expect(within(currentRunSection()).getByText("run-b")).toBeInTheDocument();
   });
 });
 
 describe("Results", () => {
-  it("renders ordered image and non-image artifacts with metadata", async () => {
+  it("renders ordered image-first cards without technical metadata", async () => {
     const artifacts: ResultResponse[] = [
       result(1, 1, "image/png", "first.png", 2048),
       result(1, 2, "application/json", "metadata.json", 512),
@@ -1193,25 +1202,31 @@ describe("Results", () => {
 
     const currentResults = screen.getByRole("heading", { name: "Results" }).closest("section");
     expect(currentResults).not.toBeNull();
-    const firstImage = await within(currentResults as HTMLElement).findByAltText(
-      "Result 1 from Job 1: first.png",
-    );
+    const scope = within(currentResults as HTMLElement);
+
+    const firstImage = await scope.findByAltText("Result 1 from Job 1: first.png");
     expect(firstImage).toHaveAttribute("src", "http://api.test/api/result/1/1");
-    expect(within(currentResults as HTMLElement).getByRole("link", { name: /JSON\s*Open artifact/ })).toHaveAttribute(
-      "href",
-      "http://api.test/api/result/1/2",
-    );
-    expect(within(currentResults as HTMLElement).getByText("metadata.json")).toBeInTheDocument();
-    expect(within(currentResults as HTMLElement).getByText("512 B")).toBeInTheDocument();
     expect(firstImage).toHaveClass("result-image");
-    expect(firstImage.closest(".result-image-link")).toBeInTheDocument();
     expect(firstImage.closest(".result-preview-frame")).not.toBeInTheDocument();
+    expect(firstImage.closest("button.result-image-button")).not.toBeNull();
+
+    // No visible technical metadata: filename, node, output, type, size.
+    expect(scope.queryByText("first.png")).not.toBeInTheDocument();
+    expect(scope.queryByText("metadata.json")).not.toBeInTheDocument();
+    expect(scope.queryByText("512 B")).not.toBeInTheDocument();
+    expect(scope.queryByText("41")).not.toBeInTheDocument();
+    expect(scope.queryByText(/Node/i)).not.toBeInTheDocument();
+    expect(scope.queryByText(/Output/i)).not.toBeInTheDocument();
+
+    // Compact labels only; artifact label appears for the multi-artifact Job.
+    expect(scope.getByText("Job 002")).toBeInTheDocument();
+    const nonImage = scope.getByRole("link", { name: /JSON\s*Open artifact/ });
+    expect(nonImage).toHaveAttribute("href", "http://api.test/api/result/1/2");
+    expect(scope.getByText("Job 001 #1")).toBeInTheDocument();
+    expect(scope.getByText("Job 001 #2")).toBeInTheDocument();
 
     const cards = currentResults?.querySelectorAll(".result-card") ?? [];
     expect(cards).toHaveLength(3);
-    expect(within(cards[0] as HTMLElement).getByText("first.png")).toBeInTheDocument();
-    expect(within(cards[1] as HTMLElement).getByText("metadata.json")).toBeInTheDocument();
-    expect(within(cards[2] as HTMLElement).getByText("second.jpg")).toBeInTheDocument();
   });
 
   it("can refresh Results after a terminal fetch failure", async () => {
@@ -1232,6 +1247,416 @@ describe("Results", () => {
 
     expect(await screen.findByAltText("Result 1 from Job 1: recovered.png")).toBeInTheDocument();
     expect(screen.queryByText("Results: Result index unavailable")).not.toBeInTheDocument();
+  });
+});
+
+describe("Result lightbox", () => {
+  function completedRunApi(apiOverrides: Partial<BatchcraftApi> = {}) {
+    return makeApi({
+      previewBatch: vi.fn(async () => previewResponse()),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      ...apiOverrides,
+    });
+  }
+
+  const threeImages: ResultResponse[] = [
+    result(1, 1, "image/png", "first.png", 100),
+    result(2, 1, "image/jpeg", "second.jpg", 100),
+    result(3, 1, "image/png", "third.png", 100),
+  ];
+
+  async function openFirstImage() {
+    const image = await screen.findByAltText("Result 1 from Job 1: first.png");
+    fireEvent.click(image.closest("button") as HTMLElement);
+    return await screen.findByRole("dialog", { name: "Result image preview" });
+  }
+
+  it("opens on image click and closes via the explicit Close control", async () => {
+    const api = completedRunApi({
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const lightbox = await openFirstImage();
+    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
+    expect(within(lightbox).getByText("Job 001")).toBeInTheDocument();
+
+    fireEvent.click(within(lightbox).getByRole("button", { name: "ⓘ Details" }));
+    const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(details).getByText("A studio portrait of cat.", { exact: false })).toBeInTheDocument();
+    fireEvent.click(within(details).getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("dialog", { name: "Result image preview" })).toBeInTheDocument();
+
+    fireEvent.click(within(lightbox).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Result image preview" })).not.toBeInTheDocument();
+  });
+
+  it("closes with Escape", async () => {
+    const api = completedRunApi({
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const lightbox = await openFirstImage();
+    fireEvent.keyDown(lightbox, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Result image preview" })).not.toBeInTheDocument();
+  });
+
+  it("navigates deterministically with Previous/Next and disables unavailable directions", async () => {
+    const api = completedRunApi({
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const image = await screen.findByAltText("Result 1 from Job 1: first.png");
+    fireEvent.click(image.closest("button") as HTMLElement);
+    const lightbox = await screen.findByRole("dialog", { name: "Result image preview" });
+
+    // First item: Previous disabled, no wrap-around.
+    expect(within(lightbox).getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(within(lightbox).getByRole("button", { name: "Next" })).toBeEnabled();
+    fireEvent.click(within(lightbox).getByRole("button", { name: "Previous" }));
+    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
+
+    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
+    expect(within(lightbox).getByText("2 of 3")).toBeInTheDocument();
+    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
+    expect(within(lightbox).getByText("3 of 3")).toBeInTheDocument();
+
+    // Last item: Next disabled, no wrap-around.
+    expect(within(lightbox).getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(within(lightbox).getByRole("button", { name: "Previous" })).toBeEnabled();
+    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
+    expect(within(lightbox).getByText("3 of 3")).toBeInTheDocument();
+  });
+
+  it("navigates with keyboard arrows", async () => {
+    const api = completedRunApi({
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const lightbox = await openFirstImage();
+    fireEvent.keyDown(lightbox, { key: "ArrowRight" });
+    expect(within(lightbox).getByText("2 of 3")).toBeInTheDocument();
+    fireEvent.keyDown(lightbox, { key: "ArrowLeft" });
+    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
+    // ArrowLeft at the first item does not wrap.
+    fireEvent.keyDown(lightbox, { key: "ArrowLeft" });
+    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
+  });
+
+  it("works identically inside the accumulated Batch Results gallery", async () => {
+    const api = makeApi({
+      previewBatch: vi.fn(async () => previewResponse()),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const gallery = batchResultsSection();
+    const image = await within(gallery).findByAltText("Result 1 from Job 1: Run 7 / first.png");
+    fireEvent.click(image.closest("button") as HTMLElement);
+
+    const lightbox = await screen.findByRole("dialog", { name: "Result image preview" });
+    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
+    fireEvent.keyDown(lightbox, { key: "ArrowRight" });
+    expect(within(lightbox).getByText("2 of 3")).toBeInTheDocument();
+  });
+
+  it("keeps the gallery usable when one image fails to load", async () => {
+    const api = completedRunApi({
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [result(1, 1, "image/png", "broken.png", 100), result(2, 1, "image/png", "ok.png", 100)],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const broken = await screen.findByAltText("Result 1 from Job 1: broken.png");
+    fireEvent.error(broken);
+    const failedSlot = await screen.findByText("Image unavailable");
+    expect(failedSlot).toBeInTheDocument();
+
+    const okImage = screen.getByAltText("Result 1 from Job 2: ok.png");
+    const button = okImage.closest("button");
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(button as HTMLElement);
+    const lightbox = await screen.findByRole("dialog", { name: "Result image preview" });
+    // The failed image is excluded from navigation.
+    expect(within(lightbox).getByText("1 of 1")).toBeInTheDocument();
+  });
+
+  it("renders images without any cropping wrapper structure", async () => {
+    const api = completedRunApi({
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const image = await screen.findByAltText("Result 1 from Job 1: first.png");
+    const button = image.closest("button.result-image-button");
+    expect(button).not.toBeNull();
+    // The image is a direct child of the button: no aspect-ratio frame or
+    // overflow container between the button and the image.
+    expect(image.parentElement).toBe(button);
+    expect(image.closest(".result-preview-frame")).not.toBeInTheDocument();
+    expect(image.closest(".asset-preview-frame")).not.toBeInTheDocument();
+  });
+});
+
+describe("Result Details", () => {
+  function frozenProvenanceRun(runId = "run-123", runNumber = 7) {
+    const frozen = runLookupResponse("succeeded", runId, runNumber);
+    frozen.batch_snapshot!.prompt_versions[0].version_number = 3;
+    frozen.plan.jobs[0] = {
+      ...frozen.plan.jobs[0],
+      resolved_prompt: "A studio portrait of a cat in cinematic light.",
+      resolved_variables: [
+        { name: "subject", value: "cat" },
+        { name: "style", value: "cinematic" },
+      ],
+      seed: 38192831,
+      reference_asset_id: "ref-02",
+      reference_filename: "ref-02.png",
+    };
+    frozen.plan.jobs[1] = {
+      ...frozen.plan.jobs[1],
+      resolved_prompt: "A studio portrait of a dog in natural light.",
+      resolved_variables: [
+        { name: "subject", value: "dog" },
+        { name: "style", value: "natural" },
+      ],
+      seed: 992211,
+      reference_asset_id: "ref-03",
+      reference_filename: "ref-03.png",
+    };
+    return frozen;
+  }
+
+  it("opens the correct Result with frozen generation provenance and secondary technical metadata", async () => {
+    const frozen = frozenProvenanceRun();
+    const getRun = vi.fn(async () => frozen);
+    const artifacts = [
+      result(2, 1, "image/png", "dog.png", 4096),
+      result(1, 1, "image/png", "cat.png", 2048),
+    ];
+    const api = makeApi({
+      getRun,
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: artifacts })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const results = currentResultsSection();
+    fireEvent.click(await within(results).findByRole("button", { name: "Details for Job 1, artifact 1" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Portrait · v3")).toBeInTheDocument();
+    expect(within(dialog).getByText("A studio portrait of a cat in cinematic light.", { exact: false }))
+      .toBeInTheDocument();
+    expect(within(dialog).getByText("subject")).toBeInTheDocument();
+    expect(within(dialog).getByText("cat")).toBeInTheDocument();
+    expect(within(dialog).getByText("style")).toBeInTheDocument();
+    expect(within(dialog).getByText("cinematic")).toBeInTheDocument();
+    expect(within(dialog).getByText("38192831")).toBeInTheDocument();
+    expect(within(dialog).getByText("ref-02.png")).toBeInTheDocument();
+    expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
+    expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
+
+    const technical = within(dialog).getByText("Technical details").closest("details");
+    expect(technical).not.toHaveAttribute("open");
+    expect(within(technical as HTMLElement).getByText("cat.png")).toBeInTheDocument();
+    expect(within(technical as HTMLElement).getByText("2.0 KB")).toBeInTheDocument();
+    expect(within(technical as HTMLElement).getByText("abc123")).toBeInTheDocument();
+
+    // Run creation already loaded and cached the frozen Run Plan.
+    expect(getRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows Base workflow when the frozen Job has no reference", async () => {
+    const frozen = frozenProvenanceRun();
+    frozen.plan.jobs[0].reference_asset_id = null;
+    frozen.plan.jobs[0].reference_filename = null;
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [result(1, 1, "image/png", "base.png", 100)],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    fireEvent.click(await within(currentResultsSection()).findByRole("button", {
+      name: "Details for Job 1, artifact 1",
+    }));
+    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Base workflow")).toBeInTheDocument();
+  });
+
+  it("uses the Job ordinal and preserves artifact-specific technical metadata", async () => {
+    const frozen = frozenProvenanceRun();
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [
+          result(1, 1, "image/png", "cat-primary.png", 100),
+          result(1, 2, "image/png", "cat-mask.png", 200),
+          result(2, 1, "image/png", "dog.png", 300),
+        ],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    const results = currentResultsSection();
+
+    fireEvent.click(await within(results).findByRole("button", { name: "Details for Job 1, artifact 2" }));
+    let dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 2" });
+    expect(within(dialog).getByText("A studio portrait of a cat in cinematic light.", { exact: false }))
+      .toBeInTheDocument();
+    expect(within(dialog).getByText("cat-mask.png")).toBeInTheDocument();
+    expect(within(dialog).getByText("200 B")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+    fireEvent.click(within(results).getByRole("button", { name: "Details for Job 2, artifact 1" }));
+    dialog = await screen.findByRole("dialog", { name: "Job 002 · Artifact 1" });
+    expect(within(dialog).getByText("A studio portrait of a dog in natural light.", { exact: false }))
+      .toBeInTheDocument();
+    expect(within(dialog).getByText("992211")).toBeInTheDocument();
+    expect(within(dialog).queryByText("cat-mask.png")).not.toBeInTheDocument();
+  });
+
+  it("uses the correct cached frozen Run for Batch Results", async () => {
+    const form = populatedBatchForm();
+    form.referenceAssetIds = ["asset-1"];
+    saveWorkingSession(form, null, ["run-a", "run-b"]);
+    const runA = frozenProvenanceRun("run-a", 10);
+    runA.plan.jobs[0].resolved_prompt = "Frozen prompt from Run A";
+    const runB = frozenProvenanceRun("run-b", 11);
+    runB.plan.jobs[0].resolved_prompt = "Frozen prompt from Run B";
+    const getRun = vi.fn(async (runId: string) => runId === "run-a" ? runA : runB);
+    const api = makeApi({
+      getRun,
+      getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
+      getResults: vi.fn(async (runId: string) => ({
+        run_id: runId,
+        results: [result(1, 1, "image/png", `${runId}.png`, 100)],
+      })),
+    });
+    render(<App api={api} />);
+
+    const runBRegion = await screen.findByRole("region", { name: "Run 11" });
+    fireEvent.click(within(runBRegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    let dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Frozen prompt from Run B", { exact: false })).toBeInTheDocument();
+    expect(within(dialog).queryByText("Frozen prompt from Run A", { exact: false })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+    fireEvent.click(within(runBRegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Frozen prompt from Run B", { exact: false })).toBeInTheDocument();
+    expect(getRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("degrades to concrete Job provenance for a legacy Run", async () => {
+    const legacy = frozenProvenanceRun();
+    legacy.batch_snapshot = null;
+    const api = makeApi({
+      getRun: vi.fn(async () => legacy),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [result(1, 1, "image/png", "legacy.png", 100)],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    fireEvent.click(await within(currentResultsSection()).findByRole("button", {
+      name: "Details for Job 1, artifact 1",
+    }));
+    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Portrait · version unavailable")).toBeInTheDocument();
+    expect(within(dialog).getByText("38192831")).toBeInTheDocument();
+    expect(within(dialog).getByText("ref-02.png")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Unavailable for this legacy Run")).toHaveLength(3);
+  });
+
+  it("keeps a failed provenance load retryable inside Details", async () => {
+    const frozen = frozenProvenanceRun();
+    const getRun = vi
+      .fn<BatchcraftApi["getRun"]>()
+      .mockRejectedValueOnce(new ApiError("creation lookup failed", "network_error", 503))
+      .mockRejectedValueOnce(new ApiError("details lookup failed", "network_error", 503))
+      .mockResolvedValueOnce(frozen);
+    const api = makeApi({
+      getRun,
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [result(1, 1, "image/png", "retry.png", 100)],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    fireEvent.click(await within(currentResultsSection()).findByRole("button", {
+      name: "Details for Job 1, artifact 1",
+    }));
+    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(await within(dialog).findByText(/details lookup failed/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+    expect(await within(dialog).findByText("Portrait · v3")).toBeInTheDocument();
+    expect(getRun).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let a stale Details request overwrite a newly selected Result", async () => {
+    const frozen = frozenProvenanceRun();
+    const pending = deferred<RunResponse>();
+    const getRun = vi
+      .fn<BatchcraftApi["getRun"]>()
+      .mockRejectedValueOnce(new ApiError("creation lookup failed", "network_error", 503))
+      .mockImplementationOnce(() => pending.promise);
+    const api = makeApi({
+      getRun,
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [
+          result(1, 1, "image/png", "cat.png", 100),
+          result(2, 1, "image/png", "dog.png", 100),
+        ],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    const results = currentResultsSection();
+
+    fireEvent.click(await within(results).findByRole("button", { name: "Details for Job 1, artifact 1" }));
+    let dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Loading frozen Run provenance...")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    fireEvent.click(within(results).getByRole("button", { name: "Details for Job 2, artifact 1" }));
+    dialog = await screen.findByRole("dialog", { name: "Job 002 · Artifact 1" });
+
+    pending.resolve(frozen);
+    expect(await within(dialog).findByText("A studio portrait of a dog in natural light.", { exact: false }))
+      .toBeInTheDocument();
+    expect(within(dialog).queryByText("A studio portrait of a cat in cinematic light.", { exact: false }))
+      .not.toBeInTheDocument();
+    expect(getRun).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1262,17 +1687,23 @@ describe("Batch working-session Results gallery", () => {
     await screen.findByRole("heading", { name: "Run 10" });
     fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
     const gallery = batchResultsSection();
-    expect(await within(gallery).findByText("a1.png")).toBeInTheDocument();
-    expect(within(gallery).getByText("a2.png")).toBeInTheDocument();
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 10 / a1.png")).toBeInTheDocument();
+    expect(within(gallery).getByAltText("Result 1 from Job 2: Run 10 / a2.png")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Create Another Run" }));
     await screen.findByRole("heading", { name: "Run 11" });
-    expect(within(gallery).getByText("a1.png")).toBeInTheDocument();
+    expect(within(gallery).getByAltText("Result 1 from Job 1: Run 10 / a1.png")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
 
-    expect(await within(gallery).findByText("b1.png")).toBeInTheDocument();
-    const filenames = [...gallery.querySelectorAll(".result-filename")].map((item) => item.textContent);
-    expect(filenames).toEqual(["a1.png", "a2.png", "b1.png", "b2.json"]);
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 11 / b1.png")).toBeInTheDocument();
+    const images = [...gallery.querySelectorAll("img.result-image")].map((item) =>
+      item.getAttribute("alt"),
+    );
+    expect(images).toEqual([
+      "Result 1 from Job 1: Run 10 / a1.png",
+      "Result 1 from Job 2: Run 10 / a2.png",
+      "Result 1 from Job 1: Run 11 / b1.png",
+    ]);
     expect(loadWorkingSession().sessionRunIds).toEqual(["run-a", "run-b"]);
   });
 
@@ -1293,8 +1724,8 @@ describe("Batch working-session Results gallery", () => {
     render(<App api={api} />);
 
     const gallery = batchResultsSection();
-    expect(await within(gallery).findByText("run-a.png")).toBeInTheDocument();
-    expect(await within(gallery).findByText("run-b.png")).toBeInTheDocument();
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 10 / run-a.png")).toBeInTheDocument();
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 11 / run-b.png")).toBeInTheDocument();
     expect(within(gallery).getAllByRole("region")).toHaveLength(2);
     expect(api.getRun).toHaveBeenCalledTimes(2);
     expect(api.getResults).toHaveBeenCalledTimes(2);
@@ -1356,7 +1787,7 @@ describe("Batch working-session Results gallery", () => {
     render(<App api={api} pollIntervalMs={5} />);
     await createRunAndStart();
     const gallery = batchResultsSection();
-    expect(await within(gallery).findByText("old-batch.png")).toBeInTheDocument();
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 7 / old-batch.png")).toBeInTheDocument();
 
     fireEvent.change(await screen.findByRole("combobox", { name: "Saved Batch" }), {
       target: { value: "batch-2" },
@@ -1365,7 +1796,7 @@ describe("Batch working-session Results gallery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard and switch" }));
     await waitFor(() => expect(loadWorkingSession().sessionRunIds).toEqual([]));
 
-    expect(within(gallery).queryByText("old-batch.png")).not.toBeInTheDocument();
+    expect(within(gallery).queryByAltText("Result 1 from Job 1: Run 7 / old-batch.png")).not.toBeInTheDocument();
     expect(within(gallery).getByText("No session Results yet")).toBeInTheDocument();
   });
 
@@ -1388,7 +1819,7 @@ describe("Batch working-session Results gallery", () => {
     render(<App api={api} />);
 
     const gallery = batchResultsSection();
-    expect(await within(gallery).findByText("healthy.png")).toBeInTheDocument();
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 22 / healthy.png")).toBeInTheDocument();
     expect(within(gallery).getByText("Unavailable: Run data is invalid")).toBeInTheDocument();
     expect(api.getRun).toHaveBeenCalledTimes(2);
   });
@@ -1689,6 +2120,14 @@ function batchResultsSection(): HTMLElement {
   const section = screen.getByRole("heading", { name: "Batch Results" }).closest("section");
   if (!section) {
     throw new Error("Batch Results section was not rendered");
+  }
+  return section;
+}
+
+function currentResultsSection(): HTMLElement {
+  const section = screen.getByRole("heading", { name: "Results" }).closest("section");
+  if (!section) {
+    throw new Error("Current Results section was not rendered");
   }
   return section;
 }

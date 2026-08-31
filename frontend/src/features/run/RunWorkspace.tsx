@@ -21,6 +21,8 @@ interface Props {
   initialResultsError: string | null;
   onStatusChange(status: RunStatus | null): void;
   onResultsChange(runId: string, results: ResultResponse[]): void;
+  getCachedRun(runId: string): RunResponse | null;
+  loadRun(runId: string): Promise<RunResponse>;
 }
 
 export function RunWorkspace({
@@ -32,6 +34,8 @@ export function RunWorkspace({
   initialResultsError,
   onStatusChange,
   onResultsChange,
+  getCachedRun,
+  loadRun,
 }: Props) {
   const execution = useRunExecution(
     api,
@@ -62,10 +66,13 @@ export function RunWorkspace({
       <ResultsPanel
         api={api}
         run={run}
+        execution={execution.execution}
         results={execution.results}
         error={execution.resultsError}
         refreshing={execution.refreshingResults}
         onRefresh={execution.refreshResults}
+        getCachedRun={getCachedRun}
+        loadRun={loadRun}
       />
     </>
   );

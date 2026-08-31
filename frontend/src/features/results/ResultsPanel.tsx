@@ -1,17 +1,35 @@
 import type { BatchcraftApi } from "../../api/client";
-import type { ResultResponse, RunCreatedResponse } from "../../api/types";
-import { ResultCard } from "./ResultCard";
+import type {
+  ExecutionResponse,
+  ResultResponse,
+  RunCreatedResponse,
+  RunResponse,
+} from "../../api/types";
+import { ResultGallery } from "./ResultGallery";
 
 interface Props {
   api: BatchcraftApi;
   run: RunCreatedResponse | null;
+  execution: ExecutionResponse | null;
   results: ResultResponse[];
   error: string | null;
   refreshing: boolean;
   onRefresh(): void;
+  getCachedRun(runId: string): RunResponse | null;
+  loadRun(runId: string): Promise<RunResponse>;
 }
 
-export function ResultsPanel({ api, run, results, error, refreshing, onRefresh }: Props) {
+export function ResultsPanel({
+  api,
+  run,
+  execution,
+  results,
+  error,
+  refreshing,
+  onRefresh,
+  getCachedRun,
+  loadRun,
+}: Props) {
   if (!run && !error) {
     return (
       <section className="section-card quiet-card inactive-card" aria-labelledby="results-heading">
@@ -41,15 +59,14 @@ export function ResultsPanel({ api, run, results, error, refreshing, onRefresh }
       {run && results.length === 0 ? <p>No Results have been ingested yet.</p> : null}
       {error ? <p className="operation-error" role="alert">Results: {error}</p> : null}
 
-      <div className="results-grid">
-        {results.map((result) => (
-          <ResultCard
-            api={api}
-            result={result}
-            key={`${result.job_ordinal}-${result.artifact_ordinal}`}
-          />
-        ))}
-      </div>
+      <ResultGallery
+        api={api}
+        runId={run?.run_id ?? null}
+        execution={execution}
+        results={results}
+        getCachedRun={getCachedRun}
+        loadRun={loadRun}
+      />
     </section>
   );
 }
