@@ -54,8 +54,12 @@ export interface EditableBatchSnapshot {
   workflow_selection: {
     workflow_id: string | null;
     workflow_version_id: string | null;
+    workflow_name: string | null;
+    workflow_version_number: number | null;
     workflow_profile_id: string | null;
     workflow_profile_version_id: string | null;
+    workflow_profile_name: string | null;
+    workflow_profile_version_number: number | null;
     workflow: JsonObject;
     workflow_profile: JsonObject;
   };
@@ -456,7 +460,19 @@ export interface RunResponse extends RunCreatedResponse {
   created_at: string;
   prompt_versions: Array<{ id: string; name: string; text: string }>;
   jobs: Array<{ ordinal: number; prompt_version_id: string }>;
+  plan: RunPlanResponse;
+  batch_snapshot: EditableBatchSnapshot | null;
   execution: ExecutionResponse;
+}
+
+export interface RunPlanJobResponse extends JobPreviewResponse {
+  reference_filename: string | null;
+}
+
+export interface RunPlanResponse {
+  job_count: number;
+  warnings: CompilationWarningResponse[];
+  jobs: RunPlanJobResponse[];
 }
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed" | "blocked";

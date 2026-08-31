@@ -12,13 +12,21 @@ interface Props {
 }
 
 export function ResultsPanel({ api, run, results, error, refreshing, onRefresh }: Props) {
+  if (!run && !error) {
+    return (
+      <section className="section-card quiet-card inactive-card" aria-labelledby="results-heading">
+        <div className="section-heading">
+          <h2 id="results-heading">Results</h2>
+        </div>
+        <p>Awaiting a Run</p>
+      </section>
+    );
+  }
+
   return (
     <section className="section-card results-section" aria-labelledby="results-heading">
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">04 / Review</p>
-          <h2 id="results-heading">Results</h2>
-        </div>
+        <h2 id="results-heading">Results</h2>
         {run ? (
           <div className="results-actions">
             <span className="section-note">{results.length} artifacts</span>

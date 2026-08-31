@@ -106,6 +106,12 @@ describe("WorkflowLibraryEditor", () => {
     const rendered = () => <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={onChange} onMetadataChange={() => undefined} />;
     const view = render(rendered());
     await waitFor(() => expect(api.listWorkflowProfileVersions).toHaveBeenCalled());
+    const section = screen.getByRole("group", { name: "Workflow and Profile" });
+    const change = await within(section).findByRole("button", { name: "Change" });
+    expect(section).toHaveTextContent("Portrait · Workflow v1");
+    expect(section).toHaveTextContent("Mapping · Profile v1");
+    expect(change).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(change);
     fireEvent.click(screen.getByRole("button", { name: "New WorkflowVersion" }));
     fireEvent.change(screen.getByLabelText("Workflow JSON", { selector: "textarea.json-editor" }), { target: { value: '{"node":"changed"}' } });
     fireEvent.click(within(screen.getByRole("dialog", { name: "New WorkflowVersion" })).getByRole("button", { name: "New WorkflowVersion" }));
@@ -147,6 +153,7 @@ describe("WorkflowLibraryEditor", () => {
       return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
     }
 
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflow version" })).toBeEnabled());
     fireEvent.change(screen.getByRole("combobox", { name: "Workflow version" }), { target: { value: v2.id } });
     expect(current.workflowProfileVersionId).toBeNull();

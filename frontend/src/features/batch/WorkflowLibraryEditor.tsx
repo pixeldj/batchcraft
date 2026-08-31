@@ -9,6 +9,7 @@ import type {
   ProjectWorkflowProfile,
 } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
+import { ConfigurationSection } from "./ConfigurationSection";
 import type { BatchFormState } from "./form";
 
 interface Props {
@@ -65,6 +66,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [linkStatus, setLinkStatus] = useState<LinkStatus>(linkedStatus(form));
   const [copyingProfileVersion, setCopyingProfileVersion] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const loadTag = useRef(0);
   const detailTag = useRef(0);
   const integrityTag = useRef(0);
@@ -93,6 +95,17 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
   const sourceProfileVersion = latestProfileVersion(
     profileVersions.filter((version) => !version.archived_at),
   ) ?? latestProfileVersion(profileVersions);
+  const collapsible = linkStatus === "linked"
+    && Boolean(
+      form.workflowId
+      && form.workflowVersionId
+      && form.workflowProfileId
+      && form.workflowProfileVersionId,
+    )
+    && !activeLibrary.loading
+    && !activeLibrary.error
+    && !activeDetail.loading
+    && !activeDetail.error;
 
   useEffect(() => {
     const requestedProjectId = normalizedProjectId;
@@ -129,7 +142,9 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
     }
     const tag = ++detailTag.current;
     const controller = new AbortController();
-    setDetail({ ...EMPTY_DETAIL, workflowId, loading: true });
+    setDetail((current) => current.workflowId === workflowId
+      ? { ...current, loading: true, error: null }
+      : { ...EMPTY_DETAIL, workflowId, loading: true });
     void Promise.all([
       api.listWorkflowVersions(workflowId, true, controller.signal),
       api.listWorkflowProfiles(workflowId, workflowVersionId ?? undefined, controller.signal),
@@ -452,8 +467,16 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
   }
 
   return (
-    <fieldset className="workflow-library">
-      <legend>Workflow and Profile</legend>
+    <ConfigurationSection
+      title="Workflow and Profile"
+      summary={workflowSummary(form)}
+      expanded={expanded}
+      collapsible={collapsible}
+      controlsId="workflow-profile-controls"
+      actionLabel="Change"
+      className="workflow-library"
+      onExpandedChange={setExpanded}
+    >
       {!normalizedProjectId ? <p className="empty-note">Select a Project to load its Workflow library.</p> : null}
       {activeLibrary.loading ? <p role="status">Loading Workflow library...</p> : null}
       {activeLibrary.error ? <div className="operation-error" role="alert"><p>{activeLibrary.error}</p><button className="button-link" type="button" onClick={() => setLoadAttempt((value) => value + 1)}>Retry</button></div> : null}
@@ -496,7 +519,23 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
         {form.workflowProfileId ? <button className="button-link" type="button" onClick={() => openDialog("rename-profile")}>Rename Profile</button> : null}
       </div>
       {dialog ? <WorkflowDialog state={dialog} setState={setDialog} onSubmit={submitDialog} onCancel={() => setDialog(null)} /> : null}
-    </fieldset>
+    </ConfigurationSection>
+  );
+}
+
+function workflowSummary(form: BatchFormState) {
+  if (!form.workflowId) return <span>No Workflow selected</span>;
+  return (
+    <div className="configuration-summary-list">
+      <span>
+        <strong>{form.workflowName || "Workflow"}</strong>
+        {form.workflowVersionNumber === null ? " · version required" : ` · Workflow v${form.workflowVersionNumber}`}
+      </span>
+      <span>
+        <strong>{form.workflowProfileName || "Profile required"}</strong>
+        {form.workflowProfileVersionNumber === null ? " · version required" : ` · Profile v${form.workflowProfileVersionNumber}`}
+      </span>
+    </div>
   );
 }
 

@@ -10,6 +10,7 @@ import {
 import { ApiError, type BatchcraftApi } from "../../api/client";
 import type { LibraryPromptVersion, ProjectPrompt } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
+import { ConfigurationSection } from "./ConfigurationSection";
 import type { PromptForm } from "./form";
 
 interface Props {
@@ -72,6 +73,7 @@ export function PromptLibraryEditor({
     error: null as string | null,
     saving: false,
   });
+  const [expanded, setExpanded] = useState(false);
   const [detachedState, setDetachedState] = useState<Record<number, "checking" | "integrity">>({});
   const loadTag = useRef(0);
   const historyTag = useRef(0);
@@ -110,6 +112,27 @@ export function PromptLibraryEditor({
     loading: Boolean(projectId.trim()),
     error: null,
   };
+  const selectionHasIssue = prompts.some((prompt) => {
+    const projectMismatch = Boolean(
+      prompt.libraryProjectId && prompt.libraryProjectId !== normalizedProjectId,
+    );
+    const missingLogicalPrompt = !activeLibrary.loading
+      && !activeLibrary.error
+      && Boolean(prompt.promptId)
+      && !activeLibrary.prompts.some((item) => item.id === prompt.promptId);
+    return projectMismatch
+      || !prompt.promptId
+      || !prompt.libraryProjectId
+      || missingLogicalPrompt
+      || Boolean(detachedState[prompt.key]);
+  });
+  const collapsible = Boolean(
+    normalizedProjectId
+    && prompts.length > 0
+    && !activeLibrary.loading
+    && !activeLibrary.error
+    && !selectionHasIssue,
+  );
 
   useEffect(() => {
     const requestedProjectId = projectId.trim();
@@ -261,6 +284,7 @@ export function PromptLibraryEditor({
   }
 
   function appendVersion(logicalPrompt: ProjectPrompt, version: LibraryPromptVersion) {
+    setExpanded(true);
     onChange([...prompts, promptForm(freshKey(), normalizedProjectId, logicalPrompt.name, version)]);
   }
 
@@ -403,22 +427,28 @@ export function PromptLibraryEditor({
   }
 
   return (
-    <fieldset>
-      <legend>Prompt Versions</legend>
-      <div className="fieldset-action">
+    <ConfigurationSection
+      title="Prompt Versions"
+      summary={`${prompts.length} ${prompts.length === 1 ? "prompt" : "prompts"}`}
+      expanded={expanded}
+      collapsible={collapsible}
+      controlsId="prompt-version-controls"
+      action={(
         <button
           className="button-secondary compact"
           type="button"
           disabled={!projectId.trim() || activeLibrary.loading || Boolean(activeLibrary.error)}
           onClick={(event) => {
             dialogTrigger.current = event.currentTarget;
+            setExpanded(true);
             setAddView("choice");
           }}
         >
           Add Prompt
         </button>
-      </div>
-
+      )}
+      onExpandedChange={setExpanded}
+    >
       {!projectId.trim() ? <p className="empty-note">Select a Project to load its Prompt library.</p> : null}
       {activeLibrary.loading ? <p role="status">Loading Prompt library...</p> : null}
       {activeLibrary.error ? (
@@ -495,7 +525,6 @@ export function PromptLibraryEditor({
           );
         })}
       </div>
-
       {addView ? (
         <dialog className="prompt-dialog" open aria-labelledby="add-prompt-title" onCancel={cancelDialog} onKeyDown={cancelOnEscape}>
           <h2 id="add-prompt-title">Add Prompt</h2>
@@ -631,7 +660,7 @@ export function PromptLibraryEditor({
           <button className="button-link" type="button" onClick={() => cancelDialog()}>Cancel</button>
         </dialog>
       ) : null}
-    </fieldset>
+    </ConfigurationSection>
   );
 }
 

@@ -1409,12 +1409,23 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v4
         "values": [],
         "random_seed_count": 3,
     }
+    workflow_selection = snapshot["workflow_selection"]
+    assert isinstance(workflow_selection, dict)
+    workflow_selection.update(
+        {
+            "workflow_name": "KREA2 Outfit",
+            "workflow_version_number": 4,
+            "workflow_profile_name": "General",
+            "workflow_profile_version_number": 4,
+        }
+    )
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as http:
         preview = http.post("/api/batches/preview", json=request)
         created = http.post("/api/runs", json=request)
+        run = http.get(f"/api/runs/{created.json()['run_id']}")
 
     assert preview.status_code == 200
     assert created.status_code == 201
@@ -1431,6 +1442,17 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v4
         202,
         303,
     ]
+    assert run.json()["batch_snapshot"]["seed_intent"] == {
+        "mode": "random",
+        "values": [],
+        "random_seed_count": 3,
+    }
+    returned_workflow = run.json()["batch_snapshot"]["workflow_selection"]
+    assert returned_workflow["workflow_name"] == "KREA2 Outfit"
+    assert returned_workflow["workflow_version_number"] == 4
+    assert returned_workflow["workflow_profile_name"] == "General"
+    assert returned_workflow["workflow_profile_version_number"] == 4
+    assert sorted({job["seed"] for job in run.json()["plan"]["jobs"]}) == [101, 202, 303]
 
     invalid = copy.deepcopy(request)
     invalid["seeds"] = {"mode": "explicit", "values": [101, 202]}
@@ -1453,12 +1475,15 @@ def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> N
     ) as http:
         preview = http.post("/api/batches/preview", json=request)
         created = http.post("/api/runs", json=request)
+        run = http.get(f"/api/runs/{created.json()['run_id']}")
 
     assert preview.status_code == 200
     body = PreviewResponse.model_validate(preview.json())
     assert body.job_count == 4
     assert [job.reference_asset_id for job in body.jobs] == [None, None, None, None]
     assert created.status_code == 201
+    assert all(job["reference_asset_id"] is None for job in run.json()["plan"]["jobs"])
+    assert all(job["reference_filename"] is None for job in run.json()["plan"]["jobs"])
 
     run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
@@ -1515,6 +1540,25 @@ def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_
         "animal",
         "fixed",
         "fixed",
+    ]
+    assert [
+        (
+            job["prompt_version_name"],
+            job["resolved_prompt"],
+            job["resolved_variables"],
+            job["reference_filename"],
+            job["seed"],
+        )
+        for job in run.json()["plan"]["jobs"]
+    ] == [
+        (
+            job["prompt_version_name"],
+            job["resolved_prompt"],
+            job["resolved_variables"],
+            "asset-1.png",
+            job["seed"],
+        )
+        for job in preview_body["jobs"]
     ]
     assert singular.status_code == 422
 
@@ -1596,6 +1640,34 @@ def test_run_creation_and_lookup_use_real_durable_store(tmp_path: Path) -> None:
     assert not (run_path / "execution.json").exists()
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "run_not_found"
+
+
+def test_run_lookup_degrades_gracefully_for_manifest_v3_without_batch_intent(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        created = http.post("/api/runs", json=request)
+        assert created.status_code == 201
+        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        manifest_path = run_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["format_version"] = 3
+        manifest.pop("batch_snapshot")
+        manifest_path.write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+        )
+
+        lookup = http.get(f"/api/runs/{created.json()['run_id']}")
+
+    assert lookup.status_code == 200
+    assert lookup.json()["batch_snapshot"] is None
+    assert lookup.json()["plan"]["job_count"] == 4
+    assert lookup.json()["plan"]["jobs"][0]["resolved_prompt"] == "Portrait of dog"
 
 
 def test_repeated_multi_prompt_run_creation_freezes_identical_plans_with_new_identities(

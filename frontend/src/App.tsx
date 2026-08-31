@@ -8,6 +8,7 @@ import type {
   ProjectResponse,
   ResultResponse,
   RunCreatedResponse,
+  RunResponse,
   RunStatus,
   SavedBatchDetail,
 } from "./api/types";
@@ -87,7 +88,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     ),
   );
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
-  const [run, setRun] = useState<RunCreatedResponse | null>(null);
+  const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [restoredRunSeed, setRestoredRunSeed] = useState<RestoredRunSeed | null>(null);
   const [previewRunAssociation, setPreviewRunAssociation] =
@@ -647,6 +648,23 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           `Run ${nextRun.run_number} was created with ${nextRun.job_count} Jobs, but the inspected Preview has ${snapshot.response.job_count}. The durable Run is preserved and does not match this Preview.`,
         );
       }
+      try {
+        const frozenRun = await api.getRun(nextRun.run_id);
+        if (
+          frozenRun.run_id !== nextRun.run_id ||
+          frozenRun.run_number !== nextRun.run_number ||
+          frozenRun.job_count !== nextRun.job_count
+        ) {
+          return;
+        }
+        if (requestedBatchIdentity === currentBatchIdentityRef.current) {
+          setRun(frozenRun);
+        }
+      } catch (caught) {
+        setCreateError(
+          `Run ${nextRun.run_number} was created, but its frozen plan could not be loaded. ${errorMessage(caught)}`,
+        );
+      }
     } catch (caught) {
       setCreateError(errorMessage(caught));
     } finally {
@@ -720,10 +738,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       </header>
 
       <main>
-        <div className="intro-strip">
-          <p>One Batch. An explicit Job plan. A durable Run.</p>
-          <span>Browser working session</span>
-        </div>
         {sessionMessage ? <p className="session-note" role="status">{sessionMessage}</p> : null}
         {savedBatchConflict ? (
           <div className="operation-error" role="alert">

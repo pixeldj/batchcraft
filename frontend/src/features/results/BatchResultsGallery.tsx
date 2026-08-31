@@ -22,60 +22,67 @@ export function BatchResultsGallery({ api, runIds, runsById }: Props) {
     0,
   );
 
+  if (runIds.length === 0) {
+    return (
+      <section className="section-card quiet-card inactive-card" aria-labelledby="batch-results-heading">
+        <div className="section-heading">
+          <h2 id="batch-results-heading">Batch Results</h2>
+        </div>
+        <p>No session Results yet</p>
+      </section>
+    );
+  }
+
   return (
     <section className="section-card batch-results-section" aria-labelledby="batch-results-heading">
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">05 / Session Review</p>
-          <h2 id="batch-results-heading">Batch Results</h2>
-        </div>
+        <h2 id="batch-results-heading">Batch Results</h2>
         <span className="section-note">
           {artifactCount} {artifactCount === 1 ? "artifact" : "artifacts"} across this browser session
         </span>
       </div>
 
-      {runIds.length === 0 ? (
-        <p>Results from Runs created for this Batch in this browser session will accumulate here.</p>
-      ) : (
-        <div className="batch-results-runs">
-          {runIds.map((runId) => {
-            const run = runsById[runId];
-            const runLabel = run?.runNumber === null || run?.runNumber === undefined
-              ? `Run ${runId}`
-              : `Run ${run.runNumber}`;
-            const orderedResults = [...(run?.results ?? [])].sort(
-              (left, right) =>
-                left.job_ordinal - right.job_ordinal ||
-                left.artifact_ordinal - right.artifact_ordinal,
-            );
-            return (
-              <section className="batch-results-run" aria-label={runLabel} key={runId}>
-                <div className="batch-results-run-heading">
-                  <strong>{runLabel}</strong>
-                  <code>{runId}</code>
+      <div className="batch-results-runs">
+        {runIds.map((runId, index) => {
+          const run = runsById[runId];
+          const runLabel = run?.runNumber === null || run?.runNumber === undefined
+            ? `Run pending ${index + 1}`
+            : `Run ${run.runNumber}`;
+          const orderedResults = [...(run?.results ?? [])].sort(
+            (left, right) =>
+              left.job_ordinal - right.job_ordinal ||
+              left.artifact_ordinal - right.artifact_ordinal,
+          );
+          return (
+            <section className="batch-results-run" aria-label={runLabel} key={runId}>
+              <div className="batch-results-run-heading">
+                <strong>{runLabel}</strong>
+                <details className="technical-details">
+                  <summary>Run details</summary>
+                  <p>Run ID: <code>{runId}</code></p>
+                </details>
+              </div>
+              {run?.loading ? <p className="empty-note">Loading Results...</p> : null}
+              {run?.error ? <p className="operation-error">Unavailable: {run.error}</p> : null}
+              {!run?.loading && !run?.error && orderedResults.length === 0 ? (
+                <p className="empty-note">No Results have been ingested for this Run yet.</p>
+              ) : null}
+              {orderedResults.length > 0 ? (
+                <div className="results-grid">
+                  {orderedResults.map((result) => (
+                    <ResultCard
+                      api={api}
+                      result={result}
+                      runLabel={runLabel}
+                      key={`${result.job_ordinal}-${result.artifact_ordinal}`}
+                    />
+                  ))}
                 </div>
-                {run?.loading ? <p className="empty-note">Loading Results...</p> : null}
-                {run?.error ? <p className="operation-error">Unavailable: {run.error}</p> : null}
-                {!run?.loading && !run?.error && orderedResults.length === 0 ? (
-                  <p className="empty-note">No Results have been ingested for this Run yet.</p>
-                ) : null}
-                {orderedResults.length > 0 ? (
-                  <div className="results-grid">
-                    {orderedResults.map((result) => (
-                      <ResultCard
-                        api={api}
-                        result={result}
-                        runLabel={runLabel}
-                        key={`${result.job_ordinal}-${result.artifact_ordinal}`}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-              </section>
-            );
-          })}
-        </div>
-      )}
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
     </section>
   );
 }

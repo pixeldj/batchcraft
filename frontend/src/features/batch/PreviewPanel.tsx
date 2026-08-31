@@ -25,16 +25,11 @@ export function PreviewPanel({
 }: Props) {
   if (!preview) {
     return (
-      <section className="section-card quiet-card" aria-labelledby="preview-heading">
+      <section className={`section-card quiet-card ${error ? "" : "inactive-card"}`.trim()} aria-labelledby="preview-heading">
         <div className="section-heading">
-          <div>
-            <p className="eyebrow">02 / Inspect</p>
-            <h2 id="preview-heading">Preview</h2>
-          </div>
+          <h2 id="preview-heading">Preview</h2>
         </div>
-        <p>
-          Preview required. Compile the current Batch draft before creating a new immutable Run.
-        </p>
+        {!error ? <p>Preview required</p> : null}
         {error ? <p className="operation-error" role="alert">{error}</p> : null}
       </section>
     );
@@ -43,10 +38,7 @@ export function PreviewPanel({
   return (
     <section className="section-card" aria-labelledby="preview-heading">
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">02 / Inspect</p>
-          <h2 id="preview-heading">Preview</h2>
-        </div>
+        <h2 id="preview-heading">Preview</h2>
         <div className="count-block">
           <strong>{preview.job_count}</strong>
           <span>{preview.job_count === 1 ? "Job" : "Jobs"}</span>
@@ -82,7 +74,6 @@ export function PreviewPanel({
                 <td className="ordinal">{job.ordinal}</td>
                 <td className="prompt-identity">
                   <strong>{job.prompt_version_name}</strong>
-                  <code>{job.prompt_version_id}</code>
                 </td>
                 <td className="prompt-cell">{job.resolved_prompt}</td>
                 <td>
@@ -92,7 +83,14 @@ export function PreviewPanel({
                         .join(", ")
                     : "None"}
                 </td>
-                <td>{job.reference_asset_id === null ? "Base workflow" : <code>{job.reference_asset_id}</code>}</td>
+                <td>
+                  {job.reference_asset_id === null ? "Base workflow" : (
+                    <details className="inline-details">
+                      <summary>Reference selected</summary>
+                      <code>{job.reference_asset_id}</code>
+                    </details>
+                  )}
+                </td>
                 <td><code>{job.seed}</code></td>
               </tr>
             ))}

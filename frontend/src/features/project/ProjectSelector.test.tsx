@@ -24,7 +24,10 @@ describe("ProjectSelector active Projects", () => {
     expect(screen.getByRole("option", { name: "Shared — second" })).toBeInTheDocument();
     expect(api.listProjects).toHaveBeenCalledWith(false, expect.any(AbortSignal));
     expect(callbacks.onReconnect).toHaveBeenCalledWith(first);
-    expect(screen.getByLabelText("Filesystem key")).toHaveValue("first");
+    const details = screen.getByText("Project details").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details as HTMLElement).getByText("first")).toBeInTheDocument();
+    expect(within(details as HTMLElement).getByText("one")).toBeInTheDocument();
     expect(screen.queryByText("Archived")).not.toBeInTheDocument();
   });
 
@@ -138,13 +141,13 @@ describe("ProjectSelector transitions", () => {
     });
     const callbacks = callbackProps();
     renderSelector(api, callbacks);
-    fireEvent.click(await screen.findByRole("button", { name: "Adopt Existing" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import from Folder" }));
 
     expect(await screen.findByLabelText("Stored Project ID")).toHaveValue("stored-id");
     expect(screen.getByLabelText("Initial label")).toHaveValue("Initial name");
     expect(screen.getByLabelText("Current Project name")).toHaveValue("Initial name");
     fireEvent.change(screen.getByLabelText("Current Project name"), { target: { value: "Current name" } });
-    fireEvent.click(screen.getByRole("button", { name: "Adopt Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import Project" }));
 
     await waitFor(() => expect(callbacks.onSelect).toHaveBeenCalledWith(adopted));
     expect(adoptProject).toHaveBeenCalledWith({
@@ -167,13 +170,13 @@ describe("ProjectSelector transitions", () => {
       }] })),
     });
     renderSelector(api, callbackProps());
-    fireEvent.click(await screen.findByRole("button", { name: "Adopt Existing" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import from Folder" }));
 
     expect(await screen.findByText("Advanced recovery")).toBeInTheDocument();
     expect(screen.getByLabelText("Project ID")).toBeRequired();
     fireEvent.change(screen.getByLabelText("Project ID"), { target: { value: "recovered-id" } });
     fireEvent.change(screen.getByLabelText("Current Project name"), { target: { value: "Recovered" } });
-    fireEvent.click(screen.getByRole("button", { name: "Adopt Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import Project" }));
 
     await waitFor(() => expect(adoptProject).toHaveBeenCalledWith({
       filesystem_key: "orphan",
@@ -189,12 +192,12 @@ describe("ProjectSelector transitions", () => {
       .mockResolvedValueOnce({ projects: [] });
     const api = makeApi({ listAdoptableProjects });
     renderSelector(api, callbackProps());
-    fireEvent.click(await screen.findByRole("button", { name: "Adopt Existing" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import from Folder" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Adopt Existing Project" });
+    const dialog = await screen.findByRole("dialog", { name: "Import Project from Folder" });
     expect(within(dialog).getByText(/scan failed/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
-    expect(await within(dialog).findByText("No Project directories are available to adopt.")).toBeInTheDocument();
+    expect(await within(dialog).findByText("No Project folders are available to import.")).toBeInTheDocument();
   });
 
   it("disables switching and actions while a Run is active", async () => {
@@ -203,7 +206,7 @@ describe("ProjectSelector transitions", () => {
 
     expect(await screen.findByRole("combobox", { name: "Active Project" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "New Project" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Adopt Existing" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import from Folder" })).toBeDisabled();
     expect(screen.getByText("Project changes are unavailable while a Run is active.")).toBeInTheDocument();
   });
 });

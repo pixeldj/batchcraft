@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Annotated, Literal, Self
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
 from batchcraft.db import (
@@ -145,8 +145,12 @@ class EditableSnapshotSeedIntent(ApiModel):
 class EditableSnapshotWorkflowSelection(ApiModel):
     workflow_id: str | None = Field(default=None, min_length=1)
     workflow_version_id: str | None = Field(default=None, min_length=1)
+    workflow_name: str | None = Field(default=None, min_length=1)
+    workflow_version_number: int | None = Field(default=None, strict=True, ge=1)
     workflow_profile_id: str | None = Field(default=None, min_length=1)
     workflow_profile_version_id: str | None = Field(default=None, min_length=1)
+    workflow_profile_name: str | None = Field(default=None, min_length=1)
+    workflow_profile_version_number: int | None = Field(default=None, strict=True, ge=1)
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
 
@@ -1088,10 +1092,46 @@ class RunJobResponse(ApiModel):
     prompt_version_id: str
 
 
+class RunPlanJobResponse(JobPreviewResponse):
+    reference_filename: str | None
+
+
+class RunPlanResponse(ApiModel):
+    job_count: int
+    warnings: list[WarningResponse]
+    jobs: list[RunPlanJobResponse]
+
+    @classmethod
+    def from_run(cls, run: PublishedRun) -> Self:
+        prompt_names = {version.id: version.name for version in run.compiled_plan.prompt_versions}
+        return cls(
+            job_count=run.compiled_plan.job_count,
+            warnings=[
+                WarningResponse.from_warning(warning) for warning in run.compiled_plan.warnings
+            ],
+            jobs=[
+                RunPlanJobResponse(
+                    **JobPreviewResponse.from_job(
+                        persisted.compiled_job,
+                        prompt_names[persisted.compiled_job.prompt_version_id],
+                    ).model_dump(),
+                    reference_filename=(
+                        persisted.reference_asset.original_filename
+                        if persisted.reference_asset is not None
+                        else None
+                    ),
+                )
+                for persisted in run.jobs
+            ],
+        )
+
+
 class RunResponse(RunCreatedResponse):
     created_at: str
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
+    plan: RunPlanResponse
+    batch_snapshot: EditableBatchSnapshot | None
     execution: ExecutionResponse
 
     @classmethod
@@ -1111,8 +1151,21 @@ class RunResponse(RunCreatedResponse):
                 )
                 for job in run.compiled_plan.jobs
             ],
+            plan=RunPlanResponse.from_run(run),
+            batch_snapshot=_validated_batch_snapshot(run.batch_snapshot),
             execution=ExecutionResponse.from_state(state),
         )
+
+
+def _validated_batch_snapshot(
+    snapshot: dict[str, object] | None,
+) -> EditableBatchSnapshot | None:
+    if snapshot is None:
+        return None
+    try:
+        return EditableBatchSnapshot.model_validate(snapshot)
+    except ValidationError:
+        return None
 
 
 class ExecutionStartedResponse(ApiModel):

@@ -172,7 +172,12 @@ Each Preview Job includes `prompt_version_id` and `prompt_version_name`; clients
 identity from resolved text. Run creation compiles and validates the request again, resolves existing
 Project assets, and publishes through `RunFilesystemStore`.
 The compact Run creation response is unchanged. `GET /api/runs/{run_id}` additionally returns the
-ordered frozen PromptVersion snapshots and each Job ordinal's PromptVersion ID association.
+ordered frozen PromptVersion snapshots, each Job ordinal's PromptVersion ID association, and a
+`plan` projection loaded from the published Run manifest. The plan contains compiler warnings and
+every concrete Job's resolved prompt, resolved variables, Reference Asset identity and frozen
+filename when selected, and materialized seed. A nullable `batch_snapshot` exposes manifest v4
+editable intent, including optional frozen Workflow/Profile display labels and version numbers.
+Runs loaded from manifest v1-v3 return `batch_snapshot: null` while retaining their concrete plan.
 
 ## Project Assets
 

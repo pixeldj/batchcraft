@@ -125,6 +125,62 @@ describe("Project selection", () => {
 });
 
 describe("Batch preview", () => {
+  it("keeps section titles while omitting decorative workflow chrome", () => {
+    render(<App api={makeApi()} />);
+
+    expect(screen.getByRole("heading", { name: "Batch configuration" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Run" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Batch Results" })).toBeInTheDocument();
+    expect(screen.queryByText("One Batch. An explicit Job plan. A durable Run.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Working draft/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0[1-5] \/ /)).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Preview" })).toHaveClass("inactive-card");
+    expect(screen.getByRole("region", { name: "Run" })).toHaveClass("inactive-card");
+    expect(screen.getByRole("region", { name: "Results" })).toHaveClass("inactive-card");
+    expect(screen.getByRole("region", { name: "Batch Results" })).toHaveClass("inactive-card");
+    expect(screen.getByText("Preview required")).toBeInTheDocument();
+    expect(screen.getByText("Create a Run to continue")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting a Run")).toBeInTheDocument();
+    expect(screen.getByText("No session Results yet")).toBeInTheDocument();
+  });
+
+  it("summarizes configured experiment sections before expanding their controls", async () => {
+    render(<App api={makeApi()} />);
+
+    const prompts = screen.getByRole("group", { name: "Prompt Versions" });
+    const promptEdit = await within(prompts).findByRole("button", { name: "Edit" });
+    expect(prompts).toHaveTextContent("1 prompt");
+    expect(promptEdit).toHaveAttribute("aria-expanded", "false");
+    expect(within(prompts).queryByRole("button", { name: "Add Prompt" })).not.toBeInTheDocument();
+
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    expect(bindings).toHaveTextContent("subject: cat, dog");
+    expect(within(bindings).getByRole("button", { name: "Edit" })).toHaveAttribute("aria-expanded", "false");
+
+    const seeds = screen.getByRole("group", { name: "Seeds" });
+    expect(seeds).toHaveTextContent("Fixed · 1");
+    expect(within(seeds).getByRole("button", { name: "Edit" })).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(promptEdit);
+    expect(within(prompts).getByRole("button", { name: "Add Prompt" })).toBeInTheDocument();
+  });
+
+  it("places Prompt and Variable add actions in the shared section action area", async () => {
+    render(<App api={makeApi()} />);
+
+    await expandConfiguration("Prompt Versions");
+    const prompts = screen.getByRole("group", { name: "Prompt Versions" });
+    const addPrompt = within(prompts).getByRole("button", { name: "Add Prompt" });
+    expect(addPrompt.closest(".section-summary-actions")).not.toBeNull();
+
+    await expandConfiguration("Variable bindings");
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    const addBinding = within(bindings).getByRole("button", { name: "Add Binding" });
+    expect(addBinding.closest(".section-summary-actions")).not.toBeNull();
+  });
+
   it("places Seeds before Reference Assets in the Batch editor", () => {
     const api = makeApi();
     render(<App api={api} />);
@@ -148,7 +204,7 @@ describe("Batch preview", () => {
     expect(screen.getByText("A studio portrait of cat.")).toBeInTheDocument();
     expect(screen.getByText("subject = cat")).toBeInTheDocument();
     expect(screen.getAllByText("Portrait", { selector: ".prompt-identity strong" })).toHaveLength(2);
-    expect(screen.getAllByText("prompt-v1", { selector: ".prompt-identity code" })).toHaveLength(2);
+    expect(screen.queryByText("prompt-v1", { selector: ".prompt-identity code" })).not.toBeInTheDocument();
     const request = vi.mocked(api.previewBatch).mock.calls[0][0];
     expect(request.references).toEqual([{ asset_id: "asset-1" }]);
     expect(request.seeds).toEqual({ mode: "fixed", values: [1] });
@@ -244,7 +300,7 @@ describe("Batch preview", () => {
 
     expect(await screen.findByRole("heading", { name: "Run 2" })).toBeInTheDocument();
     expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
-    expect(screen.getByText("2", { selector: ".run-metadata dd" })).toBeInTheDocument();
+    expect(screen.getByText("0 / 2 Jobs")).toBeInTheDocument();
   });
 
   it("materializes Random seeds once and consumes the Preview after successful Run creation", async () => {
@@ -261,6 +317,7 @@ describe("Batch preview", () => {
     });
     render(<App api={api} />);
     await enterAsset();
+    await expandConfiguration("Seeds");
     fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "random" } });
     fireEvent.change(screen.getByLabelText(/Random seed count/), { target: { value: "3" } });
     await addExistingPrompt("Editorial");
@@ -290,6 +347,7 @@ describe("Batch preview", () => {
     });
     render(<App api={api} />);
     await enterAsset();
+    await expandConfiguration("Seeds");
     fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "random" } });
     fireEvent.change(screen.getByLabelText(/Random seed count/), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
@@ -386,6 +444,7 @@ describe("PromptVersion editor", () => {
     });
     const api = makeApi({ createPromptVersion: vi.fn(async () => nextVersion) });
     render(<App api={api} />);
+    await expandConfiguration("Prompt Versions");
     const edit = await screen.findByRole("button", { name: "Edit as new version" });
     await reachPreview();
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
@@ -408,6 +467,7 @@ describe("PromptVersion editor", () => {
     const renamed = { ...projectPrompt(), name: "Renamed" };
     const api = makeApi({ updatePrompt: vi.fn(async () => renamed) });
     render(<App api={api} />);
+    await expandConfiguration("Prompt Versions");
     const rename = await screen.findByRole("button", { name: "Rename Prompt" });
     await reachPreview();
 
@@ -447,6 +507,8 @@ describe("Browser working-session restoration", () => {
     expect(await screen.findByText(/Draft restored from this browser session/)).toBeInTheDocument();
     expect(screen.getByText("Restored portrait of {{subject}}")).toBeInTheDocument();
     expect(screen.getByText("Editorial image of {{subject}}")).toBeInTheDocument();
+    await expandConfiguration("Variable bindings");
+    await expandConfiguration("Seeds");
     expect(screen.getByLabelText(/Variable List values/)).toHaveValue("fox\nwolf");
     expect(screen.getByLabelText("Seed mode")).toHaveValue("explicit");
     expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("9, 3");
@@ -455,7 +517,7 @@ describe("Browser working-session restoration", () => {
     expect(screen.getByText("2 images selected")).toBeInTheDocument();
     expect(screen.queryByText("b.png")).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Selected Reference Assets" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Change selection" }));
     const selected = await screen.findByRole("list", { name: "Selected Reference Assets" });
     expect([...selected.querySelectorAll("li > span")].map((item) => item.textContent)).toEqual([
       "b.png",
@@ -488,8 +550,6 @@ describe("Browser working-session restoration", () => {
     render(<App api={api} />);
 
     expect(screen.getByText("1 image selected")).toBeInTheDocument();
-    expect(screen.queryByText("asset-missing (missing from Project)")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
     expect(await screen.findByText("asset-missing (missing from Project)")).toBeInTheDocument();
     expect(
       await screen.findByText("Remove missing Reference Assets before Previewing this Batch."),
@@ -517,9 +577,9 @@ describe("Reference Asset picker", () => {
     expect(screen.queryByText("a.png")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deselect a.png" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Change selection" }));
     expect(await screen.findByRole("button", { name: "Deselect a.png" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Hide images" }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     expect(screen.queryByText("a.png")).not.toBeInTheDocument();
     expect(screen.getByText("1 image selected")).toBeInTheDocument();
@@ -536,7 +596,7 @@ describe("Reference Asset picker", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
-    fireEvent.click(screen.getByRole("button", { name: "Change selection" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Change selection" }));
     await screen.findByRole("button", { name: "Deselect a.png" });
 
     fireEvent.click(screen.getByRole("button", { name: "Select All" }));
@@ -713,6 +773,88 @@ describe("Run creation", () => {
       .toHaveClass("consistency-error");
     expect(screen.getByText("Run 9 was created but does not match this Preview.")).toBeInTheDocument();
   });
+
+  it("keeps the frozen Run Plan inspectable after creation and current Batch edits", async () => {
+    const frozen = runLookupResponse("created", "run-plan", 27);
+    frozen.prompt_versions = [
+      { id: "prompt-b", name: "Editorial", text: "Editorial {{subject}}" },
+      { id: "prompt-a", name: "Portrait", text: "Portrait {{subject}}" },
+    ];
+    frozen.jobs = [
+      { ordinal: 1, prompt_version_id: "prompt-b" },
+      { ordinal: 2, prompt_version_id: "prompt-a" },
+    ];
+    frozen.plan.jobs = [
+      {
+        ordinal: 1,
+        prompt_version_id: "prompt-b",
+        prompt_version_name: "Editorial",
+        resolved_prompt: "Editorial cat",
+        resolved_variables: [{ name: "subject", value: "cat" }],
+        reference_asset_id: null,
+        reference_filename: null,
+        seed: 123,
+      },
+      {
+        ordinal: 2,
+        prompt_version_id: "prompt-a",
+        prompt_version_name: "Portrait",
+        resolved_prompt: "Portrait dog",
+        resolved_variables: [{ name: "subject", value: "dog" }],
+        reference_asset_id: null,
+        reference_filename: null,
+        seed: 456,
+      },
+    ];
+    frozen.batch_snapshot!.prompt_versions = [
+      { id: "prompt-b", prompt_id: "prompt-2", version_number: 2, name: "Editorial", text: "Editorial {{subject}}" },
+      { id: "prompt-a", prompt_id: "prompt-1", version_number: 4, name: "Portrait", text: "Portrait {{subject}}" },
+    ];
+    frozen.batch_snapshot!.references = [];
+    frozen.batch_snapshot!.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
+    const api = makeApi({
+      createRun: vi.fn(async () => runResponse("run-plan", 27, 2)),
+      getRun: vi.fn(async () => frozen),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByRole("button", { name: "View Run Plan" });
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Edited afterward" } });
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Run 27 Plan" });
+    expect(within(dialog).getByRole("heading", { name: "First experiment" })).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("Edited afterward");
+    expect([...dialog.querySelectorAll(".run-plan-prompts > li > strong")].map((node) => node.textContent))
+      .toEqual(["Editorial", "Portrait"]);
+    expect(within(dialog).getByText("All values · cat, dog")).toBeInTheDocument();
+    expect(within(dialog).getByText("Random · 2 requested")).toBeInTheDocument();
+    expect(within(dialog).getByText("123, 456")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Base workflow").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
+    expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
+    expect(within(dialog).getByText("Editorial cat")).toBeInTheDocument();
+  });
+
+  it("opens a completed legacy Run Plan with concrete Jobs and reduced intent detail", async () => {
+    const legacy = runLookupResponse("succeeded", "run-legacy", 28);
+    legacy.batch_snapshot = null;
+    saveWorkingSession(populatedBatchForm(), "run-legacy", ["run-legacy"], "project-1");
+    const api = makeApi({
+      getRun: vi.fn(async () => legacy),
+      getExecution: vi.fn(async () => execution("succeeded", "run-legacy")),
+    });
+    render(<App api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Run Plan" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Run 28 Plan" });
+    expect(within(dialog).getByText(/Editable Batch intent is unavailable/)).toBeInTheDocument();
+    expect(within(dialog).getByText("Frozen Workflow snapshot · version unavailable")).toBeInTheDocument();
+    expect(within(dialog).getByText("A studio portrait of cat.")).toBeInTheDocument();
+  });
 });
 
 describe("Run execution polling", () => {
@@ -729,7 +871,8 @@ describe("Run execution polling", () => {
     await createRunAndStart();
 
     expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
-    expect(screen.getByText("prompt-1")).toBeInTheDocument();
+    expect(screen.queryByText("Job details")).not.toBeInTheDocument();
+    expect(screen.getByText("prompt-1").closest(".job-secondary-metadata")).not.toBeNull();
     expect(api.startRun).toHaveBeenCalledWith("run-123");
 
     await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
@@ -837,7 +980,7 @@ describe("Repeated Runs", () => {
     expect(createRun.mock.calls[0][0]).toBe(previewRequest);
     expect(createRun.mock.calls[1][0]).toBe(previewRequest);
     expect(previewRequest.prompt_versions.map((prompt) => prompt.name)).toEqual(["Portrait"]);
-    expect(screen.getByText("A studio portrait of {{subject}}.")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Prompt Versions" })).getByText("1 prompt")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
     expect(loadWorkingSession().currentRunId).toBe("run-2");
   });
@@ -1223,7 +1366,7 @@ describe("Batch working-session Results gallery", () => {
     await waitFor(() => expect(loadWorkingSession().sessionRunIds).toEqual([]));
 
     expect(within(gallery).queryByText("old-batch.png")).not.toBeInTheDocument();
-    expect(within(gallery).getByText(/will accumulate here/)).toBeInTheDocument();
+    expect(within(gallery).getByText("No session Results yet")).toBeInTheDocument();
   });
 
   it("keeps healthy historical Results when another session Run is unavailable", async () => {
@@ -1386,6 +1529,59 @@ function runLookupResponse(
       { ordinal: 1, prompt_version_id: "prompt-v1" },
       { ordinal: 2, prompt_version_id: "prompt-v1" },
     ],
+    plan: {
+      job_count: 2,
+      warnings: [
+        { code: "unused_binding", message: "Unused binding variable", placeholder: "unused" },
+      ],
+      jobs: previewResponse().jobs.map((job) => ({
+        ...job,
+        reference_filename: job.reference_asset_id ? "portrait.png" : null,
+      })),
+    },
+    batch_snapshot: {
+      snapshot_version: 1,
+      project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
+      source_saved_batch: { id: "batch-1", revision: 3 },
+      batch: {
+        id: "batch-1",
+        filesystem_key: "batch_1",
+        name: "First experiment",
+        description: "Frozen Batch description",
+      },
+      prompt_versions: [
+        {
+          id: "prompt-v1",
+          prompt_id: "prompt-1",
+          version_number: 1,
+          name: "Portrait",
+          text: "A studio portrait of {{subject}}.",
+        },
+      ],
+      variable_bindings: [
+        {
+          placeholder: "subject",
+          variable_list: { id: "subjects", values: ["cat", "dog"] },
+          mode: "all",
+          selected_values: ["cat", "dog"],
+          fixed_value: null,
+        },
+      ],
+      references: [{ asset_id: "asset-1" }],
+      seed_intent: { mode: "fixed", values: [1], random_seed_count: null },
+      workflow_selection: {
+        workflow_id: "workflow-1",
+        workflow_version_id: "workflow-v4",
+        workflow_name: "KREA2 Outfit",
+        workflow_version_number: 4,
+        workflow_profile_id: "profile-1",
+        workflow_profile_version_id: "profile-v4",
+        workflow_profile_name: "General",
+        workflow_profile_version_number: 4,
+        workflow: {},
+        workflow_profile: {},
+      },
+    },
     execution: execution(status, runId),
   };
 }
@@ -1539,15 +1735,26 @@ function projectPrompt(
 }
 
 async function addExistingPrompt(name: string) {
-  const add = screen.getByRole("button", { name: "Add Prompt" });
-  await waitFor(() => expect(add).toBeEnabled());
+  const section = screen.getByRole("group", { name: "Prompt Versions" });
+  await pause(0);
+  await waitFor(() => expect(within(section).queryByText("Loading Prompt library...")).not.toBeInTheDocument());
+  const edit = within(section).queryByRole("button", { name: "Edit" });
+  if (edit?.getAttribute("aria-expanded") === "false") fireEvent.click(edit);
+  await waitFor(() => expect(within(section).getByRole("button", { name: "Add Prompt" })).toBeEnabled());
+  const add = within(section).getByRole("button", { name: "Add Prompt" });
   fireEvent.click(add);
-  fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Choose existing" }));
   const dialog = screen.getByRole("dialog", { name: "Add Prompt" });
   const nameNode = within(dialog).getByText(name, { selector: "strong" });
   const card = nameNode.closest(".repeater-card");
   if (!card) throw new Error(`Prompt card was not rendered for ${name}`);
   fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Use latest version" }));
+}
+
+async function expandConfiguration(title: string, action = "Edit") {
+  const section = screen.getByRole("group", { name: title });
+  const button = await within(section).findByRole("button", { name: action });
+  if (button.getAttribute("aria-expanded") === "false") fireEvent.click(button);
 }
 
 function promptCards(): HTMLElement[] {

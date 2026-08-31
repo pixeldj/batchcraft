@@ -83,6 +83,7 @@ describe("PromptLibraryEditor library loading", () => {
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[stored]} {...callbacks} />);
 
+    await expandPromptEditor();
     expect(await screen.findByText("Current logical name")).toBeInTheDocument();
     expect(screen.getByText("Saved as Version snapshot")).toBeInTheDocument();
     expect(callbacks.onMetadataChange).toHaveBeenCalledWith([{
@@ -109,6 +110,7 @@ describe("PromptLibraryEditor selection and creation", () => {
       />,
     );
 
+    await expandPromptEditor();
     fireEvent.click(await screen.findByRole("button", { name: "Add Prompt" }));
     fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
     const picker = screen.getByRole("dialog", { name: "Add Prompt" });
@@ -209,6 +211,7 @@ describe("PromptLibraryEditor version operations", () => {
       <PromptLibraryEditor api={api} projectId="project-1" prompts={[formPrompt({ text: "current", versionId: "v2", versionNumber: 2 })]} {...callbacks} />,
     );
 
+    await expandPromptEditor();
     fireEvent.click(await screen.findByRole("button", { name: "History / change version" }));
     expect(await screen.findByText("Original wording")).toBeInTheDocument();
     expect(api.listPromptVersions).toHaveBeenCalledWith("prompt-1", true, expect.any(AbortSignal));
@@ -244,6 +247,7 @@ describe("PromptLibraryEditor version operations", () => {
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[formPrompt()]} {...callbacks} />);
 
+    await expandPromptEditor();
     fireEvent.click(await screen.findByRole("button", { name: "Edit as new version" }));
     fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "edited" } });
     fireEvent.change(screen.getByLabelText("Version note (optional)"), { target: { value: "Make it shorter" } });
@@ -272,6 +276,7 @@ describe("PromptLibraryEditor version operations", () => {
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[original]} {...callbacks} />);
 
+    await expandPromptEditor();
     fireEvent.click(await screen.findByRole("button", { name: "Rename Prompt" }));
     fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Renamed" } });
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
@@ -293,6 +298,7 @@ describe("PromptLibraryEditor ordering and linkage", () => {
       listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("p1", "One"), libraryPrompt("p2", "Two")] })),
     });
     const view = render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[first, second]} {...callbacks} />);
+    await expandPromptEditor();
     await screen.findByText("One");
 
     const secondCard = screen.getByText("Two").closest("article");
@@ -509,4 +515,10 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function expandPromptEditor() {
+  const section = screen.getByRole("group", { name: "Prompt Versions" });
+  const edit = await within(section).findByRole("button", { name: "Edit" });
+  fireEvent.click(edit);
 }

@@ -259,8 +259,12 @@ export function buildBatchRequest(
       workflow_selection: {
         workflow_id: form.workflowId,
         workflow_version_id: form.workflowVersionId,
+        workflow_name: form.workflowName.trim() || null,
+        workflow_version_number: form.workflowVersionNumber,
         workflow_profile_id: form.workflowProfileId,
         workflow_profile_version_id: form.workflowProfileVersionId,
+        workflow_profile_name: form.workflowProfileName.trim() || null,
+        workflow_profile_version_number: form.workflowProfileVersionNumber,
         workflow,
         workflow_profile: workflowProfile,
       },

@@ -320,18 +320,15 @@ export function ProjectSelector({
       ) : null}
 
       {activeProject ? (
-        <div>
-          <label className="field">
-            <span className="field-label">Filesystem key</span>
-            <input readOnly value={activeProject.filesystem_key} />
-          </label>
+        <div className="identity-details">
           <details>
             <summary>Project details</summary>
+            <p>Filesystem key: <code>{activeProject.filesystem_key}</code></p>
             <p>Project ID: <code>{activeProject.id}</code></p>
           </details>
         </div>
       ) : !listState.loading && !listState.error ? (
-        <p className="empty-note">Select an active Project, create one, or adopt an existing Project directory.</p>
+        <p className="empty-note">Select an active Project, create one, or import one from a folder.</p>
       ) : null}
 
       {!listState.loading && !listState.error && hasDraftIdentity && !activeProject ? (
@@ -364,7 +361,7 @@ export function ProjectSelector({
             setOpenDialog("adopt");
           }}
         >
-          Adopt Existing
+          Import from Folder
         </button>
       </div>
 
@@ -412,16 +409,16 @@ export function ProjectSelector({
 
       {openDialog === "adopt" && !pending ? (
         <dialog open aria-labelledby="adopt-project-title" onCancel={closeOperationDialog} onKeyDown={cancelOnEscape}>
-          <h2 id="adopt-project-title">Adopt Existing Project</h2>
-          {adoptState.loading ? <p role="status">Looking for adoptable Project directories...</p> : null}
+          <h2 id="adopt-project-title">Import Project from Folder</h2>
+          {adoptState.loading ? <p role="status">Looking for Project folders available to import...</p> : null}
           {adoptState.error ? (
             <div className="operation-error" role="alert">
-              <p>Could not load adoptable Projects: {adoptState.error}</p>
+              <p>Could not find Project folders available to import: {adoptState.error}</p>
               <button className="button-link" type="button" onClick={() => setAdoptRetry((current) => current + 1)}>Retry</button>
             </div>
           ) : null}
           {!adoptState.loading && !adoptState.error && adoptables.length === 0 ? (
-            <p className="empty-note">No Project directories are available to adopt.</p>
+            <p className="empty-note">No Project folders are available to import.</p>
           ) : null}
           {selectedAdoptable ? (
             <form onSubmit={submitAdopt}>
@@ -473,7 +470,7 @@ export function ProjectSelector({
                 <textarea value={adoptDraft.description} onChange={(event) => setAdoptDraft((current) => ({ ...current, description: event.target.value }))} />
               </label>
               {adoptDraft.error ? <p className="operation-error" role="alert">{adoptDraft.error}</p> : null}
-              <button className="button-primary" type="submit" disabled={adoptDraft.saving}>{adoptDraft.saving ? "Adopting..." : "Adopt Project"}</button>
+              <button className="button-primary" type="submit" disabled={adoptDraft.saving}>{adoptDraft.saving ? "Importing..." : "Import Project"}</button>
             </form>
           ) : null}
           <button className="button-link" type="button" onClick={closeOperationDialog}>Cancel</button>

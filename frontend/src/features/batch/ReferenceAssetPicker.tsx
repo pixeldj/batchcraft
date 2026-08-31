@@ -95,6 +95,15 @@ export function ReferenceAssetPicker({
     : [];
   const loading = Boolean(normalizedProjectKey && currentLibrary === null);
   const uploading = uploadingProjectKey === normalizedProjectKey;
+  const hasCurrentError = Boolean(currentLibrary?.error || uploadError?.projectKey === normalizedProjectKey);
+  const collapsible = Boolean(
+    normalizedProjectKey
+    && selectedAssetIds.length > 0
+    && !loading
+    && !hasCurrentError
+    && unavailableSelectedAssets.length === 0,
+  );
+  const showContent = expanded || !collapsible;
 
   function toggleAsset(assetId: string) {
     const existingIndex = selectedAssetIds.indexOf(assetId);
@@ -157,20 +166,24 @@ export function ReferenceAssetPicker({
 
   return (
     <div className="asset-picker">
-      <div className="asset-picker-summary">
+      <div className="asset-picker-summary section-summary-row">
         <strong>{selectedAssetIds.length} {selectedAssetIds.length === 1 ? "image" : "images"} selected</strong>
-        <button
-          className="button-secondary compact"
-          type="button"
-          aria-expanded={expanded}
-          aria-controls="reference-image-picker-content"
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Hide images" : "Change selection"}
-        </button>
+        {collapsible ? (
+          <div className="section-summary-actions">
+            <button
+              className="button-secondary compact"
+              type="button"
+              aria-expanded={showContent}
+              aria-controls="reference-image-picker-content"
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {showContent ? "Done" : "Change selection"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      {expanded ? (
+      {showContent ? (
         <div className="asset-picker-content" id="reference-image-picker-content">
           <div className="asset-picker-toolbar">
             <p>

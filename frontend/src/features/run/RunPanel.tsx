@@ -1,7 +1,10 @@
-import type { ExecutionResponse, RunCreatedResponse } from "../../api/types";
+import { useState } from "react";
+
+import type { ExecutionResponse, RunCreatedResponse, RunResponse } from "../../api/types";
+import { RunPlanDialog } from "./RunPlanDialog";
 
 interface Props {
-  run: RunCreatedResponse | null;
+  run: RunCreatedResponse | RunResponse | null;
   execution: ExecutionResponse | null;
   starting: boolean;
   polling: boolean;
@@ -10,16 +13,15 @@ interface Props {
 }
 
 export function RunPanel({ run, execution, starting, polling, error, onStart }: Props) {
+  const [planOpen, setPlanOpen] = useState(false);
+
   if (!run) {
     return (
-      <section className="section-card quiet-card" aria-labelledby="run-heading">
+      <section className="section-card quiet-card inactive-card" aria-labelledby="run-heading">
         <div className="section-heading">
-          <div>
-            <p className="eyebrow">03 / Execute</p>
-            <h2 id="run-heading">Run</h2>
-          </div>
+          <h2 id="run-heading">Run</h2>
         </div>
-        <p>Create a Run to freeze the plan and make it eligible for execution.</p>
+        <p>Create a Run to continue</p>
       </section>
     );
   }
@@ -28,6 +30,9 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
   const completedJobs = execution?.jobs.filter((job) => job.status === "succeeded").length ?? 0;
   const progress = run.job_count ? Math.round((completedJobs / run.job_count) * 100) : 0;
   const current = execution?.current_job_ordinal;
+  const frozenRun = "plan" in run ? run : null;
+  const dimensions = frozenRun ? summarizeDimensions(frozenRun) : null;
+  const workflow = frozenRun?.batch_snapshot?.workflow_selection;
   const statusText =
     status === "running" && current
       ? `Running · Job ${current} of ${run.job_count}`
@@ -38,21 +43,38 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
   return (
     <section className={`section-card run-card status-${status}`} aria-labelledby="run-heading">
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">03 / Execute</p>
-          <h2 id="run-heading">Run {run.run_number}</h2>
-        </div>
+        <h2 id="run-heading">Run {run.run_number}</h2>
         <span className={`status-pill ${status}`} role="status" aria-live="polite">
           {statusText}
         </span>
       </div>
 
-      <dl className="run-metadata">
-        <div><dt>Run ID</dt><dd><code>{run.run_id}</code></dd></div>
-        <div><dt>Project</dt><dd>{run.project_name}</dd></div>
-        <div><dt>Batch</dt><dd>{run.batch_name}</dd></div>
-        <div><dt>Jobs</dt><dd>{run.job_count}</dd></div>
-      </dl>
+      <div className="run-summary">
+        <strong>{completedJobs} / {run.job_count} Jobs</strong>
+        {dimensions ? <p>{dimensions}</p> : <p>Loading frozen Run Plan...</p>}
+        {workflow?.workflow_name ? (
+          <p>Workflow: <strong>{workflow.workflow_name}</strong>{formatVersion(workflow.workflow_version_number)}</p>
+        ) : null}
+        {workflow?.workflow_profile_name ? (
+          <p>Profile: <strong>{workflow.workflow_profile_name}</strong>{formatVersion(workflow.workflow_profile_version_number)}</p>
+        ) : null}
+        {execution?.started_at || execution?.completed_at ? (
+          <p className="run-summary-times">
+            {execution.started_at ? `Started ${formatTimestamp(execution.started_at)}` : null}
+            {execution.started_at && execution.completed_at ? " · " : null}
+            {execution.completed_at ? `Completed ${formatTimestamp(execution.completed_at)}` : null}
+          </p>
+        ) : null}
+        {frozenRun ? (
+          <button className="button-secondary compact" type="button" onClick={() => setPlanOpen(true)}>
+            View Run Plan
+          </button>
+        ) : null}
+      </div>
+      <details className="technical-details">
+        <summary>Run details</summary>
+        <p>Run ID: <code>{run.run_id}</code></p>
+      </details>
 
       {execution && status !== "created" ? (
         <>
@@ -61,13 +83,6 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
             <span>{progress}%</span>
           </div>
           <progress max={run.job_count} value={completedJobs}>{progress}%</progress>
-          <div className="timestamp-row">
-            {execution.started_at ? <span>Started {formatTimestamp(execution.started_at)}</span> : null}
-            {execution.completed_at ? (
-              <span>Completed {formatTimestamp(execution.completed_at)}</span>
-            ) : null}
-          </div>
-
           {execution.error ? <p className="run-error" role="alert">{execution.error}</p> : null}
           {status === "blocked" ? (
             <p className="blocked-note" role="alert">
@@ -83,7 +98,11 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
                 <div className="job-number">{String(job.ordinal).padStart(3, "0")}</div>
                 <div>
                   <strong>{job.status.replaceAll("_", " ")}</strong>
-                  {job.prompt_id ? <code>{job.prompt_id}</code> : null}
+                  {job.prompt_id ? (
+                    <span className="job-secondary-metadata">
+                      ComfyUI prompt <code>{job.prompt_id}</code>
+                    </span>
+                  ) : null}
                 </div>
                 <div className="job-result-count">
                   {job.result_count} {job.result_count === 1 ? "Result" : "Results"}
@@ -106,6 +125,9 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
         </div>
       ) : null}
       {polling ? <p className="polling-note" aria-live="polite">Watching execution state...</p> : null}
+      {frozenRun && planOpen ? (
+        <RunPlanDialog run={frozenRun} onClose={() => setPlanOpen(false)} />
+      ) : null}
     </section>
   );
 }
@@ -126,5 +148,29 @@ function Diagnostics({ diagnostics, label }: { diagnostics: string[]; label: str
 
 function formatTimestamp(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatVersion(version: number | null): string {
+  return version === null ? "" : ` · v${version}`;
+}
+
+function summarizeDimensions(run: RunResponse): string {
+  const variableValues = new Set(
+    run.plan.jobs.flatMap((job) => job.resolved_variables.map((variable) => `${variable.name}\u0000${variable.value}`)),
+  );
+  const references = new Set(
+    run.plan.jobs.flatMap((job) => job.reference_asset_id === null ? [] : [job.reference_asset_id]),
+  );
+  const seeds = new Set(run.plan.jobs.map((job) => job.seed));
+  return [
+    countLabel(run.prompt_versions.length, "prompt"),
+    countLabel(variableValues.size, "variable value"),
+    references.size ? countLabel(references.size, "reference") : "Base workflow",
+    countLabel(seeds.size, "seed"),
+  ].join(" · ");
+}
+
+function countLabel(count: number, label: string): string {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
 }

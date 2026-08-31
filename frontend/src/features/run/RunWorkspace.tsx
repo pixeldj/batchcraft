@@ -5,6 +5,7 @@ import type {
   ExecutionResponse,
   ResultResponse,
   RunCreatedResponse,
+  RunResponse,
   RunStatus,
 } from "../../api/types";
 import { ResultsPanel } from "../results/ResultsPanel";
@@ -13,7 +14,7 @@ import { useRunExecution } from "./useRunExecution";
 
 interface Props {
   api: BatchcraftApi;
-  run: RunCreatedResponse | null;
+  run: RunCreatedResponse | RunResponse | null;
   pollIntervalMs: number;
   initialExecution: ExecutionResponse | null;
   initialResults: ResultResponse[];

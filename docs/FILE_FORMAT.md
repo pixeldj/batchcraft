@@ -112,7 +112,7 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded separately from t
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The current v3 manifest contains:
+The current v4 manifest contains:
 
 - Run ID, number, creation timestamp, and Project/Batch identity snapshots;
 - ordered PromptVersion snapshots containing ID, name, and exact Prompt Template text;
@@ -129,7 +129,7 @@ The current v3 manifest contains:
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v3 creation manifest contains immutable plan and
+`manifest.json` is authoritative for exact replay. The v4 creation manifest contains immutable plan and
 provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
 versioned execution representation.
 
@@ -139,7 +139,9 @@ reference-image input. Manifest v1 and v2 continue to require the object and rem
 
 Manifest v4 adds a required top-level `batch_snapshot` object with `snapshot_version: 1`, containing
 the editable Saved Batch intent that produced the Run. Manifest v4 is otherwise identical to v3;
-v1-v3 remain readable unchanged.
+v1-v3 remain readable unchanged. New snapshots may also preserve optional human-readable Workflow
+and Profile names plus their immutable version numbers. These additive labels support historical UI
+inspection and are not required for replay; earlier v4 snapshots without them remain valid.
 
 ## `manifest.csv`
 
@@ -151,7 +153,7 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-The columns emitted alongside a v3 JSON manifest are:
+The columns emitted alongside a v4 JSON manifest are:
 
 ```text
 job_ordinal

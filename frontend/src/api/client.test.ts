@@ -385,8 +385,12 @@ function batchRequest() {
       workflow_selection: {
         workflow_id: null,
         workflow_version_id: null,
+        workflow_name: null,
+        workflow_version_number: null,
         workflow_profile_id: null,
         workflow_profile_version_id: null,
+        workflow_profile_name: null,
+        workflow_profile_version_number: null,
         workflow,
         workflow_profile: workflowProfile,
       },

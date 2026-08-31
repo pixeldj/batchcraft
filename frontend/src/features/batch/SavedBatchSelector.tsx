@@ -133,7 +133,7 @@ export function SavedBatchSelector({
   const statusLabel = selectedBatchId
     ? dirty
       ? "Unsaved changes"
-      : `Saved · revision ${revision ?? "?"}`
+      : "Saved"
     : "Unsaved draft";
 
   function openDialog(mode: DialogMode) {
@@ -256,13 +256,12 @@ export function SavedBatchSelector({
               {statusLabel}
             </span>
             {selectedBatchId ? (
-              <>
-                <span className="saved-batch-key">{filesystemKey}</span>
-                <details>
-                  <summary>Batch details</summary>
-                  <p>Batch ID: <code>{selectedBatchId}</code></p>
-                </details>
-              </>
+              <details className="technical-details">
+                <summary>Batch details</summary>
+                <p>Filesystem key: <code>{filesystemKey}</code></p>
+                <p>Batch ID: <code>{selectedBatchId}</code></p>
+                <p>Revision: {revision ?? "Unknown"}</p>
+              </details>
             ) : null}
           </div>
         </div>
