@@ -12,16 +12,17 @@ from batchcraft.db.connection import open_connection
 from batchcraft.db.models import (
     SavedBatchDefinition,
     SavedBatchDetailRecord,
+    SavedBatchImageBinding,
     SavedBatchListRecord,
     SavedBatchPromptSelection,
     SavedBatchRecord,
-    SavedBatchReferenceSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
     SavedBatchVariableBinding,
     SavedBatchWorkflowProfileVersionSnapshot,
     SavedBatchWorkflowVersionSnapshot,
 )
+from batchcraft.domain import validate_image_input_slot_key
 from batchcraft.files._io import canonical_json_bytes, is_safe_filesystem_key
 
 MAX_SAFE_SEED = 2**53 - 1
@@ -271,10 +272,34 @@ def _validate_definition(definition: SavedBatchDefinition) -> None:
         _nonblank(selection.text, "PromptVersion text")
     for binding in definition.variable_bindings:
         _validate_binding(binding)
-    for reference in definition.reference_selections:
-        if not isinstance(reference, SavedBatchReferenceSelection):
-            raise SavedBatchValidationError("reference selections must be typed records")
-        _nonblank(reference.asset_id, "Reference Asset ID")
+    slot_keys: set[str] = set()
+    for image_binding in definition.image_bindings:
+        if not isinstance(image_binding, SavedBatchImageBinding):
+            raise SavedBatchValidationError("image bindings must be typed records")
+        try:
+            validate_image_input_slot_key(image_binding.slot_key)
+        except ValueError as error:
+            raise SavedBatchValidationError(str(error)) from error
+        if image_binding.slot_key in slot_keys:
+            raise SavedBatchValidationError(f"duplicate image binding: {image_binding.slot_key!r}")
+        slot_keys.add(image_binding.slot_key)
+        if not image_binding.values:
+            raise SavedBatchValidationError(
+                "image binding values must contain at least one effective value"
+            )
+        if any(
+            value is not None and (not isinstance(value, str) or not value.strip())
+            for value in image_binding.values
+        ):
+            raise SavedBatchValidationError(
+                "image binding values must be nonblank asset IDs or null"
+            )
+        if len(set(image_binding.values)) != len(image_binding.values):
+            raise SavedBatchValidationError(
+                "image binding values must not contain exact duplicates"
+            )
+        if None in image_binding.values and image_binding.values[0] is not None:
+            raise SavedBatchValidationError("image binding values must place Base workflow first")
     if definition.selected_workflow_version is not None:
         _validate_workflow_snapshot(definition.selected_workflow_version)
     if definition.selected_workflow_profile_id is not None:
@@ -467,10 +492,39 @@ def _validate_library_selections(
             row[5],
             f"Workflow Profile version {profile_version.id}",
         )
+        raw_image_inputs = profile_version.profile.get("image_inputs")
+        if not isinstance(raw_image_inputs, list):
+            raise SavedBatchIntegrityError(
+                "selected Workflow Profile version has invalid image inputs"
+            )
+        profile_slot_keys = tuple(
+            _profile_image_input_key(value, index)
+            for index, value in enumerate(raw_image_inputs, start=1)
+        )
+        binding_slot_keys = tuple(binding.slot_key for binding in definition.image_bindings)
+        if binding_slot_keys != profile_slot_keys:
+            raise SavedBatchIntegrityError(
+                "Saved Batch image bindings must match the selected ProfileVersion slot order"
+            )
     elif profile_row is not None and workflow_row is not None and profile_row[0] != workflow_row[0]:
         raise SavedBatchIntegrityError(
             "selected Workflow and logical Workflow Profile are incompatible"
         )
+    elif definition.image_bindings:
+        raise SavedBatchIntegrityError(
+            "Saved Batch image bindings require an exact selected ProfileVersion"
+        )
+
+
+def _profile_image_input_key(value: object, position: int) -> str:
+    if not isinstance(value, dict):
+        raise SavedBatchIntegrityError(
+            f"selected Workflow Profile image input {position} is invalid"
+        )
+    try:
+        return validate_image_input_slot_key(value.get("key"))
+    except ValueError as error:
+        raise SavedBatchIntegrityError(str(error)) from error
 
 
 def _require_snapshot_match(
@@ -493,7 +547,7 @@ def _replace_children(
 ) -> None:
     connection.execute("DELETE FROM batch_prompt_selection WHERE batch_id = ?", (batch_id,))
     connection.execute("DELETE FROM batch_variable_binding WHERE batch_id = ?", (batch_id,))
-    connection.execute("DELETE FROM batch_reference_selection WHERE batch_id = ?", (batch_id,))
+    connection.execute("DELETE FROM batch_image_binding WHERE batch_id = ?", (batch_id,))
     connection.executemany(
         """
         INSERT INTO batch_prompt_selection (batch_id, position, prompt_version_id)
@@ -521,12 +575,24 @@ def _replace_children(
     )
     connection.executemany(
         """
-        INSERT INTO batch_reference_selection (batch_id, position, asset_id)
+        INSERT INTO batch_image_binding (batch_id, position, slot_key)
         VALUES (?, ?, ?)
         """,
         (
-            (batch_id, position, selection.asset_id)
-            for position, selection in enumerate(definition.reference_selections, 1)
+            (batch_id, position, binding.slot_key)
+            for position, binding in enumerate(definition.image_bindings, 1)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO batch_image_binding_value
+            (batch_id, binding_position, value_position, asset_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (batch_id, binding_position, value_position, value)
+            for binding_position, binding in enumerate(definition.image_bindings, 1)
+            for value_position, value in enumerate(binding.values, 1)
         ),
     )
 
@@ -560,8 +626,14 @@ def _get_detail(connection: sqlite3.Connection, batch_id: str) -> SavedBatchDeta
         """,
         (batch_id,),
     ).fetchall()
-    references = connection.execute(
-        "SELECT asset_id FROM batch_reference_selection WHERE batch_id = ? ORDER BY position",
+    image_rows = connection.execute(
+        """
+        SELECT b.position, b.slot_key, v.value_position, v.asset_id
+        FROM batch_image_binding AS b
+        LEFT JOIN batch_image_binding_value AS v
+          ON v.batch_id = b.batch_id AND v.binding_position = b.position
+        WHERE b.batch_id = ? ORDER BY b.position, v.value_position
+        """,
         (batch_id,),
     ).fetchall()
     workflow = _load_workflow_snapshot(connection, root.selected_workflow_version_id)
@@ -597,9 +669,7 @@ def _get_detail(connection: sqlite3.Connection, batch_id: str) -> SavedBatchDeta
             for row in prompts
         ),
         variable_bindings=tuple(_binding_from_row(row) for row in bindings),
-        reference_selections=tuple(
-            SavedBatchReferenceSelection(asset_id=_string(row[0], "asset_id")) for row in references
-        ),
+        image_bindings=_image_bindings_from_rows(image_rows),
         selected_workflow_version=workflow,
         selected_workflow_profile_name=(None if profile_metadata is None else profile_metadata[0]),
         selected_workflow_profile_archived_at=(
@@ -739,6 +809,48 @@ def _binding_from_row(row: sqlite3.Row | tuple[object, ...]) -> SavedBatchVariab
         placeholder=_plain_string(row[0], "binding.placeholder"),
         values=values,
     )
+
+
+def _image_bindings_from_rows(
+    rows: list[sqlite3.Row] | list[tuple[object, ...]],
+) -> tuple[SavedBatchImageBinding, ...]:
+    bindings: list[SavedBatchImageBinding] = []
+    current_position: int | None = None
+    current_key = ""
+    values: list[str | None] = []
+    expected_binding_position = 1
+    expected_value_position = 1
+    for row in rows:
+        position = _positive_int(row[0], "image binding position")
+        if current_position is not None and position != current_position:
+            bindings.append(SavedBatchImageBinding(current_key, tuple(values)))
+            values = []
+            expected_binding_position += 1
+            expected_value_position = 1
+        if position != current_position:
+            if position != expected_binding_position:
+                raise SavedBatchStoreError(
+                    "image binding positions must be one-based and contiguous"
+                )
+            current_position = position
+            current_key = _string(row[1], "image binding slot_key")
+        if row[2] is not None:
+            value_position = _positive_int(row[2], "image binding value position")
+            if value_position != expected_value_position:
+                raise SavedBatchStoreError(
+                    "image binding value positions must be one-based and contiguous"
+                )
+            values.append(None if row[3] is None else _string(row[3], "image binding asset_id"))
+            expected_value_position += 1
+    if current_position is not None:
+        bindings.append(SavedBatchImageBinding(current_key, tuple(values)))
+    if any(not binding.values for binding in bindings):
+        raise SavedBatchStoreError("image binding values must contain at least one effective value")
+    if any(len(set(binding.values)) != len(binding.values) for binding in bindings):
+        raise SavedBatchStoreError("image binding values must not contain exact duplicates")
+    if any(None in binding.values and binding.values[0] is not None for binding in bindings):
+        raise SavedBatchStoreError("image binding values must place Base workflow first")
+    return tuple(bindings)
 
 
 def _translate_integrity_error(

@@ -156,8 +156,9 @@ class SavedBatchVariableBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class SavedBatchReferenceSelection:
-    asset_id: str
+class SavedBatchImageBinding:
+    slot_key: str
+    values: tuple[str | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +195,7 @@ class SavedBatchDefinition:
     seed_intent: SavedBatchSeedIntent
     prompt_selections: tuple[SavedBatchPromptSelection, ...] = ()
     variable_bindings: tuple[SavedBatchVariableBinding, ...] = ()
-    reference_selections: tuple[SavedBatchReferenceSelection, ...] = ()
+    image_bindings: tuple[SavedBatchImageBinding, ...] = ()
     selected_workflow_version: SavedBatchWorkflowVersionSnapshot | None = None
     selected_workflow_profile_id: str | None = None
     selected_workflow_profile_version: SavedBatchWorkflowProfileVersionSnapshot | None = None
@@ -228,7 +229,7 @@ class SavedBatchListRecord(SavedBatchRecord):
 class SavedBatchDetailRecord(SavedBatchRecord):
     prompt_selections: tuple[SavedBatchPromptSelection, ...]
     variable_bindings: tuple[SavedBatchVariableBinding, ...]
-    reference_selections: tuple[SavedBatchReferenceSelection, ...]
+    image_bindings: tuple[SavedBatchImageBinding, ...]
     selected_workflow_version: SavedBatchWorkflowVersionSnapshot | None
     selected_workflow_profile_name: str | None
     selected_workflow_profile_archived_at: datetime | None

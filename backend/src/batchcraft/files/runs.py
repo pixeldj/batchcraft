@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from batchcraft.comfyui import WorkflowPreparationError, workflow_profile_image_inputs
 from batchcraft.domain import (
     BatchDefinition,
     CompilationError,
@@ -21,12 +22,15 @@ from batchcraft.domain import (
     CompilationWarningCode,
     CompiledJob,
     CompiledRunPlan,
+    ImageBinding,
+    ImageInputSlot,
     PromptVersion,
-    ReferenceSelection,
+    ResolvedImageInput,
     ResolvedVariable,
     SeedInput,
     VariableBinding,
     compile_batch,
+    validate_image_input_slot_key,
 )
 from batchcraft.files._io import (
     canonical_json_bytes,
@@ -43,15 +47,16 @@ from batchcraft.files.assets import AssetStoreError, ProjectAssetStore
 from batchcraft.files.models import (
     AssetRecord,
     BatchIdentity,
+    PersistedImageInput,
     PersistedJob,
     ProjectIdentity,
     PublishedRun,
 )
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
-from batchcraft.files.snapshots import BatchSnapshotV2
+from batchcraft.files.snapshots import BatchSnapshotV3
 
 RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 5
+MANIFEST_FORMAT_VERSION = 6
 OWNER_FORMAT_VERSION = 1
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
@@ -62,9 +67,7 @@ _CSV_COLUMNS = (
     "prompt_template",
     "resolved_prompt",
     "resolved_variables_json",
-    "reference_asset_id",
-    "reference_original_filename",
-    "reference_sha256",
+    "resolved_image_inputs_json",
     "seed",
     "workflow_sha256",
     "workflow_profile_sha256",
@@ -94,7 +97,7 @@ class RunFilesystemStore:
         batch: BatchIdentity,
         batch_snapshot: Mapping[str, object],
         plan: CompiledRunPlan,
-        reference_assets: Mapping[str, AssetRecord],
+        image_assets: Mapping[str, AssetRecord],
         workflow: Mapping[str, object],
         workflow_profile: Mapping[str, object],
     ) -> PublishedRun:
@@ -120,7 +123,7 @@ class RunFilesystemStore:
         )
 
         asset_store = ProjectAssetStore(project_path)
-        assets_by_id = self._validate_reference_assets(plan, reference_assets, asset_store)
+        assets_by_id = self._validate_image_assets(plan, image_assets, asset_store)
         run_id = self._new_id("Run")
         created_at = self._timestamp()
         run_number, reservation_path, final_path = self._reserve_run_number(batch_path)
@@ -157,10 +160,17 @@ class RunFilesystemStore:
                 PersistedJob(
                     job_id=self._new_id("Job"),
                     compiled_job=job,
-                    reference_asset=(
-                        assets_by_id[job.reference_asset_id]
-                        if job.reference_asset_id is not None
-                        else None
+                    image_inputs=tuple(
+                        PersistedImageInput(
+                            slot_key=item.slot_key,
+                            slot_label=next(
+                                slot.label
+                                for slot in plan.image_input_slots
+                                if slot.key == item.slot_key
+                            ),
+                            asset=(None if item.asset_id is None else assets_by_id[item.asset_id]),
+                        )
+                        for item in job.resolved_image_inputs
                     ),
                 )
                 for job in plan.jobs
@@ -302,22 +312,23 @@ class RunFilesystemStore:
         asset_store = ProjectAssetStore(project_path)
         validated_assets: dict[str, AssetRecord] = {}
         for job in loaded.jobs:
-            asset = job.reference_asset
-            if asset is None:
-                continue
-            validated = validated_assets.get(asset.asset_id)
-            if validated is not None:
-                if validated != asset:
+            for image_input in job.image_inputs:
+                asset = image_input.asset
+                if asset is None:
+                    continue
+                validated = validated_assets.get(asset.asset_id)
+                if validated is not None:
+                    if validated != asset:
+                        raise RunStoreError(
+                            f"Jobs reference inconsistent metadata for asset ID {asset.asset_id!r}"
+                        )
+                    continue
+                try:
+                    validated_assets[asset.asset_id] = asset_store.validate_record(asset)
+                except AssetStoreError as error:
                     raise RunStoreError(
-                        f"Jobs reference inconsistent metadata for asset ID {asset.asset_id!r}"
-                    )
-                continue
-            try:
-                validated_assets[asset.asset_id] = asset_store.validate_record(asset)
-            except AssetStoreError as error:
-                raise RunStoreError(
-                    f"Job {job.compiled_job.ordinal} references an invalid Project asset: {error}"
-                ) from error
+                        f"Job {job.compiled_job.ordinal} references an invalid Project asset: {error}"
+                    ) from error
 
         if validate_csv:
             expected_csv = _manifest_csv_bytes(
@@ -345,31 +356,32 @@ class RunFilesystemStore:
             workflow_profile_sha256=workflow_profile_sha256,
         )
 
-    def _validate_reference_assets(
+    def _validate_image_assets(
         self,
         plan: CompiledRunPlan,
-        reference_assets: Mapping[str, AssetRecord],
+        image_assets: Mapping[str, AssetRecord],
         asset_store: ProjectAssetStore,
     ) -> dict[str, AssetRecord]:
         assets_by_id: dict[str, AssetRecord] = {}
         for job in plan.jobs:
-            asset_id = job.reference_asset_id
-            if asset_id is None:
-                continue
-            if asset_id in assets_by_id:
-                continue
-            record = reference_assets.get(asset_id)
-            if record is None:
-                raise RunStoreError(f"compiled plan references unknown asset ID: {asset_id!r}")
-            if record.asset_id != asset_id:
-                raise RunStoreError(
-                    f"reference asset mapping key {asset_id!r} does not match record ID "
-                    f"{record.asset_id!r}"
-                )
-            try:
-                assets_by_id[asset_id] = asset_store.validate_record(record)
-            except AssetStoreError as error:
-                raise RunStoreError(f"invalid reference asset {asset_id!r}: {error}") from error
+            for image_input in job.resolved_image_inputs:
+                asset_id = image_input.asset_id
+                if asset_id is None:
+                    continue
+                if asset_id in assets_by_id:
+                    continue
+                record = image_assets.get(asset_id)
+                if record is None:
+                    raise RunStoreError(f"compiled plan references unknown asset ID: {asset_id!r}")
+                if record.asset_id != asset_id:
+                    raise RunStoreError(
+                        f"image asset mapping key {asset_id!r} does not match record ID "
+                        f"{record.asset_id!r}"
+                    )
+                try:
+                    assets_by_id[asset_id] = asset_store.validate_record(record)
+                except AssetStoreError as error:
+                    raise RunStoreError(f"invalid image asset {asset_id!r}: {error}") from error
         return assets_by_id
 
     def _reserve_run_number(self, batch_path: Path) -> tuple[int, Path, Path]:
@@ -454,6 +466,19 @@ class RunFilesystemStore:
                     f"compiled plan contains duplicate PromptVersion ID: {prompt_version.id!r}"
                 )
             prompt_ids.add(prompt_version.id)
+        slot_keys: set[str] = set()
+        for slot in plan.image_input_slots:
+            try:
+                validate_image_input_slot_key(slot.key)
+            except ValueError as error:
+                raise RunStoreError(str(error)) from error
+            if slot.key in slot_keys:
+                raise RunStoreError(f"compiled plan contains duplicate image slot: {slot.key!r}")
+            if not slot.label.strip() or not slot.node_id or not slot.input_name:
+                raise RunStoreError(
+                    f"compiled plan image slot {slot.key!r} has incomplete metadata"
+                )
+            slot_keys.add(slot.key)
         expected_ordinals = tuple(range(1, plan.job_count + 1))
         if tuple(job.ordinal for job in plan.jobs) != expected_ordinals:
             raise RunStoreError("compiled Job ordinals must be one-based and contiguous")
@@ -472,8 +497,17 @@ class RunFilesystemStore:
                 raise RunStoreError(
                     f"compiled Job {job.ordinal} contains duplicate resolved variables"
                 )
-            if job.reference_asset_id == "":
-                raise RunStoreError(f"compiled Job {job.ordinal} has an empty reference asset ID")
+            if tuple(item.slot_key for item in job.resolved_image_inputs) != tuple(
+                slot.key for slot in plan.image_input_slots
+            ):
+                raise RunStoreError(
+                    f"compiled Job {job.ordinal} image inputs do not match Profile slot order"
+                )
+            if any(
+                item.asset_id is not None and not item.asset_id.strip()
+                for item in job.resolved_image_inputs
+            ):
+                raise RunStoreError(f"compiled Job {job.ordinal} has a blank image asset ID")
 
     def _new_id(self, kind: str) -> str:
         value = self._id_factory()
@@ -548,6 +582,15 @@ def _manifest(
             }
             for version in plan.prompt_versions
         ],
+        "image_input_slots": [
+            {
+                "slot_key": slot.key,
+                "slot_label": slot.label,
+                "node_id": slot.node_id,
+                "input_name": slot.input_name,
+            }
+            for slot in plan.image_input_slots
+        ],
         "compiler_warnings": [
             {
                 "code": warning.code.value,
@@ -574,9 +617,16 @@ def _manifest(
                     {"name": variable.name, "value": variable.value}
                     for variable in job.compiled_job.resolved_variables
                 ],
-                "reference_asset": (
-                    _asset_data(job.reference_asset) if job.reference_asset is not None else None
-                ),
+                "resolved_image_inputs": [
+                    {
+                        "slot_key": image_input.slot_key,
+                        "slot_label": image_input.slot_label,
+                        "asset": (
+                            None if image_input.asset is None else _asset_data(image_input.asset)
+                        ),
+                    }
+                    for image_input in job.image_inputs
+                ],
                 "seed": job.compiled_job.seed,
                 "workflow_sha256": workflow_sha256,
                 "workflow_profile_sha256": workflow_profile_sha256,
@@ -615,15 +665,22 @@ def _manifest_csv_bytes(
                 )
                 .decode()
                 .rstrip("\n"),
-                "reference_asset_id": (
-                    job.reference_asset.asset_id if job.reference_asset is not None else ""
-                ),
-                "reference_original_filename": (
-                    job.reference_asset.original_filename if job.reference_asset is not None else ""
-                ),
-                "reference_sha256": (
-                    job.reference_asset.sha256 if job.reference_asset is not None else ""
-                ),
+                "resolved_image_inputs_json": canonical_json_bytes(
+                    [
+                        {
+                            "slot_key": image_input.slot_key,
+                            "slot_label": image_input.slot_label,
+                            "asset": (
+                                None
+                                if image_input.asset is None
+                                else _asset_data(image_input.asset)
+                            ),
+                        }
+                        for image_input in job.image_inputs
+                    ]
+                )
+                .decode()
+                .rstrip("\n"),
                 "seed": job.compiled_job.seed,
                 "workflow_sha256": workflow_sha256,
                 "workflow_profile_sha256": workflow_profile_sha256,
@@ -684,6 +741,10 @@ def _parse_run(
     if len(set(prompt_ids)) != len(prompt_ids):
         raise RunStoreError("manifest contains duplicate PromptVersion IDs")
     known_prompt_ids = {version.id for version in prompt_versions}
+    image_input_slots = tuple(
+        _parse_image_input_slot(_object_item(value, "image input slot"))
+        for value in _required_array(manifest_data, "image_input_slots")
+    )
     warnings = tuple(
         _parse_warning(_object_item(value, "compiler warning"))
         for value in _required_array(manifest_data, "compiler_warnings")
@@ -698,9 +759,20 @@ def _parse_run(
     )
     compiled_plan = CompiledRunPlan(
         prompt_versions=prompt_versions,
+        image_input_slots=image_input_slots,
         jobs=tuple(job.compiled_job for job in persisted_jobs),
         warnings=warnings,
     )
+    expected_image_inputs = tuple((slot.key, slot.label) for slot in image_input_slots)
+    for persisted_job in persisted_jobs:
+        actual_image_inputs = tuple(
+            (image_input.slot_key, image_input.slot_label)
+            for image_input in persisted_job.image_inputs
+        )
+        if actual_image_inputs != expected_image_inputs:
+            raise RunStoreError(
+                f"Job {persisted_job.compiled_job.ordinal} image input keys or labels do not match the frozen Profile"
+            )
     if _non_negative_integer(run_data, "job_count") != compiled_plan.job_count:
         raise RunStoreError("job_count does not match manifest Jobs")
     expected_ordinals = tuple(range(1, compiled_plan.job_count + 1))
@@ -754,13 +826,9 @@ def _parse_job(
     variable_names = tuple(variable.name for variable in variables)
     if len(set(variable_names)) != len(variable_names):
         raise RunStoreError("Job contains duplicate resolved variables")
-    if "reference_asset" not in data:
-        raise RunStoreError("Job must define reference_asset")
-    reference_asset = data["reference_asset"]
-    asset = (
-        None
-        if reference_asset is None
-        else _parse_asset(_object_item(reference_asset, "reference_asset"))
+    image_inputs = tuple(
+        _parse_persisted_image_input(_object_item(value, "resolved image input"))
+        for value in _required_array(data, "resolved_image_inputs")
     )
     resolved_prompt = _required_string(data, "resolved_prompt", allow_empty=True)
     if "{{" in resolved_prompt or "}}" in resolved_prompt:
@@ -770,13 +838,39 @@ def _parse_job(
         prompt_version_id=_required_string(data, "prompt_version_id"),
         resolved_prompt=resolved_prompt,
         resolved_variables=variables,
-        reference_asset_id=asset.asset_id if asset is not None else None,
+        resolved_image_inputs=tuple(
+            ResolvedImageInput(
+                slot_key=image_input.slot_key,
+                asset_id=(None if image_input.asset is None else image_input.asset.asset_id),
+            )
+            for image_input in image_inputs
+        ),
         seed=_integer(data, "seed"),
     )
     return PersistedJob(
         job_id=_required_string(data, "job_id"),
         compiled_job=compiled_job,
-        reference_asset=asset,
+        image_inputs=image_inputs,
+    )
+
+
+def _parse_image_input_slot(data: dict[str, object]) -> ImageInputSlot:
+    return ImageInputSlot(
+        key=_required_string(data, "slot_key"),
+        label=_required_string(data, "slot_label"),
+        node_id=_required_string(data, "node_id"),
+        input_name=_required_string(data, "input_name"),
+    )
+
+
+def _parse_persisted_image_input(data: dict[str, object]) -> PersistedImageInput:
+    if "asset" not in data:
+        raise RunStoreError("resolved image input must define asset")
+    raw_asset = data["asset"]
+    return PersistedImageInput(
+        slot_key=_required_string(data, "slot_key"),
+        slot_label=_required_string(data, "slot_label"),
+        asset=None if raw_asset is None else _parse_asset(_object_item(raw_asset, "asset")),
     )
 
 
@@ -867,12 +961,12 @@ def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, 
 
 def _parse_batch_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
     try:
-        parsed = BatchSnapshotV2.model_validate(snapshot)
+        parsed = BatchSnapshotV3.model_validate(snapshot)
     except ValidationError as error:
-        raise RunStoreError(f"invalid Batch snapshot v2: {error}") from error
+        raise RunStoreError(f"invalid Batch snapshot v3: {error}") from error
     canonical = cast(dict[str, object], parsed.model_dump(mode="json"))
     if canonical != snapshot:
-        raise RunStoreError("invalid Batch snapshot v2: snapshot must use its complete shape")
+        raise RunStoreError("invalid Batch snapshot v3: snapshot must use its complete shape")
     return canonical
 
 
@@ -885,7 +979,7 @@ def _validate_batch_snapshot_consistency(
     workflow: dict[str, object],
     workflow_profile: dict[str, object],
 ) -> None:
-    parsed = BatchSnapshotV2.model_validate(snapshot)
+    parsed = BatchSnapshotV3.model_validate(snapshot)
     if (
         parsed.project.id,
         parsed.project.filesystem_key,
@@ -926,8 +1020,13 @@ def _validate_batch_snapshot_consistency(
                     VariableBinding(placeholder=item.placeholder, values=tuple(item.values))
                     for item in parsed.variable_bindings
                 ),
-                references=tuple(
-                    ReferenceSelection(asset_id=item.asset_id) for item in parsed.references
+                image_input_slots=tuple(
+                    ImageInputSlot(key=key, label=label, node_id=node_id, input_name=input_name)
+                    for key, label, node_id, input_name in _profile_image_inputs(workflow_profile)
+                ),
+                image_bindings=tuple(
+                    ImageBinding(slot_key=item.slot_key, values=tuple(item.values))
+                    for item in parsed.image_bindings
                 ),
                 seeds=seeds,
             ),
@@ -937,6 +1036,15 @@ def _validate_batch_snapshot_consistency(
         raise RunStoreError(f"Batch snapshot does not compile: {error}") from error
     if snapshot_plan != plan:
         raise RunStoreError("Batch snapshot does not reconstruct the compiled Run plan")
+
+
+def _profile_image_inputs(
+    profile: dict[str, object],
+) -> tuple[tuple[str, str, str, str], ...]:
+    try:
+        return workflow_profile_image_inputs(profile)
+    except WorkflowPreparationError as error:
+        raise RunStoreError(f"invalid Workflow Profile image inputs: {error}") from error
 
 
 def _required_object(data: dict[str, object], name: str) -> dict[str, object]:

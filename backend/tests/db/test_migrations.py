@@ -36,7 +36,8 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "batch",
             "batch_prompt_selection",
             "batch_variable_binding",
-            "batch_reference_selection",
+            "batch_image_binding",
+            "batch_image_binding_value",
         }
         indexes = {
             row[0]
@@ -236,18 +237,22 @@ def test_saved_batch_schema_enforces_root_and_ordered_child_constraints(tmp_path
         connection.execute(
             "INSERT INTO batch VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", root
         )
-        connection.execute("INSERT INTO batch_reference_selection VALUES ('batch-1', 1, 'asset-1')")
+        connection.execute("INSERT INTO batch_image_binding VALUES ('batch-1', 1, 'reference')")
+        connection.execute(
+            "INSERT INTO batch_image_binding_value VALUES ('batch-1', 1, 1, 'asset-1')"
+        )
 
         with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
-            connection.execute(
-                "INSERT INTO batch_reference_selection VALUES ('batch-1', 0, 'asset-2')"
-            )
+            connection.execute("INSERT INTO batch_image_binding VALUES ('batch-1', 0, 'pose')")
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            connection.execute("INSERT INTO batch_image_binding VALUES ('batch-1', 2, 'Bad-Key')")
         with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
             connection.execute("UPDATE batch SET seed_values_json = '{}' WHERE id = 'batch-1'")
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             connection.execute("UPDATE batch SET filesystem_key = 'changed' WHERE id = 'batch-1'")
         connection.execute("DELETE FROM batch WHERE id = 'batch-1'")
-        assert connection.execute("SELECT count(*) FROM batch_reference_selection").fetchone() == (
+        assert connection.execute("SELECT count(*) FROM batch_image_binding").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM batch_image_binding_value").fetchone() == (
             0,
         )
     finally:

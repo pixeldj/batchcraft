@@ -2,6 +2,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from batchcraft.domain.image_slots import validate_image_input_slot_key
+
 
 class SnapshotModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -47,8 +49,20 @@ class SnapshotVariableBinding(SnapshotModel):
         return self
 
 
-class SnapshotReference(SnapshotModel):
-    asset_id: str = Field(min_length=1)
+class SnapshotImageBinding(SnapshotModel):
+    slot_key: str
+    values: list[str | None] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_binding(self) -> Self:
+        validate_image_input_slot_key(self.slot_key)
+        if any(value is not None and not value.strip() for value in self.values):
+            raise ValueError("image binding values must be nonblank asset IDs or null")
+        if len(set(self.values)) != len(self.values):
+            raise ValueError("image binding values must not contain exact duplicates")
+        if None in self.values and self.values[0] is not None:
+            raise ValueError("image binding values must place Base workflow first")
+        return self
 
 
 class SnapshotSeedIntent(SnapshotModel):
@@ -80,13 +94,20 @@ class SnapshotWorkflowSelection(SnapshotModel):
     workflow_profile: dict[str, object]
 
 
-class BatchSnapshotV2(SnapshotModel):
-    snapshot_version: int = Field(strict=True, ge=2, le=2)
+class BatchSnapshotV3(SnapshotModel):
+    snapshot_version: int = Field(strict=True, ge=3, le=3)
     project: SnapshotIdentity
     source_saved_batch: SnapshotSourceSavedBatch | None
     batch: SnapshotBatch
     prompt_versions: list[SnapshotPromptVersion]
     variable_bindings: list[SnapshotVariableBinding]
-    references: list[SnapshotReference]
+    image_bindings: list[SnapshotImageBinding]
     seed_intent: SnapshotSeedIntent
     workflow_selection: SnapshotWorkflowSelection
+
+    @model_validator(mode="after")
+    def validate_image_binding_keys(self) -> Self:
+        keys = [binding.slot_key for binding in self.image_bindings]
+        if len(set(keys)) != len(keys):
+            raise ValueError("image bindings must have unique slot keys")
+        return self

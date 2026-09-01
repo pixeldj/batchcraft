@@ -6,8 +6,10 @@ from batchcraft.domain import (
     BatchDefinition,
     CompilationError,
     CompilationWarningCode,
+    ImageBinding,
+    ImageInputSlot,
     PromptVersion,
-    ReferenceSelection,
+    ResolvedImageInput,
     SeedInput,
     SeedMode,
     VariableBinding,
@@ -25,14 +27,16 @@ def batch_definition(
     *,
     prompt_versions: tuple[PromptVersion, ...] | None = None,
     bindings: tuple[VariableBinding, ...] = (),
-    references: tuple[str, ...] = ("ref-1",),
+    image_slots: tuple[ImageInputSlot, ...] = (),
+    image_bindings: tuple[ImageBinding, ...] = (),
     seeds: SeedInput | None = None,
 ) -> BatchDefinition:
     return BatchDefinition(
         prompt_versions=prompt_versions
         or (PromptVersion(id="prompt-v1", name="Prompt one", text=template),),
         variable_bindings=bindings,
-        references=tuple(ReferenceSelection(asset_id=value) for value in references),
+        image_input_slots=image_slots,
+        image_bindings=image_bindings,
         seeds=seeds or SeedInput.fixed(123),
     )
 
@@ -88,12 +92,11 @@ def test_one_binding_value_produces_one_prompt_dimension_value() -> None:
     batch = batch_definition(
         "Shot with {{lens}}.",
         bindings=(binding("lens", "50mm"),),
-        references=("ref-a", "ref-b"),
     )
 
     plan = compile_batch(batch)
 
-    assert plan.job_count == 2
+    assert plan.job_count == 1
     assert {job.resolved_prompt for job in plan.jobs} == {"Shot with 50mm."}
 
 
@@ -168,18 +171,14 @@ def test_documented_dimension_order_and_rightmost_seed_variation() -> None:
             binding("animal", "cat", "dog"),
             binding("location", "park", "forest"),
         ),
-        references=("ref-b", "ref-a"),
         seeds=SeedInput.explicit((20, 10)),
     )
 
-    actual = [
-        (job.resolved_prompt, job.reference_asset_id, job.seed) for job in compile_batch(batch).jobs
-    ]
+    actual = [(job.resolved_prompt, job.seed) for job in compile_batch(batch).jobs]
 
     assert actual == [
-        (prompt, reference, seed)
+        (prompt, seed)
         for prompt in ("cat park", "cat forest", "dog park", "dog forest")
-        for reference in ("ref-b", "ref-a")
         for seed in (20, 10)
     ]
 
@@ -195,7 +194,6 @@ def test_prompt_versions_are_outermost_with_prompt_specific_placeholder_axes() -
             binding("animal", "dog", "cat"),
             binding("style", "oil", "ink"),
         ),
-        references=("ref-b", "ref-a"),
         seeds=SeedInput.explicit((20, 10)),
     )
 
@@ -205,23 +203,21 @@ def test_prompt_versions_are_outermost_with_prompt_specific_placeholder_axes() -
             job.prompt_version_id,
             job.resolved_prompt,
             tuple((value.name, value.value) for value in job.resolved_variables),
-            job.reference_asset_id,
             job.seed,
         )
         for job in compile_batch(batch).jobs
     ]
 
     assert actual == [
-        (ordinal, prompt_id, prompt, variables, reference, seed)
-        for ordinal, (prompt_id, prompt, variables, reference, seed) in enumerate(
+        (ordinal, prompt_id, prompt, variables, seed)
+        for ordinal, (prompt_id, prompt, variables, seed) in enumerate(
             (
-                (prompt_id, prompt, variables, reference, seed)
+                (prompt_id, prompt, variables, seed)
                 for prompt_id, prompts in (
                     ("animals", (("A dog", (("animal", "dog"),)), ("A cat", (("animal", "cat"),)))),
                     ("styles", (("In oil", (("style", "oil"),)), ("In ink", (("style", "ink"),)))),
                 )
                 for prompt, variables in prompts
-                for reference in ("ref-b", "ref-a")
                 for seed in (20, 10)
             ),
             start=1,
@@ -263,7 +259,8 @@ def test_prompt_versions_cannot_be_empty() -> None:
             BatchDefinition(
                 prompt_versions=(),
                 variable_bindings=(),
-                references=batch.references,
+                image_input_slots=batch.image_input_slots,
+                image_bindings=batch.image_bindings,
                 seeds=batch.seeds,
             )
         )
@@ -280,33 +277,183 @@ def test_prompt_version_ids_must_be_nonempty_and_unique(prompt_id: str) -> None:
         compile_batch(batch_definition("unused", prompt_versions=versions))
 
 
-def test_reference_order_is_preserved() -> None:
-    batch = batch_definition("Prompt", references=("ref-3", "ref-1", "ref-2"))
-
-    assert [job.reference_asset_id for job in compile_batch(batch).jobs] == [
-        "ref-3",
-        "ref-1",
-        "ref-2",
-    ]
-
-
-def test_empty_reference_axis_produces_jobs_without_a_reference_asset() -> None:
+def test_image_bindings_expand_in_profile_order_with_seeds_varying_fastest() -> None:
+    slots = (
+        ImageInputSlot("start", "Start", "1", "image"),
+        ImageInputSlot("end", "End", "2", "image"),
+    )
     plan = compile_batch(
         batch_definition(
             "Prompt",
-            references=(),
-            seeds=SeedInput.explicit((9, 2, 7)),
+            image_slots=slots,
+            image_bindings=(
+                ImageBinding("end", ("X", "Y")),
+                ImageBinding("start", ("A", "B")),
+            ),
+            seeds=SeedInput.explicit((1, 2)),
         )
     )
 
-    assert plan.job_count == 3
-    assert [job.reference_asset_id for job in plan.jobs] == [None, None, None]
-    assert [job.seed for job in plan.jobs] == [9, 2, 7]
+    assert [
+        (
+            tuple(input_.asset_id for input_ in job.resolved_image_inputs),
+            job.seed,
+        )
+        for job in plan.jobs
+    ] == [
+        (("A", "X"), 1),
+        (("A", "X"), 2),
+        (("A", "Y"), 1),
+        (("A", "Y"), 2),
+        (("B", "X"), 1),
+        (("B", "X"), 2),
+        (("B", "Y"), 1),
+        (("B", "Y"), 2),
+    ]
 
 
-def test_reference_selection_asset_id_must_not_be_empty() -> None:
-    with pytest.raises(CompilationError, match="empty asset ID"):
-        compile_batch(batch_definition("Prompt", references=("",)))
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    (
+        (("A",), ("A",)),
+        (("A", "B", "C"), ("A", "B", "C")),
+        ((None, "A"), (None, "A")),
+    ),
+)
+def test_one_image_slot_preserves_ordered_asset_and_base_alternatives(
+    values: tuple[str | None, ...], expected: tuple[str | None, ...]
+) -> None:
+    slot = ImageInputSlot("start", "Start", "1", "image")
+
+    plan = compile_batch(
+        batch_definition(
+            "Prompt",
+            image_slots=(slot,),
+            image_bindings=(ImageBinding("start", values),),
+        )
+    )
+
+    assert tuple(job.resolved_image_inputs[0].asset_id for job in plan.jobs) == expected
+
+
+def test_three_image_slots_are_independent_dimensions() -> None:
+    slots = tuple(
+        ImageInputSlot(key, key.title(), str(index), "image")
+        for index, key in enumerate(("identity", "pose", "style"), 1)
+    )
+
+    plan = compile_batch(
+        batch_definition(
+            "Prompt",
+            image_slots=slots,
+            image_bindings=(
+                ImageBinding("identity", ("i1", "i2")),
+                ImageBinding("pose", ("p1", "p2")),
+                ImageBinding("style", (None, "s1")),
+            ),
+        )
+    )
+
+    assert plan.job_count == 8
+    assert [tuple(value.asset_id for value in job.resolved_image_inputs) for job in plan.jobs] == [
+        ("i1", "p1", None),
+        ("i1", "p1", "s1"),
+        ("i1", "p2", None),
+        ("i1", "p2", "s1"),
+        ("i2", "p1", None),
+        ("i2", "p1", "s1"),
+        ("i2", "p2", None),
+        ("i2", "p2", "s1"),
+    ]
+
+
+def test_image_dimensions_follow_prompt_versions_and_prompt_variables() -> None:
+    slot = ImageInputSlot("source", "Source", "1", "image")
+    plan = compile_batch(
+        batch_definition(
+            "unused",
+            prompt_versions=(
+                PromptVersion("animals", "Animals", "{{animal}}"),
+                PromptVersion("fixed", "Fixed", "Fixed"),
+            ),
+            bindings=(binding("animal", "cat", "dog"),),
+            image_slots=(slot,),
+            image_bindings=(ImageBinding("source", ("A", "B")),),
+        )
+    )
+
+    assert [
+        (job.prompt_version_id, job.resolved_prompt, job.resolved_image_inputs[0].asset_id)
+        for job in plan.jobs
+    ] == [
+        ("animals", "cat", "A"),
+        ("animals", "cat", "B"),
+        ("animals", "dog", "A"),
+        ("animals", "dog", "B"),
+        ("fixed", "Fixed", "A"),
+        ("fixed", "Fixed", "B"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("bindings", "message"),
+    (
+        ((), "missing slots"),
+        ((ImageBinding("unknown", (None,)),), "unknown slots"),
+        ((ImageBinding("pose", ()),), "at least one value"),
+        ((ImageBinding("pose", ("",)),), "blank asset ID"),
+        ((ImageBinding("pose", ("asset", "asset")),), "exact duplicates"),
+        ((ImageBinding("pose", (None, None)),), "exact duplicates"),
+        ((ImageBinding("pose", ("asset", None)),), "Base workflow first"),
+        (
+            (ImageBinding("pose", (None,)), ImageBinding("pose", ("asset",))),
+            "duplicate image binding",
+        ),
+    ),
+)
+def test_image_bindings_must_exactly_match_profile(
+    bindings: tuple[ImageBinding, ...], message: str
+) -> None:
+    slot = ImageInputSlot("pose", "Pose", "1", "image")
+    with pytest.raises(CompilationError, match=message):
+        compile_batch(batch_definition("Prompt", image_slots=(slot,), image_bindings=bindings))
+
+
+def test_same_asset_can_fill_multiple_image_slots() -> None:
+    slots = (
+        ImageInputSlot("identity", "Identity", "1", "image"),
+        ImageInputSlot("pose", "Pose", "2", "image"),
+    )
+
+    job = compile_batch(
+        batch_definition(
+            "Prompt",
+            image_slots=slots,
+            image_bindings=(
+                ImageBinding("pose", ("shared-asset",)),
+                ImageBinding("identity", ("shared-asset",)),
+            ),
+        )
+    ).jobs[0]
+
+    assert job.resolved_image_inputs == (
+        ResolvedImageInput("identity", "shared-asset"),
+        ResolvedImageInput("pose", "shared-asset"),
+    )
+
+
+@pytest.mark.parametrize("key", ("Pose", "pose-slot", "_pose", "pose__image", "pose_"))
+def test_image_slot_keys_use_readable_snake_case(key: str) -> None:
+    slot = ImageInputSlot(key, "Pose", "1", "image")
+
+    with pytest.raises(CompilationError, match="lowercase ASCII snake case"):
+        compile_batch(
+            batch_definition(
+                "Prompt",
+                image_slots=(slot,),
+                image_bindings=(ImageBinding(key, (None,)),),
+            )
+        )
 
 
 def test_explicit_seed_order_is_preserved() -> None:
@@ -319,13 +466,12 @@ def test_job_ordinals_are_one_based_and_contiguous() -> None:
     batch = batch_definition(
         "{{animal}}",
         bindings=(binding("animal", "cat", "dog"),),
-        references=("ref-1", "ref-2"),
         seeds=SeedInput.explicit((1, 2)),
     )
 
     plan = compile_batch(batch)
 
-    assert [job.ordinal for job in plan.jobs] == list(range(1, 9))
+    assert [job.ordinal for job in plan.jobs] == list(range(1, 5))
 
 
 def test_preview_count_and_warnings_match_compilation() -> None:
@@ -335,14 +481,13 @@ def test_preview_count_and_warnings_match_compilation() -> None:
             binding("animal", "cat", "dog"),
             binding("unused", "value"),
         ),
-        references=("ref-1", "ref-2"),
         seeds=SeedInput.explicit((1, 2, 3)),
     )
 
     plan = compile_batch(batch)
     preview = preview_batch(batch)
 
-    assert preview.job_count == plan.job_count == 12
+    assert preview.job_count == plan.job_count == 6
     assert preview.warnings == plan.warnings
 
 
@@ -359,11 +504,30 @@ def test_compilation_rejects_expansion_above_job_limit() -> None:
         compile_batch(batch, max_jobs=8)
 
 
+def test_image_dimensions_use_existing_job_limit_without_materializing_extra_jobs() -> None:
+    slots = (
+        ImageInputSlot("start", "Start", "1", "image"),
+        ImageInputSlot("end", "End", "2", "image"),
+    )
+    batch = batch_definition(
+        "Prompt",
+        image_slots=slots,
+        image_bindings=(
+            ImageBinding("start", ("A", "B")),
+            ImageBinding("end", ("X", "Y")),
+        ),
+        seeds=SeedInput.explicit((1, 2)),
+    )
+
+    assert compile_batch(batch, max_jobs=8).job_count == 8
+    with pytest.raises(CompilationError, match="beyond the maximum of 7 Jobs"):
+        compile_batch(batch, max_jobs=7)
+
+
 def test_compilation_does_not_mutate_input_objects() -> None:
     batch = batch_definition(
         "{{animal}}",
         bindings=(binding("animal", "dog", "cat"),),
-        references=("ref-2", "ref-1"),
         seeds=SeedInput.explicit((8, 3)),
     )
     original = copy.deepcopy(batch)

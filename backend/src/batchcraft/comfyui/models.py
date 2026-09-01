@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -81,6 +82,6 @@ class DownloadedArtifact:
 @dataclass(frozen=True, slots=True)
 class WorkflowPreparationValues:
     prompt: str
-    reference_image: str | None
+    image_inputs: Mapping[str, str]
     seed: int
     output_prefix: str

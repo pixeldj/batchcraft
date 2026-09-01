@@ -12,9 +12,9 @@ from batchcraft.db import (
     PromptStore,
     SavedBatchConflictError,
     SavedBatchDefinition,
+    SavedBatchImageBinding,
     SavedBatchIntegrityError,
     SavedBatchPromptSelection,
-    SavedBatchReferenceSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
     SavedBatchStore,
@@ -35,7 +35,10 @@ NOW = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 def _workflow() -> dict[str, object]:
     return {
         "7": {"class_type": "KSampler", "inputs": {"seed": 1}},
-        "25": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+        "25": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "input.png", "mask": "mask.png"},
+        },
         "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
         "41": {"class_type": "SaveImage", "inputs": {"filename_prefix": "original"}},
     }
@@ -44,11 +47,6 @@ def _workflow() -> dict[str, object]:
 def _mappings() -> dict[str, object]:
     return {
         "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-        "reference_image": {
-            "node_id": "25",
-            "input_name": "image",
-            "value_type": "image",
-        },
         "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
         "output_prefix": {
             "node_id": "41",
@@ -56,6 +54,13 @@ def _mappings() -> dict[str, object]:
             "value_type": "string",
         },
     }
+
+
+def _image_inputs() -> list[object]:
+    return [
+        {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"},
+        {"key": "mask", "label": "Mask", "node_id": "25", "input_name": "mask"},
+    ]
 
 
 def _database(tmp_path: Path) -> Path:
@@ -98,6 +103,7 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
         "Profile",
         version.id,
         _mappings(),
+        _image_inputs(),
         profile_id=f"profile-{project_id}",
         version_id=f"profile-version-{project_id}",
     )
@@ -113,9 +119,9 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
             SavedBatchVariableBinding("subject", ("dog", "cat")),
             SavedBatchVariableBinding("style", ("",)),
         ),
-        reference_selections=(
-            SavedBatchReferenceSelection("asset-2"),
-            SavedBatchReferenceSelection("asset-1"),
+        image_bindings=(
+            SavedBatchImageBinding("reference", (None, "asset-2", "asset-1")),
+            SavedBatchImageBinding("mask", ("asset-mask-2", "asset-mask-1")),
         ),
         selected_workflow_version=SavedBatchWorkflowVersionSnapshot(
             version.id, version.content_sha256, version.workflow
@@ -171,7 +177,7 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
         "prompt-version-project-1-1",
     )
     assert saved.variable_bindings == definition.variable_bindings
-    assert saved.reference_selections == definition.reference_selections
+    assert saved.image_bindings == definition.image_bindings
     assert saved.selected_workflow_version is not None
     assert definition.selected_workflow_version is not None
     assert saved.selected_workflow_version.id == definition.selected_workflow_version.id
@@ -203,8 +209,27 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
             ("batch-complete", 1, "subject", '["dog","cat"]\n'),
             ("batch-complete", 2, "style", '[""]\n'),
         ]
+        assert connection.execute(
+            "SELECT position, slot_key FROM batch_image_binding "
+            "WHERE batch_id = 'batch-complete' ORDER BY position"
+        ).fetchall() == [(1, "reference"), (2, "mask")]
+        assert connection.execute(
+            "SELECT binding_position, value_position, asset_id "
+            "FROM batch_image_binding_value WHERE batch_id = 'batch-complete' "
+            "ORDER BY binding_position, value_position"
+        ).fetchall() == [
+            (1, 1, None),
+            (1, 2, "asset-2"),
+            (1, 3, "asset-1"),
+            (2, 1, "asset-mask-2"),
+            (2, 2, "asset-mask-1"),
+        ]
 
-    logical_profile_only = replace(definition, selected_workflow_profile_version=None)
+    logical_profile_only = replace(
+        definition,
+        image_bindings=(),
+        selected_workflow_profile_version=None,
+    )
     saved_without_profile_version = SavedBatchStore(path).create(
         "project-1",
         "logical_profile_only",
@@ -271,6 +296,51 @@ def test_saved_batch_reads_reject_invalid_binding_values(
 
     with pytest.raises(SavedBatchStoreError, match=message):
         store.get("invalid-batch")
+
+
+@pytest.mark.parametrize(
+    "slot_key", ("Reference", "reference-slot", "_reference", "reference__slot")
+)
+def test_saved_batch_rejects_invalid_image_binding_keys(tmp_path: Path, slot_key: str) -> None:
+    path = _database(tmp_path)
+    definition = SavedBatchDefinition(
+        "Invalid",
+        None,
+        SavedBatchSeedIntent.fixed(1),
+        image_bindings=(SavedBatchImageBinding(slot_key, ()),),
+    )
+
+    with pytest.raises(SavedBatchValidationError, match="lowercase ASCII snake case"):
+        SavedBatchStore(path).create("project-1", "invalid", definition)
+
+
+def test_saved_batch_rejects_zero_value_image_binding(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    definition = SavedBatchDefinition(
+        "Draft",
+        None,
+        SavedBatchSeedIntent.fixed(1),
+        image_bindings=(SavedBatchImageBinding("reference", ()),),
+    )
+
+    with pytest.raises(SavedBatchValidationError, match="at least one"):
+        SavedBatchStore(path).create("project-1", "draft_images", definition)
+
+
+@pytest.mark.parametrize("values", (("asset", "asset"), (None, None)))
+def test_saved_batch_rejects_duplicate_image_binding_values(
+    tmp_path: Path, values: tuple[str | None, ...]
+) -> None:
+    path = _database(tmp_path)
+    definition = SavedBatchDefinition(
+        "Draft",
+        None,
+        SavedBatchSeedIntent.fixed(1),
+        image_bindings=(SavedBatchImageBinding("reference", values),),
+    )
+
+    with pytest.raises(SavedBatchValidationError, match="exact duplicates"):
+        SavedBatchStore(path).create("project-1", "duplicate_images", definition)
 
 
 def test_update_is_atomic_increments_revision_and_rejects_stale_concurrent_saves(
@@ -392,4 +462,7 @@ def test_database_child_constraints_cascade_only_with_batch(tmp_path: Path) -> N
         connection.execute("DELETE FROM batch WHERE id = 'batch-1'")
         assert connection.execute(
             "SELECT count(*) FROM batch_variable_binding WHERE batch_id = 'batch-1'"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM batch_image_binding WHERE batch_id = 'batch-1'"
         ).fetchone() == (0,)

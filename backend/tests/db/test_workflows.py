@@ -33,11 +33,6 @@ def _workflow(seed_input: str = "seed") -> dict[str, object]:
 def _mappings(seed_input: str = "seed") -> dict[str, object]:
     return {
         "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-        "reference_image": {
-            "node_id": "25",
-            "input_name": "image",
-            "value_type": "image",
-        },
         "seed": {"node_id": "7", "input_name": seed_input, "value_type": "integer"},
         "output_prefix": {
             "node_id": "41",
@@ -45,6 +40,10 @@ def _mappings(seed_input: str = "seed") -> dict[str, object]:
             "value_type": "string",
         },
     }
+
+
+def _image_inputs() -> list[object]:
+    return [{"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"}]
 
 
 def _database(tmp_path: Path) -> Path:
@@ -130,6 +129,7 @@ def test_profile_versions_validate_exact_target_and_list_latest_compatible(
         "Profile",
         target_one.id,
         _mappings(),
+        _image_inputs(),
         profile_id="profile-1",
         version_id="profile-version-1",
     )
@@ -138,12 +138,14 @@ def test_profile_versions_validate_exact_target_and_list_latest_compatible(
         profile.id,
         target_one.id,
         _mappings(),
+        _image_inputs(),
         version_id="profile-version-2",
     )
     compatible_two = profiles.create_version(
         profile.id,
         target_two.id,
         _mappings("noise_seed"),
+        _image_inputs(),
         version_id="profile-version-3",
     )
 
@@ -152,11 +154,13 @@ def test_profile_versions_validate_exact_target_and_list_latest_compatible(
         "id": profile.id,
         "name": "Profile",
         "mappings": _mappings(),
+        "image_inputs": _image_inputs(),
     }
     assert duplicate.profile == {
         "id": profile.id,
         "name": "Renamed Profile",
         "mappings": _mappings(),
+        "image_inputs": _image_inputs(),
     }
     assert duplicate.content_sha256 != first.content_sha256
     assert duplicate.name_snapshot == "Renamed Profile"
@@ -173,15 +177,15 @@ def test_profile_versions_validate_exact_target_and_list_latest_compatible(
     assert no_compatible_version[0].latest_compatible_version is None
 
     with pytest.raises(WorkflowProfileValidationError, match="missing input 'seed'"):
-        profiles.create_version(profile.id, target_two.id, _mappings())
+        profiles.create_version(profile.id, target_two.id, _mappings(), _image_inputs())
     with pytest.raises(WorkflowProfileOwnershipError):
-        profiles.create_version(profile.id, foreign_target.id, _mappings())
+        profiles.create_version(profile.id, foreign_target.id, _mappings(), _image_inputs())
 
     profiles.archive_version(compatible_two.id)
     assert profiles.list("workflow-1")[0].latest_compatible_version == duplicate
 
 
-def test_profile_version_persists_without_reference_image_mapping(tmp_path: Path) -> None:
+def test_profile_version_persists_without_image_inputs(tmp_path: Path) -> None:
     path = _database(tmp_path)
     workflows = WorkflowStore(path, clock=lambda: NOW)
     _, target = workflows.create(
@@ -192,18 +196,19 @@ def test_profile_version_persists_without_reference_image_mapping(tmp_path: Path
         version_id="workflow-version-1",
     )
     mappings = _mappings()
-    mappings.pop("reference_image")
 
     _, version = WorkflowProfileStore(path, clock=lambda: NOW).create(
         "workflow-1",
         "Text only",
         target.id,
         mappings,
+        [],
         profile_id="profile-1",
         version_id="profile-version-1",
     )
 
     assert version.profile["mappings"] == mappings
+    assert version.profile["image_inputs"] == []
 
 
 def test_database_enforces_profile_project_target_and_version_immutability(
@@ -224,6 +229,7 @@ def test_database_enforces_profile_project_target_and_version_immutability(
         "Profile",
         target.id,
         _mappings(),
+        _image_inputs(),
         profile_id="profile-1",
         version_id="profile-version-1",
     )

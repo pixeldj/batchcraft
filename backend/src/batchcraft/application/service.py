@@ -124,8 +124,11 @@ class BatchcraftService:
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    def preview_batch(self, creation: RunCreationInput) -> CompiledRunPlan:
-        return self._compile_and_validate(creation)
+    def preview_batch(
+        self, creation: RunCreationInput
+    ) -> tuple[CompiledRunPlan, dict[str, AssetRecord]]:
+        plan = self._compile_and_validate(creation)
+        return plan, self._resolve_assets(creation.project.filesystem_key, plan)
 
     def list_project_assets(self, project_filesystem_key: str) -> tuple[AssetRecord, ...]:
         store = self._project_asset_store(project_filesystem_key)
@@ -197,7 +200,7 @@ class BatchcraftService:
                 batch=creation.batch,
                 batch_snapshot=creation.batch_snapshot,
                 plan=plan,
-                reference_assets=assets,
+                image_assets=assets,
                 workflow=creation.workflow,
                 workflow_profile=creation.workflow_profile,
             )
@@ -218,11 +221,11 @@ class BatchcraftService:
             creation.workflow_profile,
             WorkflowPreparationValues(
                 prompt=first_job.resolved_prompt,
-                reference_image=(
-                    "batchcraft-validation-reference.png"
-                    if first_job.reference_asset_id is not None
-                    else None
-                ),
+                image_inputs={
+                    item.slot_key: "batchcraft-validation-image.png"
+                    for item in first_job.resolved_image_inputs
+                    if item.asset_id is not None
+                },
                 seed=first_job.seed,
                 output_prefix="batchcraft/validation",
             ),
@@ -364,7 +367,12 @@ class BatchcraftService:
     def _resolve_assets(
         self, project_filesystem_key: str, plan: CompiledRunPlan
     ) -> dict[str, AssetRecord]:
-        needed = {job.reference_asset_id for job in plan.jobs if job.reference_asset_id is not None}
+        needed = {
+            item.asset_id
+            for job in plan.jobs
+            for item in job.resolved_image_inputs
+            if item.asset_id is not None
+        }
         if not needed:
             return {}
         project_path = self.projects_root / project_filesystem_key

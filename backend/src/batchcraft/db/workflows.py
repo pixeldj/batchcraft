@@ -1,7 +1,7 @@
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -352,6 +352,7 @@ class WorkflowProfileStore:
         name: str,
         workflow_version_id: str,
         mappings: Mapping[str, object],
+        image_inputs: Sequence[object],
         *,
         description: str | None = None,
         note: str | None = None,
@@ -380,7 +381,9 @@ class WorkflowProfileStore:
                 connection.execute("BEGIN IMMEDIATE")
                 parent_workflow = _profile_workflow(connection, workflow_id)
                 target = _profile_target(connection, workflow_version_id, workflow_id)
-                canonical, digest = _canonical_profile(profile_id, name, mappings, target.workflow)
+                canonical, digest = _canonical_profile(
+                    profile_id, name, mappings, image_inputs, target.workflow
+                )
                 _check_logical_conflict(
                     connection,
                     table="workflow_profile",
@@ -563,6 +566,7 @@ class WorkflowProfileStore:
         profile_id: str,
         workflow_version_id: str,
         mappings: Mapping[str, object],
+        image_inputs: Sequence[object],
         *,
         note: str | None = None,
         version_id: str | None = None,
@@ -592,7 +596,7 @@ class WorkflowProfileStore:
                     profile_id,
                 )
                 canonical, digest = _canonical_profile(
-                    profile.id, profile.name, mappings, target.workflow
+                    profile.id, profile.name, mappings, image_inputs, target.workflow
                 )
                 _insert_profile_version(
                     connection,
@@ -648,10 +652,16 @@ def _canonical_profile(
     profile_id: str,
     name: str,
     mappings: Mapping[str, object],
+    image_inputs: Sequence[object],
     workflow: Mapping[str, object],
 ) -> tuple[str, str]:
     try:
-        profile = {"id": profile_id, "name": name, "mappings": dict(mappings)}
+        profile = {
+            "id": profile_id,
+            "name": name,
+            "mappings": dict(mappings),
+            "image_inputs": list(image_inputs),
+        }
         validate_workflow_profile(workflow, profile)
         return _canonical(profile)
     except (WorkflowPreparationError, ValueError) as error:

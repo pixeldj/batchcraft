@@ -4,13 +4,12 @@ from typing import cast
 
 from batchcraft.comfyui.errors import WorkflowPreparationError
 from batchcraft.comfyui.models import WorkflowPreparationValues
+from batchcraft.domain.image_slots import validate_image_input_slot_key
 
 _REQUIRED_FRIENDLY_VALUES = ("prompt", "seed", "output_prefix")
-_OPTIONAL_FRIENDLY_VALUES = ("reference_image",)
-_FRIENDLY_VALUES = (*_REQUIRED_FRIENDLY_VALUES, *_OPTIONAL_FRIENDLY_VALUES)
+_FRIENDLY_VALUES = _REQUIRED_FRIENDLY_VALUES
 _EXPECTED_VALUE_TYPES = {
     "prompt": "string",
-    "reference_image": "image",
     "seed": "integer",
     "output_prefix": "string",
 }
@@ -23,8 +22,13 @@ def prepare_workflow(
 ) -> dict[str, object]:
     if "{{" in values.prompt or "}}" in values.prompt:
         raise WorkflowPreparationError("resolved prompt contains an unresolved placeholder")
-    if values.reference_image == "":
-        raise WorkflowPreparationError("uploaded reference image value must not be empty")
+    for key, value in values.image_inputs.items():
+        try:
+            validate_image_input_slot_key(key)
+        except ValueError as error:
+            raise WorkflowPreparationError(str(error)) from error
+        if not isinstance(value, str) or not value:
+            raise WorkflowPreparationError("uploaded image input values must not be empty")
     if not isinstance(values.seed, int) or isinstance(values.seed, bool):
         raise WorkflowPreparationError("seed must be an integer")
     if not values.output_prefix:
@@ -35,13 +39,14 @@ def prepare_workflow(
     workflow = copy.deepcopy(dict(base_workflow))
     profile = copy.deepcopy(dict(workflow_profile))
     mappings = _required_object(profile, "mappings", "Workflow Profile")
-    if values.reference_image is not None and "reference_image" not in mappings:
-        raise WorkflowPreparationError(
-            "selected Reference Assets require a Workflow Profile reference_image mapping"
-        )
-    friendly_values: dict[str, str | int | None] = {
+    image_inputs = workflow_profile_image_inputs(profile)
+    known_slot_keys = {slot[0] for slot in image_inputs}
+    unknown_runtime_keys = set(values.image_inputs) - known_slot_keys
+    if unknown_runtime_keys:
+        names = ", ".join(repr(key) for key in sorted(unknown_runtime_keys))
+        raise WorkflowPreparationError(f"uploaded image inputs contain unknown slot keys: {names}")
+    friendly_values: dict[str, str | int] = {
         "prompt": values.prompt,
-        "reference_image": values.reference_image,
         "seed": values.seed,
         "output_prefix": values.output_prefix,
     }
@@ -51,9 +56,13 @@ def prepare_workflow(
         input_name = _required_string(mapping, "input_name", friendly_name)
         node_object = cast(dict[str, object], workflow[node_id])
         input_object = cast(dict[str, object], node_object["inputs"])
-        value = friendly_values[friendly_name]
-        if friendly_name != "reference_image" or value is not None:
-            input_object[input_name] = value
+        friendly_value = friendly_values[friendly_name]
+        input_object[input_name] = friendly_value
+    for slot_key, _label, node_id, input_name in image_inputs:
+        image_value = values.image_inputs.get(slot_key)
+        if image_value is not None:
+            node_object = cast(dict[str, object], workflow[node_id])
+            cast(dict[str, object], node_object["inputs"])[input_name] = image_value
 
     return workflow
 
@@ -138,6 +147,66 @@ def validate_workflow_profile(
                 f"Workflow Profile mapping {friendly_name!r} targets connected input "
                 f"{input_name!r} on node {node_id!r}; mappings must target literal input values"
             )
+    for slot_key, _label, node_id, input_name in workflow_profile_image_inputs(workflow_profile):
+        target = (node_id, input_name)
+        if target in used_targets:
+            raise WorkflowPreparationError(
+                f"Workflow Profile maps multiple inputs to node {node_id!r} input {input_name!r}"
+            )
+        used_targets.add(target)
+        node = workflow.get(node_id)
+        if not isinstance(node, dict):
+            raise WorkflowPreparationError(
+                f"Workflow Profile image input {slot_key!r} references missing node {node_id!r}"
+            )
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or input_name not in inputs:
+            raise WorkflowPreparationError(
+                f"Workflow Profile image input {slot_key!r} references missing input "
+                f"{input_name!r} on node {node_id!r}"
+            )
+        if _is_connection_value(inputs[input_name]):
+            raise WorkflowPreparationError(
+                f"Workflow Profile image input {slot_key!r} targets connected input"
+            )
+
+
+def workflow_profile_image_inputs(
+    profile: Mapping[str, object],
+) -> tuple[tuple[str, str, str, str], ...]:
+    raw = profile.get("image_inputs")
+    if not isinstance(raw, list):
+        raise WorkflowPreparationError("Workflow Profile must define an 'image_inputs' array")
+    slots: list[tuple[str, str, str, str]] = []
+    keys: set[str] = set()
+    for value in raw:
+        if not isinstance(value, dict) or set(value) != {"key", "label", "node_id", "input_name"}:
+            raise WorkflowPreparationError(
+                "Workflow Profile image inputs must contain exactly key, label, node_id, and input_name"
+            )
+        try:
+            key = validate_image_input_slot_key(value.get("key"))
+        except ValueError as error:
+            raise WorkflowPreparationError(str(error)) from error
+        if key in keys:
+            raise WorkflowPreparationError(f"duplicate Workflow Profile image input key: {key!r}")
+        keys.add(key)
+        label = value.get("label")
+        node_id = value.get("node_id")
+        input_name = value.get("input_name")
+        if not isinstance(label, str) or not label.strip():
+            raise WorkflowPreparationError(f"Workflow Profile image input {key!r} needs a label")
+        if (
+            not isinstance(node_id, str)
+            or not node_id
+            or not isinstance(input_name, str)
+            or not input_name
+        ):
+            raise WorkflowPreparationError(
+                f"Workflow Profile image input {key!r} has an invalid target"
+            )
+        slots.append((key, label, node_id, input_name))
+    return tuple(slots)
 
 
 def _required_object(data: Mapping[str, object], name: str, context: str) -> dict[str, object]:

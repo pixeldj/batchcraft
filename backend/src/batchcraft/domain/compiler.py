@@ -1,6 +1,7 @@
 import re
 from itertools import product
 
+from batchcraft.domain.image_slots import validate_image_input_slot_key
 from batchcraft.domain.models import (
     BatchDefinition,
     CompilationPreview,
@@ -8,6 +9,7 @@ from batchcraft.domain.models import (
     CompilationWarningCode,
     CompiledJob,
     CompiledRunPlan,
+    ResolvedImageInput,
     ResolvedVariable,
     SeedMode,
     VariableBinding,
@@ -116,10 +118,57 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                 f"PromptVersion {prompt_version.id!r} has bindings with no values: {names}"
             )
 
-    for reference in batch.references:
-        if not reference.asset_id:
-            raise CompilationError("reference selection has an empty asset ID")
-    references = batch.references or (None,)
+    slot_keys: list[str] = []
+    for slot in batch.image_input_slots:
+        try:
+            validate_image_input_slot_key(slot.key)
+        except ValueError as error:
+            raise CompilationError(str(error)) from error
+        if slot.key in slot_keys:
+            raise CompilationError(f"duplicate image input slot key: {slot.key!r}")
+        if not slot.label.strip() or not slot.node_id or not slot.input_name:
+            raise CompilationError(f"image input slot {slot.key!r} has incomplete metadata")
+        slot_keys.append(slot.key)
+
+    bindings_by_slot: dict[str, tuple[str | None, ...]] = {}
+    for image_binding in batch.image_bindings:
+        try:
+            validate_image_input_slot_key(image_binding.slot_key)
+        except ValueError as error:
+            raise CompilationError(str(error)) from error
+        if image_binding.slot_key in bindings_by_slot:
+            raise CompilationError(f"duplicate image binding for slot {image_binding.slot_key!r}")
+        if not image_binding.values:
+            raise CompilationError(
+                f"image binding for slot {image_binding.slot_key!r} must contain at least one value"
+            )
+        if any(
+            asset_id is not None and (not isinstance(asset_id, str) or not asset_id.strip())
+            for asset_id in image_binding.values
+        ):
+            raise CompilationError(
+                f"image binding for slot {image_binding.slot_key!r} has a blank asset ID"
+            )
+        if len(set(image_binding.values)) != len(image_binding.values):
+            raise CompilationError(
+                f"image binding for slot {image_binding.slot_key!r} contains exact duplicates"
+            )
+        if None in image_binding.values and image_binding.values[0] is not None:
+            raise CompilationError(
+                f"image binding for slot {image_binding.slot_key!r} must place Base workflow first"
+            )
+        bindings_by_slot[image_binding.slot_key] = image_binding.values
+    unknown_slots = set(bindings_by_slot) - set(slot_keys)
+    missing_slots = set(slot_keys) - set(bindings_by_slot)
+    if unknown_slots:
+        raise CompilationError(
+            f"image bindings contain unknown slots: {', '.join(sorted(unknown_slots))}"
+        )
+    if missing_slots:
+        raise CompilationError(
+            f"image bindings are missing slots: {', '.join(sorted(missing_slots))}"
+        )
+    image_axes = tuple(bindings_by_slot[key] for key in slot_keys)
 
     seeds = _seed_values(batch)
     if max_jobs is not None:
@@ -127,7 +176,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             raise CompilationError("maximum Job count must not be negative")
         expected_jobs = 0
         for placeholder_names in prompt_placeholders:
-            prompt_jobs = len(references) * len(seeds)
+            prompt_jobs = len(seeds)
             remaining_jobs = max_jobs - expected_jobs
             if prompt_jobs > remaining_jobs:
                 raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
@@ -136,6 +185,10 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                 if prompt_jobs > remaining_jobs // value_count:
                     raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
                 prompt_jobs *= value_count
+            for image_axis in image_axes:
+                if prompt_jobs > remaining_jobs // len(image_axis):
+                    raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+                prompt_jobs *= len(image_axis)
             expected_jobs += prompt_jobs
 
     globally_used_placeholders = {
@@ -168,7 +221,11 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             resolved_variables = tuple(
                 ResolvedVariable(name=name, value=assignments[name]) for name in placeholder_names
             )
-            for selected_reference in references:
+            for image_values in product(*image_axes):
+                resolved_image_inputs = tuple(
+                    ResolvedImageInput(slot_key=key, asset_id=asset_id)
+                    for key, asset_id in zip(slot_keys, image_values, strict=True)
+                )
                 for seed in seeds:
                     jobs.append(
                         CompiledJob(
@@ -176,17 +233,14 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                             prompt_version_id=prompt_version.id,
                             resolved_prompt=resolved_prompt,
                             resolved_variables=resolved_variables,
-                            reference_asset_id=(
-                                selected_reference.asset_id
-                                if selected_reference is not None
-                                else None
-                            ),
+                            resolved_image_inputs=resolved_image_inputs,
                             seed=seed,
                         )
                     )
 
     return CompiledRunPlan(
         prompt_versions=batch.prompt_versions,
+        image_input_slots=batch.image_input_slots,
         jobs=tuple(jobs),
         warnings=warnings,
     )

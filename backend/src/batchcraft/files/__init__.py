@@ -11,6 +11,7 @@ from batchcraft.files.models import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
+    PersistedImageInput,
     PersistedJob,
     ProjectIdentity,
     PublishedRun,
@@ -22,7 +23,7 @@ from batchcraft.files.project_owners import (
     ProjectOwnerStore,
 )
 from batchcraft.files.runs import RunFilesystemStore, RunStoreError
-from batchcraft.files.snapshots import BatchSnapshotV2
+from batchcraft.files.snapshots import BatchSnapshotV3
 
 __all__ = [
     "AdoptableProject",
@@ -30,12 +31,13 @@ __all__ = [
     "AssetRecord",
     "AssetStoreError",
     "BatchIdentity",
-    "BatchSnapshotV2",
+    "BatchSnapshotV3",
     "BatchOwnerDiscoveryError",
     "BatchOwnerError",
     "BatchOwnerMissingError",
     "BatchOwnerStore",
     "PersistedJob",
+    "PersistedImageInput",
     "ProjectAssetStore",
     "ProjectIdentity",
     "ProjectOwnerError",

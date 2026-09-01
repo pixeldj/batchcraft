@@ -191,31 +191,39 @@ async def _execute_job(
     state = _persist_job(run, store, state, preparing)
 
     try:
-        reference_image = None
-        if persisted_job.reference_asset is not None:
-            asset = ProjectAssetStore(run.path.parents[2]).validate_record(
-                persisted_job.reference_asset
-            )
+        uploaded_image_inputs: dict[str, str] = {}
+        if tuple(item.slot_key for item in persisted_job.image_inputs) != tuple(
+            item.slot_key for item in persisted_job.compiled_job.resolved_image_inputs
+        ):
+            raise RunExecutionError("persisted image inputs do not match the compiled Job")
+        for position, image_input in enumerate(persisted_job.image_inputs, start=1):
+            if image_input.asset is None:
+                continue
+            asset = ProjectAssetStore(run.path.parents[2]).validate_record(image_input.asset)
             asset_path = run.path.parents[2] / asset.stored_path
             content = asset_path.read_bytes()
-            reference_filename = (
-                f"reference{safe_extension(asset.original_filename, asset.mime_type)}"
+            image_filename = (
+                f"{position:02d}-{image_input.slot_key}"
+                f"{safe_extension(asset.original_filename, asset.mime_type)}"
             )
             uploaded = await client.upload_input(
-                filename=reference_filename,
+                filename=image_filename,
                 content=content,
                 mime_type=asset.mime_type
-                or mimetypes.guess_type(reference_filename)[0]
+                or mimetypes.guess_type(image_filename)[0]
                 or "application/octet-stream",
-                subfolder=f"batchcraft/{run.run_id}/{persisted_job.job_id}/input",
+                subfolder=(
+                    f"batchcraft/{run.run_id}/{persisted_job.job_id}/input/"
+                    f"{position:02d}-{image_input.slot_key}"
+                ),
             )
-            reference_image = uploaded.workflow_value
+            uploaded_image_inputs[image_input.slot_key] = uploaded.workflow_value
         prepared = workflow_preparer(
             run.workflow,
             run.workflow_profile,
             WorkflowPreparationValues(
                 prompt=persisted_job.compiled_job.resolved_prompt,
-                reference_image=reference_image,
+                image_inputs=uploaded_image_inputs,
                 seed=persisted_job.compiled_job.seed,
                 output_prefix=f"batchcraft/{run.run_id}/{persisted_job.job_id}/result",
             ),

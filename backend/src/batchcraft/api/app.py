@@ -659,6 +659,7 @@ def create_app(
             description=request.description,
             workflow_version_id=request.workflow_version_id,
             mappings=request.mappings,
+            image_inputs=request.image_inputs,
             note=request.note,
         )
         return WorkflowProfileCreatedResponse(
@@ -735,6 +736,7 @@ def create_app(
             profile_id,
             workflow_version_id=request.workflow_version_id,
             mappings=request.mappings,
+            image_inputs=request.image_inputs,
             note=request.note,
         )
         return WorkflowProfileVersionResponse.from_record(version)
@@ -809,7 +811,8 @@ def create_app(
         service: ServiceDependency,
     ) -> PreviewResponse:
         creation = request.to_creation_input()
-        return PreviewResponse.from_plan(service.preview_batch(creation))
+        plan, image_assets = service.preview_batch(creation)
+        return PreviewResponse.from_plan(plan, image_assets)
 
     @app.post(
         "/api/runs",

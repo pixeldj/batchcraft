@@ -1,4 +1,9 @@
 from batchcraft.domain.compiler import CompilationError, compile_batch, preview_batch
+from batchcraft.domain.image_slots import (
+    IMAGE_INPUT_SLOT_KEY_PATTERN,
+    is_valid_image_input_slot_key,
+    validate_image_input_slot_key,
+)
 from batchcraft.domain.models import (
     BatchDefinition,
     CompilationPreview,
@@ -6,8 +11,10 @@ from batchcraft.domain.models import (
     CompilationWarningCode,
     CompiledJob,
     CompiledRunPlan,
+    ImageBinding,
+    ImageInputSlot,
     PromptVersion,
-    ReferenceSelection,
+    ResolvedImageInput,
     ResolvedVariable,
     SeedInput,
     SeedMode,
@@ -23,11 +30,16 @@ __all__ = [
     "CompiledJob",
     "CompiledRunPlan",
     "PromptVersion",
-    "ReferenceSelection",
+    "ImageBinding",
+    "ImageInputSlot",
     "ResolvedVariable",
+    "ResolvedImageInput",
     "SeedInput",
     "SeedMode",
     "VariableBinding",
     "compile_batch",
     "preview_batch",
+    "IMAGE_INPUT_SLOT_KEY_PATTERN",
+    "is_valid_image_input_slot_key",
+    "validate_image_input_slot_key",
 ]

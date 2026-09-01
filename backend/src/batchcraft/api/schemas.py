@@ -6,6 +6,7 @@ from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
+from batchcraft.comfyui import workflow_profile_image_inputs
 from batchcraft.db import (
     ProjectRecord,
     PromptListRecord,
@@ -13,9 +14,9 @@ from batchcraft.db import (
     PromptVersionRecord,
     SavedBatchDefinition,
     SavedBatchDetailRecord,
+    SavedBatchImageBinding,
     SavedBatchListRecord,
     SavedBatchPromptSelection,
-    SavedBatchReferenceSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
     SavedBatchVariableBinding,
@@ -33,8 +34,9 @@ from batchcraft.domain import (
     CompilationWarning,
     CompiledJob,
     CompiledRunPlan,
+    ImageBinding,
+    ImageInputSlot,
     PromptVersion,
-    ReferenceSelection,
     SeedInput,
     SeedMode,
     VariableBinding,
@@ -45,7 +47,7 @@ from batchcraft.files import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
-    BatchSnapshotV2,
+    BatchSnapshotV3,
     ProjectIdentity,
     PublishedRun,
 )
@@ -72,8 +74,14 @@ class VariableBindingRequest(ApiModel):
     values: list[str]
 
 
-class ReferenceRequest(ApiModel):
-    asset_id: str = Field(min_length=1)
+class ImageBindingRequest(ApiModel):
+    slot_key: str
+    values: list[str | None] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self) -> Self:
+        _validate_image_binding_values(self.values)
+        return self
 
 
 SafeSeed = Annotated[int, Field(strict=True, ge=0, le=2**53 - 1)]
@@ -89,11 +97,11 @@ class BatchRequest(ApiModel):
     batch: IdentityRequest
     prompt_versions: list[PromptVersionRequest] = Field(min_length=1)
     variable_bindings: list[VariableBindingRequest] = Field(default_factory=list)
-    references: list[ReferenceRequest]
+    image_bindings: list[ImageBindingRequest]
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
-    batch_snapshot: BatchSnapshotV2
+    batch_snapshot: BatchSnapshotV3
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
@@ -130,10 +138,10 @@ class BatchRequest(ApiModel):
         ]
         if snapshot_bindings != request_bindings:
             raise ValueError("Batch snapshot variable bindings do not match")
-        if [item.asset_id for item in snapshot.references] != [
-            item.asset_id for item in self.references
+        if [(item.slot_key, item.values) for item in snapshot.image_bindings] != [
+            (item.slot_key, item.values) for item in self.image_bindings
         ]:
-            raise ValueError("Batch snapshot Reference Asset order does not match")
+            raise ValueError("Batch snapshot image bindings do not match")
         workflow = snapshot.workflow_selection
         if workflow.workflow != self.workflow or workflow.workflow_profile != self.workflow_profile:
             raise ValueError("Batch snapshot Workflow selection does not match")
@@ -172,8 +180,15 @@ class BatchRequest(ApiModel):
                     )
                     for binding in self.variable_bindings
                 ),
-                references=tuple(
-                    ReferenceSelection(asset_id=reference.asset_id) for reference in self.references
+                image_input_slots=tuple(
+                    ImageInputSlot(key=key, label=label, node_id=node_id, input_name=input_name)
+                    for key, label, node_id, input_name in _profile_image_inputs(
+                        self.workflow_profile
+                    )
+                ),
+                image_bindings=tuple(
+                    ImageBinding(slot_key=binding.slot_key, values=tuple(binding.values))
+                    for binding in self.image_bindings
                 ),
                 seeds=SeedInput(mode=self.seeds.mode, values=tuple(self.seeds.values)),
             ),
@@ -276,8 +291,14 @@ class SavedBatchVariableBindingRequest(ApiModel):
     values: list[str]
 
 
-class SavedBatchReferenceSelectionRequest(ApiModel):
-    asset_id: str = Field(min_length=1)
+class SavedBatchImageBindingRequest(ApiModel):
+    slot_key: str
+    values: list[str | None] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self) -> Self:
+        _validate_image_binding_values(self.values)
+        return self
 
 
 class SavedBatchSeedIntentRequest(ApiModel):
@@ -332,7 +353,7 @@ class SavedBatchDefinitionRequest(ApiModel):
     description: str | None = None
     prompt_selections: list[SavedBatchPromptSelectionRequest] = Field(default_factory=list)
     variable_bindings: list[SavedBatchVariableBindingRequest] = Field(default_factory=list)
-    reference_selections: list[SavedBatchReferenceSelectionRequest] = Field(default_factory=list)
+    image_bindings: list[SavedBatchImageBindingRequest] = Field(default_factory=list)
     seed_intent: SavedBatchSeedIntentRequest
     selected_workflow_version: SavedBatchWorkflowVersionRequest | None = None
     selected_workflow_profile_id: str | None = Field(default=None, min_length=1)
@@ -371,8 +392,9 @@ class SavedBatchDefinitionRequest(ApiModel):
                 )
                 for item in self.variable_bindings
             ),
-            reference_selections=tuple(
-                SavedBatchReferenceSelection(item.asset_id) for item in self.reference_selections
+            image_bindings=tuple(
+                SavedBatchImageBinding(item.slot_key, tuple(item.values))
+                for item in self.image_bindings
             ),
             selected_workflow_version=(
                 None
@@ -443,7 +465,7 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
     created_at: datetime
     prompt_selections: list[SavedBatchPromptSelectionRequest]
     variable_bindings: list[SavedBatchVariableBindingRequest]
-    reference_selections: list[SavedBatchReferenceSelectionRequest]
+    image_bindings: list[SavedBatchImageBindingRequest]
     selected_workflow_version: SavedBatchWorkflowVersionRequest | None
     selected_workflow_profile_name: str | None
     selected_workflow_profile_archived_at: datetime | None
@@ -472,7 +494,10 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
                     }
                     for item in batch.variable_bindings
                 ],
-                "reference_selections": [asdict(item) for item in batch.reference_selections],
+                "image_bindings": [
+                    {"slot_key": item.slot_key, "values": list(item.values)}
+                    for item in batch.image_bindings
+                ],
                 "selected_workflow_version": (
                     None
                     if batch.selected_workflow_version is None
@@ -704,6 +729,7 @@ class WorkflowProfileCreateRequest(ApiModel):
     description: str | None = None
     workflow_version_id: str = Field(min_length=1)
     mappings: dict[str, object]
+    image_inputs: list[dict[str, object]] = Field(default_factory=list)
     note: str | None = None
 
 
@@ -723,6 +749,7 @@ class WorkflowProfileUpdateRequest(ApiModel):
 class WorkflowProfileVersionCreateRequest(ApiModel):
     workflow_version_id: str = Field(min_length=1)
     mappings: dict[str, object]
+    image_inputs: list[dict[str, object]] = Field(default_factory=list)
     note: str | None = None
 
 
@@ -852,17 +879,30 @@ class ResolvedVariableResponse(ApiModel):
     value: str
 
 
+class ResolvedImageInputResponse(ApiModel):
+    slot_key: str
+    label: str
+    asset_id: str | None
+    filename: str | None = None
+
+
 class JobPreviewResponse(ApiModel):
     ordinal: int
     prompt_version_id: str
     prompt_version_name: str
     resolved_prompt: str
     resolved_variables: list[ResolvedVariableResponse]
-    reference_asset_id: str | None
+    resolved_image_inputs: list["ResolvedImageInputResponse"]
     seed: int
 
     @classmethod
-    def from_job(cls, job: CompiledJob, prompt_version_name: str) -> Self:
+    def from_job(
+        cls,
+        job: CompiledJob,
+        prompt_version_name: str,
+        slot_labels: dict[str, str],
+        image_assets: dict[str, AssetRecord] | None = None,
+    ) -> Self:
         return cls(
             ordinal=job.ordinal,
             prompt_version_id=job.prompt_version_id,
@@ -872,7 +912,19 @@ class JobPreviewResponse(ApiModel):
                 ResolvedVariableResponse(name=variable.name, value=variable.value)
                 for variable in job.resolved_variables
             ],
-            reference_asset_id=job.reference_asset_id,
+            resolved_image_inputs=[
+                ResolvedImageInputResponse(
+                    slot_key=item.slot_key,
+                    label=slot_labels[item.slot_key],
+                    asset_id=item.asset_id,
+                    filename=(
+                        None
+                        if image_assets is None or item.asset_id is None
+                        else image_assets[item.asset_id].original_filename
+                    ),
+                )
+                for item in job.resolved_image_inputs
+            ],
             seed=job.seed,
         )
 
@@ -883,13 +935,21 @@ class PreviewResponse(ApiModel):
     jobs: list[JobPreviewResponse]
 
     @classmethod
-    def from_plan(cls, plan: CompiledRunPlan) -> Self:
+    def from_plan(
+        cls, plan: CompiledRunPlan, image_assets: dict[str, AssetRecord] | None = None
+    ) -> Self:
         prompt_names = {version.id: version.name for version in plan.prompt_versions}
+        slot_labels = {slot.key: slot.label for slot in plan.image_input_slots}
         return cls(
             job_count=plan.job_count,
             warnings=[WarningResponse.from_warning(warning) for warning in plan.warnings],
             jobs=[
-                JobPreviewResponse.from_job(job, prompt_names[job.prompt_version_id])
+                JobPreviewResponse.from_job(
+                    job,
+                    prompt_names[job.prompt_version_id],
+                    slot_labels,
+                    image_assets,
+                )
                 for job in plan.jobs
             ],
         )
@@ -977,34 +1037,40 @@ class RunJobResponse(ApiModel):
     prompt_version_id: str
 
 
-class RunPlanJobResponse(JobPreviewResponse):
-    reference_filename: str | None
-
-
 class RunPlanResponse(ApiModel):
     job_count: int
     warnings: list[WarningResponse]
-    jobs: list[RunPlanJobResponse]
+    jobs: list[JobPreviewResponse]
 
     @classmethod
     def from_run(cls, run: PublishedRun) -> Self:
         prompt_names = {version.id: version.name for version in run.compiled_plan.prompt_versions}
+        slot_labels = {slot.key: slot.label for slot in run.compiled_plan.image_input_slots}
         return cls(
             job_count=run.compiled_plan.job_count,
             warnings=[
                 WarningResponse.from_warning(warning) for warning in run.compiled_plan.warnings
             ],
             jobs=[
-                RunPlanJobResponse(
-                    **JobPreviewResponse.from_job(
-                        persisted.compiled_job,
-                        prompt_names[persisted.compiled_job.prompt_version_id],
-                    ).model_dump(),
-                    reference_filename=(
-                        persisted.reference_asset.original_filename
-                        if persisted.reference_asset is not None
-                        else None
-                    ),
+                JobPreviewResponse.model_validate(
+                    {
+                        **JobPreviewResponse.from_job(
+                            persisted.compiled_job,
+                            prompt_names[persisted.compiled_job.prompt_version_id],
+                            slot_labels,
+                        ).model_dump(),
+                        "resolved_image_inputs": [
+                            ResolvedImageInputResponse(
+                                slot_key=item.slot_key,
+                                label=item.slot_label,
+                                asset_id=(None if item.asset is None else item.asset.asset_id),
+                                filename=(
+                                    None if item.asset is None else item.asset.original_filename
+                                ),
+                            )
+                            for item in persisted.image_inputs
+                        ],
+                    }
                 )
                 for persisted in run.jobs
             ],
@@ -1016,7 +1082,7 @@ class RunResponse(RunCreatedResponse):
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
     plan: RunPlanResponse
-    batch_snapshot: BatchSnapshotV2
+    batch_snapshot: BatchSnapshotV3
     execution: ExecutionResponse
 
     @classmethod
@@ -1037,7 +1103,7 @@ class RunResponse(RunCreatedResponse):
                 for job in run.compiled_plan.jobs
             ],
             plan=RunPlanResponse.from_run(run),
-            batch_snapshot=BatchSnapshotV2.model_validate(run.batch_snapshot),
+            batch_snapshot=BatchSnapshotV3.model_validate(run.batch_snapshot),
             execution=ExecutionResponse.from_state(state),
         )
 
@@ -1078,6 +1144,19 @@ class ResultResponse(ApiModel):
 class ResultsResponse(ApiModel):
     run_id: str
     results: list[ResultResponse]
+
+
+def _validate_image_binding_values(values: list[str | None]) -> None:
+    if any(value is not None and not value.strip() for value in values):
+        raise ValueError("image binding values must be nonblank asset IDs or null")
+    if len(set(values)) != len(values):
+        raise ValueError("image binding values must not contain exact duplicates")
+    if None in values and values[0] is not None:
+        raise ValueError("image binding values must place Base workflow first")
+
+
+def _profile_image_inputs(profile: dict[str, object]) -> tuple[tuple[str, str, str, str], ...]:
+    return workflow_profile_image_inputs(profile)
 
 
 class ErrorDetail(ApiModel):

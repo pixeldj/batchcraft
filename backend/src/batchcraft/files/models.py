@@ -42,7 +42,14 @@ class AssetRecord:
 class PersistedJob:
     job_id: str
     compiled_job: CompiledJob
-    reference_asset: AssetRecord | None
+    image_inputs: tuple["PersistedImageInput", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedImageInput:
+    slot_key: str
+    slot_label: str
+    asset: AssetRecord | None
 
 
 @dataclass(frozen=True, slots=True)

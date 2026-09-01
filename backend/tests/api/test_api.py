@@ -233,11 +233,6 @@ def _batch_request(
         "name": "Profile",
         "mappings": {
             "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-            "reference_image": {
-                "node_id": "25",
-                "input_name": "image",
-                "value_type": "image",
-            },
             "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
             "output_prefix": {
                 "node_id": "41",
@@ -245,6 +240,10 @@ def _batch_request(
                 "value_type": "string",
             },
         },
+        "image_inputs": [
+            {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"},
+            {"key": "style", "label": "Style", "node_id": "26", "input_name": "image"},
+        ],
     }
     if invalid_profile:
         mappings = profile["mappings"]
@@ -255,11 +254,19 @@ def _batch_request(
     prompt_versions = [
         {"id": "prompt-v1", "name": "Portrait prompt", "text": "Portrait of {{animal}}"}
     ]
-    references = [{"asset_id": asset_id} for asset_id in asset_ids]
+    assert len(asset_ids) <= 2
+    image_bindings = [
+        {
+            "slot_key": slot_key,
+            "values": [asset_ids[index] if index < len(asset_ids) else None],
+        }
+        for index, slot_key in enumerate(("reference", "style"))
+    ]
     seeds = {"mode": "explicit", "values": [9, 3]}
     workflow = {
         "7": {"class_type": "KSampler", "inputs": {"seed": 0}},
         "25": {"class_type": "LoadImage", "inputs": {"image": "original.png"}},
+        "26": {"class_type": "LoadImage", "inputs": {"image": "style-original.png"}},
         "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
         "41": {"class_type": "SaveImage", "inputs": {"filename_prefix": "original"}},
     }
@@ -268,18 +275,18 @@ def _batch_request(
         "batch": batch,
         "prompt_versions": prompt_versions,
         "variable_bindings": bindings,
-        "references": references,
+        "image_bindings": image_bindings,
         "seeds": seeds,
         "workflow": workflow,
         "workflow_profile": profile,
         "batch_snapshot": {
-            "snapshot_version": 2,
+            "snapshot_version": 3,
             "project": copy.deepcopy(project),
             "source_saved_batch": None,
             "batch": {**batch, "description": None},
             "prompt_versions": copy.deepcopy(prompt_versions),
             "variable_bindings": copy.deepcopy(bindings),
-            "references": copy.deepcopy(references),
+            "image_bindings": copy.deepcopy(image_bindings),
             "seed_intent": {**seeds, "random_seed_count": None},
             "workflow_selection": {
                 "workflow_id": None,
@@ -298,7 +305,7 @@ def _sync_batch_snapshot(request: dict[str, object]) -> None:
     assert isinstance(snapshot, dict)
     snapshot["prompt_versions"] = request["prompt_versions"]
     snapshot["variable_bindings"] = request["variable_bindings"]
-    snapshot["references"] = request["references"]
+    snapshot["image_bindings"] = request["image_bindings"]
     workflow_selection = snapshot["workflow_selection"]
     assert isinstance(workflow_selection, dict)
     workflow_selection["workflow"] = request["workflow"]
@@ -391,6 +398,7 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
             "name": "Saved profile",
             "workflow_version_id": workflow_version["id"],
             "mappings": mappings,
+            "image_inputs": profile["image_inputs"],
         },
     ).json()
     profile_version = profile_created["version"]
@@ -410,7 +418,10 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
                 "values": ["dog", "cat"],
             }
         ],
-        "reference_selections": [{"asset_id": "asset-2"}, {"asset_id": "asset-1"}],
+        "image_bindings": [
+            {"slot_key": "reference", "values": ["asset-2"]},
+            {"slot_key": "style", "values": [None]},
+        ],
         "seed_intent": {"mode": "explicit", "values": [9, 3], "random_seed_count": None},
         "selected_workflow_version": {
             "id": workflow_version["id"],
@@ -602,7 +613,6 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
     profile_mappings = profile_data["mappings"]
     assert isinstance(profile_mappings, dict)
     mappings = dict(profile_mappings)
-    mappings.pop("reference_image")
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -669,6 +679,7 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
             "id": profile_id,
             "name": "Default profile",
             "mappings": mappings,
+            "image_inputs": [],
         }
 
         assert (
@@ -1045,10 +1056,7 @@ def test_saved_batch_lifecycle_is_durable_lightweight_and_project_scoped(
         assert created.status_code == 201, created.text
         batch = created.json()
         assert batch["revision"] == 1
-        assert [item["asset_id"] for item in batch["reference_selections"]] == [
-            "asset-2",
-            "asset-1",
-        ]
+        assert batch["image_bindings"] == definition["image_bindings"]
         assert batch["prompt_selections"][0]["prompt_name"] == "Saved prompt"
         assert batch["prompt_selections"][0]["version_number"] == 1
         assert batch["selected_workflow_version"]["workflow_name"] == "Saved workflow"
@@ -1062,7 +1070,7 @@ def test_saved_batch_lifecycle_is_durable_lightweight_and_project_scoped(
         for omitted in (
             "prompt_selections",
             "variable_bindings",
-            "reference_selections",
+            "image_bindings",
             "selected_workflow_version",
         ):
             assert omitted not in listed[0]
@@ -1078,7 +1086,7 @@ def test_saved_batch_lifecycle_is_durable_lightweight_and_project_scoped(
                     "values": [],
                 }
             ],
-            "reference_selections": [],
+            "image_bindings": [],
             "seed_intent": {"mode": "random", "values": [], "random_seed_count": 3},
             "selected_workflow_version": None,
             "selected_workflow_profile_id": None,
@@ -1220,7 +1228,10 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
         ).json()
         definition = _saved_batch_definition(http, project["id"])
         definition["variable_bindings"] = [{"placeholder": "animal", "values": [""]}]
-        definition["reference_selections"] = []
+        definition["image_bindings"] = [
+            {"slot_key": "reference", "values": [None]},
+            {"slot_key": "style", "values": [None]},
+        ]
         definition["seed_intent"] = {
             "mode": "fixed",
             "values": [11],
@@ -1255,12 +1266,15 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
                 }
             ],
             "variable_bindings": [binding],
-            "references": [],
+            "image_bindings": [
+                {"slot_key": "reference", "values": [None]},
+                {"slot_key": "style", "values": [None]},
+            ],
             "seeds": {"mode": "fixed", "values": [11]},
             "workflow": workflow["workflow"],
             "workflow_profile": profile["profile"],
             "batch_snapshot": {
-                "snapshot_version": 2,
+                "snapshot_version": 3,
                 "project": {
                     "id": project["id"],
                     "filesystem_key": project["filesystem_key"],
@@ -1283,7 +1297,10 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
                     }
                 ],
                 "variable_bindings": [binding],
-                "references": [],
+                "image_bindings": [
+                    {"slot_key": "reference", "values": [None]},
+                    {"slot_key": "style", "values": [None]},
+                ],
                 "seed_intent": {
                     "mode": "fixed",
                     "values": [11],
@@ -1501,6 +1518,8 @@ def test_project_asset_listing_is_lightweight_but_content_is_fully_verified(
 
 def test_preview_uses_production_compiler_order_and_preserves_warnings(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
+    _import_asset(settings, tmp_path, "asset-1")
+    _import_asset(settings, tmp_path, "asset-2")
     request = _batch_request(
         ("asset-1", "asset-2"),
         include_unused_binding=True,
@@ -1513,23 +1532,106 @@ def test_preview_uses_production_compiler_order_and_preserves_warnings(tmp_path:
 
     assert response.status_code == 200
     body = PreviewResponse.model_validate(response.json())
-    assert body.job_count == 8
-    assert [(job.resolved_prompt, job.reference_asset_id, job.seed) for job in body.jobs] == [
-        ("Portrait of dog", "asset-1", 9),
-        ("Portrait of dog", "asset-1", 3),
-        ("Portrait of dog", "asset-2", 9),
-        ("Portrait of dog", "asset-2", 3),
-        ("Portrait of cat", "asset-1", 9),
-        ("Portrait of cat", "asset-1", 3),
-        ("Portrait of cat", "asset-2", 9),
-        ("Portrait of cat", "asset-2", 3),
+    assert body.job_count == 4
+    assert [
+        (
+            job.resolved_prompt,
+            [(item.slot_key, item.asset_id) for item in job.resolved_image_inputs],
+            job.seed,
+        )
+        for job in body.jobs
+    ] == [
+        ("Portrait of dog", [("reference", "asset-1"), ("style", "asset-2")], 9),
+        ("Portrait of dog", [("reference", "asset-1"), ("style", "asset-2")], 3),
+        ("Portrait of cat", [("reference", "asset-1"), ("style", "asset-2")], 9),
+        ("Portrait of cat", [("reference", "asset-1"), ("style", "asset-2")], 3),
     ]
     assert body.warnings[0].code == "unused_binding"
 
 
+def test_preview_rejects_a_selected_project_asset_that_does_not_exist(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(("missing-asset",))
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "project_asset_not_found",
+            "message": "Project assets were not found: missing-asset",
+        }
+    }
+
+
+def test_preview_expands_ordered_image_alternatives_before_seeds(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    for asset_id in ("asset-1", "asset-2", "asset-3"):
+        _import_asset(settings, tmp_path, asset_id)
+    request = _batch_request(())
+    request["prompt_versions"] = [{"id": "fixed", "name": "Fixed", "text": "Prompt"}]
+    request["variable_bindings"] = []
+    request["image_bindings"] = [
+        {"slot_key": "style", "values": ["asset-3"]},
+        {"slot_key": "reference", "values": [None, "asset-1", "asset-2"]},
+    ]
+    _sync_batch_snapshot(request)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 200
+    assert [
+        (
+            [
+                (input_["slot_key"], input_["asset_id"], input_["filename"])
+                for input_ in job["resolved_image_inputs"]
+            ],
+            job["seed"],
+        )
+        for job in response.json()["jobs"]
+    ] == [
+        ([("reference", None, None), ("style", "asset-3", "asset-3.png")], 9),
+        ([("reference", None, None), ("style", "asset-3", "asset-3.png")], 3),
+        ([("reference", "asset-1", "asset-1.png"), ("style", "asset-3", "asset-3.png")], 9),
+        ([("reference", "asset-1", "asset-1.png"), ("style", "asset-3", "asset-3.png")], 3),
+        ([("reference", "asset-2", "asset-2.png"), ("style", "asset-3", "asset-3.png")], 9),
+        ([("reference", "asset-2", "asset-2.png"), ("style", "asset-3", "asset-3.png")], 3),
+    ]
+
+
+@pytest.mark.parametrize(
+    "values",
+    ([], ["asset-1", "asset-1"], [None, None], ["asset-1", None]),
+)
+def test_preview_rejects_invalid_image_alternative_arrays(
+    tmp_path: Path, values: list[str | None]
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+    request["image_bindings"] = [
+        {"slot_key": "reference", "values": values},
+        {"slot_key": "style", "values": [None]},
+    ]
+    _sync_batch_snapshot(request)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
 @pytest.mark.parametrize(
     "mismatch",
-    ("project", "batch", "prompts", "bindings", "references", "workflow", "profile", "seeds"),
+    ("project", "batch", "prompts", "bindings", "images", "workflow", "profile", "seeds"),
 )
 def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str) -> None:
     settings = _settings(tmp_path)
@@ -1552,10 +1654,10 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
         bindings = snapshot["variable_bindings"]
         assert isinstance(bindings, list)
         bindings[0] = {**bindings[0], "values": ["cat"]}
-    elif mismatch == "references":
-        references = snapshot["references"]
-        assert isinstance(references, list)
-        references.reverse()
+    elif mismatch == "images":
+        image_bindings = snapshot["image_bindings"]
+        assert isinstance(image_bindings, list)
+        image_bindings.reverse()
     elif mismatch in {"workflow", "profile"}:
         selection = snapshot["workflow_selection"]
         assert isinstance(selection, dict)
@@ -1574,7 +1676,7 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
     assert response.json()["error"]["code"] == "invalid_request"
 
 
-def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v5(
+def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v6(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -1610,7 +1712,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v5
     assert created.status_code == 201
     run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert manifest["format_version"] == 5
+    assert manifest["format_version"] == 6
     expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
     assert manifest["batch_snapshot"] == expected_snapshot
     assert [job["seed"] for job in manifest["jobs"]] == [
@@ -1645,7 +1747,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v5
     assert mismatch.json()["error"]["code"] == "invalid_request"
 
 
-def test_run_api_requires_complete_snapshot_v2_and_rejects_malformed_durable_snapshot(
+def test_run_api_requires_complete_snapshot_v3_and_rejects_malformed_durable_snapshot(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -1675,14 +1777,13 @@ def test_run_api_requires_complete_snapshot_v2_and_rejects_malformed_durable_sna
     assert malformed.json()["error"]["code"] == "invalid_run_data"
 
 
-def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> None:
+def test_preview_and_run_creation_allow_zero_image_input_slots(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     request = _batch_request(())
     profile = request["workflow_profile"]
     assert isinstance(profile, dict)
-    mappings = profile["mappings"]
-    assert isinstance(mappings, dict)
-    mappings.pop("reference_image")
+    profile["image_inputs"] = []
+    request["image_bindings"] = []
     _sync_batch_snapshot(request)
 
     with TestClient(
@@ -1695,26 +1796,23 @@ def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> N
     assert preview.status_code == 200
     body = PreviewResponse.model_validate(preview.json())
     assert body.job_count == 4
-    assert [job.reference_asset_id for job in body.jobs] == [None, None, None, None]
+    assert [job.resolved_image_inputs for job in body.jobs] == [[], [], [], []]
     assert created.status_code == 201
-    assert all(job["reference_asset_id"] is None for job in run.json()["plan"]["jobs"])
-    assert all(job["reference_filename"] is None for job in run.json()["plan"]["jobs"])
+    assert all(job["resolved_image_inputs"] == [] for job in run.json()["plan"]["jobs"])
 
     run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert all(job["reference_asset"] is None for job in manifest["jobs"])
+    assert all(job["resolved_image_inputs"] == [] for job in manifest["jobs"])
     assert not (settings.projects_root / "project_key" / "assets").exists()
 
 
-def test_preview_rejects_selected_references_without_reference_image_mapping(
+def test_preview_rejects_image_bindings_that_do_not_match_profile_slots(
     tmp_path: Path,
 ) -> None:
     request = _batch_request(("asset-1",))
     profile = request["workflow_profile"]
     assert isinstance(profile, dict)
-    mappings = profile["mappings"]
-    assert isinstance(mappings, dict)
-    mappings.pop("reference_image")
+    profile["image_inputs"] = []
     _sync_batch_snapshot(request)
 
     with TestClient(
@@ -1723,10 +1821,8 @@ def test_preview_rejects_selected_references_without_reference_image_mapping(
         response = http.post("/api/batches/preview", json=request)
 
     assert response.status_code == 422
-    assert response.json()["error"] == {
-        "code": "invalid_workflow_profile",
-        "message": "selected Reference Assets require a Workflow Profile reference_image mapping",
-    }
+    assert response.json()["error"]["code"] == "invalid_batch"
+    assert "unknown slots" in response.json()["error"]["message"]
 
 
 def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_path: Path) -> None:
@@ -1784,7 +1880,7 @@ def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_
             job["prompt_version_name"],
             job["resolved_prompt"],
             job["resolved_variables"],
-            job["reference_filename"],
+            [(item["slot_key"], item["filename"]) for item in job["resolved_image_inputs"]],
             job["seed"],
         )
         for job in run.json()["plan"]["jobs"]
@@ -1793,7 +1889,7 @@ def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_
             job["prompt_version_name"],
             job["resolved_prompt"],
             job["resolved_variables"],
-            "asset-1.png",
+            [("reference", "asset-1.png"), ("style", None)],
             job["seed"],
         )
         for job in preview_body["jobs"]

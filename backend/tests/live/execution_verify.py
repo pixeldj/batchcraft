@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import cast
 
 from batchcraft.comfyui import ComfyUIClient
-from batchcraft.domain import CompiledJob, CompiledRunPlan, PromptVersion
+from batchcraft.domain import (
+    CompiledJob,
+    CompiledRunPlan,
+    ImageInputSlot,
+    PromptVersion,
+    ResolvedImageInput,
+)
 from batchcraft.execution import ExecutionConfig, RunExecutionStatus, execute_run
 from batchcraft.files import (
     BatchIdentity,
@@ -24,11 +30,6 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "name": "Known spike workflow",
     "mappings": {
         "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-        "reference_image": {
-            "node_id": "25",
-            "input_name": "image",
-            "value_type": "image",
-        },
         "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
         "output_prefix": {
             "node_id": "41",
@@ -36,6 +37,9 @@ WORKFLOW_PROFILE: dict[str, object] = {
             "value_type": "string",
         },
     },
+    "image_inputs": [
+        {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"}
+    ],
 }
 
 
@@ -87,6 +91,7 @@ async def verify() -> dict[str, object]:
                 text="live verification prompt",
             ),
         ),
+        image_input_slots=(ImageInputSlot("reference", "Reference", "25", "image"),),
         jobs=tuple(
             CompiledJob(
                 ordinal=ordinal,
@@ -96,7 +101,7 @@ async def verify() -> dict[str, object]:
                     f"[batchcraft sequential live verification {verification_id} Job {ordinal}]"
                 ),
                 resolved_variables=(),
-                reference_asset_id=asset.asset_id,
+                resolved_image_inputs=(ResolvedImageInput("reference", asset.asset_id),),
                 seed=123456788 + ordinal,
             )
             for ordinal in (1, 2)
@@ -107,7 +112,7 @@ async def verify() -> dict[str, object]:
         project=project,
         batch=batch,
         batch_snapshot={
-            "snapshot_version": 2,
+            "snapshot_version": 3,
             "project": {
                 "id": project.id,
                 "filesystem_key": project.filesystem_key,
@@ -130,7 +135,7 @@ async def verify() -> dict[str, object]:
                 }
             ],
             "variable_bindings": [],
-            "references": [{"asset_id": asset.asset_id}],
+            "image_bindings": [{"slot_key": "reference", "values": [asset.asset_id]}],
             "seed_intent": {
                 "mode": "explicit",
                 "values": [123456789, 123456790],
@@ -150,7 +155,7 @@ async def verify() -> dict[str, object]:
             },
         },
         plan=plan,
-        reference_assets={asset.asset_id: asset},
+        image_assets={asset.asset_id: asset},
         workflow=workflow,
         workflow_profile=WORKFLOW_PROFILE,
     )

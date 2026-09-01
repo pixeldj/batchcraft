@@ -24,11 +24,6 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "name": "Known spike workflow",
     "mappings": {
         "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-        "reference_image": {
-            "node_id": "25",
-            "input_name": "image",
-            "value_type": "image",
-        },
         "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
         "output_prefix": {
             "node_id": "41",
@@ -36,6 +31,9 @@ WORKFLOW_PROFILE: dict[str, object] = {
             "value_type": "string",
         },
     },
+    "image_inputs": [
+        {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"}
+    ],
 }
 
 
@@ -89,7 +87,7 @@ async def verify() -> dict[str, object]:
                     "Turn the reference into a polished character illustration. "
                     f"[batchcraft production live verification {verification_id}]"
                 ),
-                reference_image=uploaded.workflow_value,
+                image_inputs={"reference": uploaded.workflow_value},
                 seed=seed,
                 output_prefix=f"batchcraft-live/{verification_id}/result",
             ),

@@ -43,11 +43,6 @@ def _profile() -> dict[str, object]:
         "name": "Known workflow",
         "mappings": {
             "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-            "reference_image": {
-                "node_id": "25",
-                "input_name": "image",
-                "value_type": "image",
-            },
             "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
             "output_prefix": {
                 "node_id": "41",
@@ -55,13 +50,16 @@ def _profile() -> dict[str, object]:
                 "value_type": "string",
             },
         },
+        "image_inputs": [
+            {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"}
+        ],
     }
 
 
 def _values(prompt: str = "A resolved dog portrait") -> WorkflowPreparationValues:
     return WorkflowPreparationValues(
         prompt=prompt,
-        reference_image="batchcraft/run-1/reference.png",
+        image_inputs={"reference": "batchcraft/run-1/reference.png"},
         seed=123456,
         output_prefix="batchcraft/run-1/job-1",
     )
@@ -87,10 +85,9 @@ def test_prepare_workflow_maps_values_without_mutating_snapshots() -> None:
     assert prepared is not workflow
 
 
-def test_prepare_workflow_without_reference_preserves_base_image_value() -> None:
+def test_prepare_workflow_without_runtime_image_preserves_base_image_value() -> None:
     workflow = _workflow()
     profile = _profile()
-    cast(dict[str, object], profile["mappings"]).pop("reference_image")
     values = _values()
 
     prepared = prepare_workflow(
@@ -98,7 +95,7 @@ def test_prepare_workflow_without_reference_preserves_base_image_value() -> None
         profile,
         WorkflowPreparationValues(
             prompt=values.prompt,
-            reference_image=None,
+            image_inputs={},
             seed=values.seed,
             output_prefix=values.output_prefix,
         ),
@@ -109,38 +106,61 @@ def test_prepare_workflow_without_reference_preserves_base_image_value() -> None
     assert workflow["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
 
 
-def test_prepare_workflow_without_reference_still_validates_present_reference_mapping() -> None:
+def test_prepare_workflow_without_runtime_image_still_validates_slot_target() -> None:
     profile = _profile()
-    profile["mappings"]["reference_image"]["input_name"] = "missing"  # type: ignore[index]
+    profile["image_inputs"][0]["input_name"] = "missing"  # type: ignore[index]
     values = _values()
 
-    with pytest.raises(WorkflowPreparationError, match="reference_image.*missing input 'missing'"):
+    with pytest.raises(
+        WorkflowPreparationError, match="image input 'reference'.*missing input 'missing'"
+    ):
         prepare_workflow(
             _workflow(),
             profile,
             WorkflowPreparationValues(
                 prompt=values.prompt,
-                reference_image=None,
+                image_inputs={},
                 seed=values.seed,
                 output_prefix=values.output_prefix,
             ),
         )
 
 
-def test_prepare_workflow_rejects_empty_reference_image_value() -> None:
+def test_prepare_workflow_rejects_empty_image_value() -> None:
     values = _values()
 
-    with pytest.raises(WorkflowPreparationError, match="reference image value must not be empty"):
+    with pytest.raises(WorkflowPreparationError, match="image input values must not be empty"):
         prepare_workflow(
             _workflow(),
             _profile(),
             WorkflowPreparationValues(
                 prompt=values.prompt,
-                reference_image="",
+                image_inputs={"reference": ""},
                 seed=values.seed,
                 output_prefix=values.output_prefix,
             ),
         )
+
+
+def test_profile_rejects_two_image_slots_targeting_the_same_workflow_input() -> None:
+    profile = _profile()
+    image_inputs = cast(list[object], profile["image_inputs"])
+    image_inputs.append(
+        {"key": "alternate", "label": "Alternate", "node_id": "25", "input_name": "image"}
+    )
+
+    with pytest.raises(WorkflowPreparationError, match="maps multiple inputs to node '25'"):
+        validate_workflow_profile(_workflow(), profile)
+
+
+def test_profile_rejects_image_slot_targeting_a_core_mapping_input() -> None:
+    profile = _profile()
+    image_input = cast(list[dict[str, object]], profile["image_inputs"])[0]
+    image_input["node_id"] = "34"
+    image_input["input_name"] = "prompt"
+
+    with pytest.raises(WorkflowPreparationError, match="maps multiple inputs to node '34'"):
+        validate_workflow_profile(_workflow(), profile)
 
 
 def test_prepare_workflow_rejects_missing_mapped_node() -> None:
@@ -172,7 +192,7 @@ def test_prepare_workflow_rejects_non_integer_runtime_seed(seed: object) -> None
     values = _values()
     invalid_values = WorkflowPreparationValues(
         prompt=values.prompt,
-        reference_image=values.reference_image,
+        image_inputs=values.image_inputs,
         seed=cast(int, seed),
         output_prefix=values.output_prefix,
     )
@@ -215,15 +235,16 @@ def test_validate_workflow_profile_rejects_unknown_mapping_names() -> None:
         validate_workflow_profile(_workflow(), profile)
 
 
-def test_prepare_workflow_requires_reference_mapping_for_selected_reference_assets() -> None:
-    profile = _profile()
-    cast(dict[str, object], profile["mappings"]).pop("reference_image")
-
-    with pytest.raises(
-        WorkflowPreparationError,
-        match="selected Reference Assets.*reference_image mapping",
-    ):
-        prepare_workflow(_workflow(), profile, _values())
+def test_prepare_workflow_rejects_unknown_runtime_slot() -> None:
+    values = _values()
+    invalid = WorkflowPreparationValues(
+        prompt=values.prompt,
+        image_inputs={"unknown": "image.png"},
+        seed=values.seed,
+        output_prefix=values.output_prefix,
+    )
+    with pytest.raises(WorkflowPreparationError, match="unknown slot keys.*'unknown'"):
+        prepare_workflow(_workflow(), _profile(), invalid)
 
 
 def test_validate_workflow_profile_rejects_connection_valued_mapping_target() -> None:

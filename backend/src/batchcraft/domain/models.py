@@ -25,8 +25,17 @@ class VariableBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class ReferenceSelection:
-    asset_id: str
+class ImageInputSlot:
+    key: str
+    label: str
+    node_id: str
+    input_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImageBinding:
+    slot_key: str
+    values: tuple[str | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +56,8 @@ class SeedInput:
 class BatchDefinition:
     prompt_versions: tuple[PromptVersion, ...]
     variable_bindings: tuple[VariableBinding, ...]
-    references: tuple[ReferenceSelection, ...]
+    image_input_slots: tuple[ImageInputSlot, ...]
+    image_bindings: tuple[ImageBinding, ...]
     seeds: SeedInput
 
 
@@ -55,6 +65,12 @@ class BatchDefinition:
 class ResolvedVariable:
     name: str
     value: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedImageInput:
+    slot_key: str
+    asset_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +86,14 @@ class CompiledJob:
     prompt_version_id: str
     resolved_prompt: str
     resolved_variables: tuple[ResolvedVariable, ...]
-    reference_asset_id: str | None
+    resolved_image_inputs: tuple[ResolvedImageInput, ...]
     seed: int
 
 
 @dataclass(frozen=True, slots=True)
 class CompiledRunPlan:
     prompt_versions: tuple[PromptVersion, ...]
+    image_input_slots: tuple[ImageInputSlot, ...]
     jobs: tuple[CompiledJob, ...]
     warnings: tuple[CompilationWarning, ...]
 

@@ -25,8 +25,9 @@ from batchcraft.comfyui import (
 )
 from batchcraft.domain import (
     BatchDefinition,
+    ImageBinding,
+    ImageInputSlot,
     PromptVersion,
-    ReferenceSelection,
     SeedInput,
     compile_batch,
 )
@@ -54,6 +55,7 @@ BATCH = BatchIdentity(id="batch-id", filesystem_key="batch_key", name="Batch")
 WORKFLOW: dict[str, object] = {
     "7": {"class_type": "KSampler", "inputs": {"seed": 0}},
     "25": {"class_type": "LoadImage", "inputs": {"image": "original.png"}},
+    "26": {"class_type": "LoadImage", "inputs": {"image": "second-original.png"}},
     "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
     "41": {"class_type": "SaveImage", "inputs": {"filename_prefix": "original"}},
 }
@@ -62,11 +64,6 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "name": "Profile",
     "mappings": {
         "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-        "reference_image": {
-            "node_id": "25",
-            "input_name": "image",
-            "value_type": "image",
-        },
         "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
         "output_prefix": {
             "node_id": "41",
@@ -74,6 +71,10 @@ WORKFLOW_PROFILE: dict[str, object] = {
             "value_type": "string",
         },
     },
+    "image_inputs": [
+        {"key": "identity", "label": "Identity", "node_id": "25", "input_name": "image"},
+        {"key": "pose", "label": "Pose", "node_id": "26", "input_name": "image"},
+    ],
 }
 
 
@@ -237,14 +238,15 @@ def _published_run(
     tmp_path: Path,
     *,
     job_count: int = 2,
-    with_references: bool = True,
+    with_images: bool = True,
     vary_prompt_and_seed: bool = False,
+    image_alternatives: bool = False,
 ) -> tuple[PublishedRun, tuple[bytes, ...]]:
     projects_path = tmp_path / "projects"
     project_path = projects_path / PROJECT.filesystem_key
     contents: tuple[bytes, ...] = ()
     assets: tuple[AssetRecord, ...] = ()
-    if with_references:
+    if with_images:
         sources = (tmp_path / "first.png", tmp_path / "second.webp")
         contents = (b"first reference", b"second reference")
         for source, content in zip(sources, contents, strict=True):
@@ -256,26 +258,38 @@ def _published_run(
         assets = tuple(asset_store.import_file(source) for source in sources)
     prompts: tuple[PromptVersion, ...]
     if vary_prompt_and_seed:
-        assert not with_references
+        assert not with_images
         prompts = (
             PromptVersion(id="prompt-1", name="Prompt 1", text="resolved prompt 1"),
             PromptVersion(id="prompt-2", name="Prompt 2", text="resolved prompt 2"),
         )
-        selected_assets: tuple[AssetRecord, ...] = ()
         seeds = SeedInput.explicit((101, 102))
         seed_mode = "explicit"
     else:
         prompts = (PromptVersion(id="prompt-version", name="Prompt", text="resolved prompt"),)
-        selected_assets = assets[:job_count]
-        seeds = SeedInput.fixed(101)
-        seed_mode = "fixed"
+        seeds = SeedInput.explicit(tuple(101 + index for index in range(job_count)))
+        seed_mode = "explicit"
+    slots = (
+        ImageInputSlot("identity", "Identity", "25", "image"),
+        ImageInputSlot("pose", "Pose", "26", "image"),
+    )
+    image_bindings = (
+        ImageBinding(
+            "identity",
+            (
+                (None, assets[0].asset_id)
+                if image_alternatives
+                else ((assets[0].asset_id if assets else None),)
+            ),
+        ),
+        ImageBinding("pose", ((assets[1].asset_id if assets else None),)),
+    )
     plan = compile_batch(
         BatchDefinition(
             prompt_versions=prompts,
             variable_bindings=(),
-            references=tuple(
-                ReferenceSelection(asset_id=asset.asset_id) for asset in selected_assets
-            ),
+            image_input_slots=slots,
+            image_bindings=image_bindings,
             seeds=seeds,
         )
     )
@@ -290,7 +304,7 @@ def _published_run(
         project=PROJECT,
         batch=BATCH,
         batch_snapshot={
-            "snapshot_version": 2,
+            "snapshot_version": 3,
             "project": {
                 "id": PROJECT.id,
                 "filesystem_key": PROJECT.filesystem_key,
@@ -314,7 +328,10 @@ def _published_run(
                 for prompt in prompts
             ],
             "variable_bindings": [],
-            "references": [{"asset_id": asset.asset_id} for asset in selected_assets],
+            "image_bindings": [
+                {"slot_key": binding.slot_key, "values": list(binding.values)}
+                for binding in image_bindings
+            ],
             "seed_intent": {
                 "mode": seed_mode,
                 "values": list(seeds.values),
@@ -334,11 +351,11 @@ def _published_run(
             },
         },
         plan=plan,
-        reference_assets={asset.asset_id: asset for asset in assets},
+        image_assets={asset.asset_id: asset for asset in assets},
         workflow=WORKFLOW,
         workflow_profile=WORKFLOW_PROFILE,
     )
-    return run, contents[: len(selected_assets)]
+    return run, contents * plan.job_count
 
 
 def _outcome(
@@ -450,15 +467,21 @@ def test_two_jobs_execute_sequentially_with_frozen_inputs_and_ingested_results(
         "resolved prompt",
         "resolved prompt",
     ]
-    assert [call[2].seed for call in preparation_calls] == [101, 101]
+    assert [call[2].seed for call in preparation_calls] == [101, 102]
     assert all(call[0] is run.workflow for call in preparation_calls)
     assert all(call[1] is run.workflow_profile for call in preparation_calls)
-    first_reference = preparation_calls[0][2].reference_image
-    second_reference = preparation_calls[1][2].reference_image
-    assert first_reference is not None
-    assert second_reference is not None
-    assert first_reference.endswith("/reference.png")
-    assert second_reference.endswith("/reference.webp")
+    assert [tuple(call[2].image_inputs) for call in preparation_calls] == [
+        ("identity", "pose"),
+        ("identity", "pose"),
+    ]
+    assert preparation_calls[0][2].image_inputs["identity"].endswith("/01-identity.png")
+    assert preparation_calls[0][2].image_inputs["pose"].endswith("/02-pose.webp")
+    assert [upload[0] for upload in client.uploads] == [
+        "01-identity.png",
+        "02-pose.webp",
+        "01-identity.png",
+        "02-pose.webp",
+    ]
     assert preparation_calls[0][2].output_prefix == "batchcraft/run-id/job-1/result"
     assert preparation_calls[1][2].output_prefix == "batchcraft/run-id/job-2/result"
     assert client.call_log.index("history:prompt-1") < client.call_log.index("submit:prompt-2")
@@ -497,7 +520,7 @@ def test_two_jobs_execute_sequentially_with_frozen_inputs_and_ingested_results(
 def test_each_job_uses_its_own_compiled_prompt_and_seed(tmp_path: Path) -> None:
     run, _ = _published_run(
         tmp_path,
-        with_references=False,
+        with_images=False,
         vary_prompt_and_seed=True,
     )
     prompt_ids = [f"prompt-{index}" for index in range(1, 5)]
@@ -530,10 +553,10 @@ def test_each_job_uses_its_own_compiled_prompt_and_seed(tmp_path: Path) -> None:
     ]
 
 
-def test_job_without_reference_skips_upload_and_preserves_base_workflow_image(
+def test_null_image_bindings_skip_upload_and_preserve_base_workflow_images(
     tmp_path: Path,
 ) -> None:
-    run, _ = _published_run(tmp_path, job_count=1, with_references=False)
+    run, _ = _published_run(tmp_path, job_count=1, with_images=False)
     client = FakeExecutionClient(
         submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
         histories={"prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED)]},
@@ -553,9 +576,51 @@ def test_job_without_reference_skips_upload_and_preserves_base_workflow_image(
     assert state.status is RunExecutionStatus.SUCCEEDED
     assert state.jobs[0].status is JobExecutionStatus.SUCCEEDED
     assert client.uploads == []
-    assert [values.reference_image for values in preparation_values] == [None]
+    assert [dict(values.image_inputs) for values in preparation_values] == [{}]
     assert len(client.submitted_workflows) == 1
     assert client.submitted_workflows[0]["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
+    assert client.submitted_workflows[0]["26"]["inputs"]["image"] == "second-original.png"  # type: ignore[index]
+
+
+def test_cartesian_jobs_reach_executor_with_one_resolved_value_per_slot(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, image_alternatives=True)
+    client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1"),
+            SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-2"),
+        ],
+        histories={
+            "prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED)],
+            "prompt-2": [_outcome("prompt-2", ExecutionStatus.SUCCEEDED)],
+        },
+    )
+    preparation_values: list[WorkflowPreparationValues] = []
+
+    def observing_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        preparation_values.append(values)
+        return prepare_workflow(workflow, profile, values)
+
+    state = _run(run, client, preparer=observing_preparer)
+
+    assert state.status is RunExecutionStatus.SUCCEEDED
+    assert [tuple(values.image_inputs) for values in preparation_values] == [
+        ("pose",),
+        ("identity", "pose"),
+    ]
+    assert [upload[0] for upload in client.uploads] == [
+        "02-pose.webp",
+        "01-identity.png",
+        "02-pose.webp",
+    ]
+    assert client.submitted_workflows[0]["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
+    second_identity = client.submitted_workflows[1]["25"]["inputs"]["image"]  # type: ignore[index]
+    assert str(second_identity).endswith("/01-identity.png")
 
 
 @pytest.mark.parametrize(
@@ -598,7 +663,7 @@ def test_rejected_or_unknown_submission_stops_without_retrying_or_advancing(
     assert state.jobs[0].submission_disposition is spec.disposition
     assert state.jobs[0].submission_http_status == spec.status
     assert len(client.submitted_workflows) == 1
-    assert len(client.uploads) == 1
+    assert len(client.uploads) == 2
     if spec.disposition is SubmissionDisposition.UNKNOWN:
         assert state.jobs[0].prompt_id is None
         assert state.completed_at is None
