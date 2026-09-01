@@ -279,6 +279,31 @@ unsupported migration history and must be inspected and recreated manually; batc
 or rewrites them automatically. Browser v11 drafts reset automatically. Numeric ranges, enums,
 `/object_info`, LoRA discovery, and linked or zipped parameter dimensions remain deferred.
 
+### Phase 2.8: Generic Workflow Parameters Pass 3B-2
+
+Completed end to end. Integer and float parameter bindings may preserve numeric Range intent with exact
+decimal-text Start, End, Step, and independent Base workflow inclusion. One backend domain materializer
+uses scaled-integer arithmetic to emit explicit typed values before the existing Pass 3B-1 compiler.
+Start is included, End appears only when reached exactly, descending ranges require negative Step, and
+each Range is limited to 10,000 numeric values. Compiled Jobs, executor state, workflow preparation,
+manifest Jobs, and Results remain scalar-only.
+
+Saved Batches reopen in their original Values or Range mode. Run Plan shows compact frozen Range intent
+while concrete Jobs and Result Details show exact scalar values. The Batch Parameters editor reuses
+`ConfigurationSection`; collapse state is local UI state and neither changes Batch semantics nor
+invalidates Preview. Browser sessions use v13.
+
+This change establishes Batch snapshot v5 and replaces the consolidated SQLite baseline with
+mode-aware parameter intent storage. Manifest v7, CSV, Run v1, and execution v2 remain current. Existing
+development databases, snapshot-v4 Runs, and browser v12 drafts are unsupported; databases must be
+inspected and recreated manually, while browser drafts reset automatically. Enums, random parameter
+values, linked or zipped dimensions, `/object_info`, and LoRA discovery remain deferred.
+
+Closed-tab recovery is also deferred to a dedicated milestone. It must restore the most recent
+Project/Saved Batch and active or recent Run IDs from backend-authoritative state, handle running and
+terminal Runs safely, and require a fresh Preview. Do not replace `sessionStorage` with `localStorage`
+without that complete design.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -319,8 +344,9 @@ The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATC
 SQL migrations live under `backend/src/batchcraft/db/migrations/`. The current pre-release schema is
 one consolidated `0001_initial.sql` baseline. Generic Workflow Parameters Pass 3A replaced the prior
 consolidated 0001 bytes and schema with normalized parameter binding storage; Pass 3B-1 replaced those
-bytes again to permit multiple positive parameter value positions. Any database created from an earlier
-baseline has unsupported migration history and must be recreated manually. The application fails
+bytes again to permit multiple positive parameter value positions; Pass 3B-2 replaced them again with
+Values/Range mode and decimal Range columns. Any database created from an earlier baseline has
+unsupported migration history and must be recreated manually. The application fails
 startup and never erases it. The migration runner, ordered discovery,
 checksums, and transactional application remain the forward-change mechanism. Once preserving a
 baseline is required, add only the next contiguous `NNNN_name.sql` file and do
@@ -355,10 +381,11 @@ workflow, and remove deleted slots. Missing assets remain visible and block Prev
 binding change invalidates Preview.
 
 The selected Profile also drives the generic parameter editor. It renders parameters in Profile order
-and lets each hold one or more ordered Base workflow or strict typed scalar alternatives. Profile
-changes preserve same-key alternatives only when the declared type remains compatible. Any alternative
-addition, removal, reorder, or value change invalidates Preview. The frontend does not calculate the
-parameter product; Job count and concrete expansion remain backend compiler responsibilities.
+and lets each hold ordered Values or numeric Range intent. Range input remains decimal text and the
+frontend uses exact BigInt arithmetic only to validate and display count; it never emits generated Range
+values. Profile changes preserve same-key drafts only when the declared type remains compatible. Any
+semantic Values/Range change invalidates Preview. Collapsing the section is local UI state and does not.
+Job count, authoritative Range materialization, and concrete expansion remain backend responsibilities.
 
 Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it
 once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact

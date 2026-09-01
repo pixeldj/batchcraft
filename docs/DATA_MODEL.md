@@ -307,8 +307,10 @@ Ordered child tables complete the aggregate:
   executable `values`.
 - `batch_image_binding` — ordered unique `slot_key` records.
 - `batch_image_binding_value` — ordered Project Asset IDs or JSON-equivalent `null` values for each binding.
-- `batch_parameter_binding` — ordered unique stable parameter keys.
-- `batch_parameter_binding_value` — ordered typed JSON scalar or `null` Base-workflow alternatives for each parameter.
+- `batch_parameter_binding` — ordered unique stable parameter keys plus `values`/`range` mode,
+  independent Base inclusion, and decimal-text Range fields.
+- `batch_parameter_binding_value` — ordered typed JSON scalar or `null` Base-workflow alternatives for
+  `values` mode only.
 
 Saved Batches may be intentionally incomplete: they may have zero prompt selections, zero values for
 a variable binding, no workflow/profile selection, and zero image bindings when no Profile is selected
@@ -327,12 +329,13 @@ by stable slot key. Every slot has at least one ordered, unique alternative. `nu
 and appears first when included. Each slot is an independent Cartesian dimension. Zipped, row-linked,
 and collection-link semantics remain unsupported.
 
-Parameter bindings use `{ "parameter_key": string, "values": [scalar | null, ...] }`. Saved Batch writes
-persist the exact selected Profile parameter set in Profile order. Preview and Run creation may receive
-binding records in any order and resolve them by stable key. Every parameter has one or more ordered,
-unique, type-correct alternatives. `null` means Base workflow, appears first when included, and is
-distinct from empty string, zero, and false. Each parameter is an independent Cartesian dimension in
-Profile order.
+Parameter bindings are discriminated editable intent. `values` mode stores
+`{ "parameter_key": string, "mode": "values", "values": [scalar | null, ...] }`. Numeric `range` mode
+stores `{ "parameter_key": string, "mode": "range", "include_base": boolean,
+"range": { "start": string, "end": string, "step": string } }`. Saved Batches preserve exact Range
+decimal text rather than replacing it with generated values. Preview and Run creation resolve binding
+records by stable key and materialize Range intent once at the backend domain boundary. Each parameter
+then supplies one or more ordered, unique, type-correct alternatives to the existing compiler.
 
 Editing a Saved Batch increments its `revision`; concurrent conflicting saves fail rather than
 silently overwrite. Detached Prompt or Workflow-Profile snapshots must be explicitly imported or
@@ -429,8 +432,9 @@ Each entry records `slot_key` and `asset_id`, where `null` means Base workflow. 
 adds the Profile's slot label and complete asset provenance.
 
 Each generic parameter is also an independent Batch dimension. The Batch snapshot preserves all
-ordered alternatives, while every Job's `resolved_parameters` contains one concrete scalar or Base
-workflow choice per Profile parameter.
+ordered explicit alternatives or exact editable Range intent. Before compilation, Range intent is
+materialized to explicit values through exact scaled-integer arithmetic. Every Job's
+`resolved_parameters` contains one concrete scalar or Base workflow choice per Profile parameter.
 
 A Job must never contain unresolved prompt variables.
 

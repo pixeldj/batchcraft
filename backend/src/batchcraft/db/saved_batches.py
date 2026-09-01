@@ -1,6 +1,5 @@
 import hashlib
 import json
-import math
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
@@ -16,7 +15,6 @@ from batchcraft.db.models import (
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
     SavedBatchListRecord,
-    SavedBatchParameterBinding,
     SavedBatchPromptSelection,
     SavedBatchRecord,
     SavedBatchSeedIntent,
@@ -26,6 +24,12 @@ from batchcraft.db.models import (
     SavedBatchWorkflowVersionSnapshot,
 )
 from batchcraft.domain import (
+    ParameterDecimalRange,
+    ParameterRangeIntent,
+    ParameterValuesIntent,
+    ParameterValueType,
+    WorkflowParameter,
+    materialize_parameter_bindings,
     validate_image_input_slot_key,
     validate_parameter_alternatives,
     validate_parameter_scalar,
@@ -312,7 +316,7 @@ def _validate_definition(definition: SavedBatchDefinition) -> None:
             raise SavedBatchValidationError("image binding values must place Base workflow first")
     parameter_keys: set[str] = set()
     for parameter_binding in definition.parameter_bindings:
-        if not isinstance(parameter_binding, SavedBatchParameterBinding):
+        if not isinstance(parameter_binding, (ParameterValuesIntent, ParameterRangeIntent)):
             raise SavedBatchValidationError("parameter bindings must be typed records")
         try:
             validate_stable_key(parameter_binding.parameter_key)
@@ -323,10 +327,24 @@ def _validate_definition(definition: SavedBatchDefinition) -> None:
                 f"duplicate parameter binding: {parameter_binding.parameter_key!r}"
             )
         parameter_keys.add(parameter_binding.parameter_key)
-        try:
-            validate_parameter_alternatives(parameter_binding.values)
-        except ValueError as error:
-            raise SavedBatchValidationError(str(error)) from error
+        if isinstance(parameter_binding, ParameterValuesIntent):
+            try:
+                validate_parameter_alternatives(parameter_binding.values)
+            except ValueError as error:
+                raise SavedBatchValidationError(str(error)) from error
+        elif (
+            not isinstance(parameter_binding.include_base, bool)
+            or not isinstance(parameter_binding.range, ParameterDecimalRange)
+            or not all(
+                isinstance(value, str)
+                for value in (
+                    parameter_binding.range.start,
+                    parameter_binding.range.end,
+                    parameter_binding.range.step,
+                )
+            )
+        ):
+            raise SavedBatchValidationError("parameter range intent is malformed")
     if definition.selected_workflow_version is not None:
         _validate_workflow_snapshot(definition.selected_workflow_version)
     if definition.selected_workflow_profile_id is not None:
@@ -549,21 +567,16 @@ def _validate_library_selections(
             raise SavedBatchIntegrityError(
                 "Saved Batch parameter bindings must match the selected ProfileVersion parameter order"
             )
-        for raw_parameter, binding in zip(
-            raw_parameters, definition.parameter_bindings, strict=True
-        ):
-            assert isinstance(raw_parameter, dict)
-            value_type = raw_parameter.get("value_type")
-            if value_type not in {"string", "integer", "float", "boolean"}:
-                raise SavedBatchIntegrityError(
-                    f"selected Workflow Profile parameter {binding.parameter_key!r} has invalid type"
-                )
-            for value in binding.values:
-                if not _parameter_value_matches(value_type, value):
-                    raise SavedBatchIntegrityError(
-                        f"Saved Batch parameter {binding.parameter_key!r} "
-                        f"must be {value_type} or null"
-                    )
+        try:
+            materialize_parameter_bindings(
+                tuple(
+                    _workflow_parameter(value, index)
+                    for index, value in enumerate(raw_parameters, 1)
+                ),
+                definition.parameter_bindings,
+            )
+        except ValueError as error:
+            raise SavedBatchIntegrityError(str(error)) from error
     elif profile_row is not None and workflow_row is not None and profile_row[0] != workflow_row[0]:
         raise SavedBatchIntegrityError(
             "selected Workflow and logical Workflow Profile are incompatible"
@@ -632,11 +645,22 @@ def _replace_children(
     )
     connection.executemany(
         """
-        INSERT INTO batch_parameter_binding (batch_id, position, parameter_key)
-        VALUES (?, ?, ?)
+        INSERT INTO batch_parameter_binding
+            (batch_id, position, parameter_key, mode, include_base,
+             range_start, range_end, range_step)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            (batch_id, position, binding.parameter_key)
+            (
+                batch_id,
+                position,
+                binding.parameter_key,
+                binding.mode,
+                int(binding.include_base) if isinstance(binding, ParameterRangeIntent) else 0,
+                binding.range.start if isinstance(binding, ParameterRangeIntent) else None,
+                binding.range.end if isinstance(binding, ParameterRangeIntent) else None,
+                binding.range.step if isinstance(binding, ParameterRangeIntent) else None,
+            )
             for position, binding in enumerate(definition.parameter_bindings, 1)
         ),
     )
@@ -649,6 +673,7 @@ def _replace_children(
         (
             (batch_id, binding_position, value_position, _canonical_scalar(value))
             for binding_position, binding in enumerate(definition.parameter_bindings, 1)
+            if isinstance(binding, ParameterValuesIntent)
             for value_position, value in enumerate(binding.values, 1)
         ),
     )
@@ -732,7 +757,8 @@ def _get_detail(connection: sqlite3.Connection, batch_id: str) -> SavedBatchDeta
     ).fetchall()
     parameter_rows = connection.execute(
         """
-        SELECT b.position, b.parameter_key, v.value_position, v.value_json
+        SELECT b.position, b.parameter_key, b.mode, b.include_base,
+               b.range_start, b.range_end, b.range_step, v.value_position, v.value_json
         FROM batch_parameter_binding AS b
         LEFT JOIN batch_parameter_binding_value AS v
           ON v.batch_id = b.batch_id AND v.binding_position = b.position
@@ -962,17 +988,24 @@ def _image_bindings_from_rows(
 
 def _parameter_bindings_from_rows(
     rows: list[sqlite3.Row] | list[tuple[object, ...]],
-) -> tuple[SavedBatchParameterBinding, ...]:
-    bindings: list[SavedBatchParameterBinding] = []
+) -> tuple[ParameterValuesIntent | ParameterRangeIntent, ...]:
+    bindings: list[ParameterValuesIntent | ParameterRangeIntent] = []
     current_position: int | None = None
     current_key = ""
+    current_mode = ""
+    current_include_base = False
+    current_range: ParameterDecimalRange | None = None
     values: list[str | int | float | bool | None] = []
     expected_binding_position = 1
     expected_value_position = 1
     for row in rows:
         position = _positive_int(row[0], "parameter binding position")
         if current_position is not None and position != current_position:
-            bindings.append(SavedBatchParameterBinding(current_key, tuple(values)))
+            bindings.append(
+                _persisted_parameter_intent(
+                    current_key, current_mode, current_include_base, current_range, values
+                )
+            )
             values = []
             expected_binding_position += 1
             expected_value_position = 1
@@ -983,13 +1016,24 @@ def _parameter_bindings_from_rows(
                 )
             current_position = position
             current_key = _string(row[1], "parameter binding parameter_key")
-        if row[2] is not None:
-            value_position = _positive_int(row[2], "parameter binding value position")
+            current_mode = _string(row[2], "parameter binding mode")
+            current_include_base = _database_bool(row[3], "parameter binding include_base")
+            range_parts = row[4:7]
+            if all(value is None for value in range_parts):
+                current_range = None
+            elif all(isinstance(value, str) for value in range_parts):
+                current_range = ParameterDecimalRange(*range_parts)
+            else:
+                raise SavedBatchStoreError(
+                    "persisted parameter range must be complete decimal text"
+                )
+        if row[7] is not None:
+            value_position = _positive_int(row[7], "parameter binding value position")
             if value_position != expected_value_position:
                 raise SavedBatchStoreError(
                     "parameter binding value positions must be one-based and contiguous"
                 )
-            value = _json(row[3], "parameter binding value_json")
+            value = _json(row[8], "parameter binding value_json")
             try:
                 scalar = None if value is None else validate_parameter_scalar(value)
             except ValueError as error:
@@ -997,18 +1041,25 @@ def _parameter_bindings_from_rows(
             values.append(scalar)
             expected_value_position += 1
     if current_position is not None:
-        bindings.append(SavedBatchParameterBinding(current_key, tuple(values)))
+        bindings.append(
+            _persisted_parameter_intent(
+                current_key, current_mode, current_include_base, current_range, values
+            )
+        )
     for binding in bindings:
-        try:
-            validate_parameter_alternatives(binding.values)
-        except ValueError as error:
-            raise SavedBatchStoreError(f"invalid persisted parameter values: {error}") from error
+        if isinstance(binding, ParameterValuesIntent):
+            try:
+                validate_parameter_alternatives(binding.values)
+            except ValueError as error:
+                raise SavedBatchStoreError(
+                    f"invalid persisted parameter values: {error}"
+                ) from error
     return tuple(bindings)
 
 
 def _validate_persisted_parameter_bindings(
     profile: SavedBatchWorkflowProfileVersionSnapshot | None,
-    bindings: tuple[SavedBatchParameterBinding, ...],
+    bindings: tuple[ParameterValuesIntent | ParameterRangeIntent, ...],
 ) -> None:
     if profile is None:
         if bindings:
@@ -1031,13 +1082,15 @@ def _validate_persisted_parameter_bindings(
             raise SavedBatchStoreError(
                 "persisted parameter bindings do not match the selected Workflow Profile"
             )
-        assert isinstance(raw_parameter, dict)
-        value_type = raw_parameter.get("value_type")
-        for value in binding.values:
-            if not _parameter_value_matches(value_type, value):
-                raise SavedBatchStoreError(
-                    f"persisted parameter {binding.parameter_key!r} does not match its Profile type"
-                )
+    try:
+        materialize_parameter_bindings(
+            tuple(
+                _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
+            ),
+            bindings,
+        )
+    except ValueError as error:
+        raise SavedBatchStoreError(f"invalid persisted parameter intent: {error}") from error
 
 
 def _normalize_parameter_bindings(definition: SavedBatchDefinition) -> SavedBatchDefinition:
@@ -1056,22 +1109,46 @@ def _normalize_parameter_bindings(definition: SavedBatchDefinition) -> SavedBatc
     return replace(definition, parameter_bindings=tuple(by_key[key] for key in keys))
 
 
-def _parameter_value_matches(value_type: object, value: object) -> bool:
-    if value is None:
-        return True
-    if value_type == "string":
-        return isinstance(value, str)
-    if value_type == "integer":
-        return (
-            isinstance(value, int)
-            and not isinstance(value, bool)
-            and -MAX_SAFE_SEED <= value <= MAX_SAFE_SEED
-        )
-    if value_type == "float":
-        return (
-            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-        )
-    return value_type == "boolean" and isinstance(value, bool)
+def _persisted_parameter_intent(
+    key: str,
+    mode: str,
+    include_base: bool,
+    decimal_range: ParameterDecimalRange | None,
+    values: list[str | int | float | bool | None],
+) -> ParameterValuesIntent | ParameterRangeIntent:
+    if mode == "values":
+        if include_base or decimal_range is not None:
+            raise SavedBatchStoreError("persisted values parameter intent has range fields")
+        return ParameterValuesIntent(key, tuple(values))
+    if mode == "range":
+        if decimal_range is None or values:
+            raise SavedBatchStoreError("persisted range parameter intent has invalid value rows")
+        return ParameterRangeIntent(key, include_base, decimal_range)
+    raise SavedBatchStoreError(f"persisted parameter intent has unsupported mode: {mode!r}")
+
+
+def _workflow_parameter(value: object, position: int) -> WorkflowParameter:
+    key = _profile_parameter_key(value, position)
+    assert isinstance(value, dict)
+    raw_value_type = value.get("value_type")
+    if not isinstance(raw_value_type, str):
+        raise SavedBatchStoreError(f"selected Workflow Profile parameter {key!r} has invalid type")
+    try:
+        value_type = ParameterValueType(raw_value_type)
+    except ValueError as error:
+        raise SavedBatchStoreError(
+            f"selected Workflow Profile parameter {key!r} has invalid type"
+        ) from error
+    label = _string(value.get("label"), f"Workflow Profile parameter {key!r} label")
+    node_id = _string(value.get("node_id"), f"Workflow Profile parameter {key!r} node_id")
+    input_name = _string(value.get("input_name"), f"Workflow Profile parameter {key!r} input_name")
+    return WorkflowParameter(key, label, node_id, input_name, value_type)
+
+
+def _database_bool(value: object, label: str) -> bool:
+    if value not in (0, 1) or isinstance(value, bool):
+        raise SavedBatchStoreError(f"{label} must be zero or one")
+    return bool(value)
 
 
 def _canonical_scalar(value: object) -> str:

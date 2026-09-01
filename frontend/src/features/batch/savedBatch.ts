@@ -17,6 +17,7 @@ import {
   reconcileParameterBindings,
   profileImageInputs,
   profileParameters,
+  defaultParameterRange,
   validateImageBindings,
   type BatchFormState,
 } from "./form";
@@ -214,7 +215,19 @@ export function canonicalBatchIntent(form: BatchFormState): string {
       values: normalizedBindingValues(binding.values),
     })),
     imageBindings: form.imageBindings,
-    parameterBindings: form.parameterBindings,
+    parameterBindings: form.parameterBindings.map((binding) => binding.mode === "range"
+      ? {
+        parameterKey: binding.parameterKey,
+        valueType: binding.valueType,
+        mode: binding.mode,
+        range: binding.range,
+      }
+      : {
+        parameterKey: binding.parameterKey,
+        valueType: binding.valueType,
+        mode: binding.mode,
+        alternatives: binding.alternatives,
+      }),
     seed: form.seedMode === "random"
       ? { mode: "random", randomSeedCount: form.randomSeedCount.trim() }
       : { mode: form.seedMode, values: splitSeeds(form.seedValues) },
@@ -239,15 +252,25 @@ function savedParameterBindingsToForm(
   bindings: SavedBatchDetail["parameter_bindings"],
   parameters: ReturnType<typeof profileParameters>,
 ): BatchFormState["parameterBindings"] {
-  const byKey = new Map(bindings.map((binding) => [binding.parameter_key, binding.values]));
+  const byKey = new Map(bindings.map((binding) => [binding.parameter_key, binding]));
   return parameters.map((parameter) => {
-    const values = byKey.get(parameter.key);
+    const binding = byKey.get(parameter.key);
+    const values = binding?.mode === "values" ? binding.values : undefined;
     return {
       parameterKey: parameter.key,
       valueType: parameter.value_type,
+      mode: binding?.mode ?? "values",
       alternatives: values?.map((value) => value === null
         ? { kind: "base" as const }
         : { kind: "override" as const, value: String(value) }) ?? [{ kind: "base" as const }],
+      range: binding?.mode === "range"
+        ? {
+          start: binding.range.start,
+          end: binding.range.end,
+          step: binding.range.step,
+          includeBase: binding.include_base,
+        }
+        : defaultParameterRange(parameter.value_type),
     };
   });
 }

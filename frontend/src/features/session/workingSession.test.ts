@@ -8,7 +8,7 @@ import {
 } from "./workingSession";
 
 describe("browser working session", () => {
-  it("round-trips a v12 draft and recovery metadata without UI keys", () => {
+  it("round-trips a v13 draft and recovery metadata without UI keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
@@ -38,7 +38,7 @@ describe("browser working session", () => {
     >;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.version).toBe(12);
+    expect(stored.version).toBe(13);
     expect(stored).toMatchObject({
       current_run_id: "run-42",
       session_run_ids: ["run-40", "run-42"],
@@ -80,7 +80,7 @@ describe("browser working session", () => {
     });
   });
 
-  it("round-trips an incomplete v12 draft", () => {
+  it("round-trips an incomplete v13 draft", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.prompts = [];
@@ -103,16 +103,31 @@ describe("browser working session", () => {
       { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
     ] });
     form.parameterBindings = [
-      { parameterKey: "unknown", valueType: "string", alternatives: [{ kind: "override", value: "remove me" }] },
-      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }] },
+      parameterBinding("unknown", "string", [{ kind: "override", value: "remove me" }]),
+      parameterBinding("steps", "integer", [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }]),
     ];
 
     saveWorkingSession(form, null, [], null, storage);
 
     expect(loadWorkingSession(storage).form.parameterBindings).toEqual([
-      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }] },
-      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }] },
+      parameterBinding("steps", "integer", [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }]),
+      parameterBinding("enabled", "boolean", [{ kind: "base" }]),
     ]);
+  });
+
+  it("round-trips retained Values and exact Range drafts in v13", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.parameterBindings[0] = {
+      ...form.parameterBindings[0],
+      mode: "range",
+      alternatives: [{ kind: "override", value: "30" }],
+      range: { start: "30.00", end: "0.00", step: "-2.50", includeBase: true },
+    };
+
+    saveWorkingSession(form, null, [], null, storage);
+
+    expect(loadWorkingSession(storage).form.parameterBindings[0]).toEqual(form.parameterBindings[0]);
   });
 
   it("round-trips zero values and one exact empty value distinctly", () => {
@@ -204,7 +219,7 @@ describe("browser working session", () => {
       const alternatives = form.parameterBindings[0].alternatives as Array<Record<string, unknown>>;
       alternatives[0].value = 30;
     }],
-  ] as const)("falls back for malformed v12 %s", (_name, mutate) => {
+  ] as const)("falls back for malformed v13 %s", (_name, mutate) => {
     const storage = new MemoryStorage();
     saveWorkingSession(
       populatedForm(),
@@ -225,7 +240,7 @@ describe("browser working session", () => {
     expectFreshSession(loadWorkingSession(storage));
   });
 
-  it.each([1, 8, 9, 10, 11, 99])("resets an old or unknown version %i", (version) => {
+  it.each([1, 8, 9, 10, 11, 12, 99])("resets an old or unknown version %i", (version) => {
     const storage = new MemoryStorage();
     saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
@@ -240,7 +255,7 @@ describe("browser working session", () => {
 
   it.each([
     "not json",
-    JSON.stringify({ version: 12, form: { prompts: [] }, current_run_id: null }),
+    JSON.stringify({ version: 13, form: { prompts: [] }, current_run_id: null }),
   ])("falls back safely for malformed current data", (stored) => {
     const storage = new MemoryStorage();
     storage.setItem(WORKING_SESSION_KEY, stored);
@@ -282,7 +297,7 @@ function populatedForm(): BatchFormState {
     { slot_key: "style", values: [null, "asset-b", "asset-a"] },
     { slot_key: "composition", values: ["asset-c", "asset-d"] },
   ];
-  form.parameterBindings = [{ parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }] }];
+  form.parameterBindings = [parameterBinding("steps", "integer", [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }])];
   form.seedMode = "explicit";
   form.seedValues = "9, 3";
   form.randomSeedCount = "7";
@@ -301,6 +316,22 @@ function populatedForm(): BatchFormState {
   form.workflowProfileWorkflowVersionId = "workflow-v2";
   form.workflowProfileContentSha256 = "profile-sha";
   return form;
+}
+
+function parameterBinding(
+  parameterKey: string,
+  valueType: "string" | "integer" | "float" | "boolean",
+  alternatives: Array<{ kind: "base" } | { kind: "override"; value: string }>,
+) {
+  return {
+    parameterKey,
+    valueType,
+    mode: "values" as const,
+    alternatives,
+    range: valueType === "integer"
+      ? { start: "0", end: "10", step: "1", includeBase: false }
+      : { start: "0", end: "1", step: "0.1", includeBase: false },
+  };
 }
 
 function withoutKeys(form: BatchFormState) {

@@ -30,7 +30,16 @@ export interface PromptForm {
 export interface ParameterBindingForm {
   parameterKey: string;
   valueType: ParameterValueType;
+  mode: "values" | "range";
   alternatives: ParameterAlternativeForm[];
+  range: ParameterRangeDraft;
+}
+
+export interface ParameterRangeDraft {
+  start: string;
+  end: string;
+  step: string;
+  includeBase: boolean;
 }
 
 export type ParameterAlternativeForm =
@@ -73,6 +82,9 @@ export interface BatchRequestContext {
 }
 
 export const MAX_RANDOM_SEED_COUNT = 100;
+export const MAX_PARAMETER_ALTERNATIVES = 10_000;
+const MAX_DECIMAL_LENGTH = 100;
+const SIMPLE_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
 
 let nextVariableBindingKey = 1;
 let nextPromptKey = 1;
@@ -272,7 +284,7 @@ export function buildEditableBatchSnapshot(
     };
 
   return {
-    snapshot_version: 4,
+    snapshot_version: 5,
     project,
     source_saved_batch: context.sourceSavedBatch,
     batch: { ...batch, description: form.batchDescription.trim() || null },
@@ -365,13 +377,17 @@ export function reconcileParameterBindings(
     if (!existing) return {
       parameterKey: parameter.key,
       valueType: parameter.value_type,
+      mode: "values",
       alternatives: [{ kind: "base" }],
+      range: defaultParameterRange(parameter.value_type),
     };
     if (existing.valueType === parameter.value_type) return existing;
     return {
       parameterKey: parameter.key,
       valueType: parameter.value_type,
+      mode: "values",
       alternatives: [{ kind: "base" }],
+      range: defaultParameterRange(parameter.value_type),
     };
   });
 }
@@ -386,6 +402,19 @@ export function reconcileFormBindings(form: BatchFormState, profileJson: string)
 
 export function buildParameterBindings(bindings: ParameterBindingForm[]): ParameterBindingRequest[] {
   return bindings.map((binding) => {
+    if (binding.mode === "range") {
+      parameterRangeCount(binding.range, binding.valueType, binding.parameterKey);
+      return {
+        parameter_key: binding.parameterKey,
+        mode: "range",
+        include_base: binding.range.includeBase,
+        range: {
+          start: binding.range.start,
+          end: binding.range.end,
+          step: binding.range.step,
+        },
+      };
+    }
     if (binding.alternatives.length === 0) {
       throw new FormBuildError(
         "parameters",
@@ -407,8 +436,74 @@ export function buildParameterBindings(bindings: ParameterBindingForm[]): Parame
         `${binding.parameterKey} must place Base workflow first.`,
       );
     }
-    return { parameter_key: binding.parameterKey, values };
+    return { parameter_key: binding.parameterKey, mode: "values", values };
   });
+}
+
+export function defaultParameterRange(valueType: ParameterValueType): ParameterRangeDraft {
+  return valueType === "integer"
+    ? { start: "0", end: "10", step: "1", includeBase: false }
+    : { start: "0", end: "1", step: "0.1", includeBase: false };
+}
+
+export function parameterRangeCount(
+  range: ParameterRangeDraft,
+  valueType: ParameterValueType,
+  label: string,
+): number {
+  if (valueType !== "integer" && valueType !== "float") {
+    throw new FormBuildError("parameters", `${label} does not support Range mode.`);
+  }
+  const parsed = [range.start, range.end, range.step].map((raw, index) => (
+    parseRangeDecimal(raw, valueType, label, ["start", "end", "step"][index])
+  ));
+  const scale = Math.max(...parsed.map((value) => value.scale));
+  const [start, end, step] = parsed.map((value) => value.integer * 10n ** BigInt(scale - value.scale));
+  if (step === 0n) throw new FormBuildError("parameters", `${label} step must not be zero.`);
+  if (start < end && step < 0n) {
+    throw new FormBuildError("parameters", `${label} step must be positive for an ascending range.`);
+  }
+  if (start > end && step > 0n) {
+    throw new FormBuildError("parameters", `${label} step must be negative for a descending range.`);
+  }
+  const distance = start > end ? start - end : end - start;
+  const magnitude = step < 0n ? -step : step;
+  const generated = distance / magnitude + 1n;
+  if (generated > BigInt(MAX_PARAMETER_ALTERNATIVES)) {
+    throw new FormBuildError(
+      "parameters",
+      `This range produces ${generated.toLocaleString()} values. Reduce the range or increase the step.`,
+    );
+  }
+  if (valueType === "integer") {
+    const scaleFactor = 10n ** BigInt(scale);
+    const last = start + (generated - 1n) * step;
+    const minimum = BigInt(Number.MIN_SAFE_INTEGER) * scaleFactor;
+    const maximum = BigInt(Number.MAX_SAFE_INTEGER) * scaleFactor;
+    if (start < minimum || start > maximum || last < minimum || last > maximum) {
+      throw new FormBuildError("parameters", `${label} integer range values must be JavaScript-safe integers.`);
+    }
+  }
+  return Number(generated) + (range.includeBase ? 1 : 0);
+}
+
+function parseRangeDecimal(
+  raw: string,
+  valueType: ParameterValueType,
+  label: string,
+  field: string,
+): { integer: bigint; scale: number } {
+  if (raw.length > MAX_DECIMAL_LENGTH || !SIMPLE_DECIMAL.test(raw)) {
+    throw new FormBuildError("parameters", `${label} ${field} must use simple decimal notation.`);
+  }
+  const unsigned = raw[0] === "+" || raw[0] === "-" ? raw.slice(1) : raw;
+  const [whole, fraction = ""] = unsigned.split(".");
+  const digits = `${whole || "0"}${fraction}`;
+  const integer = BigInt(`${raw.startsWith("-") ? "-" : ""}${digits}`);
+  if (valueType === "integer" && integer % 10n ** BigInt(fraction.length) !== 0n) {
+    throw new FormBuildError("parameters", `${label} integer ranges require integral start, end, and step.`);
+  }
+  return { integer, scale: fraction.length };
 }
 
 export function parseParameterValue(

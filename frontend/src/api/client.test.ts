@@ -383,7 +383,7 @@ function batchRequest() {
     workflow,
     workflow_profile: workflowProfile,
     batch_snapshot: {
-      snapshot_version: 4 as const,
+      snapshot_version: 5 as const,
       project,
       source_saved_batch: null,
       batch: { ...batch, description: null },

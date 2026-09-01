@@ -14,7 +14,6 @@ from batchcraft.db import (
     SavedBatchDefinition,
     SavedBatchImageBinding,
     SavedBatchIntegrityError,
-    SavedBatchParameterBinding,
     SavedBatchPromptSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
@@ -29,6 +28,7 @@ from batchcraft.db import (
     apply_migrations,
     open_connection,
 )
+from batchcraft.domain import ParameterDecimalRange, ParameterRangeIntent, ParameterValuesIntent
 
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 
@@ -145,8 +145,8 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
             SavedBatchImageBinding("mask", ("asset-mask-2", "asset-mask-1")),
         ),
         parameter_bindings=(
-            SavedBatchParameterBinding("cfg", (None, 8, 9.5)),
-            SavedBatchParameterBinding("steps", (30, 40)),
+            ParameterValuesIntent("cfg", (None, 8, 9.5)),
+            ParameterValuesIntent("steps", (30, 40)),
         ),
         selected_workflow_version=SavedBatchWorkflowVersionSnapshot(
             version.id, version.content_sha256, version.workflow
@@ -204,8 +204,8 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     assert saved.variable_bindings == definition.variable_bindings
     assert saved.image_bindings == definition.image_bindings
     assert saved.parameter_bindings == (
-        SavedBatchParameterBinding("steps", (30, 40)),
-        SavedBatchParameterBinding("cfg", (None, 8, 9.5)),
+        ParameterValuesIntent("steps", (30, 40)),
+        ParameterValuesIntent("cfg", (None, 8, 9.5)),
     )
     assert saved.selected_workflow_version is not None
     assert definition.selected_workflow_version is not None
@@ -283,6 +283,95 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     assert saved_without_profile_version.selected_workflow_profile_version is None
 
 
+def test_saved_batch_range_intent_roundtrips_and_survives_revision_update(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    store = SavedBatchStore(path, clock=lambda: NOW)
+    definition = _complete_definition(path)
+    ranged = replace(
+        definition,
+        parameter_bindings=(
+            ParameterRangeIntent("steps", True, ParameterDecimalRange("10", "30", "10")),
+            ParameterRangeIntent("cfg", False, ParameterDecimalRange("6.5", "7.5", "0.5")),
+        ),
+    )
+
+    created = store.create("project-1", "ranged", ranged, batch_id="batch-ranged")
+    updated = store.update(
+        created.id,
+        replace(ranged, name="Ranged updated"),
+        expected_revision=created.revision,
+    )
+
+    assert created.parameter_bindings == ranged.parameter_bindings
+    assert updated.revision == 2
+    assert updated.parameter_bindings == ranged.parameter_bindings
+    with closing(open_connection(path)) as connection:
+        assert connection.execute(
+            "SELECT position, mode, include_base, range_start, range_end, range_step "
+            "FROM batch_parameter_binding WHERE batch_id = ? ORDER BY position",
+            (created.id,),
+        ).fetchall() == [
+            (1, "range", 1, "10", "30", "10"),
+            (2, "range", 0, "6.5", "7.5", "0.5"),
+        ]
+        assert connection.execute(
+            "SELECT count(*) FROM batch_parameter_binding_value WHERE batch_id = ?",
+            (created.id,),
+        ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    (
+        ("unsupported_mode", "unsupported mode"),
+        ("invalid_boolean", "include_base must be zero or one"),
+        ("incomplete_range", "complete decimal text"),
+        ("value_row", "invalid value rows"),
+        ("malformed_decimal", "invalid persisted parameter intent"),
+    ),
+)
+def test_saved_batch_reads_reject_corrupt_persisted_parameter_ranges(
+    tmp_path: Path, corruption: str, message: str
+) -> None:
+    path = _database(tmp_path)
+    definition = _complete_definition(path)
+    ranged = replace(
+        definition,
+        parameter_bindings=(
+            ParameterRangeIntent("steps", True, ParameterDecimalRange("10", "30", "10")),
+            ParameterRangeIntent("cfg", False, ParameterDecimalRange("6.5", "7.5", "0.5")),
+        ),
+    )
+    SavedBatchStore(path, clock=lambda: NOW).create(
+        "project-1", "ranged", ranged, batch_id="batch-ranged"
+    )
+    with closing(open_connection(path)) as connection:
+        if corruption == "value_row":
+            connection.execute(
+                "INSERT INTO batch_parameter_binding_value "
+                "(batch_id, binding_position, value_position, value_json) VALUES (?, 1, 1, ?)",
+                ("batch-ranged", "20\n"),
+            )
+        else:
+            if corruption in {"unsupported_mode", "invalid_boolean", "incomplete_range"}:
+                connection.execute("PRAGMA ignore_check_constraints = ON")
+            assignments = {
+                "unsupported_mode": ("mode = ?", "future"),
+                "invalid_boolean": ("include_base = ?", 2),
+                "incomplete_range": ("range_end = ?", None),
+                "malformed_decimal": ("range_step = ?", "not-decimal"),
+            }
+            clause, value = assignments[corruption]
+            connection.execute(
+                f"UPDATE batch_parameter_binding SET {clause} WHERE batch_id = ? AND position = 1",
+                (value, "batch-ranged"),
+            )
+        connection.commit()
+
+    with pytest.raises(SavedBatchStoreError, match=message):
+        SavedBatchStore(path).get("batch-ranged")
+
+
 @pytest.mark.parametrize(
     "corruption",
     (
@@ -310,7 +399,7 @@ def test_saved_batch_reads_reject_corrupt_persisted_parameter_values(
                 "WHERE batch_id = ? AND binding_position = 1 AND value_position = 1",
                 ('"thirty"\n', "batch-complete"),
             )
-            message = "does not match its Profile type"
+            message = "must be integer"
         elif corruption == "unsafe_integer":
             connection.execute(
                 "UPDATE batch_parameter_binding_value SET value_json = ? "
@@ -377,8 +466,8 @@ def test_saved_batch_writes_validate_parameter_alternatives(
     path = _database(tmp_path)
     definition = _complete_definition(path)
     bindings = (
-        SavedBatchParameterBinding("steps", values),  # type: ignore[arg-type]
-        SavedBatchParameterBinding("cfg", (None, 8, 9.5)),
+        ParameterValuesIntent("steps", values),  # type: ignore[arg-type]
+        ParameterValuesIntent("cfg", (None, 8, 9.5)),
     )
 
     with pytest.raises((SavedBatchValidationError, SavedBatchIntegrityError), match=message):

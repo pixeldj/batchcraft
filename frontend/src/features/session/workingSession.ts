@@ -10,7 +10,7 @@ import {
 } from "../batch/form";
 
 export const WORKING_SESSION_KEY = "batchcraft.working-session";
-const WORKING_SESSION_VERSION = 12;
+const WORKING_SESSION_VERSION = 13;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
 type StoredPrompt = Omit<PromptForm, "key">;
@@ -20,8 +20,8 @@ interface StoredBatchForm extends Omit<BatchFormState, "prompts" | "variableBind
   variableBindings: StoredVariableBinding[];
 }
 
-interface WorkingSessionEnvelopeV12 {
-  version: 12;
+interface WorkingSessionEnvelopeV13 {
+  version: 13;
   form: StoredBatchForm;
   current_run_id: string | null;
   session_run_ids: string[];
@@ -52,7 +52,7 @@ export function loadWorkingSession(
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (!isWorkingSessionEnvelopeV12(value)) {
+    if (!isWorkingSessionEnvelopeV13(value)) {
       return defaultSession();
     }
     return restoredSession(value);
@@ -73,7 +73,7 @@ export function saveWorkingSession(
   if (!storage) {
     return;
   }
-  const envelope: WorkingSessionEnvelopeV12 = {
+  const envelope: WorkingSessionEnvelopeV13 = {
     version: WORKING_SESSION_VERSION,
     form: dehydrateForm(form),
     current_run_id: currentRunId,
@@ -146,7 +146,7 @@ function defaultSession(): RestoredWorkingSession {
   };
 }
 
-function restoredSession(value: WorkingSessionEnvelopeV12): RestoredWorkingSession {
+function restoredSession(value: WorkingSessionEnvelopeV13): RestoredWorkingSession {
   return {
     form: hydrateForm(value.form),
     currentRunId: value.current_run_id,
@@ -166,7 +166,7 @@ function browserSessionStorage(): Storage | null {
   }
 }
 
-function isWorkingSessionEnvelopeV12(value: unknown): value is WorkingSessionEnvelopeV12 {
+function isWorkingSessionEnvelopeV13(value: unknown): value is WorkingSessionEnvelopeV13 {
   return (
     isRecord(value) &&
     hasExactKeys(value, [
@@ -265,9 +265,11 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
 function isParameterBindings(value: unknown): boolean {
   if (!Array.isArray(value) || !value.every((binding) => (
     isRecord(binding)
-    && hasExactKeys(binding, ["parameterKey", "valueType", "alternatives"])
+    && hasExactKeys(binding, ["parameterKey", "valueType", "mode", "alternatives", "range"])
     && isNonEmptyString(binding.parameterKey)
     && ["string", "integer", "float", "boolean"].includes(String(binding.valueType))
+    && (binding.mode === "values" || binding.mode === "range")
+    && (binding.mode !== "range" || binding.valueType === "integer" || binding.valueType === "float")
     && Array.isArray(binding.alternatives)
     && binding.alternatives.every((alternative) => (
       isRecord(alternative)
@@ -281,6 +283,12 @@ function isParameterBindings(value: unknown): boolean {
     && binding.alternatives.filter((alternative) => alternative.kind === "base").length <= 1
     && (!binding.alternatives.some((alternative) => alternative.kind === "base")
       || binding.alternatives[0]?.kind === "base")
+    && isRecord(binding.range)
+    && hasExactKeys(binding.range, ["start", "end", "step", "includeBase"])
+    && typeof binding.range.start === "string"
+    && typeof binding.range.end === "string"
+    && typeof binding.range.step === "string"
+    && typeof binding.range.includeBase === "boolean"
   ))) return false;
   const keys = value.map((binding) => (binding as { parameterKey: string }).parameterKey);
   return new Set(keys).size === keys.length;

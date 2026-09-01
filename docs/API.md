@@ -181,10 +181,9 @@ required `batch_snapshot` object containing the full editable Saved Batch state.
 Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
 template text, canonical variable bindings shaped as `{ "placeholder": string, "values": string[] }`,
 ordered image bindings shaped as `{ "slot_key": string, "values": [asset_id | null] }`, seed input,
-ordered parameter bindings shaped as `{ "parameter_key": string, "values": [scalar | null, ...] }`,
-the API-format workflow, and its Workflow Profile snapshot. Preview and Run creation require one or
-more ordered, unique, type-correct alternatives per Profile parameter. The singular `prompt_version`
-field is not accepted.
+ordered parameter bindings using the discriminated `values` or `range` shapes documented below, the
+API-format workflow, and its Workflow Profile snapshot. The singular `prompt_version` field is not
+accepted.
 The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
 a Random seed intent that stores only `mode` and `count`.
 
@@ -201,7 +200,7 @@ every concrete Job's resolved prompt, resolved variables, ordered `resolved_imag
 materialized seed. Each resolved image entry has `slot_key`, frozen `label`, nullable `asset_id`, and a
 nullable frozen filename. The required `batch_snapshot` exposes canonical
 editable intent, including optional frozen Workflow/Profile display labels and version numbers. The
-Run loader supports manifest v7 with `snapshot_version: 4`; unsupported manifest or snapshot versions
+Run loader supports manifest v7 with `snapshot_version: 5`; unsupported manifest or snapshot versions
 make the Run invalid rather than producing a partial response.
 
 ## Project Assets
@@ -243,8 +242,8 @@ returns a single Saved Batch; `PATCH` updates it with the client-held `revision`
 Saved Batch request and detail schemas expose the same canonical variable binding shape. Zero values
 are allowed because Saved Batches are drafts. The empty string is a concrete value. Saved Batch writes
 and executable Preview/Run requests reject exact duplicate values, including duplicate empty strings.
-Requests containing removed binding fields such as `mode`, `fixed_value`, or `selected_values` are
-invalid; the API does not normalize them.
+Requests containing removed binding fields such as `fixed_value` or `selected_values`, or parameter
+bindings without the required `mode` discriminator, are invalid; the API does not normalize them.
 
 Saved Batch request and detail schemas expose `image_bindings` entries with `slot_key` and `values`.
 When a Profile is selected, Saved Batch writes require the exact Profile slot set in Profile order with
@@ -254,10 +253,18 @@ when included, and does not upload or mutate that slot for its concrete Job. Eve
 Cartesian dimension. Zipped, row-linked, and collection-link semantics are not supported.
 
 Saved Batch request and detail schemas also expose ordered `parameter_bindings`. When a Profile is
-selected, writes require the exact Profile parameter set in Profile order and one or more ordered,
-unique typed scalar or `null` alternatives per parameter. `null` means Base workflow and appears first
-when included. Empty string, zero, and false remain concrete overrides. The backend rejects duplicates,
-wrong scalar types, non-finite numbers, and integers outside the signed JavaScript-safe range.
+selected, writes require the exact Profile parameter set in Profile order. Explicit bindings use
+`{ "parameter_key": ..., "mode": "values", "values": [...] }` and retain Pass 3B-1 validation.
+Numeric Range bindings use `{ "parameter_key": ..., "mode": "range", "include_base": boolean,
+"range": { "start": decimal-string, "end": decimal-string, "step": decimal-string } }`. String and
+boolean parameters cannot use Range mode. Saved Batch responses preserve Range mode and exact decimal
+text. Optimistic revision behavior is unchanged.
+
+The backend is authoritative for Range materialization. It uses exact scaled-integer progression,
+supports ascending and descending ranges, includes End only when exactly reached, rejects zero or
+wrong-direction steps, and limits a Range to 10,000 generated numeric values. Base workflow is prepended
+after materialization when requested. The resulting explicit values enter the existing compiler; Range
+objects never enter Compiled Jobs, executor state, or workflow preparation.
 
 Executable Preview and Run requests may supply binding records in any order. Compilation resolves them
 by stable key and expands Image Input and parameter dimensions in their respective Profile order.

@@ -9,6 +9,8 @@ import { ImageInputBindingsEditor } from "./ImageInputBindingsEditor";
 import { ParameterBindingsEditor } from "./ParameterBindingsEditor";
 import {
   MAX_RANDOM_SEED_COUNT,
+  buildParameterBindings,
+  parameterRangeCount,
   newVariableBinding,
   normalizedBindingValues,
   profileParameters,
@@ -80,6 +82,8 @@ export function BatchEditor({
 }: Props) {
   const [variablesExpanded, setVariablesExpanded] = useState(false);
   const [seedsExpanded, setSeedsExpanded] = useState(false);
+  const [parametersExpanded, setParametersExpanded] = useState(false);
+  const parameters = safeProfileParameters(form.workflowProfileJson);
   const workflowSelectionIncomplete = Boolean(form.workflowLibraryProjectId) && (
     !form.workflowId ||
     !form.workflowVersionId ||
@@ -96,6 +100,7 @@ export function BatchEditor({
   const seedsComplete = form.seedMode === "random"
     ? /^\d+$/.test(form.randomSeedCount.trim())
     : form.seedValues.trim().length > 0;
+  const parametersComplete = parameterBindingsComplete(form.parameterBindings, parameters);
   const previewUnavailable = previewing || !projectVerified || selectedProjectId !== form.projectId || workflowSelectionIncomplete;
   function update<K extends keyof BatchFormState>(key: K, value: BatchFormState[K]) {
     onChange({ ...form, [key]: value });
@@ -320,11 +325,22 @@ export function BatchEditor({
         onChange={(imageBindings) => update("imageBindings", imageBindings)}
       />
 
-      <ParameterBindingsEditor
-        parameters={safeProfileParameters(form.workflowProfileJson)}
-        parameterBindings={form.parameterBindings}
-        onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
-      />
+      {parameters.length ? (
+        <ConfigurationSection
+          title="Parameters"
+          summary={parameterSummary(form.parameterBindings, parameters.length)}
+          expanded={parametersExpanded}
+          collapsible={parametersComplete}
+          controlsId="parameter-binding-controls"
+          onExpandedChange={setParametersExpanded}
+        >
+          <ParameterBindingsEditor
+            parameters={parameters}
+            parameterBindings={form.parameterBindings}
+            onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
+          />
+        </ConfigurationSection>
+      ) : null}
 
       {error ? <p className="operation-error" role="alert">{error}</p> : null}
       <div className="action-row">
@@ -463,4 +479,33 @@ function seedSummary(form: BatchFormState): string {
   if (form.seedMode === "fixed") return `Fixed · ${form.seedValues.trim() || "not set"}`;
   const seeds = form.seedValues.split(/[\n,]/).map((seed) => seed.trim()).filter(Boolean);
   return `Explicit · ${seeds.length} ${seeds.length === 1 ? "seed" : "seeds"}`;
+}
+
+function parameterBindingsComplete(
+  bindings: BatchFormState["parameterBindings"],
+  parameters: ReturnType<typeof safeProfileParameters>,
+): boolean {
+  if (bindings.length !== parameters.length || !parameters.every((parameter) => bindings.some(
+    (binding) => binding.parameterKey === parameter.key && binding.valueType === parameter.value_type,
+  ))) return false;
+  try {
+    buildParameterBindings(bindings);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parameterSummary(bindings: BatchFormState["parameterBindings"], parameterCount: number): string {
+  const sweeping = bindings.filter((binding) => {
+    if (binding.mode === "range") {
+      try {
+        return parameterRangeCount(binding.range, binding.valueType, binding.parameterKey) > 1;
+      } catch {
+        return false;
+      }
+    }
+    return binding.alternatives.length > 1;
+  }).length;
+  return `${parameterCount} ${parameterCount === 1 ? "parameter" : "parameters"} · ${sweeping} sweeping`;
 }

@@ -30,7 +30,9 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
-    ParameterBinding,
+    ParameterDecimalRange,
+    ParameterRangeIntent,
+    ParameterValuesIntent,
     ParameterValueType,
     PromptVersion,
     ResolvedImageInput,
@@ -40,6 +42,7 @@ from batchcraft.domain import (
     VariableBinding,
     WorkflowParameter,
     compile_batch,
+    materialize_parameter_bindings,
     validate_image_input_slot_key,
     validate_parameter_scalar,
 )
@@ -64,7 +67,11 @@ from batchcraft.files.models import (
     PublishedRun,
 )
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
-from batchcraft.files.snapshots import BatchSnapshotV4
+from batchcraft.files.snapshots import (
+    BatchSnapshotV5,
+    SnapshotParameterRangeBinding,
+    SnapshotParameterValuesBinding,
+)
 
 RUN_FORMAT_VERSION = 1
 MANIFEST_FORMAT_VERSION = 7
@@ -1090,12 +1097,12 @@ def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, 
 
 def _parse_batch_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
     try:
-        parsed = BatchSnapshotV4.model_validate(snapshot)
+        parsed = BatchSnapshotV5.model_validate(snapshot)
     except ValidationError as error:
-        raise RunStoreError(f"invalid Batch snapshot v4: {error}") from error
+        raise RunStoreError(f"invalid Batch snapshot v5: {error}") from error
     canonical = cast(dict[str, object], parsed.model_dump(mode="json"))
     if canonical != snapshot:
-        raise RunStoreError("invalid Batch snapshot v4: snapshot must use its complete shape")
+        raise RunStoreError("invalid Batch snapshot v5: snapshot must use its complete shape")
     return canonical
 
 
@@ -1108,7 +1115,7 @@ def _validate_batch_snapshot_consistency(
     workflow: dict[str, object],
     workflow_profile: dict[str, object],
 ) -> None:
-    parsed = BatchSnapshotV4.model_validate(snapshot)
+    parsed = BatchSnapshotV5.model_validate(snapshot)
     if (
         parsed.project.id,
         parsed.project.filesystem_key,
@@ -1158,15 +1165,15 @@ def _validate_batch_snapshot_consistency(
                     for item in parsed.image_bindings
                 ),
                 parameters=_profile_parameters(workflow_profile),
-                parameter_bindings=tuple(
-                    ParameterBinding(parameter_key=item.parameter_key, values=tuple(item.values))
-                    for item in parsed.parameter_bindings
+                parameter_bindings=materialize_parameter_bindings(
+                    _profile_parameters(workflow_profile),
+                    tuple(_snapshot_parameter_intent(item) for item in parsed.parameter_bindings),
                 ),
                 seeds=seeds,
             ),
             max_jobs=plan.job_count,
         )
-    except CompilationError as error:
+    except (CompilationError, ValueError) as error:
         raise RunStoreError(f"Batch snapshot does not compile: {error}") from error
     if not _compiled_plans_match_exactly(snapshot_plan, plan):
         raise RunStoreError("Batch snapshot does not reconstruct the compiled Run plan")
@@ -1200,6 +1207,18 @@ def _profile_parameters(profile: dict[str, object]) -> tuple[WorkflowParameter, 
         return workflow_profile_parameters(profile)
     except WorkflowPreparationError as error:
         raise RunStoreError(f"invalid Workflow Profile parameters: {error}") from error
+
+
+def _snapshot_parameter_intent(
+    binding: SnapshotParameterValuesBinding | SnapshotParameterRangeBinding,
+) -> ParameterValuesIntent | ParameterRangeIntent:
+    if isinstance(binding, SnapshotParameterValuesBinding):
+        return ParameterValuesIntent(binding.parameter_key, tuple(binding.values))
+    return ParameterRangeIntent(
+        binding.parameter_key,
+        binding.include_base,
+        ParameterDecimalRange(binding.range.start, binding.range.end, binding.range.step),
+    )
 
 
 def _required_object(data: dict[str, object], name: str) -> dict[str, object]:

@@ -1,5 +1,10 @@
 import type { ParameterValueType, WorkflowProfileParameter } from "../../api/types";
-import type { ParameterAlternativeForm, ParameterBindingForm } from "./form";
+import {
+  parameterRangeCount,
+  type ParameterAlternativeForm,
+  type ParameterBindingForm,
+  type ParameterRangeDraft,
+} from "./form";
 
 interface Props {
   parameters: WorkflowProfileParameter[];
@@ -16,25 +21,51 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, onChang
   });
   if (rows.length === 0) return null;
 
-  function update(parameterKey: string, alternatives: ParameterAlternativeForm[]) {
+  function patch(parameterKey: string, next: Partial<ParameterBindingForm>) {
     onChange(parameterBindings.map((binding) => binding.parameterKey === parameterKey
-      ? { ...binding, alternatives }
+      ? { ...binding, ...next }
       : binding));
   }
 
+  function update(parameterKey: string, alternatives: ParameterAlternativeForm[]) {
+    patch(parameterKey, { alternatives });
+  }
+
   return (
-    <fieldset className="parameter-bindings">
-      <legend>Parameters</legend>
+    <div className="parameter-bindings">
       <p className="field-hint">Each ordered alternative is resolved by the backend into concrete Jobs.</p>
       <div className="repeater-stack">
         {rows.map(({ parameter, binding }) => {
           const includesBase = binding.alternatives.some((alternative) => alternative.kind === "base");
+          const rangeResult = binding.mode === "range" ? rangeValidation(binding) : null;
+          const count = binding.mode === "range"
+            ? rangeResult?.count ?? null
+            : binding.alternatives.length;
           return (
             <div className="repeater-card" key={parameter.key}>
               <div className="repeater-title">
                 <strong>{parameter.label}</strong>
-                <span className="field-hint">{binding.alternatives.length} {binding.alternatives.length === 1 ? "alternative" : "alternatives"}</span>
+                <span className="field-hint">
+                  {count === null ? "Invalid range" : `${count} ${count === 1 ? "alternative" : "alternatives"}`}
+                </span>
               </div>
+              {binding.valueType === "integer" || binding.valueType === "float" ? (
+                <div className="parameter-mode" role="group" aria-label={`${parameter.label} mode`}>
+                  <button aria-pressed={binding.mode === "values"} className={binding.mode === "values" ? "selected" : ""} type="button" onClick={() => patch(parameter.key, { mode: "values" })}>Values</button>
+                  <button aria-pressed={binding.mode === "range"} className={binding.mode === "range" ? "selected" : ""} type="button" onClick={() => patch(parameter.key, { mode: "range" })}>Range</button>
+                </div>
+              ) : null}
+              {binding.mode === "range" ? (
+                <RangeEditor
+                  parameterKey={parameter.key}
+                  label={parameter.label}
+                  range={binding.range}
+                  error={rangeResult?.error ?? null}
+                  count={rangeResult?.count ?? null}
+                  onChange={(range) => patch(parameter.key, { range })}
+                />
+              ) : (
+                <>
               <div className="parameter-alternative-toolbar">
                 <label className="checkbox-row">
                   <input
@@ -110,12 +141,62 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, onChang
                   </li>
                 ))}
               </ol>
+                </>
+              )}
             </div>
           );
         })}
       </div>
-    </fieldset>
+    </div>
   );
+}
+
+function RangeEditor({ parameterKey, label, range, error, count, onChange }: {
+  parameterKey: string;
+  label: string;
+  range: ParameterRangeDraft;
+  error: string | null;
+  count: number | null;
+  onChange(range: ParameterRangeDraft): void;
+}) {
+  const errorId = `${parameterKey}-range-error`;
+  function update(key: keyof ParameterRangeDraft, value: string | boolean) {
+    onChange({ ...range, [key]: value });
+  }
+  return (
+    <div className="parameter-range-editor">
+      <div className="field-grid three-columns">
+        {(["start", "end", "step"] as const).map((key) => (
+          <label className="field" key={key}>
+            <span className="field-label">{key[0].toUpperCase() + key.slice(1)}</span>
+            <input
+              aria-describedby={error ? errorId : undefined}
+              aria-invalid={Boolean(error)}
+              aria-label={`${label} range ${key}`}
+              inputMode="decimal"
+              value={range[key]}
+              onChange={(event) => update(key, event.target.value)}
+            />
+          </label>
+        ))}
+      </div>
+      <label className="checkbox-row">
+        <input type="checkbox" aria-label={`Include Base workflow for ${label}`} checked={range.includeBase} onChange={(event) => update("includeBase", event.target.checked)} />
+        <span>Include Base workflow</span>
+      </label>
+      {error
+        ? <p className="operation-error" id={errorId} role="alert">{error}</p>
+        : <p className="field-hint">{count} {count === 1 ? "alternative" : "alternatives"}{range.includeBase ? " including Base" : ""}</p>}
+    </div>
+  );
+}
+
+function rangeValidation(binding: ParameterBindingForm): { count: number | null; error: string | null } {
+  try {
+    return { count: parameterRangeCount(binding.range, binding.valueType, binding.parameterKey), error: null };
+  } catch (error) {
+    return { count: null, error: error instanceof Error ? error.message : "Invalid range." };
+  }
 }
 
 function ParameterValueInput({ valueType, value, label, onChange }: { valueType: ParameterValueType; value: string; label: string; onChange(value: string): void }) {

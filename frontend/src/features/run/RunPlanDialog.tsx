@@ -1,4 +1,5 @@
 import type { EditableBatchSnapshot, RunPlanJobResponse, RunResponse } from "../../api/types";
+import { parameterRangeCount, profileParameters } from "../batch/form";
 
 interface Props {
   run: RunResponse;
@@ -42,12 +43,18 @@ export function RunPlanDialog({ run, onClose }: Props) {
                 <div key={binding.parameter_key}>
                   <dt>{resolved?.label ?? binding.parameter_key}</dt>
                   <dd className="run-plan-parameter-alternatives">
-                    {binding.values.map((value, index) => (
+                    {binding.mode === "values" ? binding.values.map((value, index) => (
                       <span key={`${typeof value}-${String(value)}-${index}`}>
                         <span className="alternative-number">{index + 1}</span>
                         {formatParameterValue(value)}
                       </span>
-                    ))}
+                    )) : (
+                      <span className="run-plan-range-intent">
+                        <strong>{binding.range.start} → {binding.range.end} by {binding.range.step}</strong>
+                        <span>{rangeBindingCount(snapshot, binding)} alternatives</span>
+                        <span>{binding.include_base ? "Includes Base workflow" : "Base workflow not included"}</span>
+                      </span>
+                    )}
                   </dd>
                 </div>
               );
@@ -192,9 +199,29 @@ function parameterSummary(run: RunResponse): string {
   if (parameters.length === 0) return "No parameters";
   const bindings = new Map(run.batch_snapshot.parameter_bindings.map((binding) => [binding.parameter_key, binding]));
   return parameters.map((parameter) => {
-    const count = bindings.get(parameter.parameter_key)?.values.length ?? 0;
+    const binding = bindings.get(parameter.parameter_key);
+    const count = binding?.mode === "values"
+      ? binding.values.length
+      : binding?.mode === "range" ? rangeBindingCount(run.batch_snapshot, binding) : 0;
     return `${parameter.label}: ${count} ${count === 1 ? "alternative" : "alternatives"}`;
   }).join(" · ");
+}
+
+function rangeBindingCount(
+  snapshot: EditableBatchSnapshot,
+  binding: Extract<EditableBatchSnapshot["parameter_bindings"][number], { mode: "range" }>,
+): number {
+  const parameter = profileParameters(snapshot.workflow_selection.workflow_profile)
+    .find((candidate) => candidate.key === binding.parameter_key);
+  if (!parameter) return 0;
+  try {
+    return parameterRangeCount({
+      ...binding.range,
+      includeBase: binding.include_base,
+    }, parameter.value_type, binding.parameter_key);
+  } catch {
+    return 0;
+  }
 }
 
 function formatParameterValue(value: string | number | boolean | null): string {

@@ -19,10 +19,24 @@ export interface ImageBindingRequest {
 export type ParameterValueType = "string" | "integer" | "float" | "boolean";
 export type ParameterScalar = string | number | boolean;
 
-export interface ParameterBindingRequest {
+export interface ParameterValuesBindingRequest {
   parameter_key: string;
+  mode: "values";
   values: Array<ParameterScalar | null>;
 }
+
+export interface ParameterRangeBindingRequest {
+  parameter_key: string;
+  mode: "range";
+  include_base: boolean;
+  range: {
+    start: string;
+    end: string;
+    step: string;
+  };
+}
+
+export type ParameterBindingRequest = ParameterValuesBindingRequest | ParameterRangeBindingRequest;
 
 export interface WorkflowProfileParameter {
   key: string;
@@ -60,7 +74,7 @@ export interface BatchRequest {
 }
 
 export interface EditableBatchSnapshot {
-  snapshot_version: 4;
+  snapshot_version: 5;
   project: IdentityRequest;
   source_saved_batch: { id: string; revision: number } | null;
   batch: IdentityRequest & { description: string | null };

@@ -134,21 +134,75 @@ describe("Saved Batch Parameters", () => {
       ] },
     };
     detail.parameter_bindings = [
-      { parameter_key: "enabled", values: [false, true] },
-      { parameter_key: "caption", values: [null, "", "caption"] },
+      { parameter_key: "enabled", mode: "values", values: [false, true] },
+      { parameter_key: "caption", mode: "values", values: [null, "", "caption"] },
     ];
 
     const form = savedBatchToForm(detail, project());
     expect(form.parameterBindings).toEqual([
-      { parameterKey: "caption", valueType: "string", alternatives: [{ kind: "base" }, { kind: "override", value: "" }, { kind: "override", value: "caption" }] },
-      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "override", value: "false" }, { kind: "override", value: "true" }] },
+      { parameterKey: "caption", valueType: "string", mode: "values", alternatives: [{ kind: "base" }, { kind: "override", value: "" }, { kind: "override", value: "caption" }], range: { start: "0", end: "1", step: "0.1", includeBase: false } },
+      { parameterKey: "enabled", valueType: "boolean", mode: "values", alternatives: [{ kind: "override", value: "false" }, { kind: "override", value: "true" }], range: { start: "0", end: "1", step: "0.1", includeBase: false } },
     ]);
     expect(buildSavedBatchDefinition(form).parameter_bindings).toEqual([
-      { parameter_key: "caption", values: [null, "", "caption"] },
-      { parameter_key: "enabled", values: [false, true] },
+      { parameter_key: "caption", mode: "values", values: [null, "", "caption"] },
+      { parameter_key: "enabled", mode: "values", values: [false, true] },
     ]);
     const changed = { ...form, parameterBindings: form.parameterBindings.map((binding) => binding.parameterKey === "caption" ? { ...binding, alternatives: [...binding.alternatives].reverse() } : binding) };
     expect(canonicalBatchIntent(changed)).not.toBe(canonicalBatchIntent(form));
+  });
+
+  it("reopens and resaves exact Range intent while retaining a Values draft", () => {
+    const detail = savedBatchDetail();
+    detail.selected_workflow_version_id = "workflow-v1";
+    detail.selected_workflow_profile_version_id = "profile-v1";
+    detail.selected_workflow_version = {
+      id: "workflow-v1", content_sha256: "workflow-sha", workflow: { node: {} },
+      workflow_id: "workflow-1", workflow_name: "Workflow", version_number: 1,
+      name_snapshot: "Workflow", workflow_archived_at: null, version_archived_at: null,
+    };
+    detail.selected_workflow_profile_id = "profile-1";
+    detail.selected_workflow_profile_version = {
+      id: "profile-v1", workflow_profile_id: "profile-1", workflow_version_id: "workflow-v1",
+      content_sha256: "profile-sha", workflow_profile_name: "Profile", version_number: 1,
+      name_snapshot: "Profile", workflow_profile_archived_at: null, version_archived_at: null,
+      profile: { mappings: {}, image_inputs: [], parameters: [
+        { key: "cfg", label: "CFG", node_id: "1", input_name: "cfg", value_type: "float" },
+      ] },
+    };
+    detail.parameter_bindings = [{
+      parameter_key: "cfg", mode: "range", include_base: true,
+      range: { start: "0.10", end: "1.00", step: "0.05" },
+    }];
+
+    const form = savedBatchToForm(detail, project());
+    expect(form.parameterBindings).toEqual([{
+      parameterKey: "cfg", valueType: "float", mode: "range",
+      alternatives: [{ kind: "base" }],
+      range: { start: "0.10", end: "1.00", step: "0.05", includeBase: true },
+    }]);
+    expect(buildSavedBatchDefinition(form).parameter_bindings).toEqual(detail.parameter_bindings);
+  });
+
+  it("excludes inactive drafts from Saved Batch dirty identity", () => {
+    const valuesForm = initialBatchForm();
+    valuesForm.parameterBindings = [{
+      parameterKey: "cfg",
+      valueType: "float",
+      mode: "values",
+      alternatives: [{ kind: "override", value: "7" }],
+      range: { start: "0", end: "1", step: "0.1", includeBase: false },
+    }];
+    const changedInactiveRange = {
+      ...valuesForm,
+      parameterBindings: valuesForm.parameterBindings.map((binding) => ({
+        ...binding,
+        range: { start: "3.0", end: "7.0", step: "0.5", includeBase: true },
+      })),
+    };
+
+    expect(canonicalBatchIntent(changedInactiveRange)).toBe(canonicalBatchIntent(valuesForm));
+    changedInactiveRange.parameterBindings[0].mode = "range";
+    expect(canonicalBatchIntent(changedInactiveRange)).not.toBe(canonicalBatchIntent(valuesForm));
   });
 });
 

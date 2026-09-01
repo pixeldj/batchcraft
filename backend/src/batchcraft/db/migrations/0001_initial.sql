@@ -287,6 +287,18 @@ CREATE TABLE batch_parameter_binding (
         AND parameter_key NOT GLOB '*__*'
         AND substr(parameter_key, -1) != '_'
     ),
+    mode TEXT NOT NULL CHECK (mode IN ('values', 'range')),
+    include_base INTEGER NOT NULL CHECK (include_base IN (0, 1)),
+    range_start TEXT,
+    range_end TEXT,
+    range_step TEXT,
+    CHECK (
+        (mode = 'values' AND include_base = 0 AND range_start IS NULL
+            AND range_end IS NULL AND range_step IS NULL)
+        OR
+        (mode = 'range' AND range_start IS NOT NULL AND range_end IS NOT NULL
+            AND range_step IS NOT NULL)
+    ),
     PRIMARY KEY (batch_id, position),
     UNIQUE (batch_id, parameter_key),
     FOREIGN KEY (batch_id) REFERENCES batch(id) ON UPDATE RESTRICT ON DELETE CASCADE

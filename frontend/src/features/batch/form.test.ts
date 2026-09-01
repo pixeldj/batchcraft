@@ -10,6 +10,7 @@ import {
   newPrompt,
   reconcileParameterBindings,
   reconcileImageBindings,
+  parameterRangeCount,
 } from "./form";
 
 describe("buildBatchRequest", () => {
@@ -64,7 +65,7 @@ describe("buildBatchRequest", () => {
         parameters: [],
       },
       batch_snapshot: expect.objectContaining({
-        snapshot_version: 4,
+        snapshot_version: 5,
         source_saved_batch: null,
       }),
     });
@@ -117,22 +118,22 @@ describe("buildBatchRequest", () => {
       { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
     ] });
     form.parameterBindings = [
-      { parameterKey: "caption", valueType: "string", alternatives: [{ kind: "base" }, { kind: "override", value: "" }, { kind: "override", value: "text" }] },
-      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "override", value: "-30" }, { kind: "override", value: "0" }] },
-      { parameterKey: "cfg", valueType: "float", alternatives: [{ kind: "override", value: "7" }] },
-      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }, { kind: "override", value: "false" }] },
+      parameterBinding("caption", "string", [{ kind: "base" }, { kind: "override", value: "" }, { kind: "override", value: "text" }]),
+      parameterBinding("steps", "integer", [{ kind: "override", value: "-30" }, { kind: "override", value: "0" }]),
+      parameterBinding("cfg", "float", [{ kind: "override", value: "7" }]),
+      parameterBinding("enabled", "boolean", [{ kind: "base" }, { kind: "override", value: "false" }]),
     ];
 
     const request = buildBatchRequest(form);
     expect(request.parameter_bindings).toEqual([
-      { parameter_key: "caption", values: [null, "", "text"] },
-      { parameter_key: "steps", values: [-30, 0] },
-      { parameter_key: "cfg", values: [7] },
-      { parameter_key: "enabled", values: [null, false] },
+      { parameter_key: "caption", mode: "values", values: [null, "", "text"] },
+      { parameter_key: "steps", mode: "values", values: [-30, 0] },
+      { parameter_key: "cfg", mode: "values", values: [7] },
+      { parameter_key: "enabled", mode: "values", values: [null, false] },
     ]);
     expect(request.batch_snapshot.parameter_bindings).toEqual(request.parameter_bindings);
     form.parameterBindings[3] = { ...form.parameterBindings[3], alternatives: [{ kind: "override", value: "false" }] };
-    expect(buildBatchRequest(form).parameter_bindings[3]).toEqual({ parameter_key: "enabled", values: [false] });
+    expect(buildBatchRequest(form).parameter_bindings[3]).toEqual({ parameter_key: "enabled", mode: "values", values: [false] });
   });
 
   it.each([
@@ -145,36 +146,83 @@ describe("buildBatchRequest", () => {
     form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
       { key: "value", label: "Value", node_id: "1", input_name: "value", value_type: valueType },
     ] });
-    form.parameterBindings = [{ parameterKey: "value", valueType, alternatives: [{ kind: "override", value }] }];
+    form.parameterBindings = [parameterBinding("value", valueType, [{ kind: "override", value }])];
     expect(() => buildBatchRequest(form)).toThrow(message);
+  });
+
+  it("serializes exact ascending and descending range intent without materializing values", () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "cfg", label: "CFG", node_id: "1", input_name: "cfg", value_type: "float" },
+      { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "integer" },
+    ] });
+    form.parameterBindings = [
+      { ...parameterBinding("cfg", "float", [{ kind: "override", value: "retained" }]), mode: "range", range: { start: "0.10", end: "0.30", step: "0.10", includeBase: true } },
+      { ...parameterBinding("steps", "integer", [{ kind: "base" }]), mode: "range", range: { start: "10", end: "0", step: "-3", includeBase: false } },
+    ];
+
+    expect(buildBatchRequest(form).parameter_bindings).toEqual([
+      { parameter_key: "cfg", mode: "range", include_base: true, range: { start: "0.10", end: "0.30", step: "0.10" } },
+      { parameter_key: "steps", mode: "range", include_base: false, range: { start: "10", end: "0", step: "-3" } },
+    ]);
+    expect(parameterRangeCount(form.parameterBindings[0].range, "float", "CFG")).toBe(4);
+    expect(parameterRangeCount(form.parameterBindings[1].range, "integer", "Steps")).toBe(4);
+  });
+
+  it("counts exact scaled decimals, start=end, and Base without Number addition", () => {
+    expect(parameterRangeCount({ start: "0", end: "1", step: "0.1", includeBase: false }, "float", "CFG")).toBe(11);
+    expect(parameterRangeCount({ start: "7", end: "7", step: "-2", includeBase: true }, "integer", "Steps")).toBe(2);
+    expect(parameterRangeCount({ start: ".5", end: "1.", step: "+.25", includeBase: false }, "float", "CFG")).toBe(3);
+    expect(parameterRangeCount({ start: "1.0", end: "3.0", step: "1.0", includeBase: false }, "integer", "Steps")).toBe(3);
+    expect(parameterRangeCount({ start: "1", end: "10000", step: "1", includeBase: true }, "integer", "Steps")).toBe(10_001);
+  });
+
+  it.each([
+    [{ start: "0", end: "1", step: "0", includeBase: false }, "float", /must not be zero/],
+    [{ start: "0", end: "1", step: "-0.1", includeBase: false }, "float", /positive.*ascending/],
+    [{ start: "1", end: "0", step: "0.1", includeBase: false }, "float", /negative.*descending/],
+    [{ start: "0", end: "1", step: "0.00001", includeBase: false }, "float", /produces 100,001 values/],
+    [{ start: "0.5", end: "1", step: "1", includeBase: false }, "integer", /require integral/],
+    [{ start: "1e2", end: "200", step: "1", includeBase: false }, "float", /simple decimal/],
+  ] as const)("rejects invalid range draft %#", (range, valueType, message) => {
+    expect(() => parameterRangeCount(range, valueType, "Value")).toThrow(message);
+  });
+
+  it("keeps high-precision float validation at the backend boundary", () => {
+    expect(parameterRangeCount({
+      start: "0.10000000000000001",
+      end: "0.2",
+      step: "0.1",
+      includeBase: false,
+    }, "float", "Value")).toBe(1);
   });
 
   it("reconciles complete Parameter order by stable key and exact declared type", () => {
     expect(reconcileParameterBindings([
-      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "override", value: "30" }] },
-      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }, { kind: "override", value: "false" }, { kind: "override", value: "true" }] },
-      { parameterKey: "removed", valueType: "string", alternatives: [{ kind: "override", value: "old" }] },
+      parameterBinding("steps", "integer", [{ kind: "override", value: "30" }]),
+      parameterBinding("enabled", "boolean", [{ kind: "base" }, { kind: "override", value: "false" }, { kind: "override", value: "true" }]),
+      parameterBinding("removed", "string", [{ kind: "override", value: "old" }]),
     ], [
       { key: "enabled", label: "Renamed", node_id: "1", input_name: "enabled", value_type: "boolean" },
       { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "float" },
       { key: "added", label: "Added", node_id: "1", input_name: "added", value_type: "string" },
     ])).toEqual([
-      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }, { kind: "override", value: "false" }, { kind: "override", value: "true" }] },
-      { parameterKey: "steps", valueType: "float", alternatives: [{ kind: "base" }] },
-      { parameterKey: "added", valueType: "string", alternatives: [{ kind: "base" }] },
+      parameterBinding("enabled", "boolean", [{ kind: "base" }, { kind: "override", value: "false" }, { kind: "override", value: "true" }]),
+      parameterBinding("steps", "float", [{ kind: "base" }]),
+      parameterBinding("added", "string", [{ kind: "base" }]),
     ]);
   });
 
   it("resets incompatible Parameter alternatives when the declared type changes", () => {
     expect(reconcileParameterBindings([
-      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "override", value: "false" }] },
-      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "base" }, { kind: "override", value: "30" }] },
+      parameterBinding("enabled", "boolean", [{ kind: "override", value: "false" }]),
+      parameterBinding("steps", "integer", [{ kind: "base" }, { kind: "override", value: "30" }]),
     ], [
       { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "integer" },
       { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "float" },
     ])).toEqual([
-      { parameterKey: "enabled", valueType: "integer", alternatives: [{ kind: "base" }] },
-      { parameterKey: "steps", valueType: "float", alternatives: [{ kind: "base" }] },
+      parameterBinding("enabled", "integer", [{ kind: "base" }]),
+      parameterBinding("steps", "float", [{ kind: "base" }]),
     ]);
   });
 
@@ -187,7 +235,7 @@ describe("buildBatchRequest", () => {
     form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
       { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "integer" },
     ] });
-    form.parameterBindings = [{ parameterKey: "steps", valueType: "integer", alternatives: [...alternatives] }];
+    form.parameterBindings = [parameterBinding("steps", "integer", [...alternatives])];
     expect(() => buildBatchRequest(form)).toThrow(message);
   });
 
@@ -410,4 +458,20 @@ function populatedBatchForm() {
   prompt.text = "A studio portrait of {{subject}}.";
   form.prompts = [prompt];
   return form;
+}
+
+function parameterBinding(
+  parameterKey: string,
+  valueType: "string" | "integer" | "float" | "boolean",
+  alternatives: Array<{ kind: "base" } | { kind: "override"; value: string }>,
+) {
+  return {
+    parameterKey,
+    valueType,
+    mode: "values" as const,
+    alternatives,
+    range: valueType === "integer"
+      ? { start: "0", end: "10", step: "1", includeBase: false }
+      : { start: "0", end: "1", step: "0.1", includeBase: false },
+  };
 }

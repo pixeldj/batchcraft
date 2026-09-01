@@ -61,7 +61,7 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "parameters": [],
 }
 BATCH_SNAPSHOT: dict[str, object] = {
-    "snapshot_version": 4,
+    "snapshot_version": 5,
     "project": {
         "id": PROJECT.id,
         "filesystem_key": PROJECT.filesystem_key,
@@ -445,7 +445,9 @@ def test_manifest_v7_round_trips_ordered_prompt_versions_and_job_associations(
     ]
 
 
-def test_manifest_v7_freezes_parameter_definitions_values_and_csv(tmp_path: Path) -> None:
+def test_manifest_v7_recovers_range_snapshot_into_frozen_scalar_jobs_and_csv(
+    tmp_path: Path,
+) -> None:
     projects_path = tmp_path / "projects"
     workflow = json.loads(json.dumps(WORKFLOW))
     workflow["114"]["inputs"]["steps"] = 20
@@ -486,7 +488,14 @@ def test_manifest_v7_freezes_parameter_definitions_values_and_csv(tmp_path: Path
         ],
         "variable_bindings": [],
         "image_bindings": [{"slot_key": "reference", "values": [None]}],
-        "parameter_bindings": [{"parameter_key": "steps", "values": [None, -5, 0]}],
+        "parameter_bindings": [
+            {
+                "parameter_key": "steps",
+                "mode": "range",
+                "include_base": True,
+                "range": {"start": "-5", "end": "0", "step": "5"},
+            }
+        ],
         "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
         "workflow_selection": {
             **workflow_selection,
@@ -513,7 +522,12 @@ def test_manifest_v7_freezes_parameter_definitions_values_and_csv(tmp_path: Path
 
     assert manifest["parameters"][0]["parameter_key"] == "steps"
     assert manifest["batch_snapshot"]["parameter_bindings"] == [
-        {"parameter_key": "steps", "values": [None, -5, 0]}
+        {
+            "parameter_key": "steps",
+            "mode": "range",
+            "include_base": True,
+            "range": {"start": "-5", "end": "0", "step": "5"},
+        }
     ]
     assert [job["resolved_parameters"] for job in manifest["jobs"]] == [
         [{"parameter_key": "steps", "value": None}],
@@ -575,7 +589,7 @@ def test_run_load_rejects_python_equal_parameter_scalar_representation_mismatch(
         ],
         "variable_bindings": [],
         "image_bindings": [{"slot_key": "reference", "values": [None]}],
-        "parameter_bindings": [{"parameter_key": "cfg", "values": [1]}],
+        "parameter_bindings": [{"parameter_key": "cfg", "mode": "values", "values": [1]}],
         "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
         "workflow_selection": {
             **workflow_selection,
@@ -815,7 +829,7 @@ def test_manifest_v7_preserves_batch_alternatives_and_concrete_job_choices(
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
     assert manifest["format_version"] == 7
-    assert manifest["batch_snapshot"]["snapshot_version"] == 4
+    assert manifest["batch_snapshot"]["snapshot_version"] == 5
     assert manifest["batch_snapshot"]["image_bindings"] == snapshot["image_bindings"]
     assert [job["resolved_image_inputs"][0]["asset"] is None for job in manifest["jobs"]] == [
         True,
@@ -908,7 +922,7 @@ def test_manifest_v7_rejects_missing_or_malformed_batch_snapshot(
         manifest["batch_snapshot"]["variable_bindings"][0]["values"] = ["dog", "dog"]
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
-    with pytest.raises(RunStoreError, match="batch_snapshot must|invalid Batch snapshot v4"):
+    with pytest.raises(RunStoreError, match="batch_snapshot must|invalid Batch snapshot v5"):
         RunFilesystemStore(projects_path).load_run(created.path)
 
 
@@ -951,7 +965,7 @@ def test_manifest_v7_rejects_batch_snapshot_that_contradicts_frozen_run(
 
 
 @pytest.mark.parametrize("corruption", ("version_one", "incomplete", "old_binding_field"))
-def test_create_run_rejects_malformed_snapshot_v4(tmp_path: Path, corruption: str) -> None:
+def test_create_run_rejects_malformed_snapshot_v5(tmp_path: Path, corruption: str) -> None:
     batch_snapshot = json.loads(
         json.dumps(
             {**BATCH_SNAPSHOT, "image_bindings": [{"slot_key": "reference", "values": [None]}]}
@@ -964,7 +978,7 @@ def test_create_run_rejects_malformed_snapshot_v4(tmp_path: Path, corruption: st
     else:
         batch_snapshot["variable_bindings"][0]["fixed_value"] = "dog"
 
-    with pytest.raises(RunStoreError, match="invalid Batch snapshot v4"):
+    with pytest.raises(RunStoreError, match="invalid Batch snapshot v5"):
         _create(
             RunFilesystemStore(tmp_path / "projects"),
             _fixture_plan(None),
@@ -1094,7 +1108,7 @@ def test_run_load_rejects_semantically_invalid_frozen_workflow_profile_pair(
             ],
             "variable_bindings": [],
             "image_bindings": [{"slot_key": "reference", "values": [None]}],
-            "parameter_bindings": [{"parameter_key": "steps", "values": [None]}],
+            "parameter_bindings": [{"parameter_key": "steps", "mode": "values", "values": [None]}],
             "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
             "workflow_selection": {
                 **workflow_selection,

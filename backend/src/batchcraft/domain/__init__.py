@@ -29,6 +29,14 @@ from batchcraft.domain.models import (
     validate_parameter_alternatives,
     validate_parameter_scalar,
 )
+from batchcraft.domain.parameter_intents import (
+    MAX_PARAMETER_RANGE_VALUES,
+    EditableParameterBinding,
+    ParameterDecimalRange,
+    ParameterRangeIntent,
+    ParameterValuesIntent,
+    materialize_parameter_bindings,
+)
 
 __all__ = [
     "BatchDefinition",
@@ -42,9 +50,14 @@ __all__ = [
     "ImageBinding",
     "ImageInputSlot",
     "MAX_SAFE_INTEGER",
+    "MAX_PARAMETER_RANGE_VALUES",
+    "EditableParameterBinding",
     "ParameterBinding",
+    "ParameterDecimalRange",
+    "ParameterRangeIntent",
     "ParameterScalar",
     "ParameterValueType",
+    "ParameterValuesIntent",
     "ResolvedVariable",
     "ResolvedImageInput",
     "ResolvedParameter",
@@ -53,6 +66,7 @@ __all__ = [
     "VariableBinding",
     "WorkflowParameter",
     "compile_batch",
+    "materialize_parameter_bindings",
     "preview_batch",
     "IMAGE_INPUT_SLOT_KEY_PATTERN",
     "is_valid_image_input_slot_key",

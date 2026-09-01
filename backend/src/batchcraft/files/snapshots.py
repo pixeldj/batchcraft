@@ -80,14 +80,34 @@ class SnapshotImageBinding(SnapshotModel):
         return self
 
 
-class SnapshotParameterBinding(SnapshotModel):
+class SnapshotParameterValuesBinding(SnapshotModel):
     parameter_key: str
+    mode: Literal["values"]
     values: list[SnapshotParameterScalar | None] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_values(self) -> Self:
         validate_parameter_alternatives(self.values)
         return self
+
+
+class SnapshotParameterRange(SnapshotModel):
+    start: str = Field(min_length=1, max_length=100)
+    end: str = Field(min_length=1, max_length=100)
+    step: str = Field(min_length=1, max_length=100)
+
+
+class SnapshotParameterRangeBinding(SnapshotModel):
+    parameter_key: str
+    mode: Literal["range"]
+    include_base: StrictBool
+    range: SnapshotParameterRange
+
+
+SnapshotParameterBinding = Annotated[
+    SnapshotParameterValuesBinding | SnapshotParameterRangeBinding,
+    Field(discriminator="mode"),
+]
 
 
 class SnapshotSeedIntent(SnapshotModel):
@@ -119,8 +139,8 @@ class SnapshotWorkflowSelection(SnapshotModel):
     workflow_profile: dict[str, object]
 
 
-class BatchSnapshotV4(SnapshotModel):
-    snapshot_version: int = Field(strict=True, ge=4, le=4)
+class BatchSnapshotV5(SnapshotModel):
+    snapshot_version: int = Field(strict=True, ge=5, le=5)
     project: SnapshotIdentity
     source_saved_batch: SnapshotSourceSavedBatch | None
     batch: SnapshotBatch

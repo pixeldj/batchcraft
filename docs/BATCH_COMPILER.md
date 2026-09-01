@@ -151,7 +151,7 @@ sum(prompt-variable combinations for each PromptVersion)
 A Profile may define zero Image Input slots, which contributes a multiplicative identity of one. Every
 defined slot supplies at least one ordered alternative: a Reference Asset ID or `null` for Base workflow.
 A Profile may likewise define zero generic parameters. Every defined parameter supplies at least one
-ordered typed scalar or `null` alternative.
+ordered typed scalar or `null` alternative after editable intent has been materialized.
 
 The UI should prominently display the resulting count.
 
@@ -224,14 +224,23 @@ Examples:
 - strength;
 - duration.
 
-Each Profile parameter has one `{parameter_key, values:[scalar|null,...]}` binding. Values are ordered,
-unique, and strictly validated against the declared `string`, `integer`, `float`, or `boolean` type.
-Empty string, zero, and false are concrete values. Numeric values must be finite; integers must also be
-within the signed JavaScript-safe range. `null` means Base workflow and appears first when included.
+Each Profile parameter has either an explicit
+`{parameter_key, mode:"values", values:[scalar|null,...]}` binding or, for `integer` and `float`, a
+`{parameter_key, mode:"range", include_base, range:{start,end,step}}` binding. Range fields remain
+decimal strings in editable intent. One backend materializer parses them into scaled integers, computes
+the exact progression without repeated binary floating-point addition, and emits ordinary finite JSON
+numbers. It rejects wrong direction, zero step, fractional integer parts, unsafe integers, decimal values
+that cannot round-trip through JSON without precision loss, and ranges over 10,000 numeric values.
+
+Start is always included. Progression stops before the next value would pass End; End is included only
+when reached exactly. Descending ranges require a negative Step. Start equal to End produces one value
+for any nonzero Step. Base workflow is prepended after numeric materialization and never participates in
+arithmetic. Explicit values retain Pass 3B-1 ordering, type, duplicate, and Base-first validation.
 
 Parameters expand in Profile order before seeds. A Profile with no parameters contributes the
-multiplicative identity of one. Numeric ranges, enums, random values, and linked or zipped dimensions
-remain deferred.
+multiplicative identity of one. The compiler receives only materialized `ParameterBinding.values`; it
+does not parse or calculate ranges. Enums, random values, and linked or zipped dimensions remain
+deferred.
 
 ## Run Creation
 
@@ -240,12 +249,13 @@ Creating a Run should conceptually:
 1. validate the Batch;
 2. snapshot effective source data;
 3. resolve prompt variants;
-4. expand named Image Input, parameter, and seed dimensions;
-5. assign deterministic Job ordinals;
-6. determine output naming;
-7. publish the initial Run/manifest artifacts;
-8. persist Run and Job index state;
-9. mark the Run ready for scheduling.
+4. materialize editable parameter Range intent into explicit values;
+5. expand named Image Input, parameter, and seed dimensions;
+6. assign deterministic Job ordinals;
+7. determine output naming;
+8. publish the initial Run/manifest artifacts;
+9. persist Run and Job index state;
+10. mark the Run ready for scheduling.
 
 A partially compiled Run should not be presented as a valid executable Run.
 

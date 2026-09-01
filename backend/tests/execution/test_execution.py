@@ -327,7 +327,7 @@ def _published_run(
         project=PROJECT,
         batch=BATCH,
         batch_snapshot={
-            "snapshot_version": 4,
+            "snapshot_version": 5,
             "project": {
                 "id": PROJECT.id,
                 "filesystem_key": PROJECT.filesystem_key,
@@ -358,6 +358,7 @@ def _published_run(
             "parameter_bindings": [
                 {
                     "parameter_key": "steps",
+                    "mode": "values",
                     "values": list(
                         (parameter_value,) if parameter_values is None else parameter_values
                     ),

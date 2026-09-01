@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from batchcraft.domain import EditableParameterBinding, ParameterScalar
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectRecord:
@@ -161,13 +163,8 @@ class SavedBatchImageBinding:
     values: tuple[str | None, ...]
 
 
-SavedBatchParameterScalar = str | int | float | bool
-
-
-@dataclass(frozen=True, slots=True)
-class SavedBatchParameterBinding:
-    parameter_key: str
-    values: tuple[SavedBatchParameterScalar | None, ...]
+SavedBatchParameterScalar = ParameterScalar
+SavedBatchParameterBinding = EditableParameterBinding
 
 
 @dataclass(frozen=True, slots=True)

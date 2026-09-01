@@ -159,7 +159,7 @@ Every Job contains ordered `resolved_parameters` entries shaped as
 Every entry remains scalar because parameter alternatives are resolved during compilation, before the
 Job reaches execution.
 
-Manifest v7 requires a top-level `batch_snapshot` object with `snapshot_version: 4`. It stores variable
+Manifest v7 requires a top-level `batch_snapshot` object with `snapshot_version: 5`. It stores variable
 bindings canonically as `{ "placeholder": string, "values": string[] }`. Zero values may
 appear in mutable Saved Batch drafts but a successfully compiled Run cannot use a zero-value binding.
 An empty string is one concrete value. New writes reject exact duplicate values, including duplicate
@@ -168,14 +168,17 @@ The snapshot stores ordered image bindings as `{ "slot_key": string, "values": [
 Each Profile slot requires one or more ordered, unique alternatives. Every slot is an independent
 Cartesian compiler dimension, while each concrete manifest Job stores only its one resolved choice.
 Base workflow is `null` and appears first when included.
-The snapshot stores one or more ordered, unique typed scalar or `null` alternatives per Profile
-parameter in bindings shaped as `{ "parameter_key": string, "values": [scalar | null, ...] }`. Each
-parameter is an independent Cartesian compiler dimension, while each concrete manifest Job stores only
-its one resolved scalar or Base workflow choice. Base workflow is `null` and appears first when included.
+The snapshot stores parameter editable intent. Explicit bindings use
+`{ "parameter_key": string, "mode": "values", "values": [scalar | null, ...] }`. Numeric Range
+bindings use `{ "parameter_key": string, "mode": "range", "include_base": boolean,
+"range": { "start": string, "end": string, "step": string } }`. Range decimal text remains frozen for
+editable provenance. Loading rematerializes it through the authoritative backend function and requires
+the result to reconstruct the exact scalar Job plan. Each concrete manifest Job still stores only one
+resolved scalar or Base workflow choice.
 Snapshots may also preserve optional human-readable Workflow and Profile names plus immutable version
 numbers. These labels support historical UI inspection and are not required for replay.
 
-Manifest v1-v6 and snapshot v1-v3 are unsupported. The loader rejects them and never rewrites Run files.
+Manifest v1-v6 and snapshot v1-v4 are unsupported. The loader rejects them and never rewrites Run files.
 
 ## `manifest.csv`
 
@@ -338,7 +341,7 @@ Modified reruns can be added later.
 ## Loading and Validation
 
 Loading a published Run requires `run.json`, canonical manifest v7, `manifest.csv`, both snapshot
-files, and `outputs/`. Manifest v7 requires a batch snapshot with `snapshot_version: 4`, a non-empty
+files, and `outputs/`. Manifest v7 requires a batch snapshot with `snapshot_version: 5`, a non-empty
 ordered PromptVersion collection, unique PromptVersion IDs, required names, and every Job's
 association with a known PromptVersion. The loader validates ordered, unique Profile slot metadata and
 requires every Job to contain the same ordered slot keys. Each resolved slot must contain either a
@@ -368,7 +371,7 @@ Example:
 }
 ```
 
-The pre-release baseline supports `run.json` v1, manifest v7 with required snapshot v4, execution v2,
+The pre-release baseline supports `run.json` v1, manifest v7 with required snapshot v5, execution v2,
 and `asset.json` v1. Unsupported development versions fail closed. The application does not rewrite
 or delete them automatically. Version fields and migration boundaries remain so a future change can
 add an explicit compatibility path when released data requires one.

@@ -133,7 +133,7 @@ Result data; they are not a Project-wide history index. Preview and Run creation
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into manifest v7 with Batch snapshot v4. SQLite now owns current Project metadata, the immutable-version Prompt,
+provenance into manifest v7 with Batch snapshot v5. SQLite now owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, and mutable Saved Batches; searchable filesystem-derived
 indexes remain a later slice.
 
@@ -201,8 +201,9 @@ templated independently against the bindings it references. The rightmost dimens
 Each compiled Job still resolves to one final prompt string mapped to one friendly workflow prompt
 input. Every Profile Image Input slot and generic parameter is an independent ordered Cartesian
 dimension, while every compiled Job contains one resolved value per slot and parameter. Parameter axes
-follow Profile order, and seeds remain the fastest-varying dimension. Numeric ranges and multiple
-workflow prompt or text slots are deferred.
+follow Profile order, and seeds remain the fastest-varying dimension. Editable numeric Range intent is
+materialized into explicit parameter alternatives before this compiler boundary. Multiple workflow
+prompt or text slots are deferred.
 
 No prompt expansion should occur inside ComfyUI for core batchcraft functionality.
 
@@ -277,17 +278,18 @@ Base workflow, so the executor performs no upload and the adapter leaves that ta
 concrete Job.
 
 Batch/API/Saved Batch parameter bindings use
-`{"parameter_key":"cfg","values":[null,7.0,7.5]}`. Every parameter requires one or more ordered,
-unique alternatives and forms an independent Cartesian dimension in Profile order. `null` means Base
-workflow and appears first when included. Concrete scalars are validated against the Profile type.
-Each compiled Job carries one resolved scalar or Base state per parameter.
+`{"parameter_key":"cfg","mode":"values","values":[null,7.0,7.5]}` or numeric Range intent shaped as
+`{"parameter_key":"cfg","mode":"range","include_base":true,"range":{"start":"3.0","end":"7.0","step":"0.5"}}`.
+One backend domain materializer converts Range intent through exact scaled-integer arithmetic into the
+same ordered explicit alternatives before compilation. Every parameter forms an independent Cartesian
+dimension in Profile order. Each compiled Job carries one resolved scalar or Base state per parameter.
 
 ## Saved Batch vs Run Boundary
 
 Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
 boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
 Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
-the plan and provenance into manifest v7 with Batch snapshot v4. Editing a Saved Batch after Run creation never alters the
+the plan and provenance into manifest v7 with Batch snapshot v5. Editing a Saved Batch after Run creation never alters the
 existing Run.
 
 ## Persistence Strategy

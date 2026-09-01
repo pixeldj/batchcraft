@@ -24,7 +24,6 @@ from batchcraft.db import (
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
     SavedBatchListRecord,
-    SavedBatchParameterBinding,
     SavedBatchPromptSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
@@ -45,12 +44,15 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
-    ParameterBinding,
+    ParameterDecimalRange,
+    ParameterRangeIntent,
+    ParameterValuesIntent,
     PromptVersion,
     SeedInput,
     SeedMode,
     VariableBinding,
     WorkflowParameter,
+    materialize_parameter_bindings,
     validate_parameter_alternatives,
     validate_parameter_scalar,
 )
@@ -60,7 +62,7 @@ from batchcraft.files import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
-    BatchSnapshotV4,
+    BatchSnapshotV5,
     ProjectIdentity,
     PublishedRun,
 )
@@ -106,14 +108,34 @@ ParameterScalarRequest = Annotated[
 ]
 
 
-class ParameterBindingRequest(ApiModel):
+class ParameterValuesBindingRequest(ApiModel):
     parameter_key: str
+    mode: Literal["values"]
     values: list[ParameterScalarRequest | None] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_values(self) -> Self:
         validate_parameter_alternatives(self.values)
         return self
+
+
+class ParameterRangeRequest(ApiModel):
+    start: str = Field(min_length=1, max_length=100)
+    end: str = Field(min_length=1, max_length=100)
+    step: str = Field(min_length=1, max_length=100)
+
+
+class ParameterRangeBindingRequest(ApiModel):
+    parameter_key: str
+    mode: Literal["range"]
+    include_base: StrictBool
+    range: ParameterRangeRequest
+
+
+ParameterBindingRequest = Annotated[
+    ParameterValuesBindingRequest | ParameterRangeBindingRequest,
+    Field(discriminator="mode"),
+]
 
 
 class SeedRequest(ApiModel):
@@ -131,7 +153,7 @@ class BatchRequest(ApiModel):
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
-    batch_snapshot: BatchSnapshotV4
+    batch_snapshot: BatchSnapshotV5
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
@@ -175,13 +197,17 @@ class BatchRequest(ApiModel):
             (item.slot_key, item.values) for item in self.image_bindings
         ]:
             raise ValueError("Batch snapshot image bindings do not match")
-        if [(item.parameter_key, item.values) for item in snapshot.parameter_bindings] != [
-            (item.parameter_key, item.values) for item in self.parameter_bindings
+        if [item.model_dump(mode="json") for item in snapshot.parameter_bindings] != [
+            item.model_dump(mode="json") for item in self.parameter_bindings
         ]:
             raise ValueError("Batch snapshot parameter bindings do not match")
         workflow = snapshot.workflow_selection
         if workflow.workflow != self.workflow or workflow.workflow_profile != self.workflow_profile:
             raise ValueError("Batch snapshot Workflow selection does not match")
+        materialize_parameter_bindings(
+            _profile_parameters(self.workflow_profile),
+            tuple(_parameter_intent(binding) for binding in self.parameter_bindings),
+        )
         intent = snapshot.seed_intent
         if intent.mode == "random":
             if (
@@ -194,6 +220,7 @@ class BatchRequest(ApiModel):
         return self
 
     def to_creation_input(self) -> RunCreationInput:
+        parameters = _profile_parameters(self.workflow_profile)
         return RunCreationInput(
             project=ProjectIdentity(
                 id=self.project.id,
@@ -227,12 +254,10 @@ class BatchRequest(ApiModel):
                     ImageBinding(slot_key=binding.slot_key, values=tuple(binding.values))
                     for binding in self.image_bindings
                 ),
-                parameters=_profile_parameters(self.workflow_profile),
-                parameter_bindings=tuple(
-                    ParameterBinding(
-                        parameter_key=binding.parameter_key, values=tuple(binding.values)
-                    )
-                    for binding in self.parameter_bindings
+                parameters=parameters,
+                parameter_bindings=materialize_parameter_bindings(
+                    parameters,
+                    tuple(_parameter_intent(binding) for binding in self.parameter_bindings),
                 ),
                 seeds=SeedInput(mode=self.seeds.mode, values=tuple(self.seeds.values)),
             ),
@@ -345,14 +370,7 @@ class SavedBatchImageBindingRequest(ApiModel):
         return self
 
 
-class SavedBatchParameterBindingRequest(ApiModel):
-    parameter_key: str
-    values: list[ParameterScalarRequest | None] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_values(self) -> Self:
-        validate_parameter_alternatives(self.values)
-        return self
+SavedBatchParameterBindingRequest = ParameterBindingRequest
 
 
 class SavedBatchSeedIntentRequest(ApiModel):
@@ -454,10 +472,7 @@ class SavedBatchDefinitionRequest(ApiModel):
                 SavedBatchImageBinding(item.slot_key, tuple(item.values))
                 for item in self.image_bindings
             ),
-            parameter_bindings=tuple(
-                SavedBatchParameterBinding(item.parameter_key, tuple(item.values))
-                for item in self.parameter_bindings
-            ),
+            parameter_bindings=tuple(_parameter_intent(item) for item in self.parameter_bindings),
             selected_workflow_version=(
                 None
                 if workflow is None
@@ -562,8 +577,7 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
                     for item in batch.image_bindings
                 ],
                 "parameter_bindings": [
-                    {"parameter_key": item.parameter_key, "values": list(item.values)}
-                    for item in batch.parameter_bindings
+                    _parameter_intent_json(item) for item in batch.parameter_bindings
                 ],
                 "selected_workflow_version": (
                     None
@@ -1173,7 +1187,7 @@ class RunResponse(RunCreatedResponse):
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
     plan: RunPlanResponse
-    batch_snapshot: BatchSnapshotV4
+    batch_snapshot: BatchSnapshotV5
     execution: ExecutionResponse
 
     @classmethod
@@ -1194,7 +1208,7 @@ class RunResponse(RunCreatedResponse):
                 for job in run.compiled_plan.jobs
             ],
             plan=RunPlanResponse.from_run(run),
-            batch_snapshot=BatchSnapshotV4.model_validate(run.batch_snapshot),
+            batch_snapshot=BatchSnapshotV5.model_validate(run.batch_snapshot),
             execution=ExecutionResponse.from_state(state),
         )
 
@@ -1252,6 +1266,35 @@ def _profile_image_inputs(profile: dict[str, object]) -> tuple[tuple[str, str, s
 
 def _profile_parameters(profile: dict[str, object]) -> tuple[WorkflowParameter, ...]:
     return workflow_profile_parameters(profile)
+
+
+def _parameter_intent(
+    binding: ParameterBindingRequest,
+) -> ParameterValuesIntent | ParameterRangeIntent:
+    if isinstance(binding, ParameterValuesBindingRequest):
+        return ParameterValuesIntent(binding.parameter_key, tuple(binding.values))
+    return ParameterRangeIntent(
+        binding.parameter_key,
+        binding.include_base,
+        ParameterDecimalRange(binding.range.start, binding.range.end, binding.range.step),
+    )
+
+
+def _parameter_intent_json(
+    intent: ParameterValuesIntent | ParameterRangeIntent,
+) -> dict[str, object]:
+    if isinstance(intent, ParameterValuesIntent):
+        return {
+            "parameter_key": intent.parameter_key,
+            "mode": "values",
+            "values": list(intent.values),
+        }
+    return {
+        "parameter_key": intent.parameter_key,
+        "mode": "range",
+        "include_base": intent.include_base,
+        "range": asdict(intent.range),
+    }
 
 
 class ErrorDetail(ApiModel):

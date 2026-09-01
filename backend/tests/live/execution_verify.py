@@ -113,7 +113,7 @@ async def verify() -> dict[str, object]:
         project=project,
         batch=batch,
         batch_snapshot={
-            "snapshot_version": 4,
+            "snapshot_version": 5,
             "project": {
                 "id": project.id,
                 "filesystem_key": project.filesystem_key,

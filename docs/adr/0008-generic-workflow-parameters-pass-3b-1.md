@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-01
 - **Supersedes:** ADR 0007's exactly-one parameter cardinality and non-dimensional parameter behavior; the prior browser session v11 and consolidated SQLite baseline; parameter-after-seed ordering in ADRs 0001 and 0002; and ADR 0006's four-axis compiler order.
+- **Superseded in part by:** ADR 0009 for deterministic numeric Range intent, Batch snapshot v5, browser session v13, and the current SQLite baseline.
 
 ## Context
 

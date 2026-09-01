@@ -135,7 +135,9 @@ input name, and value type for every core mapping. Named image targets must also
 inputs, not ComfyUI connection arrays. It rejects unresolved placeholders before transport. Runtime
 image keys must exist in Profile metadata. Omitted keys mean Base workflow and remain unchanged.
 Parameter override keys and scalar types receive the same boundary validation. Omitted parameter keys
-mean Base workflow and remain unchanged.
+mean Base workflow and remain unchanged. Editable numeric Range intent is materialized into explicit
+typed alternatives before compilation; neither Range objects nor unresolved value lists reach this
+integration boundary.
 
 Cartesian alternative expansion belongs entirely to the compiler. The executor receives at most one
 selected asset per slot. Zipped, row-linked, and Reference Collection link behavior remains deferred.

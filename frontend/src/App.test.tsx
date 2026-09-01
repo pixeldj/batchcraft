@@ -485,8 +485,8 @@ describe("Batch preview", () => {
     ] });
     form.imageBindings = [];
     form.parameterBindings = [
-      { parameterKey: "unknown", valueType: "string", alternatives: [{ kind: "override", value: "remove me" }] },
-      { parameterKey: "caption", valueType: "string", alternatives: [{ kind: "base" }] },
+      { parameterKey: "unknown", valueType: "string", mode: "values", alternatives: [{ kind: "override", value: "remove me" }], range: { start: "0", end: "1", step: "0.1", includeBase: false } },
+      { parameterKey: "caption", valueType: "string", mode: "values", alternatives: [{ kind: "base" }], range: { start: "0", end: "1", step: "0.1", includeBase: false } },
     ];
     saveWorkingSession(form, null, [], "project-1");
     const parameterPreview = previewResponse();
@@ -499,6 +499,7 @@ describe("Batch preview", () => {
     const api = makeApi({ previewBatch: vi.fn(async () => parameterPreview) });
     render(<App api={api} />);
     await screen.findByText(/Draft restored from this browser session/);
+    await expandConfiguration("Parameters");
 
     expect(screen.getByRole("checkbox", { name: "Include Base workflow for Caption" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Include Base workflow for Enabled" })).toBeChecked();
@@ -510,13 +511,42 @@ describe("Batch preview", () => {
     await screen.findByRole("button", { name: "Create Run" });
 
     expect(vi.mocked(api.previewBatch).mock.calls[0][0].parameter_bindings).toEqual([
-      { parameter_key: "caption", values: [null, ""] },
-      { parameter_key: "enabled", values: [null, false] },
+      { parameter_key: "caption", mode: "values", values: [null, ""] },
+      { parameter_key: "enabled", mode: "values", values: [null, false] },
     ]);
     expect(screen.getAllByText('"" (empty string)').length).toBeGreaterThan(0);
     expect(screen.getAllByText("false").length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Caption override 2"), { target: { value: "changed" } });
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+  });
+
+  it("collapses complete Parameters without changing values or invalidating Preview", async () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "integer" },
+    ] });
+    form.imageBindings = [];
+    form.parameterBindings = [{
+      parameterKey: "steps", valueType: "integer", mode: "values",
+      alternatives: [{ kind: "base" }, { kind: "override", value: "30" }],
+      range: { start: "0", end: "10", step: "1", includeBase: false },
+    }];
+    saveWorkingSession(form, null, [], "project-1");
+    const api = makeApi();
+    render(<App api={api} />);
+    await screen.findByText(/Draft restored/);
+    await expandConfiguration("Parameters");
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+
+    const section = screen.getByRole("group", { name: "Parameters" });
+    fireEvent.click(within(section).getByRole("button", { name: "Done" }));
+
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeInTheDocument();
+    expect(api.previewBatch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].parameter_bindings).toEqual([
+      { parameter_key: "steps", mode: "values", values: [null, 30] },
+    ]);
   });
 });
 
@@ -847,7 +877,14 @@ describe("Run creation", () => {
       { id: "prompt-a", prompt_id: "prompt-1", version_number: 4, name: "Portrait", text: "Portrait {{subject}}" },
     ];
     frozen.batch_snapshot.image_bindings = [{ slot_key: "source", values: [null, "asset-1"] }];
-    frozen.batch_snapshot.parameter_bindings = [{ parameter_key: "steps", values: [null, 30, 0] }];
+    frozen.batch_snapshot.parameter_bindings = [{
+      parameter_key: "steps", mode: "range", include_base: true,
+      range: { start: "30", end: "0", step: "-15" },
+    }];
+    frozen.batch_snapshot.workflow_selection.workflow_profile = {
+      mappings: {}, image_inputs: [{ key: "source", label: "Source image", node_id: "1", input_name: "image" }],
+      parameters: [{ key: "steps", label: "Steps", node_id: "2", input_name: "steps", value_type: "integer" }],
+    };
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
     frozen.batch_snapshot.variable_bindings.push({ placeholder: "style", values: ["editorial"] });
     const api = makeApi({
@@ -878,7 +915,9 @@ describe("Run creation", () => {
     expect(within(dialog).getAllByText("asset-1").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("Steps").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("30").length).toBeGreaterThan(0);
-    expect(within(dialog).getByText("0")).toBeInTheDocument();
+    expect(within(dialog).getByText("30 → 0 by -15")).toBeInTheDocument();
+    expect(within(dialog).getByText("4 alternatives")).toBeInTheDocument();
+    expect(within(dialog).getByText("Includes Base workflow")).toBeInTheDocument();
     expect(within(dialog).queryByText("steps")).not.toBeInTheDocument();
     expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
@@ -2222,7 +2261,7 @@ function runLookupResponse(
       jobs: previewResponse().jobs,
     },
     batch_snapshot: {
-      snapshot_version: 4,
+      snapshot_version: 5,
       project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
       source_saved_batch: { id: "batch-1", revision: 3 },
       batch: {

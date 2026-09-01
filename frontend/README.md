@@ -6,9 +6,9 @@ Runs, watching Job state, viewing the current Run's Results, and reviewing accum
 from this browser working session. It communicates only with the batchcraft FastAPI application.
 
 The current tab stores a versioned working draft, selected Project ID, current Run ID, and ordered
-unique session Run IDs in `sessionStorage`. The current schema is version 12 and stores canonical
-Variable Bindings, ordered Image Input bindings, and ordered Parameter alternatives plus the
-`batch_snapshot` required by Preview and Run creation. Only a valid v12 session is restored;
+unique session Run IDs in `sessionStorage`. The current schema is version 13 and stores canonical
+Variable Bindings, ordered Image Input bindings, and Parameter Values/Range drafts plus the
+`batch_snapshot` required by Preview and Run creation. Only a valid v13 session is restored;
 unsupported or malformed data starts a clean working session. A refresh restores
 the form and ordered prompt list, then reloads Run, execution, and Result data from FastAPI. Result metadata
 and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
@@ -21,9 +21,11 @@ deleted slots. Missing Reference Assets remain visible and block Preview until r
 
 The selected ProfileVersion also defines ordered Parameters targeting literal workflow inputs. Each
 Parameter independently selects one or more ordered Base workflow or typed string, integer, float, or
-boolean alternatives. Profile changes reconcile these values by stable key and compatible declared
-type. Each Parameter independently multiplies Job count, while every concrete Job contains one scalar
-or Base workflow choice.
+boolean alternatives. Integer and float Parameters may instead preserve a decimal-text Range with
+Start, End, Step, and independent Base inclusion. The backend materializes Range intent before the
+existing compiler. Profile changes reconcile these values by stable key and compatible declared type.
+Each Parameter independently multiplies Job count, while every concrete Job contains one scalar or Base
+workflow choice.
 
 Preview and Result Details render every concrete Job slot and Parameter by its frozen label and resolved
 value. Run Plan also shows all frozen Batch alternatives. Each slot and Parameter independently
@@ -63,12 +65,18 @@ ProfileVersions. The visual Profile mapper keeps prompt, seed, and output-prefix
 ordered named Image Inputs and typed generic Parameters. Both collections support add, remove, move,
 editable labels, stable keys, and target repair. Parameter types are inferred from compatible literal
 workflow values and may be string, integer, float, or boolean. The Batch editor leaves each parameter
-with one or more ordered Base workflow or strict typed override alternatives. Parameter dimensions
-follow Image Input slots in Profile order and precede seeds.
+with ordered Values or, for numeric types, a deterministic Range. The Parameters section uses the same
+collapsible Edit/Done interaction as other configuration sections; collapsing changes no form state or
+Preview validity. Parameter dimensions follow Image Input slots in Profile order and precede seeds.
 Selecting another WorkflowVersion clears an incompatible Profile selection and
 blocks Preview until a compatible version is chosen. Library reconciliation never rewrites a restored
 snapshot with different content; unavailable or integrity-mismatched pairs remain detached and are
 validated by the backend during Preview. ComfyUI remains the workflow editor.
+
+Closed-tab recovery remains a separate milestone. This frontend intentionally keeps tab-scoped
+`sessionStorage`; it does not yet restore the most recent Project/Saved Batch or active/recent Run IDs
+after a tab closes. That future work must reconstruct Run state from backend-authoritative data without
+restoring stale Preview state.
 
 ## Requirements
 

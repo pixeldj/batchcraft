@@ -16,6 +16,7 @@ from typing import NoReturn, cast
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from pydantic import BaseModel, TypeAdapter
 
 import batchcraft.execution.state as execution_state_module
 from batchcraft.api import Settings, create_app
@@ -23,6 +24,7 @@ from batchcraft.api.schemas import (
     BatchRequest,
     ExecutionResponse,
     ParameterBindingRequest,
+    ParameterValuesBindingRequest,
     PreviewResponse,
     ResultsResponse,
     SavedBatchParameterBindingRequest,
@@ -61,7 +63,7 @@ from batchcraft.files import (
     PublishedRun,
     RunFilesystemStore,
 )
-from batchcraft.files.snapshots import SnapshotParameterBinding
+from batchcraft.files.snapshots import SnapshotParameterBinding, SnapshotParameterValuesBinding
 
 PNG_A = b"\x89PNG\r\n\x1a\nimage-a"
 PNG_B = b"\x89PNG\r\n\x1a\nimage-b"
@@ -74,9 +76,14 @@ PNG_B = b"\x89PNG\r\n\x1a\nimage-b"
 def test_parameter_scalar_api_and_snapshot_boundaries_preserve_valid_values(
     value: object,
 ) -> None:
-    api = ParameterBindingRequest.model_validate({"parameter_key": "value", "values": [value]})
-    snapshot = SnapshotParameterBinding.model_validate(
-        {"parameter_key": "value", "values": [value]}
+    payload = {"parameter_key": "value", "mode": "values", "values": [value]}
+    api = cast(
+        ParameterValuesBindingRequest,
+        TypeAdapter(ParameterBindingRequest).validate_python(payload),
+    )
+    snapshot = cast(
+        SnapshotParameterValuesBinding,
+        TypeAdapter(SnapshotParameterBinding).validate_python(payload),
     )
 
     assert api.values == [value]
@@ -93,12 +100,12 @@ def test_parameter_scalar_api_and_snapshot_boundaries_preserve_valid_values(
 def test_parameter_scalar_api_and_snapshot_boundaries_reject_invalid_values(
     value: object,
 ) -> None:
-    payload = {"parameter_key": "value", "values": [value]}
+    payload = {"parameter_key": "value", "mode": "values", "values": [value]}
 
     with pytest.raises(ValueError):
-        ParameterBindingRequest.model_validate(payload)
+        TypeAdapter(ParameterBindingRequest).validate_python(payload)
     with pytest.raises(ValueError):
-        SnapshotParameterBinding.model_validate(payload)
+        TypeAdapter(SnapshotParameterBinding).validate_python(payload)
 
 
 @pytest.mark.parametrize(
@@ -113,7 +120,7 @@ def test_parameter_scalar_api_and_snapshot_boundaries_reject_invalid_values(
 def test_parameter_alternative_dtos_reject_invalid_shapes(
     values: list[object], message: str
 ) -> None:
-    payload = {"parameter_key": "value", "values": values}
+    payload = {"parameter_key": "value", "mode": "values", "values": values}
 
     for model in (
         ParameterBindingRequest,
@@ -121,7 +128,24 @@ def test_parameter_alternative_dtos_reject_invalid_shapes(
         SnapshotParameterBinding,
     ):
         with pytest.raises(ValueError, match=message):
-            model.model_validate(payload)
+            TypeAdapter(model).validate_python(payload)
+
+
+def test_editable_range_intent_dtos_preserve_exact_decimal_text() -> None:
+    payload = {
+        "parameter_key": "cfg",
+        "mode": "range",
+        "include_base": True,
+        "range": {"start": "-0.50", "end": "1.00", "step": "0.25"},
+    }
+
+    for model in (
+        ParameterBindingRequest,
+        SavedBatchParameterBindingRequest,
+        SnapshotParameterBinding,
+    ):
+        parsed = cast(BaseModel, TypeAdapter(model).validate_python(payload))
+        assert parsed.model_dump(mode="json") == payload
 
 
 class FakeEventSource:
@@ -159,6 +183,7 @@ class FakeComfyUIClient:
         self.artifact_count = artifact_count
         self.closed = False
         self.submission_count = 0
+        self.submitted_workflows: list[dict[str, object]] = []
 
     async def get_server_info(self) -> ServerInfo:
         if self.status_error is not None:
@@ -193,6 +218,7 @@ class FakeComfyUIClient:
     async def submit_prompt(
         self, workflow: Mapping[str, object], *, client_id: str
     ) -> PromptSubmission:
+        self.submitted_workflows.append(copy.deepcopy(dict(workflow)))
         self.submission_count += 1
         prompt_id = (
             f"prompt-{self.submission_count}"
@@ -342,7 +368,7 @@ def _batch_request(
         "workflow": workflow,
         "workflow_profile": profile,
         "batch_snapshot": {
-            "snapshot_version": 4,
+            "snapshot_version": 5,
             "project": copy.deepcopy(project),
             "source_saved_batch": None,
             "batch": {**batch, "description": None},
@@ -399,7 +425,9 @@ def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> 
             "value_type": "integer",
         }
     ]
-    request["parameter_bindings"] = [{"parameter_key": "steps", "values": [None, -5, 0]}]
+    request["parameter_bindings"] = [
+        {"parameter_key": "steps", "mode": "values", "values": [None, -5, 0]}
+    ]
     _sync_batch_snapshot(request)
 
     with TestClient(
@@ -436,8 +464,68 @@ def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> 
         {"parameter_key": "steps", "label": "Steps", "value": None}
     ]
     assert run.json()["batch_snapshot"]["parameter_bindings"] == [
-        {"parameter_key": "steps", "values": [None, -5, 0]}
+        {"parameter_key": "steps", "mode": "values", "values": [None, -5, 0]}
     ]
+
+
+def test_batch_request_materializes_range_intent_before_compilation(tmp_path: Path) -> None:
+    request = _batch_request(())
+    workflow = cast(dict[str, object], request["workflow"])
+    profile = cast(dict[str, object], request["workflow_profile"])
+    node_inputs = cast(dict[str, object], cast(dict[str, object], workflow["7"])["inputs"])
+    node_inputs["steps"] = 20
+    profile["parameters"] = [
+        {
+            "key": "steps",
+            "label": "Steps",
+            "node_id": "7",
+            "input_name": "steps",
+            "value_type": "integer",
+        }
+    ]
+    request["parameter_bindings"] = [
+        {
+            "parameter_key": "steps",
+            "mode": "range",
+            "include_base": True,
+            "range": {"start": "10", "end": "30", "step": "10"},
+        }
+    ]
+    _sync_batch_snapshot(request)
+
+    parsed = BatchRequest.model_validate(request)
+    creation = parsed.to_creation_input()
+    client = FakeComfyUIClient()
+    with TestClient(
+        create_app(_settings(tmp_path), client_factory=lambda _settings: client)
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+        run_id = _create_run(http, request)
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        _wait_for_status(http, run_id, "succeeded")
+
+    assert creation.definition.parameter_bindings[0].values == (None, 10, 20, 30)
+    assert response.status_code == 200
+    assert response.json()["job_count"] == 16
+    assert [job["resolved_parameters"][0]["value"] for job in response.json()["jobs"][:8]] == [
+        None,
+        None,
+        10,
+        10,
+        20,
+        20,
+        30,
+        30,
+    ]
+    submitted_steps = [
+        cast(
+            dict[str, object],
+            cast(dict[str, object], submitted["7"])["inputs"],
+        )["steps"]
+        for submitted in client.submitted_workflows
+    ]
+    assert submitted_steps == [20, 20, 10, 10, 20, 20, 30, 30] * 2
+    assert all(not isinstance(value, (dict, list)) for value in submitted_steps)
 
 
 @pytest.mark.parametrize(
@@ -1404,7 +1492,7 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
             "workflow": workflow["workflow"],
             "workflow_profile": profile["profile"],
             "batch_snapshot": {
-                "snapshot_version": 4,
+                "snapshot_version": 5,
                 "project": {
                     "id": project["id"],
                     "filesystem_key": project["filesystem_key"],
@@ -1878,7 +1966,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v7
     assert mismatch.json()["error"]["code"] == "invalid_request"
 
 
-def test_run_api_requires_complete_snapshot_v4_and_rejects_malformed_durable_snapshot(
+def test_run_api_requires_complete_snapshot_v5_and_rejects_malformed_durable_snapshot(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)

@@ -178,13 +178,14 @@ status, Project and library management, Saved Batch editing, Workflow Profile bu
 named Image Input binding, deterministic Job preview, durable Run creation, execution polling, and
 Result rendering. It uses the FastAPI application as its only backend boundary.
 
-Generic Workflow Parameters Pass 3B-1 is implemented end to end. ProfileVersions store ordered typed
+Generic Workflow Parameters Pass 3B-2 is implemented end to end. ProfileVersions store ordered typed
 `{key,label,node_id,input_name,value_type}` parameter definitions beside core mappings and Image Input
-slots. Batch/API/Saved Batch bindings store one or more ordered, unique
-`string|integer|float|boolean|null` alternatives per parameter. `null` preserves Base workflow and
-appears first when present. Parameters are independent Cartesian dimensions in Profile order between
-Image Input slots and seeds; every Job and Result provenance record still carries one resolved scalar
-or Base state per Profile parameter. Manifest v7, Batch snapshot v4, browser session v12, and the
-replacement consolidated SQLite 0001 baseline are current. Numeric ranges, enums, `/object_info`, LoRA
-discovery, and linked or zipped parameters remain deferred. Keep frontend HTTP types and UI state
+slots. Editable Batch/API/Saved Batch bindings use either ordered explicit typed alternatives or a
+numeric Range intent with decimal-text Start, End, Step, and independent Base inclusion. One backend
+scaled-integer materializer resolves Range intent to explicit values before the existing compiler.
+Parameters remain independent Cartesian dimensions in Profile order between Image Input slots and
+seeds; every Job and Result provenance record carries one resolved scalar or Base state per Profile
+parameter. Manifest v7, Batch snapshot v5, browser session v13, and the replacement consolidated SQLite
+0001 baseline are current. Enums, `/object_info`, LoRA discovery, random values, linked or zipped
+parameters, and closed-tab session recovery remain deferred. Keep frontend HTTP types and UI state
 separate from backend compiler, filesystem, ComfyUI, execution, and persistence rules.
