@@ -193,16 +193,16 @@ Within Batch compilation, the Prompt Resolver produces explicit resolved prompt 
 The Batch Compiler then combines dimensions in this order:
 
 ```text
-PromptVersion -> prompt variables -> Image Input slots -> seeds
+PromptVersion -> prompt variables -> Image Input slots -> parameters -> seeds
 ```
 
 PromptVersion is the first Batch dimension. Selected PromptVersions preserve user order, and each is
 templated independently against the bindings it references. The rightmost dimension varies fastest.
 Each compiled Job still resolves to one final prompt string mapped to one friendly workflow prompt
-input. Every Profile Image Input slot is an independent ordered Cartesian dimension, while every
-compiled Job contains one resolved value per slot. Fixed generic parameters are copied into every Job
-after validation and add no dimension in Pass 3A. Future parameter sweeps, if implemented, follow seeds.
-Multiple workflow prompt or text slots are deferred.
+input. Every Profile Image Input slot and generic parameter is an independent ordered Cartesian
+dimension, while every compiled Job contains one resolved value per slot and parameter. Parameter axes
+follow Profile order, and seeds remain the fastest-varying dimension. Numeric ranges and multiple
+workflow prompt or text slots are deferred.
 
 No prompt expansion should occur inside ComfyUI for core batchcraft functionality.
 
@@ -277,9 +277,10 @@ Base workflow, so the executor performs no upload and the adapter leaves that ta
 concrete Job.
 
 Batch/API/Saved Batch parameter bindings use
-`{"parameter_key":"cfg","values":[7.5]}` or `{"parameter_key":"cfg","values":[null]}`.
-Pass 3A requires exactly one value. `null` leaves the base workflow input unchanged. A concrete scalar
-is validated against the Profile type and copied into every Job without changing Job count.
+`{"parameter_key":"cfg","values":[null,7.0,7.5]}`. Every parameter requires one or more ordered,
+unique alternatives and forms an independent Cartesian dimension in Profile order. `null` means Base
+workflow and appears first when included. Concrete scalars are validated against the Profile type.
+Each compiled Job carries one resolved scalar or Base state per parameter.
 
 ## Saved Batch vs Run Boundary
 
@@ -299,7 +300,7 @@ SQLite currently stores:
 - logical Prompts and immutable PromptVersions;
 - logical Workflows and immutable WorkflowVersions;
 - logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
-- mutable Saved Batches with ordered prompt, variable, named image, and typed fixed parameter bindings.
+- mutable Saved Batches with ordered prompt, variable, named image, and typed parameter-alternative bindings.
 
 Later migrations may add:
 

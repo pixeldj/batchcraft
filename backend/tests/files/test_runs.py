@@ -468,7 +468,7 @@ def test_manifest_v7_freezes_parameter_definitions_values_and_csv(tmp_path: Path
             image_bindings=(ImageBinding("reference", (None,)),),
             seeds=SeedInput.fixed(9),
             parameters=(parameter,),
-            parameter_bindings=(ParameterBinding("steps", (-5,)),),
+            parameter_bindings=(ParameterBinding("steps", (None, -5, 0)),),
         )
     )
     workflow_selection = BATCH_SNAPSHOT["workflow_selection"]
@@ -486,7 +486,96 @@ def test_manifest_v7_freezes_parameter_definitions_values_and_csv(tmp_path: Path
         ],
         "variable_bindings": [],
         "image_bindings": [{"slot_key": "reference", "values": [None]}],
-        "parameter_bindings": [{"parameter_key": "steps", "values": [-5]}],
+        "parameter_bindings": [{"parameter_key": "steps", "values": [None, -5, 0]}],
+        "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
+        "workflow_selection": {
+            **workflow_selection,
+            "workflow": workflow,
+            "workflow_profile": profile,
+        },
+    }
+    created = _create(
+        RunFilesystemStore(
+            projects_path,
+            id_factory=SequentialIds("run-id", "job-1", "job-2", "job-3"),
+            clock=lambda: FIXED_TIME,
+        ),
+        plan,
+        None,
+        batch_snapshot=snapshot,
+        workflow=workflow,
+        workflow_profile=profile,
+    )
+
+    manifest = json.loads((created.path / "manifest.json").read_text())
+    with (created.path / "manifest.csv").open(newline="") as file:
+        row = next(csv.DictReader(file))
+
+    assert manifest["parameters"][0]["parameter_key"] == "steps"
+    assert manifest["batch_snapshot"]["parameter_bindings"] == [
+        {"parameter_key": "steps", "values": [None, -5, 0]}
+    ]
+    assert [job["resolved_parameters"] for job in manifest["jobs"]] == [
+        [{"parameter_key": "steps", "value": None}],
+        [{"parameter_key": "steps", "value": -5}],
+        [{"parameter_key": "steps", "value": 0}],
+    ]
+    assert json.loads(row["resolved_parameters_json"]) == [
+        {"parameter_key": "steps", "value": None}
+    ]
+    assert RunFilesystemStore(projects_path).load_run(created.path).compiled_plan == plan
+
+    corrupted_workflow = json.loads(json.dumps(workflow))
+    corrupted_workflow["114"]["inputs"]["steps"] = "twenty"
+    _rewrite_frozen_workflow_pair(created, corrupted_workflow, profile)
+    with pytest.raises(RunStoreError, match="base value must be integer"):
+        RunFilesystemStore(projects_path).load_run(created.path)
+
+
+def test_run_load_rejects_python_equal_parameter_scalar_representation_mismatch(
+    tmp_path: Path,
+) -> None:
+    projects_path = tmp_path / "projects"
+    workflow = json.loads(json.dumps(WORKFLOW))
+    workflow["114"]["inputs"]["cfg"] = 7.0
+    profile = json.loads(json.dumps(WORKFLOW_PROFILE))
+    profile["parameters"] = [
+        {
+            "key": "cfg",
+            "label": "CFG",
+            "node_id": "114",
+            "input_name": "cfg",
+            "value_type": "float",
+        }
+    ]
+    parameter = WorkflowParameter("cfg", "CFG", "114", "cfg", ParameterValueType.FLOAT)
+    plan = compile_batch(
+        BatchDefinition(
+            prompt_versions=(PromptVersion("prompt-v3", "Portrait prompt", "Portrait"),),
+            variable_bindings=(),
+            image_input_slots=(ImageInputSlot("reference", "Reference", "221", "image"),),
+            image_bindings=(ImageBinding("reference", (None,)),),
+            seeds=SeedInput.fixed(9),
+            parameters=(parameter,),
+            parameter_bindings=(ParameterBinding("cfg", (1,)),),
+        )
+    )
+    workflow_selection = BATCH_SNAPSHOT["workflow_selection"]
+    assert isinstance(workflow_selection, dict)
+    snapshot = {
+        **BATCH_SNAPSHOT,
+        "prompt_versions": [
+            {
+                "id": "prompt-v3",
+                "prompt_id": None,
+                "version_number": None,
+                "name": "Portrait prompt",
+                "text": "Portrait",
+            }
+        ],
+        "variable_bindings": [],
+        "image_bindings": [{"slot_key": "reference", "values": [None]}],
+        "parameter_bindings": [{"parameter_key": "cfg", "values": [1]}],
         "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
         "workflow_selection": {
             **workflow_selection,
@@ -506,20 +595,17 @@ def test_manifest_v7_freezes_parameter_definitions_values_and_csv(tmp_path: Path
         workflow=workflow,
         workflow_profile=profile,
     )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    snapshot_value = manifest["batch_snapshot"]["parameter_bindings"][0]["values"][0]
+    manifest_value = manifest["jobs"][0]["resolved_parameters"][0]["value"]
+    assert snapshot_value == manifest_value == 1
+    assert type(snapshot_value) is type(manifest_value) is int
+    manifest["jobs"][0]["resolved_parameters"][0]["value"] = 1.0
+    assert manifest["jobs"][0]["resolved_parameters"][0]["value"] == snapshot_value
+    manifest_path.write_bytes(canonical_json_bytes(manifest))
 
-    manifest = json.loads((created.path / "manifest.json").read_text())
-    with (created.path / "manifest.csv").open(newline="") as file:
-        row = next(csv.DictReader(file))
-
-    assert manifest["parameters"][0]["parameter_key"] == "steps"
-    assert manifest["jobs"][0]["resolved_parameters"] == [{"parameter_key": "steps", "value": -5}]
-    assert json.loads(row["resolved_parameters_json"]) == [{"parameter_key": "steps", "value": -5}]
-    assert RunFilesystemStore(projects_path).load_run(created.path).compiled_plan == plan
-
-    corrupted_workflow = json.loads(json.dumps(workflow))
-    corrupted_workflow["114"]["inputs"]["steps"] = "twenty"
-    _rewrite_frozen_workflow_pair(created, corrupted_workflow, profile)
-    with pytest.raises(RunStoreError, match="base value must be integer"):
+    with pytest.raises(RunStoreError, match="does not reconstruct the compiled Run plan"):
         RunFilesystemStore(projects_path).load_run(created.path)
 
 

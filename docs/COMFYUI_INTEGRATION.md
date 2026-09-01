@@ -123,7 +123,7 @@ The scheduler must reconcile an ambiguous outcome through available prompt IDs, 
 The first production integration boundary lives under `backend/src/batchcraft/comfyui/`. It is deliberately narrower than execution orchestration and provides:
 
 - pure Workflow Profile mapping for required prompt, seed, and output prefix values plus zero or more
-  named image values and typed fixed parameter overrides;
+  named image values and typed scalar parameter overrides;
 - async system information and input upload operations;
 - one-shot prompt submission with typed accepted, rejected, and unknown outcomes;
 - prompt-correlated WebSocket event observation;

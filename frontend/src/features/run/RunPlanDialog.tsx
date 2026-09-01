@@ -41,15 +41,19 @@ export function RunPlanDialog({ run, onClose }: Props) {
               return (
                 <div key={binding.parameter_key}>
                   <dt>{resolved?.label ?? binding.parameter_key}</dt>
-                  <dd>
-                    {formatParameterValue(binding.values[0] ?? null)}
-                    <code>{binding.parameter_key}</code>
+                  <dd className="run-plan-parameter-alternatives">
+                    {binding.values.map((value, index) => (
+                      <span key={`${typeof value}-${String(value)}-${index}`}>
+                        <span className="alternative-number">{index + 1}</span>
+                        {formatParameterValue(value)}
+                      </span>
+                    ))}
                   </dd>
                 </div>
               );
             })}
           </dl>
-        ) : <p className="empty-note">This Profile has no fixed parameters.</p>}
+        ) : <p className="empty-note">This Profile has no parameters.</p>}
       </section>
 
       <section className="run-plan-section" aria-labelledby="run-plan-prompts-title">
@@ -154,7 +158,7 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
           {job.resolved_parameters.map((parameter) => (
             <div key={parameter.parameter_key}>
               <dt>{parameter.label}</dt>
-              <dd>{formatParameterValue(parameter.value)} <code>{parameter.parameter_key}</code></dd>
+              <dd>{formatParameterValue(parameter.value)}</dd>
             </div>
           ))}
           <div><dt>Seed</dt><dd><code>{job.seed}</code></dd></div>
@@ -185,8 +189,12 @@ function imageInputSummary(run: RunResponse): string {
 
 function parameterSummary(run: RunResponse): string {
   const parameters = run.plan.jobs[0]?.resolved_parameters ?? [];
-  if (parameters.length === 0) return "No fixed parameters";
-  return parameters.map((parameter) => `${parameter.label}: ${formatParameterValue(parameter.value)}`).join(" · ");
+  if (parameters.length === 0) return "No parameters";
+  const bindings = new Map(run.batch_snapshot.parameter_bindings.map((binding) => [binding.parameter_key, binding]));
+  return parameters.map((parameter) => {
+    const count = bindings.get(parameter.parameter_key)?.values.length ?? 0;
+    return `${parameter.label}: ${count} ${count === 1 ? "alternative" : "alternatives"}`;
+  }).join(" · ");
 }
 
 function formatParameterValue(value: string | number | boolean | null): string {

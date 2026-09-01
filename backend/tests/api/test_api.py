@@ -25,6 +25,7 @@ from batchcraft.api.schemas import (
     ParameterBindingRequest,
     PreviewResponse,
     ResultsResponse,
+    SavedBatchParameterBindingRequest,
     SavedBatchVariableBindingRequest,
 )
 from batchcraft.comfyui import (
@@ -98,6 +99,29 @@ def test_parameter_scalar_api_and_snapshot_boundaries_reject_invalid_values(
         ParameterBindingRequest.model_validate(payload)
     with pytest.raises(ValueError):
         SnapshotParameterBinding.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    (
+        ([], "at least 1"),
+        ([1, 1.0], "exact duplicates"),
+        ([None, None], "exact duplicates"),
+        ([0, None], "Base workflow first"),
+    ),
+)
+def test_parameter_alternative_dtos_reject_invalid_shapes(
+    values: list[object], message: str
+) -> None:
+    payload = {"parameter_key": "value", "values": values}
+
+    for model in (
+        ParameterBindingRequest,
+        SavedBatchParameterBindingRequest,
+        SnapshotParameterBinding,
+    ):
+        with pytest.raises(ValueError, match=message):
+            model.model_validate(payload)
 
 
 class FakeEventSource:
@@ -375,7 +399,7 @@ def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> 
             "value_type": "integer",
         }
     ]
-    request["parameter_bindings"] = [{"parameter_key": "steps", "values": [-5]}]
+    request["parameter_bindings"] = [{"parameter_key": "steps", "values": [None, -5, 0]}]
     _sync_batch_snapshot(request)
 
     with TestClient(
@@ -389,21 +413,30 @@ def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> 
         zero_bindings = cast(list[dict[str, object]], zero["parameter_bindings"])
         zero_bindings[0]["values"] = []
         _sync_batch_snapshot(zero)
-        multiple = copy.deepcopy(request)
-        multiple_bindings = cast(list[dict[str, object]], multiple["parameter_bindings"])
-        multiple_bindings[0]["values"] = [1, 2]
-        _sync_batch_snapshot(multiple)
+        duplicate = copy.deepcopy(request)
+        duplicate_bindings = cast(list[dict[str, object]], duplicate["parameter_bindings"])
+        duplicate_bindings[0]["values"] = [1, 1]
+        _sync_batch_snapshot(duplicate)
 
         assert http.post("/api/batches/preview", json=zero).status_code == 422
-        assert http.post("/api/batches/preview", json=multiple).status_code == 422
+        assert http.post("/api/batches/preview", json=duplicate).status_code == 422
 
     assert preview.status_code == 200
-    assert preview.json()["jobs"][0]["resolved_parameters"] == [
-        {"parameter_key": "steps", "label": "Steps", "value": -5}
-    ]
+    assert preview.json()["job_count"] == 12
+    assert [job["resolved_parameters"][0]["value"] for job in preview.json()["jobs"]] == [
+        None,
+        None,
+        -5,
+        -5,
+        0,
+        0,
+    ] * 2
     assert created.status_code == 201
     assert run.json()["plan"]["jobs"][0]["resolved_parameters"] == [
-        {"parameter_key": "steps", "label": "Steps", "value": -5}
+        {"parameter_key": "steps", "label": "Steps", "value": None}
+    ]
+    assert run.json()["batch_snapshot"]["parameter_bindings"] == [
+        {"parameter_key": "steps", "values": [None, -5, 0]}
     ]
 
 

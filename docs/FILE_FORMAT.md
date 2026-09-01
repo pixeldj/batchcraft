@@ -156,7 +156,8 @@ The top-level `image_input_slots` array freezes each slot's `slot_key`, `slot_la
 The top-level `parameters` array freezes each generic parameter's key, label, target, and value type.
 Every Job contains ordered `resolved_parameters` entries shaped as
 `{ "parameter_key": string, "value": scalar | null }`. `null` preserves the Base workflow value.
-Parameters are scalar inputs in Pass 3A and do not multiply Jobs.
+Every entry remains scalar because parameter alternatives are resolved during compilation, before the
+Job reaches execution.
 
 Manifest v7 requires a top-level `batch_snapshot` object with `snapshot_version: 4`. It stores variable
 bindings canonically as `{ "placeholder": string, "values": string[] }`. Zero values may
@@ -167,8 +168,10 @@ The snapshot stores ordered image bindings as `{ "slot_key": string, "values": [
 Each Profile slot requires one or more ordered, unique alternatives. Every slot is an independent
 Cartesian compiler dimension, while each concrete manifest Job stores only its one resolved choice.
 Base workflow is `null` and appears first when included.
-The snapshot also stores one typed scalar or `null` per Profile parameter in ordered bindings shaped as
-`{ "parameter_key": string, "values": [scalar | null] }`.
+The snapshot stores one or more ordered, unique typed scalar or `null` alternatives per Profile
+parameter in bindings shaped as `{ "parameter_key": string, "values": [scalar | null, ...] }`. Each
+parameter is an independent Cartesian compiler dimension, while each concrete manifest Job stores only
+its one resolved scalar or Base workflow choice. Base workflow is `null` and appears first when included.
 Snapshots may also preserve optional human-readable Workflow and Profile names plus immutable version
 numbers. These labels support historical UI inspection and are not required for replay.
 

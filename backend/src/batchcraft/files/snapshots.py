@@ -10,7 +10,7 @@ from pydantic import (
     model_validator,
 )
 
-from batchcraft.domain import validate_parameter_scalar
+from batchcraft.domain import validate_parameter_alternatives, validate_parameter_scalar
 from batchcraft.domain.image_slots import validate_image_input_slot_key
 
 
@@ -82,7 +82,12 @@ class SnapshotImageBinding(SnapshotModel):
 
 class SnapshotParameterBinding(SnapshotModel):
     parameter_key: str
-    values: list[SnapshotParameterScalar | None]
+    values: list[SnapshotParameterScalar | None] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self) -> Self:
+        validate_parameter_alternatives(self.values)
+        return self
 
 
 class SnapshotSeedIntent(SnapshotModel):
@@ -127,8 +132,11 @@ class BatchSnapshotV4(SnapshotModel):
     workflow_selection: SnapshotWorkflowSelection
 
     @model_validator(mode="after")
-    def validate_image_binding_keys(self) -> Self:
+    def validate_binding_keys(self) -> Self:
         keys = [binding.slot_key for binding in self.image_bindings]
         if len(set(keys)) != len(keys):
             raise ValueError("image bindings must have unique slot keys")
+        parameter_keys = [binding.parameter_key for binding in self.parameter_bindings]
+        if len(set(parameter_keys)) != len(parameter_keys):
+            raise ValueError("parameter bindings must have unique parameter keys")
         return self

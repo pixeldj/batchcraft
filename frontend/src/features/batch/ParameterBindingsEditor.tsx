@@ -1,18 +1,13 @@
-import type { ParameterValueType } from "../../api/types";
-import {
-  profileParameters,
-  type ParameterBindingForm,
-} from "./form";
+import type { ParameterValueType, WorkflowProfileParameter } from "../../api/types";
+import type { ParameterAlternativeForm, ParameterBindingForm } from "./form";
 
 interface Props {
-  profileJson: string;
+  parameters: WorkflowProfileParameter[];
   parameterBindings: ParameterBindingForm[];
   onChange(bindings: ParameterBindingForm[]): void;
 }
 
-export function ParameterBindingsEditor({ profileJson, parameterBindings, onChange }: Props) {
-  const parameters = safeProfileParameters(profileJson);
-  if (parameters === null) return null;
+export function ParameterBindingsEditor({ parameters, parameterBindings, onChange }: Props) {
   const rows = parameters.flatMap((parameter) => {
     const binding = parameterBindings.find((candidate) => (
       candidate.parameterKey === parameter.key && candidate.valueType === parameter.value_type
@@ -21,38 +16,100 @@ export function ParameterBindingsEditor({ profileJson, parameterBindings, onChan
   });
   if (rows.length === 0) return null;
 
-  function update(parameterKey: string, patch: Partial<ParameterBindingForm>) {
+  function update(parameterKey: string, alternatives: ParameterAlternativeForm[]) {
     onChange(parameterBindings.map((binding) => binding.parameterKey === parameterKey
-      ? { ...binding, ...patch }
+      ? { ...binding, alternatives }
       : binding));
   }
 
   return (
     <fieldset className="parameter-bindings">
       <legend>Parameters</legend>
-      <p className="field-hint">Fixed Workflow Profile parameters do not change the Job count.</p>
+      <p className="field-hint">Each ordered alternative is resolved by the backend into concrete Jobs.</p>
       <div className="repeater-stack">
         {rows.map(({ parameter, binding }) => {
+          const includesBase = binding.alternatives.some((alternative) => alternative.kind === "base");
           return (
             <div className="repeater-card" key={parameter.key}>
               <div className="repeater-title">
                 <strong>{parameter.label}</strong>
-                <code>{parameter.key}</code>
+                <span className="field-hint">{binding.alternatives.length} {binding.alternatives.length === 1 ? "alternative" : "alternatives"}</span>
               </div>
-              <div className="field-grid two-columns align-start">
-                <label className="field">
-                  <span className="field-label">Value source</span>
-                  <select
-                    aria-label={`${parameter.label} value source`}
-                    value={binding.mode}
-                    onChange={(event) => update(parameter.key, { mode: event.target.value as "base" | "override" })}
-                  >
-                    <option value="base">Base workflow</option>
-                    <option value="override">Override</option>
-                  </select>
+              <div className="parameter-alternative-toolbar">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    aria-label={`Include Base workflow for ${parameter.label}`}
+                    checked={includesBase}
+                    onChange={(event) => update(
+                      parameter.key,
+                      event.target.checked
+                        ? [{ kind: "base" }, ...binding.alternatives.filter((item) => item.kind !== "base")]
+                        : binding.alternatives.filter((item) => item.kind !== "base"),
+                    )}
+                  />
+                  <span>Include Base workflow</span>
                 </label>
-                {binding.mode === "override" ? <ParameterValueInput binding={binding} label={parameter.label} onChange={(value) => update(parameter.key, { value })} /> : null}
+                <button
+                  className="button-secondary compact"
+                  type="button"
+                  aria-label={`Add override for ${parameter.label}`}
+                  onClick={() => update(parameter.key, [
+                    ...binding.alternatives,
+                    { kind: "override", value: defaultRawValue(binding.valueType) },
+                  ])}
+                >
+                  Add override
+                </button>
               </div>
+              {binding.alternatives.length === 0 ? (
+                <p className="operation-error">Add at least one alternative before Preview.</p>
+              ) : null}
+              <ol className="parameter-alternatives" aria-label={`${parameter.label} alternatives`}>
+                {binding.alternatives.map((alternative, index) => (
+                  <li key={`${alternative.kind}-${index}`}>
+                    <span className="parameter-alternative-order">{index + 1}</span>
+                    {alternative.kind === "base" ? (
+                      <span className="parameter-base-value">Base workflow</span>
+                    ) : (
+                      <ParameterValueInput
+                        valueType={binding.valueType}
+                        value={alternative.value}
+                        label={`${parameter.label} override ${index + 1}`}
+                        onChange={(value) => update(parameter.key, binding.alternatives.map((item, itemIndex) => (
+                          itemIndex === index ? { kind: "override", value } : item
+                        )))}
+                      />
+                    )}
+                    <div className="parameter-alternative-actions">
+                      {alternative.kind === "override" ? (
+                        <>
+                          <button
+                            className="button-link"
+                            type="button"
+                            disabled={index === (includesBase ? 1 : 0)}
+                            aria-label={`Move ${parameter.label} alternative ${index + 1} up`}
+                            onClick={() => update(parameter.key, move(binding.alternatives, index, index - 1))}
+                          >Up</button>
+                          <button
+                            className="button-link"
+                            type="button"
+                            disabled={index === binding.alternatives.length - 1}
+                            aria-label={`Move ${parameter.label} alternative ${index + 1} down`}
+                            onClick={() => update(parameter.key, move(binding.alternatives, index, index + 1))}
+                          >Down</button>
+                        </>
+                      ) : null}
+                      <button
+                        className="button-link danger"
+                        type="button"
+                        aria-label={`Remove ${parameter.label} alternative ${index + 1}`}
+                        onClick={() => update(parameter.key, binding.alternatives.filter((_, itemIndex) => itemIndex !== index))}
+                      >Remove</button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
             </div>
           );
         })}
@@ -61,21 +118,12 @@ export function ParameterBindingsEditor({ profileJson, parameterBindings, onChan
   );
 }
 
-function safeProfileParameters(profileJson: string) {
-  try {
-    return profileParameters(profileJson);
-  } catch {
-    return null;
-  }
-}
-
-function ParameterValueInput({ binding, label, onChange }: { binding: ParameterBindingForm; label: string; onChange(value: string): void }) {
-  if (binding.valueType === "boolean") {
+function ParameterValueInput({ valueType, value, label, onChange }: { valueType: ParameterValueType; value: string; label: string; onChange(value: string): void }) {
+  if (valueType === "boolean") {
     return (
-      <label className="field">
-        <span className="field-label">Override value</span>
-        <select aria-label={`${label} override value`} value={binding.value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">Select true or false</option>
+      <label className="field parameter-value-field">
+        <span className="visually-hidden">{label}</span>
+        <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="true">true</option>
           <option value="false">false</option>
         </select>
@@ -88,15 +136,28 @@ function ParameterValueInput({ binding, label, onChange }: { binding: ParameterB
     float: "Finite number",
   };
   return (
-    <label className="field">
-      <span className="field-label">Override value</span>
+    <label className="field parameter-value-field">
+      <span className="visually-hidden">{label}</span>
       <input
-        aria-label={`${label} override value`}
-        inputMode={binding.valueType === "string" ? undefined : "decimal"}
-        value={binding.value}
+        aria-label={label}
+        inputMode={valueType === "string" ? undefined : "decimal"}
+        value={value}
         onChange={(event) => onChange(event.target.value)}
       />
-      <span className="field-hint">{hints[binding.valueType]}</span>
+      <span className="field-hint">{hints[valueType]}</span>
     </label>
   );
+}
+
+function defaultRawValue(valueType: ParameterValueType): string {
+  if (valueType === "boolean") return "true";
+  if (valueType === "string") return "";
+  return "0";
+}
+
+function move<T>(values: T[], from: number, to: number): T[] {
+  const next = [...values];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
 }

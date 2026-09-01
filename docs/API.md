@@ -181,9 +181,10 @@ required `batch_snapshot` object containing the full editable Saved Batch state.
 Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
 template text, canonical variable bindings shaped as `{ "placeholder": string, "values": string[] }`,
 ordered image bindings shaped as `{ "slot_key": string, "values": [asset_id | null] }`, seed input,
-ordered parameter bindings shaped as `{ "parameter_key": string, "values": [scalar | null] }`,
-the API-format workflow, and its Workflow Profile snapshot. Preview and Run creation require exactly one
-typed value or `null` per Profile parameter. The singular `prompt_version` field is not accepted.
+ordered parameter bindings shaped as `{ "parameter_key": string, "values": [scalar | null, ...] }`,
+the API-format workflow, and its Workflow Profile snapshot. Preview and Run creation require one or
+more ordered, unique, type-correct alternatives per Profile parameter. The singular `prompt_version`
+field is not accepted.
 The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
 a Random seed intent that stores only `mode` and `count`.
 
@@ -253,14 +254,15 @@ when included, and does not upload or mutate that slot for its concrete Job. Eve
 Cartesian dimension. Zipped, row-linked, and collection-link semantics are not supported.
 
 Saved Batch request and detail schemas also expose ordered `parameter_bindings`. When a Profile is
-selected, writes require the exact Profile parameter set in Profile order and exactly one typed scalar
-or `null` per parameter. `null` means Base workflow. Empty string, zero, and false remain concrete
-overrides. The backend rejects wrong scalar types, non-finite numbers, and integers outside the signed
-JavaScript-safe range.
+selected, writes require the exact Profile parameter set in Profile order and one or more ordered,
+unique typed scalar or `null` alternatives per parameter. `null` means Base workflow and appears first
+when included. Empty string, zero, and false remain concrete overrides. The backend rejects duplicates,
+wrong scalar types, non-finite numbers, and integers outside the signed JavaScript-safe range.
 
 Executable Preview and Run requests may supply binding records in any order. Compilation resolves them
-by stable slot key and expands dimensions in Profile slot order. Alternative order inside each binding
-is significant and preserved.
+by stable key and expands Image Input and parameter dimensions in their respective Profile order.
+Alternative order inside each binding is significant and preserved. Parameters follow Image Input
+slots and precede seeds, so seeds vary fastest.
 
 Random seed intent stores `mode` and `count` in the `batch_snapshot`; the frontend materializes the
 concrete ordered seed list before Preview or Run creation.

@@ -11,6 +11,7 @@ import {
   MAX_RANDOM_SEED_COUNT,
   newVariableBinding,
   normalizedBindingValues,
+  profileParameters,
   type BatchFormState,
   type VariableBindingForm,
 } from "./form";
@@ -320,7 +321,7 @@ export function BatchEditor({
       />
 
       <ParameterBindingsEditor
-        profileJson={form.workflowProfileJson}
+        parameters={safeProfileParameters(form.workflowProfileJson)}
         parameterBindings={form.parameterBindings}
         onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
       />
@@ -333,6 +334,14 @@ export function BatchEditor({
       </div>
     </section>
   );
+}
+
+function safeProfileParameters(profileJson: string) {
+  try {
+    return profileParameters(profileJson);
+  } catch {
+    return [];
+  }
 }
 
 function variableSummary(bindings: VariableBindingForm[]) {

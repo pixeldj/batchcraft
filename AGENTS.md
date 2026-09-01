@@ -163,7 +163,7 @@ The pure deterministic Batch compiler is implemented under `backend/`.
 The Run filesystem store is implemented under `backend/`, including execution identity, canonical manifests, workflow and Workflow Profile snapshots, content-addressed Project assets, loading, and atomic filesystem publication.
 
 The production ComfyUI adapter is implemented under `backend/`, including pure Workflow Profile core,
-named Image Input, and typed fixed parameter mapping plus typed async HTTP/WebSocket operations. It
+named Image Input, and typed scalar parameter mapping plus typed async HTTP/WebSocket operations. It
 does not own scheduling, retries, execution-state persistence, or Run filesystem mutation.
 
 The sequential Run executor is implemented under `backend/`, including versioned mutable execution state, queue-depth-1 Job orchestration, history reconciliation, and Result ingestion. It executes one published Run against one ComfyUI client and does not provide global scheduling or automatic recovery.
@@ -178,12 +178,13 @@ status, Project and library management, Saved Batch editing, Workflow Profile bu
 named Image Input binding, deterministic Job preview, durable Run creation, execution polling, and
 Result rendering. It uses the FastAPI application as its only backend boundary.
 
-Generic Workflow Parameters Pass 3A is implemented end to end. ProfileVersions store ordered typed
+Generic Workflow Parameters Pass 3B-1 is implemented end to end. ProfileVersions store ordered typed
 `{key,label,node_id,input_name,value_type}` parameter definitions beside core mappings and Image Input
-slots. Batch/API/Saved Batch bindings store exactly one `string|integer|float|boolean|null` value per
-parameter inside a reserved `values` array. `null` preserves Base workflow. Parameters do not multiply
-Jobs in Pass 3A; every Job and Result provenance record carries one resolved scalar or Base state per
-Profile parameter. Manifest v7, Batch snapshot v4, browser session v11, and the replacement consolidated
-SQLite 0001 baseline are current. Parameter sweeps, ranges, enums, `/object_info`, and LoRA discovery
-remain deferred. Keep frontend HTTP types and UI state separate from backend compiler, filesystem,
-ComfyUI, execution, and persistence rules.
+slots. Batch/API/Saved Batch bindings store one or more ordered, unique
+`string|integer|float|boolean|null` alternatives per parameter. `null` preserves Base workflow and
+appears first when present. Parameters are independent Cartesian dimensions in Profile order between
+Image Input slots and seeds; every Job and Result provenance record still carries one resolved scalar
+or Base state per Profile parameter. Manifest v7, Batch snapshot v4, browser session v12, and the
+replacement consolidated SQLite 0001 baseline are current. Numeric ranges, enums, `/object_info`, LoRA
+discovery, and linked or zipped parameters remain deferred. Keep frontend HTTP types and UI state
+separate from backend compiler, filesystem, ComfyUI, execution, and persistence rules.

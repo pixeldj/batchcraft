@@ -211,6 +211,15 @@ pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; over
 .base-workflow-mark { display: grid; min-height: 6.5rem; place-items: center; color: var(--muted); background: var(--paper); border-bottom: 1px solid var(--line); font: 800 1.15rem "SFMono-Regular", monospace; letter-spacing: 0.08em; text-transform: uppercase; }
 .run-plan-image-alternatives { display: flex; flex-wrap: wrap; gap: 0.55rem 1rem; }
 .run-plan-image-alternatives > span { display: grid; gap: 0.15rem; }
+.parameter-alternative-toolbar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem; align-items: center; margin-bottom: 0.7rem; }
+.parameter-alternatives { display: grid; gap: 0.45rem; margin: 0; padding: 0; list-style: none; }
+.parameter-alternatives li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; gap: 0.65rem; align-items: center; min-width: 0; padding: 0.55rem; background: var(--paper-raised); border: 1px solid var(--line); }
+.parameter-alternative-order, .alternative-number { color: var(--accent); font: 700 0.68rem "SFMono-Regular", monospace; }
+.parameter-base-value { font-size: 0.78rem; font-weight: 700; }
+.parameter-value-field { min-width: 0; }
+.parameter-value-field input, .parameter-value-field select { min-height: 2.1rem; }
+.parameter-alternative-actions { display: flex; gap: 0.65rem; align-items: center; }
+.parameter-alternative-actions .button-link { font-size: 0.7rem; }
 
 .button-primary, .button-secondary {
   min-height: 2.55rem;
@@ -309,6 +318,8 @@ progress::-webkit-progress-value { background: var(--accent); }
 .run-plan-prompts pre { margin: 0.5rem 0 0; padding: 0.65rem; overflow-x: auto; color: var(--ink); background: var(--paper); white-space: pre-wrap; }
 .run-plan-bindings { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.75rem; }
 .run-plan-bindings div { padding: 0.65rem; background: var(--paper-raised); border-top: 2px solid var(--line); }
+.run-plan-parameter-alternatives { display: grid; gap: 0.35rem; }
+.run-plan-parameter-alternatives > span { display: flex; min-width: 0; gap: 0.5rem; align-items: baseline; overflow-wrap: anywhere; }
 .run-plan-jobs { display: grid; gap: 0.45rem; }
 .run-plan-job { background: var(--paper-raised); border: 1px solid var(--line); }
 .run-plan-job summary { display: grid; grid-template-columns: 3.2rem minmax(8rem, 1fr) minmax(6rem, 1fr) minmax(7rem, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.7rem; cursor: pointer; font-size: 0.76rem; }
@@ -382,6 +393,8 @@ progress::-webkit-progress-value { background: var(--accent); }
 .result-generation-details > dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; margin: 0; }
 .result-generation-details dt, .result-technical-details dt { color: var(--muted); font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; }
 .result-generation-details dd, .result-technical-details dd { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
+.detail-value-code { display: grid; gap: 0.25rem; min-width: 0; }
+.detail-value-code .detail-value, .detail-value-code code { min-width: 0; overflow-wrap: anywhere; }
 .result-details-wide { grid-column: 1 / -1; }
 .result-resolved-prompt { white-space: pre-wrap; }
 .result-details-variables { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin: 0; }
@@ -409,6 +422,9 @@ progress::-webkit-progress-value { background: var(--accent); }
   .asset-picker-actions { width: 100%; justify-content: flex-start; }
   .repeater-title { align-items: flex-start; gap: 0.75rem; }
   .repeater-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .parameter-alternatives li { grid-template-columns: 1.6rem minmax(0, 1fr); }
+  .parameter-alternative-actions { grid-column: 2; flex-wrap: wrap; }
+  .parameter-alternative-actions .button-link { display: inline-flex; min-width: 2.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.5rem; }
   .variable-binding-fields { grid-template-columns: 1fr; }
   .seed-fieldset .section-summary-actions { transform: none; }
   .run-summary { grid-template-columns: 1fr; }

@@ -1,4 +1,5 @@
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -62,6 +63,29 @@ def validate_parameter_scalar(value: object) -> ParameterScalar:
     if isinstance(value, float) and math.isfinite(value):
         return value
     raise ValueError("parameter values must be finite JSON strings, numbers, or booleans")
+
+
+def validate_parameter_alternatives(values: Sequence[object]) -> None:
+    if not values:
+        raise ValueError("parameter binding values must contain at least one effective value")
+    for value in values:
+        if value is not None:
+            validate_parameter_scalar(value)
+    for position, value in enumerate(values):
+        if any(_parameter_values_equal(value, prior) for prior in values[:position]):
+            raise ValueError("parameter binding values must not contain exact duplicates")
+    if None in values and values[0] is not None:
+        raise ValueError("parameter binding values must place Base workflow first")
+
+
+def _parameter_values_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is right
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, str) or isinstance(right, str):
+        return isinstance(left, str) and isinstance(right, str) and left == right
+    return isinstance(left, (int, float)) and isinstance(right, (int, float)) and left == right
 
 
 @dataclass(frozen=True, slots=True)

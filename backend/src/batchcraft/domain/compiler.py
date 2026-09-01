@@ -15,6 +15,7 @@ from batchcraft.domain.models import (
     ResolvedVariable,
     SeedMode,
     VariableBinding,
+    validate_parameter_alternatives,
     validate_parameter_scalar,
 )
 
@@ -187,7 +188,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             raise CompilationError(f"workflow parameter {parameter.key!r} has incomplete metadata")
         parameter_keys.append(parameter.key)
 
-    parameter_values: dict[str, str | int | float | bool | None] = {}
+    parameter_values: dict[str, tuple[str | int | float | bool | None, ...]] = {}
     for parameter_binding in batch.parameter_bindings:
         try:
             validate_stable_key(parameter_binding.parameter_key)
@@ -197,11 +198,13 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             raise CompilationError(
                 f"duplicate parameter binding for {parameter_binding.parameter_key!r}"
             )
-        if len(parameter_binding.values) != 1:
+        try:
+            validate_parameter_alternatives(parameter_binding.values)
+        except ValueError as error:
             raise CompilationError(
-                f"parameter binding for {parameter_binding.parameter_key!r} must contain exactly one value"
-            )
-        parameter_values[parameter_binding.parameter_key] = parameter_binding.values[0]
+                f"parameter binding for {parameter_binding.parameter_key!r} is invalid: {error}"
+            ) from error
+        parameter_values[parameter_binding.parameter_key] = parameter_binding.values
     unknown_parameters = set(parameter_values) - set(parameter_keys)
     missing_parameters = set(parameter_keys) - set(parameter_values)
     if unknown_parameters:
@@ -213,13 +216,9 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             f"parameter bindings are missing parameters: {', '.join(sorted(missing_parameters))}"
         )
     for parameter in batch.parameters:
-        _validate_parameter_value(
-            parameter.key, parameter.value_type.value, parameter_values[parameter.key]
-        )
-    resolved_parameters = tuple(
-        ResolvedParameter(parameter_key=parameter.key, value=parameter_values[parameter.key])
-        for parameter in batch.parameters
-    )
+        for value in parameter_values[parameter.key]:
+            _validate_parameter_value(parameter.key, parameter.value_type.value, value)
+    parameter_axes = tuple(parameter_values[parameter.key] for parameter in batch.parameters)
 
     seeds = _seed_values(batch)
     if max_jobs is not None:
@@ -240,6 +239,10 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                 if prompt_jobs > remaining_jobs // len(image_axis):
                     raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
                 prompt_jobs *= len(image_axis)
+            for parameter_axis in parameter_axes:
+                if prompt_jobs > remaining_jobs // len(parameter_axis):
+                    raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+                prompt_jobs *= len(parameter_axis)
             expected_jobs += prompt_jobs
 
     globally_used_placeholders = {
@@ -277,18 +280,23 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                     ResolvedImageInput(slot_key=key, asset_id=asset_id)
                     for key, asset_id in zip(slot_keys, image_values, strict=True)
                 )
-                for seed in seeds:
-                    jobs.append(
-                        CompiledJob(
-                            ordinal=len(jobs) + 1,
-                            prompt_version_id=prompt_version.id,
-                            resolved_prompt=resolved_prompt,
-                            resolved_variables=resolved_variables,
-                            resolved_image_inputs=resolved_image_inputs,
-                            resolved_parameters=resolved_parameters,
-                            seed=seed,
-                        )
+                for parameter_values_for_job in product(*parameter_axes):
+                    resolved_parameters = tuple(
+                        ResolvedParameter(parameter_key=key, value=value)
+                        for key, value in zip(parameter_keys, parameter_values_for_job, strict=True)
                     )
+                    for seed in seeds:
+                        jobs.append(
+                            CompiledJob(
+                                ordinal=len(jobs) + 1,
+                                prompt_version_id=prompt_version.id,
+                                resolved_prompt=resolved_prompt,
+                                resolved_variables=resolved_variables,
+                                resolved_image_inputs=resolved_image_inputs,
+                                resolved_parameters=resolved_parameters,
+                                seed=seed,
+                            )
+                        )
 
     return CompiledRunPlan(
         prompt_versions=batch.prompt_versions,

@@ -24,8 +24,8 @@ A Batch may provide:
 - an ordered, non-empty collection of PromptVersions;
 - VariableBindings;
 - ordered named Image Input bindings;
+- ordered generic parameter bindings;
 - seed policy;
-- exposed workflow parameter values;
 - output naming configuration.
 
 ## Compilation Pipeline
@@ -42,8 +42,8 @@ Prompt Resolver
 Resolved Prompt Variants
        |
        +---- Named Image Input dimensions
+       +---- Generic parameter dimensions
        +---- Seed dimensions
-       +---- Fixed workflow parameters (copied, not expanded)
        |
        v
 Expansion
@@ -121,16 +121,16 @@ Compilation produces three Jobs:
 The compiler applies dimensions in this order:
 
 ```text
-PromptVersion -> prompt variables -> Image Input slots -> seeds
+PromptVersion -> prompt variables -> Image Input slots -> parameters -> seeds
 ```
 
 PromptVersion is the first Batch dimension and preserves user selection order. Each PromptVersion is
 templated independently and expands only the bindings it references, in placeholder first-occurrence
-order. Profile Image Input slots follow in Profile order, then seeds. The rightmost dimension varies
-fastest, so seeds vary fastest. User order is preserved within every dimension. Each resulting Job
-contains one resolved Image Input value per slot.
-Generic Workflow Parameters are scalar Job inputs, not dimensions in Pass 3A. Every Job receives the
-same ordered set of concrete or Base workflow parameter values.
+order. Profile Image Input slots follow in Profile order, then generic parameters in Profile order,
+then seeds. The rightmost dimension varies fastest, so seeds vary fastest. User order is preserved
+within every dimension. Each resulting Job contains one resolved Image Input value per slot and one
+resolved scalar or Base workflow value per parameter. Binding-record request order does not affect
+compilation.
 
 This ordering must be covered by preview, compilation, manifest round-trip, and rerun tests.
 
@@ -144,11 +144,14 @@ For independent dimensions:
 jobs =
 sum(prompt-variable combinations for each PromptVersion)
 × product(Image Input alternatives per Profile slot)
+× product(parameter alternatives per Profile parameter)
 × seed values
 ```
 
 A Profile may define zero Image Input slots, which contributes a multiplicative identity of one. Every
 defined slot supplies at least one ordered alternative: a Reference Asset ID or `null` for Base workflow.
+A Profile may likewise define zero generic parameters. Every defined parameter supplies at least one
+ordered typed scalar or `null` alternative.
 
 The UI should prominently display the resulting count.
 
@@ -209,9 +212,9 @@ ordered `resolved_image_inputs` with one `{slot_key, asset_id}` choice per slot.
 Base workflow and requires no upload or workflow mutation. Zipped, row-linked, and collection-link
 semantics remain unsupported.
 
-## Parameter Sweeps
+## Generic Parameter Alternatives
 
-Any exposed scalar workflow parameter may eventually become a Batch dimension.
+Every exposed scalar workflow parameter is an independent Batch dimension.
 
 Examples:
 
@@ -219,11 +222,16 @@ Examples:
 - steps;
 - denoise;
 - strength;
-- model choice.
+- duration.
 
-This should use the same compiler machinery as prompt variables rather than separate ad hoc loops.
+Each Profile parameter has one `{parameter_key, values:[scalar|null,...]}` binding. Values are ordered,
+unique, and strictly validated against the declared `string`, `integer`, `float`, or `boolean` type.
+Empty string, zero, and false are concrete values. Numeric values must be finite; integers must also be
+within the signed JavaScript-safe range. `null` means Base workflow and appears first when included.
 
-Parameter sweeps are not part of the v1 pure compiler milestone. The implemented v1 expansion order therefore ends with seeds while preserving the documented position for future parameter dimensions.
+Parameters expand in Profile order before seeds. A Profile with no parameters contributes the
+multiplicative identity of one. Numeric ranges, enums, random values, and linked or zipped dimensions
+remain deferred.
 
 ## Run Creation
 
@@ -232,7 +240,7 @@ Creating a Run should conceptually:
 1. validate the Batch;
 2. snapshot effective source data;
 3. resolve prompt variants;
-4. resolve fixed parameters and expand named Image Input and seed dimensions;
+4. expand named Image Input, parameter, and seed dimensions;
 5. assign deterministic Job ordinals;
 6. determine output naming;
 7. publish the initial Run/manifest artifacts;

@@ -242,12 +242,12 @@ function savedParameterBindingsToForm(
   const byKey = new Map(bindings.map((binding) => [binding.parameter_key, binding.values]));
   return parameters.map((parameter) => {
     const values = byKey.get(parameter.key);
-    const value = values?.[0];
     return {
       parameterKey: parameter.key,
       valueType: parameter.value_type,
-      mode: value === null || value === undefined ? "base" : "override",
-      value: value === null || value === undefined ? "" : String(value),
+      alternatives: values?.map((value) => value === null
+        ? { kind: "base" as const }
+        : { kind: "override" as const, value: String(value) }) ?? [{ kind: "base" as const }],
     };
   });
 }

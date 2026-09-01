@@ -114,7 +114,7 @@ describe("Saved Batch Image Inputs", () => {
 });
 
 describe("Saved Batch Parameters", () => {
-  it("round-trips Profile-ordered typed Base and Override bindings and dirty identity", () => {
+  it("round-trips Profile-ordered typed alternatives and dirty identity", () => {
     const detail = savedBatchDetail();
     detail.selected_workflow_version_id = "workflow-v1";
     detail.selected_workflow_profile_id = "profile-1";
@@ -134,20 +134,20 @@ describe("Saved Batch Parameters", () => {
       ] },
     };
     detail.parameter_bindings = [
-      { parameter_key: "enabled", values: [false] },
-      { parameter_key: "caption", values: [null] },
+      { parameter_key: "enabled", values: [false, true] },
+      { parameter_key: "caption", values: [null, "", "caption"] },
     ];
 
     const form = savedBatchToForm(detail, project());
     expect(form.parameterBindings).toEqual([
-      { parameterKey: "caption", valueType: "string", mode: "base", value: "" },
-      { parameterKey: "enabled", valueType: "boolean", mode: "override", value: "false" },
+      { parameterKey: "caption", valueType: "string", alternatives: [{ kind: "base" }, { kind: "override", value: "" }, { kind: "override", value: "caption" }] },
+      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "override", value: "false" }, { kind: "override", value: "true" }] },
     ]);
     expect(buildSavedBatchDefinition(form).parameter_bindings).toEqual([
-      { parameter_key: "caption", values: [null] },
-      { parameter_key: "enabled", values: [false] },
+      { parameter_key: "caption", values: [null, "", "caption"] },
+      { parameter_key: "enabled", values: [false, true] },
     ]);
-    const changed = { ...form, parameterBindings: form.parameterBindings.map((binding) => binding.parameterKey === "caption" ? { ...binding, mode: "override" as const } : binding) };
+    const changed = { ...form, parameterBindings: form.parameterBindings.map((binding) => binding.parameterKey === "caption" ? { ...binding, alternatives: [...binding.alternatives].reverse() } : binding) };
     expect(canonicalBatchIntent(changed)).not.toBe(canonicalBatchIntent(form));
   });
 });

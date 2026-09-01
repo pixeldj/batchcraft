@@ -1168,8 +1168,22 @@ def _validate_batch_snapshot_consistency(
         )
     except CompilationError as error:
         raise RunStoreError(f"Batch snapshot does not compile: {error}") from error
-    if snapshot_plan != plan:
+    if not _compiled_plans_match_exactly(snapshot_plan, plan):
         raise RunStoreError("Batch snapshot does not reconstruct the compiled Run plan")
+
+
+def _compiled_plans_match_exactly(left: CompiledRunPlan, right: CompiledRunPlan) -> bool:
+    if left != right:
+        return False
+    left_values = tuple(
+        tuple(canonical_json_bytes(parameter.value) for parameter in job.resolved_parameters)
+        for job in left.jobs
+    )
+    right_values = tuple(
+        tuple(canonical_json_bytes(parameter.value) for parameter in job.resolved_parameters)
+        for job in right.jobs
+    )
+    return left_values == right_values
 
 
 def _profile_image_inputs(

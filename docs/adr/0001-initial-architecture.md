@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Superseded in part by:** ADR 0008 for the current parameter-before-seed dimension order.
 
 ## Context
 

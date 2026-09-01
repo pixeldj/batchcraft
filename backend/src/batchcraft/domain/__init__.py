@@ -26,6 +26,7 @@ from batchcraft.domain.models import (
     SeedMode,
     VariableBinding,
     WorkflowParameter,
+    validate_parameter_alternatives,
     validate_parameter_scalar,
 )
 
@@ -56,6 +57,7 @@ __all__ = [
     "IMAGE_INPUT_SLOT_KEY_PATTERN",
     "is_valid_image_input_slot_key",
     "validate_image_input_slot_key",
+    "validate_parameter_alternatives",
     "validate_parameter_scalar",
     "validate_stable_key",
 ]

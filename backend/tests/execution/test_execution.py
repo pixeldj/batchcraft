@@ -254,6 +254,7 @@ def _published_run(
     vary_prompt_and_seed: bool = False,
     image_alternatives: bool = False,
     parameter_value: int | None = -5,
+    parameter_values: tuple[int | None, ...] | None = None,
 ) -> tuple[PublishedRun, tuple[bytes, ...]]:
     projects_path = tmp_path / "projects"
     project_path = projects_path / PROJECT.filesystem_key
@@ -307,7 +308,12 @@ def _published_run(
             parameters=(
                 WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
             ),
-            parameter_bindings=(ParameterBinding("steps", (parameter_value,)),),
+            parameter_bindings=(
+                ParameterBinding(
+                    "steps",
+                    (parameter_value,) if parameter_values is None else parameter_values,
+                ),
+            ),
         )
     )
     run_ids = SequentialValues(
@@ -349,7 +355,14 @@ def _published_run(
                 {"slot_key": binding.slot_key, "values": list(binding.values)}
                 for binding in image_bindings
             ],
-            "parameter_bindings": [{"parameter_key": "steps", "values": [parameter_value]}],
+            "parameter_bindings": [
+                {
+                    "parameter_key": "steps",
+                    "values": list(
+                        (parameter_value,) if parameter_values is None else parameter_values
+                    ),
+                }
+            ],
             "seed_intent": {
                 "mode": seed_mode,
                 "values": list(seeds.values),
@@ -641,6 +654,51 @@ def test_cartesian_jobs_reach_executor_with_one_resolved_value_per_slot(
     assert client.submitted_workflows[0]["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
     second_identity = client.submitted_workflows[1]["25"]["inputs"]["image"]  # type: ignore[index]
     assert str(second_identity).endswith("/01-identity.png")
+
+
+def test_parameter_sweep_jobs_reach_executor_as_scalar_overrides(tmp_path: Path) -> None:
+    run, _ = _published_run(
+        tmp_path,
+        job_count=1,
+        with_images=False,
+        parameter_values=(None, -5, 0),
+    )
+    client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(SubmissionDisposition.ACCEPTED, f"prompt-{index}")
+            for index in range(1, 4)
+        ],
+        histories={
+            f"prompt-{index}": [_outcome(f"prompt-{index}", ExecutionStatus.SUCCEEDED)]
+            for index in range(1, 4)
+        },
+    )
+    preparation_values: list[WorkflowPreparationValues] = []
+
+    def observing_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        preparation_values.append(values)
+        return prepare_workflow(workflow, profile, values)
+
+    state = _run(run, client, preparer=observing_preparer)
+
+    assert state.status is RunExecutionStatus.SUCCEEDED
+    assert [dict(values.parameters) for values in preparation_values] == [
+        {},
+        {"steps": -5},
+        {"steps": 0},
+    ]
+    submitted_steps: list[object] = []
+    for workflow in client.submitted_workflows:
+        node = workflow["7"]
+        assert isinstance(node, dict)
+        inputs = node["inputs"]
+        assert isinstance(inputs, dict)
+        submitted_steps.append(inputs["steps"])
+    assert submitted_steps == [20, -5, 0]
 
 
 @pytest.mark.parametrize(

@@ -108,7 +108,7 @@ describe("buildBatchRequest", () => {
     expect(buildBatchRequest(form).image_bindings).toEqual([]);
   });
 
-  it("constructs Base and exact typed fixed Parameter bindings without coercion", () => {
+  it("constructs ordered Base and exact typed Parameter alternatives without coercion", () => {
     const form = populatedBatchForm();
     form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
       { key: "caption", label: "Caption", node_id: "1", input_name: "caption", value_type: "string" },
@@ -117,21 +117,21 @@ describe("buildBatchRequest", () => {
       { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
     ] });
     form.parameterBindings = [
-      { parameterKey: "caption", valueType: "string", mode: "override", value: "" },
-      { parameterKey: "steps", valueType: "integer", mode: "override", value: "-30" },
-      { parameterKey: "cfg", valueType: "float", mode: "override", value: "7" },
-      { parameterKey: "enabled", valueType: "boolean", mode: "base", value: "false" },
+      { parameterKey: "caption", valueType: "string", alternatives: [{ kind: "base" }, { kind: "override", value: "" }, { kind: "override", value: "text" }] },
+      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "override", value: "-30" }, { kind: "override", value: "0" }] },
+      { parameterKey: "cfg", valueType: "float", alternatives: [{ kind: "override", value: "7" }] },
+      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }, { kind: "override", value: "false" }] },
     ];
 
     const request = buildBatchRequest(form);
     expect(request.parameter_bindings).toEqual([
-      { parameter_key: "caption", values: [""] },
-      { parameter_key: "steps", values: [-30] },
+      { parameter_key: "caption", values: [null, "", "text"] },
+      { parameter_key: "steps", values: [-30, 0] },
       { parameter_key: "cfg", values: [7] },
-      { parameter_key: "enabled", values: [null] },
+      { parameter_key: "enabled", values: [null, false] },
     ]);
     expect(request.batch_snapshot.parameter_bindings).toEqual(request.parameter_bindings);
-    form.parameterBindings[3] = { ...form.parameterBindings[3], mode: "override", value: "false" };
+    form.parameterBindings[3] = { ...form.parameterBindings[3], alternatives: [{ kind: "override", value: "false" }] };
     expect(buildBatchRequest(form).parameter_bindings[3]).toEqual({ parameter_key: "enabled", values: [false] });
   });
 
@@ -145,37 +145,50 @@ describe("buildBatchRequest", () => {
     form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
       { key: "value", label: "Value", node_id: "1", input_name: "value", value_type: valueType },
     ] });
-    form.parameterBindings = [{ parameterKey: "value", valueType, mode: "override", value }];
+    form.parameterBindings = [{ parameterKey: "value", valueType, alternatives: [{ kind: "override", value }] }];
     expect(() => buildBatchRequest(form)).toThrow(message);
   });
 
-  it("reconciles Parameters by stable key and compatible declared type only", () => {
+  it("reconciles complete Parameter order by stable key and exact declared type", () => {
     expect(reconcileParameterBindings([
-      { parameterKey: "steps", valueType: "integer", mode: "override", value: "30" },
-      { parameterKey: "enabled", valueType: "boolean", mode: "override", value: "false" },
-      { parameterKey: "removed", valueType: "string", mode: "override", value: "old" },
+      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "override", value: "30" }] },
+      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }, { kind: "override", value: "false" }, { kind: "override", value: "true" }] },
+      { parameterKey: "removed", valueType: "string", alternatives: [{ kind: "override", value: "old" }] },
     ], [
       { key: "enabled", label: "Renamed", node_id: "1", input_name: "enabled", value_type: "boolean" },
       { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "float" },
       { key: "added", label: "Added", node_id: "1", input_name: "added", value_type: "string" },
     ])).toEqual([
-      { parameterKey: "enabled", valueType: "boolean", mode: "override", value: "false" },
-      { parameterKey: "steps", valueType: "float", mode: "override", value: "30" },
-      { parameterKey: "added", valueType: "string", mode: "base", value: "" },
+      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "base" }, { kind: "override", value: "false" }, { kind: "override", value: "true" }] },
+      { parameterKey: "steps", valueType: "float", alternatives: [{ kind: "base" }] },
+      { parameterKey: "added", valueType: "string", alternatives: [{ kind: "base" }] },
     ]);
   });
 
-  it("clears an incompatible hidden Base draft when the declared type changes", () => {
+  it("resets incompatible Parameter alternatives when the declared type changes", () => {
     expect(reconcileParameterBindings([
-      { parameterKey: "enabled", valueType: "boolean", mode: "base", value: "false" },
-      { parameterKey: "steps", valueType: "integer", mode: "base", value: "30" },
+      { parameterKey: "enabled", valueType: "boolean", alternatives: [{ kind: "override", value: "false" }] },
+      { parameterKey: "steps", valueType: "integer", alternatives: [{ kind: "base" }, { kind: "override", value: "30" }] },
     ], [
       { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "integer" },
       { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "float" },
     ])).toEqual([
-      { parameterKey: "enabled", valueType: "integer", mode: "base", value: "" },
-      { parameterKey: "steps", valueType: "float", mode: "base", value: "30" },
+      { parameterKey: "enabled", valueType: "integer", alternatives: [{ kind: "base" }] },
+      { parameterKey: "steps", valueType: "float", alternatives: [{ kind: "base" }] },
     ]);
+  });
+
+  it.each([
+    [[], /at least one alternative/],
+    [[{ kind: "override", value: "1" }, { kind: "override", value: "01" }], /duplicate alternatives/],
+    [[{ kind: "override", value: "1" }, { kind: "base" }], /Base workflow first/],
+  ] as const)("rejects invalid Parameter alternatives", (alternatives, message) => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "integer" },
+    ] });
+    form.parameterBindings = [{ parameterKey: "steps", valueType: "integer", alternatives: [...alternatives] }];
+    expect(() => buildBatchRequest(form)).toThrow(message);
   });
 
   it("reconciles complete ordered alternatives by stable slot key", () => {

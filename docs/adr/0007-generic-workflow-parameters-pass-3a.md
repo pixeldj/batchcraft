@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-01
 - **Supersedes:** The deferred fixed-parameter contract and the manifest v6, Batch snapshot v3, browser session v10, and prior consolidated SQLite baseline.
+- **Superseded in part by:** ADR 0008 for multi-alternative parameter dimensions, browser session v12, and the current consolidated SQLite baseline.
 
 ## Context
 

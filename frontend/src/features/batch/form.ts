@@ -30,9 +30,12 @@ export interface PromptForm {
 export interface ParameterBindingForm {
   parameterKey: string;
   valueType: ParameterValueType;
-  mode: "base" | "override";
-  value: string;
+  alternatives: ParameterAlternativeForm[];
 }
+
+export type ParameterAlternativeForm =
+  | { kind: "base" }
+  | { kind: "override"; value: string };
 
 export interface BatchFormState {
   projectId: string;
@@ -362,26 +365,14 @@ export function reconcileParameterBindings(
     if (!existing) return {
       parameterKey: parameter.key,
       valueType: parameter.value_type,
-      mode: "base",
-      value: "",
+      alternatives: [{ kind: "base" }],
     };
     if (existing.valueType === parameter.value_type) return existing;
-    let compatible = false;
-    try {
-      const scalar = parseParameterValue(existing.value, existing.valueType, parameter.label);
-      compatible = parameterScalarCompatible(scalar, parameter.value_type);
-    } catch {
-      // An invalid draft is not compatible with a changed declared type.
-    }
-    if (existing.mode === "base") {
-      return {
-        ...existing,
-        valueType: parameter.value_type,
-        value: compatible ? existing.value : "",
-      };
-    }
-    if (compatible) return { ...existing, valueType: parameter.value_type };
-    return { parameterKey: parameter.key, valueType: parameter.value_type, mode: "base", value: "" };
+    return {
+      parameterKey: parameter.key,
+      valueType: parameter.value_type,
+      alternatives: [{ kind: "base" }],
+    };
   });
 }
 
@@ -394,12 +385,30 @@ export function reconcileFormBindings(form: BatchFormState, profileJson: string)
 }
 
 export function buildParameterBindings(bindings: ParameterBindingForm[]): ParameterBindingRequest[] {
-  return bindings.map((binding) => ({
-    parameter_key: binding.parameterKey,
-    values: [binding.mode === "base"
+  return bindings.map((binding) => {
+    if (binding.alternatives.length === 0) {
+      throw new FormBuildError(
+        "parameters",
+        `${binding.parameterKey} must have at least one alternative.`,
+      );
+    }
+    const values = binding.alternatives.map((alternative) => alternative.kind === "base"
       ? null
-      : parseParameterValue(binding.value, binding.valueType, binding.parameterKey)],
-  }));
+      : parseParameterValue(alternative.value, binding.valueType, binding.parameterKey));
+    if (new Set(values).size !== values.length) {
+      throw new FormBuildError(
+        "parameters",
+        `${binding.parameterKey} contains duplicate alternatives.`,
+      );
+    }
+    if (values.includes(null) && values[0] !== null) {
+      throw new FormBuildError(
+        "parameters",
+        `${binding.parameterKey} must place Base workflow first.`,
+      );
+    }
+    return { parameter_key: binding.parameterKey, values };
+  });
 }
 
 export function parseParameterValue(
@@ -430,13 +439,6 @@ export function parseParameterValue(
     throw new FormBuildError("parameters", `${label} must be a finite number.`);
   }
   return value;
-}
-
-function parameterScalarCompatible(value: ParameterScalar, valueType: ParameterValueType): boolean {
-  if (valueType === "string") return typeof value === "string";
-  if (valueType === "boolean") return typeof value === "boolean";
-  if (valueType === "integer") return typeof value === "number" && Number.isSafeInteger(value);
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isParameterValueType(value: unknown): value is ParameterValueType {

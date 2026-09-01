@@ -485,8 +485,8 @@ describe("Batch preview", () => {
     ] });
     form.imageBindings = [];
     form.parameterBindings = [
-      { parameterKey: "unknown", valueType: "string", mode: "override", value: "remove me" },
-      { parameterKey: "caption", valueType: "string", mode: "base", value: "" },
+      { parameterKey: "unknown", valueType: "string", alternatives: [{ kind: "override", value: "remove me" }] },
+      { parameterKey: "caption", valueType: "string", alternatives: [{ kind: "base" }] },
     ];
     saveWorkingSession(form, null, [], "project-1");
     const parameterPreview = previewResponse();
@@ -500,21 +500,22 @@ describe("Batch preview", () => {
     render(<App api={api} />);
     await screen.findByText(/Draft restored from this browser session/);
 
-    expect(screen.getByLabelText("Enabled value source")).toHaveValue("base");
+    expect(screen.getByRole("checkbox", { name: "Include Base workflow for Caption" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include Base workflow for Enabled" })).toBeChecked();
     expect(screen.queryByText("unknown")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Caption value source"), { target: { value: "override" } });
-    fireEvent.change(screen.getByLabelText("Enabled value source"), { target: { value: "override" } });
-    fireEvent.change(screen.getByLabelText("Enabled override value"), { target: { value: "false" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add override for Caption" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add override for Enabled" }));
+    fireEvent.change(screen.getByLabelText("Enabled override 2"), { target: { value: "false" } });
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
 
     expect(vi.mocked(api.previewBatch).mock.calls[0][0].parameter_bindings).toEqual([
-      { parameter_key: "caption", values: [""] },
-      { parameter_key: "enabled", values: [false] },
+      { parameter_key: "caption", values: [null, ""] },
+      { parameter_key: "enabled", values: [null, false] },
     ]);
     expect(screen.getAllByText('"" (empty string)').length).toBeGreaterThan(0);
     expect(screen.getAllByText("false").length).toBeGreaterThan(0);
-    fireEvent.change(screen.getByLabelText("Caption override value"), { target: { value: "changed" } });
+    fireEvent.change(screen.getByLabelText("Caption override 2"), { target: { value: "changed" } });
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
   });
 });
@@ -846,7 +847,7 @@ describe("Run creation", () => {
       { id: "prompt-a", prompt_id: "prompt-1", version_number: 4, name: "Portrait", text: "Portrait {{subject}}" },
     ];
     frozen.batch_snapshot.image_bindings = [{ slot_key: "source", values: [null, "asset-1"] }];
-    frozen.batch_snapshot.parameter_bindings = [{ parameter_key: "steps", values: [30] }];
+    frozen.batch_snapshot.parameter_bindings = [{ parameter_key: "steps", values: [null, 30, 0] }];
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
     frozen.batch_snapshot.variable_bindings.push({ placeholder: "style", values: ["editorial"] });
     const api = makeApi({
@@ -877,7 +878,8 @@ describe("Run creation", () => {
     expect(within(dialog).getAllByText("asset-1").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("Steps").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("30").length).toBeGreaterThan(0);
-    expect(within(dialog).getAllByText("steps").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText("0")).toBeInTheDocument();
+    expect(within(dialog).queryByText("steps")).not.toBeInTheDocument();
     expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("Editorial cat")).toBeInTheDocument();
@@ -1518,7 +1520,7 @@ describe("Result lightbox", () => {
     expect(within(details).getByText("A studio portrait of cat.", { exact: false })).toBeInTheDocument();
     expect(within(details).getByText("Enabled")).toBeInTheDocument();
     expect(within(details).getByText("false")).toBeInTheDocument();
-    expect(within(details).getByText("enabled")).toBeInTheDocument();
+    expect(within(details).queryByText("enabled")).not.toBeInTheDocument();
     fireEvent.click(within(details).getByRole("button", { name: "Close" }));
     expect(screen.getByRole("dialog", { name: "Result image preview" })).toBeInTheDocument();
 
@@ -1741,6 +1743,33 @@ describe("Result Details", () => {
     }));
     const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(within(dialog).getByText("Base workflow")).toBeInTheDocument();
+  });
+
+  it("renders a Parameter label and exact value without concatenating its technical key", async () => {
+    const frozen = frozenProvenanceRun();
+    frozen.plan.jobs[0].resolved_parameters = [
+      { parameter_key: "cfg_internal", label: "Guidance", value: null },
+      { parameter_key: "caption_internal", label: "Caption", value: "" },
+    ];
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-123",
+        results: [result(1, 1, "image/png", "parameters.png", 100)],
+      })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    fireEvent.click(await within(currentResultsSection()).findByRole("button", {
+      name: "Details for Job 1, artifact 1",
+    }));
+    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Guidance").nextElementSibling).toHaveTextContent(/^Base workflow$/);
+    expect(within(dialog).getByText("Caption").nextElementSibling).toHaveTextContent(/^"" \(empty string\)$/);
+    expect(dialog).not.toHaveTextContent("cfg_internal");
+    expect(dialog).not.toHaveTextContent("caption_internal");
   });
 
   it("uses the Job ordinal and preserves artifact-specific technical metadata", async () => {

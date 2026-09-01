@@ -145,8 +145,8 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
             SavedBatchImageBinding("mask", ("asset-mask-2", "asset-mask-1")),
         ),
         parameter_bindings=(
-            SavedBatchParameterBinding("cfg", (8,)),
-            SavedBatchParameterBinding("steps", (30,)),
+            SavedBatchParameterBinding("cfg", (None, 8, 9.5)),
+            SavedBatchParameterBinding("steps", (30, 40)),
         ),
         selected_workflow_version=SavedBatchWorkflowVersionSnapshot(
             version.id, version.content_sha256, version.workflow
@@ -204,8 +204,8 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     assert saved.variable_bindings == definition.variable_bindings
     assert saved.image_bindings == definition.image_bindings
     assert saved.parameter_bindings == (
-        SavedBatchParameterBinding("steps", (30,)),
-        SavedBatchParameterBinding("cfg", (8,)),
+        SavedBatchParameterBinding("steps", (30, 40)),
+        SavedBatchParameterBinding("cfg", (None, 8, 9.5)),
     )
     assert saved.selected_workflow_version is not None
     assert definition.selected_workflow_version is not None
@@ -253,6 +253,17 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
             (2, 1, "asset-mask-2"),
             (2, 2, "asset-mask-1"),
         ]
+        assert connection.execute(
+            "SELECT binding_position, value_position, value_json "
+            "FROM batch_parameter_binding_value WHERE batch_id = 'batch-complete' "
+            "ORDER BY binding_position, value_position"
+        ).fetchall() == [
+            (1, 1, "30\n"),
+            (1, 2, "40\n"),
+            (2, 1, "null\n"),
+            (2, 2, "8\n"),
+            (2, 3, "9.5\n"),
+        ]
 
     logical_profile_only = replace(
         definition,
@@ -274,7 +285,15 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
 
 @pytest.mark.parametrize(
     "corruption",
-    ("wrong_type", "unsafe_integer", "malformed_value", "missing_value", "extra_value"),
+    (
+        "wrong_type",
+        "unsafe_integer",
+        "malformed_value",
+        "missing_value",
+        "noncontiguous_value",
+        "duplicate_value",
+        "base_not_first",
+    ),
 )
 def test_saved_batch_reads_reject_corrupt_persisted_parameter_values(
     tmp_path: Path, corruption: str
@@ -288,7 +307,7 @@ def test_saved_batch_reads_reject_corrupt_persisted_parameter_values(
         if corruption == "wrong_type":
             connection.execute(
                 "UPDATE batch_parameter_binding_value SET value_json = ? "
-                "WHERE batch_id = ? AND binding_position = 1",
+                "WHERE batch_id = ? AND binding_position = 1 AND value_position = 1",
                 ('"thirty"\n', "batch-complete"),
             )
             message = "does not match its Profile type"
@@ -310,23 +329,64 @@ def test_saved_batch_reads_reject_corrupt_persisted_parameter_values(
         elif corruption == "missing_value":
             connection.execute(
                 "DELETE FROM batch_parameter_binding_value "
-                "WHERE batch_id = ? AND binding_position = 1",
+                "WHERE batch_id = ? AND binding_position = 1 AND value_position = 1",
                 ("batch-complete",),
             )
-            message = "value position"
-        else:
-            connection.execute("PRAGMA ignore_check_constraints = ON")
+            message = "value positions"
+        elif corruption == "noncontiguous_value":
             connection.execute(
-                "INSERT INTO batch_parameter_binding_value "
-                "(batch_id, binding_position, value_position, value_json) "
-                "VALUES (?, ?, ?, ?)",
-                ("batch-complete", 1, 2, "31\n"),
+                "UPDATE batch_parameter_binding_value SET value_position = 3 "
+                "WHERE batch_id = ? AND binding_position = 1 AND value_position = 2",
+                ("batch-complete",),
             )
-            message = "positions must be one-based and contiguous"
+            message = "value positions"
+        elif corruption == "duplicate_value":
+            connection.execute(
+                "UPDATE batch_parameter_binding_value SET value_json = '30' || char(10) "
+                "WHERE batch_id = ? AND binding_position = 1 AND value_position = 2",
+                ("batch-complete",),
+            )
+            message = "exact duplicates"
+        else:
+            connection.execute(
+                "UPDATE batch_parameter_binding_value SET value_json = CASE value_position "
+                "WHEN 1 THEN '8' || char(10) WHEN 2 THEN 'null' || char(10) ELSE value_json END "
+                "WHERE batch_id = ? AND binding_position = 2",
+                ("batch-complete",),
+            )
+            message = "Base workflow first"
         connection.commit()
 
     with pytest.raises(SavedBatchStoreError, match=message):
         SavedBatchStore(path).get("batch-complete")
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    (
+        ((), "at least one"),
+        ((30, 30), "exact duplicates"),
+        ((None, None), "exact duplicates"),
+        ((30, None), "Base workflow first"),
+        ((30, True), "must be integer"),
+    ),
+)
+def test_saved_batch_writes_validate_parameter_alternatives(
+    tmp_path: Path, values: tuple[object, ...], message: str
+) -> None:
+    path = _database(tmp_path)
+    definition = _complete_definition(path)
+    bindings = (
+        SavedBatchParameterBinding("steps", values),  # type: ignore[arg-type]
+        SavedBatchParameterBinding("cfg", (None, 8, 9.5)),
+    )
+
+    with pytest.raises((SavedBatchValidationError, SavedBatchIntegrityError), match=message):
+        SavedBatchStore(path).create(
+            "project-1",
+            "invalid_parameters",
+            replace(definition, parameter_bindings=bindings),
+        )
 
 
 @pytest.mark.parametrize("values", (("cat", "cat"), ("", "")))

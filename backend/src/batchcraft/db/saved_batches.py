@@ -27,6 +27,7 @@ from batchcraft.db.models import (
 )
 from batchcraft.domain import (
     validate_image_input_slot_key,
+    validate_parameter_alternatives,
     validate_parameter_scalar,
     validate_stable_key,
 )
@@ -322,15 +323,10 @@ def _validate_definition(definition: SavedBatchDefinition) -> None:
                 f"duplicate parameter binding: {parameter_binding.parameter_key!r}"
             )
         parameter_keys.add(parameter_binding.parameter_key)
-        if len(parameter_binding.values) != 1:
-            raise SavedBatchValidationError(
-                "parameter binding values must contain exactly one effective value"
-            )
-        value = parameter_binding.values[0]
-        if value is not None and not _is_json_scalar(value):
-            raise SavedBatchValidationError(
-                "parameter binding values must be finite JSON scalars or null"
-            )
+        try:
+            validate_parameter_alternatives(parameter_binding.values)
+        except ValueError as error:
+            raise SavedBatchValidationError(str(error)) from error
     if definition.selected_workflow_version is not None:
         _validate_workflow_snapshot(definition.selected_workflow_version)
     if definition.selected_workflow_profile_id is not None:
@@ -562,10 +558,12 @@ def _validate_library_selections(
                 raise SavedBatchIntegrityError(
                     f"selected Workflow Profile parameter {binding.parameter_key!r} has invalid type"
                 )
-            if not _parameter_value_matches(value_type, binding.values[0]):
-                raise SavedBatchIntegrityError(
-                    f"Saved Batch parameter {binding.parameter_key!r} must be {value_type} or null"
-                )
+            for value in binding.values:
+                if not _parameter_value_matches(value_type, value):
+                    raise SavedBatchIntegrityError(
+                        f"Saved Batch parameter {binding.parameter_key!r} "
+                        f"must be {value_type} or null"
+                    )
     elif profile_row is not None and workflow_row is not None and profile_row[0] != workflow_row[0]:
         raise SavedBatchIntegrityError(
             "selected Workflow and logical Workflow Profile are incompatible"
@@ -966,24 +964,45 @@ def _parameter_bindings_from_rows(
     rows: list[sqlite3.Row] | list[tuple[object, ...]],
 ) -> tuple[SavedBatchParameterBinding, ...]:
     bindings: list[SavedBatchParameterBinding] = []
-    for expected_position, row in enumerate(rows, start=1):
+    current_position: int | None = None
+    current_key = ""
+    values: list[str | int | float | bool | None] = []
+    expected_binding_position = 1
+    expected_value_position = 1
+    for row in rows:
         position = _positive_int(row[0], "parameter binding position")
-        value_position = _positive_int(row[2], "parameter binding value position")
-        if position != expected_position or value_position != 1:
-            raise SavedBatchStoreError(
-                "parameter binding positions must be one-based and contiguous"
-            )
-        value = _json(row[3], "parameter binding value_json")
+        if current_position is not None and position != current_position:
+            bindings.append(SavedBatchParameterBinding(current_key, tuple(values)))
+            values = []
+            expected_binding_position += 1
+            expected_value_position = 1
+        if position != current_position:
+            if position != expected_binding_position:
+                raise SavedBatchStoreError(
+                    "parameter binding positions must be one-based and contiguous"
+                )
+            current_position = position
+            current_key = _string(row[1], "parameter binding parameter_key")
+        if row[2] is not None:
+            value_position = _positive_int(row[2], "parameter binding value position")
+            if value_position != expected_value_position:
+                raise SavedBatchStoreError(
+                    "parameter binding value positions must be one-based and contiguous"
+                )
+            value = _json(row[3], "parameter binding value_json")
+            try:
+                scalar = None if value is None else validate_parameter_scalar(value)
+            except ValueError as error:
+                raise SavedBatchStoreError(f"invalid persisted parameter value: {error}") from error
+            values.append(scalar)
+            expected_value_position += 1
+    if current_position is not None:
+        bindings.append(SavedBatchParameterBinding(current_key, tuple(values)))
+    for binding in bindings:
         try:
-            scalar = None if value is None else validate_parameter_scalar(value)
+            validate_parameter_alternatives(binding.values)
         except ValueError as error:
-            raise SavedBatchStoreError(f"invalid persisted parameter value: {error}") from error
-        bindings.append(
-            SavedBatchParameterBinding(
-                parameter_key=_string(row[1], "parameter binding parameter_key"),
-                values=(scalar,),
-            )
-        )
+            raise SavedBatchStoreError(f"invalid persisted parameter values: {error}") from error
     return tuple(bindings)
 
 
@@ -1014,10 +1033,11 @@ def _validate_persisted_parameter_bindings(
             )
         assert isinstance(raw_parameter, dict)
         value_type = raw_parameter.get("value_type")
-        if not _parameter_value_matches(value_type, binding.values[0]):
-            raise SavedBatchStoreError(
-                f"persisted parameter {binding.parameter_key!r} does not match its Profile type"
-            )
+        for value in binding.values:
+            if not _parameter_value_matches(value_type, value):
+                raise SavedBatchStoreError(
+                    f"persisted parameter {binding.parameter_key!r} does not match its Profile type"
+                )
 
 
 def _normalize_parameter_bindings(definition: SavedBatchDefinition) -> SavedBatchDefinition:
@@ -1034,14 +1054,6 @@ def _normalize_parameter_bindings(definition: SavedBatchDefinition) -> SavedBatc
     if len(by_key) != len(definition.parameter_bindings) or set(by_key) != set(keys):
         return definition
     return replace(definition, parameter_bindings=tuple(by_key[key] for key in keys))
-
-
-def _is_json_scalar(value: object) -> bool:
-    try:
-        validate_parameter_scalar(value)
-    except ValueError:
-        return False
-    return True
 
 
 def _parameter_value_matches(value_type: object, value: object) -> bool:

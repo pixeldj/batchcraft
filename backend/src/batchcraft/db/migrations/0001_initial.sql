@@ -295,7 +295,7 @@ CREATE TABLE batch_parameter_binding (
 CREATE TABLE batch_parameter_binding_value (
     batch_id TEXT NOT NULL,
     binding_position INTEGER NOT NULL CHECK (binding_position >= 1),
-    value_position INTEGER NOT NULL CHECK (value_position = 1),
+    value_position INTEGER NOT NULL CHECK (value_position >= 1),
     value_json TEXT NOT NULL CHECK (
         json_valid(value_json)
         AND json_type(value_json) IN ('null', 'text', 'integer', 'real', 'true', 'false')

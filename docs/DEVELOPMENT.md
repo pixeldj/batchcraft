@@ -260,6 +260,25 @@ Existing development databases and Runs are unsupported and must be inspected an
 batchcraft never deletes or rewrites them automatically. Browser v10 drafts reset automatically.
 Parameter sweeps remain deferred.
 
+### Phase 2.7: Generic Workflow Parameters Pass 3B-1
+
+Completed end to end. Every Profile parameter now accepts one or more ordered, unique typed scalar or
+Base workflow alternatives. Parameters form independent Cartesian dimensions in Profile order between
+Image Input slots and seeds. Every compiled Job, executor input, manifest Job, and Result provenance
+record remains fully resolved to one scalar or Base state per parameter.
+
+The Batch editor supports adding, removing, and reordering typed alternatives while toggling Base
+workflow independently. Profile reconciliation preserves same-key, same-type alternatives. Run Plan
+shows frozen Batch alternatives and concrete Job choices; Result Details shows human labels and resolved
+values without concatenating technical keys. Browser sessions use v12.
+
+Manifest v7 and Batch snapshot v4 remain current because their binding arrays already represent ordered
+alternatives and Job records already represent scalar choices. The consolidated `0001_initial.sql`
+baseline now permits multiple ordered parameter-value rows. Existing Pass 3A development databases have
+unsupported migration history and must be inspected and recreated manually; batchcraft never deletes
+or rewrites them automatically. Browser v11 drafts reset automatically. Numeric ranges, enums,
+`/object_info`, LoRA discovery, and linked or zipped parameter dimensions remain deferred.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -299,9 +318,10 @@ The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATC
 
 SQL migrations live under `backend/src/batchcraft/db/migrations/`. The current pre-release schema is
 one consolidated `0001_initial.sql` baseline. Generic Workflow Parameters Pass 3A replaced the prior
-consolidated 0001 bytes and schema with normalized parameter binding storage. Any
-database created from the prior baseline has unsupported migration history and must be recreated
-manually. The application fails startup and never erases it. The migration runner, ordered discovery,
+consolidated 0001 bytes and schema with normalized parameter binding storage; Pass 3B-1 replaced those
+bytes again to permit multiple positive parameter value positions. Any database created from an earlier
+baseline has unsupported migration history and must be recreated manually. The application fails
+startup and never erases it. The migration runner, ordered discovery,
 checksums, and transactional application remain the forward-change mechanism. Once preserving a
 baseline is required, add only the next contiguous `NNNN_name.sql` file and do
 not change applied migration bytes. Test migration behavior against file-backed temporary databases
@@ -333,6 +353,12 @@ each choose ordered Project Asset alternatives plus an independent Base workflow
 changes reconcile by stable slot key, preserve complete matching value order, add new slots as Base
 workflow, and remove deleted slots. Missing assets remain visible and block Preview until repaired. Any
 binding change invalidates Preview.
+
+The selected Profile also drives the generic parameter editor. It renders parameters in Profile order
+and lets each hold one or more ordered Base workflow or strict typed scalar alternatives. Profile
+changes preserve same-key alternatives only when the declared type remains compatible. Any alternative
+addition, removal, reorder, or value change invalidates Preview. The frontend does not calculate the
+parameter product; Job count and concrete expansion remain backend compiler responsibilities.
 
 Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it
 once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact
@@ -446,6 +472,7 @@ High-value unit-test areas include:
 - rerun creation;
 - Workflow Profile core and named Image Input mapping;
 - named Image Input key, order, binding, frozen provenance, deterministic upload, and Base workflow behavior.
+- generic parameter key, type, alternatives, deterministic expansion, frozen provenance, scalar execution, and Base workflow behavior.
 
 A preview and an actual Run must be produced by the same underlying compiler behavior. Tests should protect this invariant.
 

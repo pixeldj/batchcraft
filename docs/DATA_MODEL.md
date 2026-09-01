@@ -308,7 +308,7 @@ Ordered child tables complete the aggregate:
 - `batch_image_binding` — ordered unique `slot_key` records.
 - `batch_image_binding_value` — ordered Project Asset IDs or JSON-equivalent `null` values for each binding.
 - `batch_parameter_binding` — ordered unique stable parameter keys.
-- `batch_parameter_binding_value` — one typed JSON scalar or `null` Base-workflow value per parameter in Pass 3A.
+- `batch_parameter_binding_value` — ordered typed JSON scalar or `null` Base-workflow alternatives for each parameter.
 
 Saved Batches may be intentionally incomplete: they may have zero prompt selections, zero values for
 a variable binding, no workflow/profile selection, and zero image bindings when no Profile is selected
@@ -327,11 +327,12 @@ by stable slot key. Every slot has at least one ordered, unique alternative. `nu
 and appears first when included. Each slot is an independent Cartesian dimension. Zipped, row-linked,
 and collection-link semantics remain unsupported.
 
-Parameter bindings use `{ "parameter_key": string, "values": [scalar | null] }`. Saved Batch writes
+Parameter bindings use `{ "parameter_key": string, "values": [scalar | null, ...] }`. Saved Batch writes
 persist the exact selected Profile parameter set in Profile order. Preview and Run creation may receive
-binding records in any order and resolve them by stable key. Pass 3A requires exactly one value per
-parameter. `null` means Base workflow and is distinct from empty string, zero, and false. Parameters do
-not form compiler dimensions until Pass 3B.
+binding records in any order and resolve them by stable key. Every parameter has one or more ordered,
+unique, type-correct alternatives. `null` means Base workflow, appears first when included, and is
+distinct from empty string, zero, and false. Each parameter is an independent Cartesian dimension in
+Profile order.
 
 Editing a Saved Batch increments its `revision`; concurrent conflicting saves fail rather than
 silently overwrite. Detached Prompt or Workflow-Profile snapshots must be explicitly imported or
@@ -417,7 +418,7 @@ A Job additionally records:
 - workflow hash.
 
 The compiler orders Job dimensions as PromptVersion, prompt variables, Profile Image Input slots,
-seeds, then parameter sweeps.
+generic parameters, then seeds.
 PromptVersion order is the Batch's selected order. Each PromptVersion expands
 only the bindings it references, in placeholder first-occurrence order. The rightmost dimension varies
 fastest, and each dimension preserves user selection order.
@@ -426,6 +427,10 @@ Each named Image Input slot is an independent Batch dimension. The Batch snapsho
 alternatives, while every Job's `resolved_image_inputs` contains one concrete choice per Profile slot.
 Each entry records `slot_key` and `asset_id`, where `null` means Base workflow. Frozen Run persistence
 adds the Profile's slot label and complete asset provenance.
+
+Each generic parameter is also an independent Batch dimension. The Batch snapshot preserves all
+ordered alternatives, while every Job's `resolved_parameters` contains one concrete scalar or Base
+workflow choice per Profile parameter.
 
 A Job must never contain unresolved prompt variables.
 

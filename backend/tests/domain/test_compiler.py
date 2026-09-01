@@ -62,34 +62,49 @@ def test_simple_substitution() -> None:
     ]
 
 
-def test_parameters_resolve_in_profile_order_without_changing_job_count() -> None:
+def test_parameters_expand_in_profile_order_before_seeds() -> None:
     parameters = (
+        WorkflowParameter("cfg", "CFG", "7", "cfg", ParameterValueType.FLOAT),
         WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
-        WorkflowParameter("enabled", "Enabled", "7", "enabled", ParameterValueType.BOOLEAN),
     )
     batch = batch_definition(
-        "{{animal}}",
-        bindings=(binding("animal", "cat", "dog"),),
-        seeds=SeedInput.explicit((1, 2)),
+        "prompt",
+        seeds=SeedInput.explicit((9, 3)),
         parameters=parameters,
         parameter_bindings=(
-            ParameterBinding("enabled", (None,)),
-            ParameterBinding("steps", (-12,)),
+            ParameterBinding("steps", (20, 30)),
+            ParameterBinding("cfg", (7, 8.5)),
         ),
     )
 
     plan = compile_batch(batch)
 
-    assert plan.job_count == 4
+    assert plan.job_count == 8
     assert plan.parameters == parameters
     assert [
-        [(item.parameter_key, item.value) for item in job.resolved_parameters] for job in plan.jobs
-    ] == [[("steps", -12), ("enabled", None)]] * 4
+        (tuple((item.parameter_key, item.value) for item in job.resolved_parameters), job.seed)
+        for job in plan.jobs
+    ] == [
+        ((("cfg", cfg), ("steps", steps)), seed)
+        for cfg in (7, 8.5)
+        for steps in (20, 30)
+        for seed in (9, 3)
+    ]
 
 
-@pytest.mark.parametrize("values", ((), (1, 2)))
-def test_parameters_require_exactly_one_value(values: tuple[int, ...]) -> None:
-    with pytest.raises(CompilationError, match="exactly one value"):
+@pytest.mark.parametrize(
+    ("values", "message"),
+    (
+        ((), "at least one"),
+        ((1, 1), "exact duplicates"),
+        ((None, None), "exact duplicates"),
+        ((1, None), "Base workflow first"),
+    ),
+)
+def test_parameter_alternatives_reject_invalid_shapes(
+    values: tuple[int | None, ...], message: str
+) -> None:
+    with pytest.raises(CompilationError, match=message):
         compile_batch(
             batch_definition(
                 "prompt",
@@ -99,6 +114,52 @@ def test_parameters_require_exactly_one_value(values: tuple[int, ...]) -> None:
                 parameter_bindings=(ParameterBinding("steps", values),),
             )
         )
+
+
+def test_float_numeric_duplicates_are_exact_and_booleans_do_not_equal_integers() -> None:
+    parameter = WorkflowParameter("value", "Value", "7", "value", ParameterValueType.FLOAT)
+    with pytest.raises(CompilationError, match="exact duplicates"):
+        compile_batch(
+            batch_definition(
+                "prompt",
+                parameters=(parameter,),
+                parameter_bindings=(ParameterBinding("value", (1, 1.0)),),
+            )
+        )
+
+    with pytest.raises(CompilationError, match="must be float"):
+        compile_batch(
+            batch_definition(
+                "prompt",
+                parameters=(parameter,),
+                parameter_bindings=(ParameterBinding("value", (1, True)),),
+            )
+        )
+
+
+def test_three_parameters_preserve_base_boolean_empty_string_and_zero() -> None:
+    parameters = (
+        WorkflowParameter("enabled", "Enabled", "7", "enabled", ParameterValueType.BOOLEAN),
+        WorkflowParameter("label", "Label", "7", "label", ParameterValueType.STRING),
+        WorkflowParameter("cfg", "CFG", "7", "cfg", ParameterValueType.FLOAT),
+    )
+    plan = compile_batch(
+        batch_definition(
+            "prompt",
+            parameters=parameters,
+            parameter_bindings=(
+                ParameterBinding("cfg", (0,)),
+                ParameterBinding("label", ("",)),
+                ParameterBinding("enabled", (None, False, True)),
+            ),
+        )
+    )
+
+    assert [tuple(item.value for item in job.resolved_parameters) for job in plan.jobs] == [
+        (None, "", 0),
+        (False, "", 0),
+        (True, "", 0),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -465,6 +526,38 @@ def test_image_dimensions_follow_prompt_versions_and_prompt_variables() -> None:
     ]
 
 
+def test_prompt_variable_image_parameter_and_seed_axes_have_full_order() -> None:
+    slot = ImageInputSlot("source", "Source", "1", "image")
+    parameter = WorkflowParameter("cfg", "CFG", "7", "cfg", ParameterValueType.FLOAT)
+    plan = compile_batch(
+        batch_definition(
+            "{{animal}}",
+            bindings=(binding("animal", "cat", "dog"),),
+            image_slots=(slot,),
+            image_bindings=(ImageBinding("source", (None, "asset")),),
+            parameters=(parameter,),
+            parameter_bindings=(ParameterBinding("cfg", (7, 8)),),
+            seeds=SeedInput.explicit((1, 2)),
+        )
+    )
+
+    assert [
+        (
+            job.resolved_prompt,
+            job.resolved_image_inputs[0].asset_id,
+            job.resolved_parameters[0].value,
+            job.seed,
+        )
+        for job in plan.jobs
+    ] == [
+        (animal, image, cfg, seed)
+        for animal in ("cat", "dog")
+        for image in (None, "asset")
+        for cfg in (7, 8)
+        for seed in (1, 2)
+    ]
+
+
 @pytest.mark.parametrize(
     ("bindings", "message"),
     (
@@ -592,6 +685,26 @@ def test_image_dimensions_use_existing_job_limit_without_materializing_extra_job
     assert compile_batch(batch, max_jobs=8).job_count == 8
     with pytest.raises(CompilationError, match="beyond the maximum of 7 Jobs"):
         compile_batch(batch, max_jobs=7)
+
+
+def test_parameter_dimensions_use_incremental_job_limit() -> None:
+    parameters = (
+        WorkflowParameter("cfg", "CFG", "7", "cfg", ParameterValueType.FLOAT),
+        WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
+    )
+    batch = batch_definition(
+        "Prompt",
+        parameters=parameters,
+        parameter_bindings=(
+            ParameterBinding("cfg", (7, 8)),
+            ParameterBinding("steps", (20, 30, 40)),
+        ),
+        seeds=SeedInput.explicit((1, 2)),
+    )
+
+    assert compile_batch(batch, max_jobs=12).job_count == 12
+    with pytest.raises(CompilationError, match="beyond the maximum of 11 Jobs"):
+        compile_batch(batch, max_jobs=11)
 
 
 def test_compilation_does_not_mutate_input_objects() -> None:

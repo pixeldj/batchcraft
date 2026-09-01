@@ -51,6 +51,7 @@ from batchcraft.domain import (
     SeedMode,
     VariableBinding,
     WorkflowParameter,
+    validate_parameter_alternatives,
     validate_parameter_scalar,
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
@@ -107,7 +108,12 @@ ParameterScalarRequest = Annotated[
 
 class ParameterBindingRequest(ApiModel):
     parameter_key: str
-    values: list[ParameterScalarRequest | None]
+    values: list[ParameterScalarRequest | None] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self) -> Self:
+        validate_parameter_alternatives(self.values)
+        return self
 
 
 class SeedRequest(ApiModel):
@@ -129,6 +135,9 @@ class BatchRequest(ApiModel):
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
+        parameter_keys = [binding.parameter_key for binding in self.parameter_bindings]
+        if len(set(parameter_keys)) != len(parameter_keys):
+            raise ValueError("parameter bindings must have unique parameter keys")
         snapshot = self.batch_snapshot
         if (
             snapshot.project.id,
@@ -338,7 +347,12 @@ class SavedBatchImageBindingRequest(ApiModel):
 
 class SavedBatchParameterBindingRequest(ApiModel):
     parameter_key: str
-    values: list[ParameterScalarRequest | None]
+    values: list[ParameterScalarRequest | None] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self) -> Self:
+        validate_parameter_alternatives(self.values)
+        return self
 
 
 class SavedBatchSeedIntentRequest(ApiModel):
@@ -406,6 +420,9 @@ class SavedBatchDefinitionRequest(ApiModel):
             raise ValueError("Saved Batch name must be nonblank")
         if self.description is not None and not self.description.strip():
             raise ValueError("Saved Batch description must be nonblank when provided")
+        parameter_keys = [binding.parameter_key for binding in self.parameter_bindings]
+        if len(set(parameter_keys)) != len(parameter_keys):
+            raise ValueError("parameter bindings must have unique parameter keys")
         profile = self.selected_workflow_profile_version
         if profile is not None and profile.workflow_profile_id != self.selected_workflow_profile_id:
             raise ValueError("Workflow Profile version must match the selected logical Profile")

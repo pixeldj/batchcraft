@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-31
 - **Supersedes:** Compatibility requirements in ADR 0002 and ADR 0003 for superseded development formats.
-- **Superseded in part by:** ADR 0005 for named Image Input persistence and ADR 0007 for manifest v7, Batch snapshot v4, browser session v11, the replacement SQLite baseline, and typed fixed parameters.
+- **Superseded in part by:** ADR 0005 for named Image Input persistence, ADR 0007 for manifest v7 and Batch snapshot v4, and ADR 0008 for browser session v12, the current SQLite baseline, and parameter alternatives.
 
 ## Context
 

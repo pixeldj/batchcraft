@@ -170,7 +170,6 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
             key={parameter.parameter_key}
             label={parameter.label}
             value={formatParameterValue(parameter.value)}
-            code={parameter.parameter_key}
           />
         ))}
         <Detail
@@ -228,7 +227,14 @@ function Detail({ label, value, code }: { label: string; value: string; code?: s
   return (
     <div>
       <dt>{label}</dt>
-      <dd>{code ? <>{value === code ? null : <span>{value}</span>}<code>{code}</code></> : value}</dd>
+      <dd className={code ? "detail-value-code" : undefined}>
+        {code ? (
+          <>
+            {value === code ? null : <span className="detail-value">{value}</span>}
+            <code>{code}</code>
+          </>
+        ) : value}
+      </dd>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-31
 - **Supersedes:** ADR 0005's one-effective-value cardinality and non-dimensional Image Input behavior.
-- **Superseded in part by:** ADR 0007 for current durable format versions and the added fixed-parameter contract.
+- **Superseded in part by:** ADR 0007 for manifest v7, Batch snapshot v4, and typed parameters; ADR 0008 defines the current browser and SQLite baselines and places parameter dimensions before seeds.
 
 ## Context
 
