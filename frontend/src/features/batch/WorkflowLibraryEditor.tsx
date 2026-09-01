@@ -7,10 +7,12 @@ import type {
   LibraryWorkflowVersion,
   ProjectWorkflow,
   ProjectWorkflowProfile,
+  WorkflowProfileImageInput,
+  WorkflowProfileParameter,
 } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
-import type { BatchFormState } from "./form";
+import { reconcileFormBindings, type BatchFormState } from "./form";
 import { WorkflowProfileMapper } from "./WorkflowProfileMapper";
 
 interface Props {
@@ -337,11 +339,12 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
     const copiedProfileJson = kind === "profile-version" && !form.workflowProfileVersionId
       ? sourceProfileVersion?.profile
       : null;
+    const baseProfileJson = copiedProfileJson ? pretty(copiedProfileJson) : form.workflowProfileJson;
     setDialog({
       kind,
       name: kind === "rename-workflow" ? form.workflowName : kind === "rename-profile" ? form.workflowProfileName : "",
       workflowJson: form.workflowJson,
-      profileJson: copiedProfileJson ? pretty(copiedProfileJson) : form.workflowProfileJson,
+       profileJson: kind === "profile" ? ensureProfileArrays(baseProfileJson) : baseProfileJson,
       note: "",
       saving: false,
       error: null,
@@ -385,15 +388,15 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
             : clearProfileSelectionAndSnapshot(workflowSelection),
         );
       } else if (dialog.kind === "profile" && form.workflowId && form.workflowVersionId) {
-        const mappings = parseProfileMappings(dialog.profileJson);
-        const created = await api.createWorkflowProfile(form.workflowId, { name: dialog.name, workflow_version_id: form.workflowVersionId, mappings, note: nullable(dialog.note) });
+        const profileContract = parseProfileContract(dialog.profileJson);
+        const created = await api.createWorkflowProfile(form.workflowId, { name: dialog.name, workflow_version_id: form.workflowVersionId, ...profileContract, note: nullable(dialog.note) });
         if (!contextIsCurrent()) return;
         const profile: ProjectWorkflowProfile = { ...created.workflow_profile, latest_compatible_version: created.version };
         setDetail((current) => current.workflowId === form.workflowId ? { ...current, profiles: [...current.profiles, profile], profileVersions: { ...current.profileVersions, [profile.id]: [created.version] } } : current);
         onChange(applyProfile(formRef.current, profile, created.version));
       } else if (dialog.kind === "profile-version" && form.workflowProfileId && form.workflowVersionId && selectedProfile) {
-        const mappings = parseProfileMappings(dialog.profileJson);
-        const version = await api.createWorkflowProfileVersion(form.workflowProfileId, { workflow_version_id: form.workflowVersionId, mappings, note: nullable(dialog.note) });
+        const profileContract = parseProfileContract(dialog.profileJson);
+        const version = await api.createWorkflowProfileVersion(form.workflowProfileId, { workflow_version_id: form.workflowVersionId, ...profileContract, note: nullable(dialog.note) });
         if (!contextIsCurrent()) return;
         setDetail((current) => ({
           ...current,
@@ -414,7 +417,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
         setDetail((current) => ({ ...current, profiles: current.profiles.map((item) => item.id === updated.id ? { ...item, name: updated.name, updated_at: updated.updated_at } : item) }));
         onMetadataChange({ ...formRef.current, workflowProfileName: updated.name });
       } else if (dialog.kind === "raw") {
-        onChange({ ...detach(form), workflowJson: dialog.workflowJson, workflowProfileJson: dialog.profileJson });
+        onChange(reconcileFormBindings({ ...detach(form), workflowJson: dialog.workflowJson, workflowProfileJson: dialog.profileJson }, dialog.profileJson));
       }
       setDialog(null);
     } catch (caught) {
@@ -521,7 +524,8 @@ function WorkflowDialog({ state, workflow, setState, onSubmit, onCancel }: { sta
 }
 
 function applyProfile(form: BatchFormState, profile: ProjectWorkflowProfile, version: LibraryWorkflowProfileVersion): BatchFormState {
-  return { ...form, workflowProfileId: profile.id, workflowProfileName: profile.name, workflowProfileVersionId: version.id, workflowProfileVersionNumber: version.version_number, workflowProfileWorkflowVersionId: version.workflow_version_id, workflowProfileContentSha256: version.content_sha256, workflowProfileJson: pretty(version.profile) };
+  const profileJson = pretty(version.profile);
+  return reconcileFormBindings({ ...form, workflowProfileId: profile.id, workflowProfileName: profile.name, workflowProfileVersionId: version.id, workflowProfileVersionNumber: version.version_number, workflowProfileWorkflowVersionId: version.workflow_version_id, workflowProfileContentSha256: version.content_sha256, workflowProfileJson: profileJson }, profileJson);
 }
 
 function selectProfileWithoutVersion(
@@ -545,7 +549,7 @@ function clearProfileLink(form: BatchFormState): BatchFormState {
 }
 
 function clearProfileSelectionAndSnapshot(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowProfileJson: "{}" };
+  return { ...clearProfileLink(form), workflowProfileJson: "{}", imageBindings: [], parameterBindings: [] };
 }
 
 function detach(form: BatchFormState): BatchFormState {
@@ -578,9 +582,22 @@ function parseRequiredObject(value: string, label: string): JsonObject {
   return parsed;
 }
 
-function parseProfileMappings(value: string): JsonObject {
+function ensureProfileArrays(value: string): string {
+  const profile = parseObjectOrNull(value) ?? {};
+  return pretty({
+    ...profile,
+    image_inputs: Array.isArray(profile.image_inputs) ? profile.image_inputs : [],
+    parameters: Array.isArray(profile.parameters) ? profile.parameters : [],
+  });
+}
+
+function parseProfileContract(value: string) {
   const profile = parseRequiredObject(value, "Workflow Profile");
-  return profileMappings(profile);
+  return {
+    mappings: profileMappings(profile),
+    image_inputs: profileImageInputs(profile),
+    parameters: profileParameters(profile),
+  };
 }
 
 function profileMappings(profile: JsonObject): JsonObject {
@@ -588,7 +605,79 @@ function profileMappings(profile: JsonObject): JsonObject {
   if (typeof mappings !== "object" || mappings === null || Array.isArray(mappings)) {
     throw new Error("Workflow Profile JSON must define a mappings object.");
   }
-  return mappings as JsonObject;
+  return Object.fromEntries(
+    ["prompt", "seed", "output_prefix"].flatMap((key) => Object.hasOwn(mappings, key)
+      ? [[key, (mappings as JsonObject)[key]]]
+      : []),
+  );
+}
+
+function profileImageInputs(profile: JsonObject): WorkflowProfileImageInput[] {
+  if (!Array.isArray(profile.image_inputs)) {
+    throw new Error("Workflow Profile JSON must define an image_inputs array.");
+  }
+  const slots = profile.image_inputs.map((value, index) => {
+    if (
+      typeof value !== "object"
+      || value === null
+      || Array.isArray(value)
+      || typeof value.key !== "string"
+      || typeof value.label !== "string"
+      || typeof value.node_id !== "string"
+      || typeof value.input_name !== "string"
+      || !value.key.trim()
+      || !value.label.trim()
+      || !value.node_id.trim()
+      || !value.input_name.trim()
+    ) {
+      throw new Error(`Image Input ${index + 1} requires a key, label, node, and input.`);
+    }
+    return {
+      key: value.key,
+      label: value.label,
+      node_id: value.node_id,
+      input_name: value.input_name,
+    };
+  });
+  if (new Set(slots.map((slot) => slot.key)).size !== slots.length) {
+    throw new Error("Image Input keys must be unique.");
+  }
+  return slots;
+}
+
+function profileParameters(profile: JsonObject): WorkflowProfileParameter[] {
+  if (!Array.isArray(profile.parameters)) {
+    throw new Error("Workflow Profile JSON must define a parameters array.");
+  }
+  const parameters = profile.parameters.map((value, index) => {
+    if (
+      typeof value !== "object"
+      || value === null
+      || Array.isArray(value)
+      || typeof value.key !== "string"
+      || typeof value.label !== "string"
+      || typeof value.node_id !== "string"
+      || typeof value.input_name !== "string"
+      || !["string", "integer", "float", "boolean"].includes(String(value.value_type))
+      || !value.key.trim()
+      || !value.label.trim()
+      || !value.node_id.trim()
+      || !value.input_name.trim()
+    ) {
+      throw new Error(`Parameter ${index + 1} requires a key, label, node, input, and supported type.`);
+    }
+    return {
+      key: value.key,
+      label: value.label,
+      node_id: value.node_id,
+      input_name: value.input_name,
+      value_type: value.value_type as WorkflowProfileParameter["value_type"],
+    };
+  });
+  if (new Set(parameters.map((parameter) => parameter.key)).size !== parameters.length) {
+    throw new Error("Parameter keys must be unique.");
+  }
+  return parameters;
 }
 
 function parseObjectOrNull(value: string): JsonObject | null {

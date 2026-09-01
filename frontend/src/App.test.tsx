@@ -57,7 +57,7 @@ describe("Project selection", () => {
 
     expect(await screen.findByRole("combobox", { name: "Active Project" })).toHaveValue("");
     expect(screen.getByText("Select a Project to load its Prompt library.")).toBeInTheDocument();
-    expect(screen.getByText("Select a Project to load its image library.")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Image Inputs" })).not.toBeInTheDocument();
     expect(api.listPrompts).not.toHaveBeenCalled();
     expect(api.listProjectAssets).not.toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe("Project selection", () => {
   it("confirms before clearing detached Workflow/Profile snapshots", async () => {
     const form = populatedBatchForm();
     form.prompts = [];
-    form.referenceAssetIds = [];
+    form.imageBindings = [];
     form.workflowLibraryProjectId = null;
     form.workflowId = null;
     form.workflowVersionId = null;
@@ -266,14 +266,14 @@ describe("Batch preview", () => {
     ]));
   });
 
-  it("places Seeds before Reference Assets in the Batch editor", () => {
+  it("places Image Inputs after the Workflow Profile that defines them", () => {
     const api = makeApi();
     render(<App api={api} />);
 
-    const seeds = screen.getByRole("group", { name: "Seeds" });
-    const references = screen.getByRole("group", { name: "Reference Assets" });
+    const workflow = screen.getByRole("group", { name: "Workflow and Profile" });
+    const imageInputs = screen.getByRole("group", { name: "Image Inputs" });
 
-    expect(seeds.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(workflow.compareDocumentPosition(imageInputs) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 
   it("builds the API request and renders Jobs and compiler warnings", async () => {
@@ -291,23 +291,23 @@ describe("Batch preview", () => {
     expect(screen.getAllByText("Portrait", { selector: ".prompt-identity strong" })).toHaveLength(2);
     expect(screen.queryByText("prompt-v1", { selector: ".prompt-identity code" })).not.toBeInTheDocument();
     const request = vi.mocked(api.previewBatch).mock.calls[0][0];
-    expect(request.references).toEqual([{ asset_id: "asset-1" }]);
+    expect(request.image_bindings).toEqual([{ slot_key: "source", values: [null, "asset-1"] }]);
     expect(request.seeds).toEqual({ mode: "fixed", values: [1] });
     expect(request.variable_bindings[0]).toEqual(
       { placeholder: "subject", values: ["cat", "dog"] },
     );
   });
 
-  it("previews the base workflow without Reference Assets", async () => {
+  it("previews Base workflow for a named Image Input", async () => {
     const api = makeApi({ previewBatch: vi.fn(async () => previewResponse(2, null)) });
     render(<App api={api} />);
-    await screen.findByRole("button", { name: "Select portrait.png" });
+    await screen.findByRole("button", { name: "Add portrait.png to Source image" });
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
     await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
-    expect(vi.mocked(api.previewBatch).mock.calls[0][0].references).toEqual([]);
-    expect(screen.getAllByText("Base workflow")).toHaveLength(2);
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].image_bindings).toEqual([{ slot_key: "source", values: [null] }]);
+    expect(screen.getAllByText("Base workflow").length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders backend validation errors near the Batch editor", async () => {
@@ -362,23 +362,19 @@ describe("Batch preview", () => {
   });
 
   it("creates a two-Job Run from the exact BatchRequest stored with its Preview", async () => {
-    const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
+    const assets = [asset("asset-a", "a.png")];
     const api = makeApi({
       listProjectAssets: vi.fn(async () => ({ assets })),
       previewBatch: vi.fn(async () => previewResponse(2)),
       createRun: vi.fn(async () => runResponse("run-two", 2, 2)),
     });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Select a.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add a.png to Source image" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
-    expect(previewRequest.references).toEqual([
-      { asset_id: "asset-a" },
-      { asset_id: "asset-b" },
-    ]);
+    expect(previewRequest.image_bindings).toEqual([{ slot_key: "source", values: [null, "asset-a"] }]);
     expect(screen.getByText("2", { selector: ".count-block strong" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
@@ -449,7 +445,7 @@ describe("Batch preview", () => {
     expect(vi.mocked(api.createRun).mock.calls[1][0]).toBe(previewRequest);
   });
 
-  it("invalidates Preview after reference edits and requires Preview before creation", async () => {
+  it("invalidates Preview after Image Input edits and requires Preview before creation", async () => {
     const assets = [
       asset("asset-a", "a.png"),
       asset("asset-b", "b.png"),
@@ -464,12 +460,11 @@ describe("Batch preview", () => {
       createRun: vi.fn(async () => runResponse("run-three", 3, 3)),
     });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Select a.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add a.png to Source image" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add c.png to Source image" }));
 
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
@@ -479,7 +474,48 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
     expect(await screen.findByRole("heading", { name: "Run 3" })).toBeInTheDocument();
-    expect(vi.mocked(api.createRun).mock.calls[0][0].references).toHaveLength(3);
+    expect(vi.mocked(api.createRun).mock.calls[0][0].image_bindings).toEqual([{ slot_key: "source", values: [null, "asset-a", "asset-c"] }]);
+  });
+
+  it("constructs typed Parameter overrides and invalidates Preview after edits", async () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "caption", label: "Caption", node_id: "1", input_name: "caption", value_type: "string" },
+      { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
+    ] });
+    form.imageBindings = [];
+    form.parameterBindings = [
+      { parameterKey: "unknown", valueType: "string", mode: "override", value: "remove me" },
+      { parameterKey: "caption", valueType: "string", mode: "base", value: "" },
+    ];
+    saveWorkingSession(form, null, [], "project-1");
+    const parameterPreview = previewResponse();
+    parameterPreview.jobs.forEach((job) => {
+      job.resolved_parameters = [
+        { parameter_key: "caption", label: "Caption", value: "" },
+        { parameter_key: "enabled", label: "Enabled", value: false },
+      ];
+    });
+    const api = makeApi({ previewBatch: vi.fn(async () => parameterPreview) });
+    render(<App api={api} />);
+    await screen.findByText(/Draft restored from this browser session/);
+
+    expect(screen.getByLabelText("Enabled value source")).toHaveValue("base");
+    expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Caption value source"), { target: { value: "override" } });
+    fireEvent.change(screen.getByLabelText("Enabled value source"), { target: { value: "override" } });
+    fireEvent.change(screen.getByLabelText("Enabled override value"), { target: { value: "false" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].parameter_bindings).toEqual([
+      { parameter_key: "caption", values: [""] },
+      { parameter_key: "enabled", values: [false] },
+    ]);
+    expect(screen.getAllByText('"" (empty string)').length).toBeGreaterThan(0);
+    expect(screen.getAllByText("false").length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("Caption override value"), { target: { value: "changed" } });
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
   });
 });
 
@@ -567,7 +603,7 @@ describe("PromptVersion editor", () => {
 });
 
 describe("Browser working-session restoration", () => {
-  it("restores the form and ordered references after remount but requires a new Preview", async () => {
+  it("restores ordered named Image Inputs after remount but requires a new Preview", async () => {
     const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
     const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
     const form = populatedBatchForm();
@@ -583,9 +619,15 @@ describe("Browser working-session restoration", () => {
     form.seedMode = "explicit";
     form.seedValues = "9, 3";
     form.workflowJson = '{"workflow":true}';
-    form.workflowProfileJson = '{"profile":true}';
-    form.referenceAssetIds = ["asset-b", "asset-a"];
-    saveWorkingSession(form, null);
+    form.workflowProfileJson = profileJson([
+      { key: "style", label: "Style", node_id: "1", input_name: "image" },
+      { key: "pose", label: "Pose", node_id: "2", input_name: "image" },
+    ]);
+    form.imageBindings = [
+      { slot_key: "style", values: ["asset-b"] },
+      { slot_key: "pose", values: ["asset-a"] },
+    ];
+    saveWorkingSession(form, null, [], "project-1");
 
     render(<App api={api} />);
 
@@ -598,16 +640,8 @@ describe("Browser working-session restoration", () => {
     expect(screen.getByLabelText("Seed mode")).toHaveValue("explicit");
     expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("9, 3");
     expect(screen.getByLabelText("Workflow JSON")).toHaveValue('{"workflow":true}');
-    expect(screen.getByLabelText("Workflow Profile JSON")).toHaveValue('{"profile":true}');
-    expect(screen.getByText("2 images selected")).toBeInTheDocument();
-    expect(screen.queryByText("b.png")).not.toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Selected Reference Assets" })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Change selection" }));
-    const selected = await screen.findByRole("list", { name: "Selected Reference Assets" });
-    expect([...selected.querySelectorAll("li > span")].map((item) => item.textContent)).toEqual([
-      "b.png",
-      "a.png",
-    ]);
+    expect(screen.getByRole("button", { name: "Remove b.png from Style" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Remove a.png from Pose" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
   });
@@ -627,190 +661,97 @@ describe("Browser working-session restoration", () => {
     write.mockRestore();
   });
 
-  it("surfaces a restored Reference Asset that no longer exists and blocks Preview", async () => {
+  it("surfaces a missing Image Input asset and blocks Preview", async () => {
     const form = populatedBatchForm();
-    form.referenceAssetIds = ["asset-missing"];
-    saveWorkingSession(form, null);
+    form.imageBindings = [{ slot_key: "source", values: ["asset-missing"] }];
+    saveWorkingSession(form, null, [], "project-1");
     const api = makeApi();
     render(<App api={api} />);
 
-    expect(screen.getByText("1 image selected")).toBeInTheDocument();
-    expect(await screen.findByText("asset-missing (missing from Project)")).toBeInTheDocument();
-    expect(
-      await screen.findByText("Remove missing Reference Assets before Previewing this Batch."),
-    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Missing Project Asset 1")).toBeInTheDocument();
+      expect(screen.getByText(/One or more selected Project Assets are missing/)).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
     expect(
-      await screen.findByText(/Selected Reference Assets are no longer available/),
+      await screen.findByText(/Selected Image Input assets are no longer available/),
     ).toBeInTheDocument();
     expect(api.previewBatch).not.toHaveBeenCalled();
   });
 });
 
-describe("Reference Asset picker", () => {
-  it("shows only the selected count while collapsed and toggles the Project library", async () => {
+describe("Image Input controls", () => {
+  it("renders one control per slot in Profile order and fetches the library once", async () => {
     const form = populatedBatchForm();
-    form.referenceAssetIds = ["asset-a"];
-    saveWorkingSession(form, null);
-    const api = makeApi({
-      listProjectAssets: vi.fn(async () => ({ assets: [asset("asset-a", "a.png")] })),
-    });
+    form.workflowProfileJson = profileJson([
+      { key: "style", label: "Style", node_id: "1", input_name: "image" },
+      { key: "pose", label: "Pose", node_id: "2", input_name: "image" },
+    ]);
+    form.imageBindings = [
+      { slot_key: "style", values: [null] },
+      { slot_key: "pose", values: ["asset-a"] },
+    ];
+    saveWorkingSession(form, null, [], "project-1");
+    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets: [asset("asset-a", "a.png")] })) });
     render(<App api={api} />);
 
-    expect(screen.getByText("1 image selected")).toBeInTheDocument();
-    expect(screen.queryByText("a.png")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Deselect a.png" })).not.toBeInTheDocument();
-
-    fireEvent.click(await screen.findByRole("button", { name: "Change selection" }));
-    expect(await screen.findByRole("button", { name: "Deselect a.png" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-
-    expect(screen.queryByText("a.png")).not.toBeInTheDocument();
-    expect(screen.getByText("1 image selected")).toBeInTheDocument();
+    await screen.findAllByRole("button", { name: /a\.png/ });
+    const imageInputs = screen.getByRole("group", { name: "Image Inputs" });
+    expect(within(imageInputs).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Style", "Pose"]);
+    expect(within(imageInputs).getByRole("button", { name: "Base workflow for Style" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Remove a.png from Pose" })).toHaveAttribute("aria-pressed", "true");
+    expect(api.listProjectAssets).toHaveBeenCalledOnce();
   });
 
-  it("Select All preserves selected order, appends display order, and Select None invalidates Preview", async () => {
+  it("preserves ordered alternatives independently across named slots", async () => {
     const form = populatedBatchForm();
-    form.referenceAssetIds = ["asset-c", "asset-a"];
-    saveWorkingSession(form, null);
-    const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png"), asset("asset-c", "c.png")];
-    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
-    render(<App api={api} />);
+    form.workflowProfileJson = profileJson([
+      { key: "style", label: "Style", node_id: "1", input_name: "image" },
+      { key: "pose", label: "Pose", node_id: "2", input_name: "image" },
+    ]);
+    form.imageBindings = [
+      { slot_key: "style", values: [null] },
+      { slot_key: "pose", values: [null] },
+    ];
+    saveWorkingSession(form, null, [], "project-1");
+    const assets = [
+      asset("asset-a", "a.png"),
+      asset("asset-b", "b.png"),
+      asset("asset-c", "c.png"),
+    ];
+    render(<App api={makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) })} />);
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-    await screen.findByRole("button", { name: "Create Run" });
-    fireEvent.click(await screen.findByRole("button", { name: "Change selection" }));
-    await screen.findByRole("button", { name: "Deselect a.png" });
+    fireEvent.click(await screen.findByRole("button", { name: "Add a.png to Style" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add b.png to Style" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add c.png to Pose" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Select All" }));
+    expect(loadWorkingSession().form.imageBindings).toEqual([
+      { slot_key: "style", values: [null, "asset-a", "asset-b"] },
+      { slot_key: "pose", values: [null, "asset-c"] },
+    ]);
+    const selected = screen.getByRole("list", { name: "Style selected alternatives" });
+    expect(within(selected).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Base workflowRemove",
+      "a.pngRemove",
+      "b.pngRemove",
+    ]);
 
-    expect(screen.getByText("3 images selected")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove a.png from Style" }));
+
+    expect(loadWorkingSession().form.imageBindings[0]).toEqual({
+      slot_key: "style",
+      values: [null, "asset-b"],
+    });
+  });
+
+  it("excludes Base workflow independently and invalidates Preview", async () => {
+    render(<App api={makeApi()} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Base workflow for Source image" }));
+
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(api.previewBatch).mock.calls[1][0].references).toEqual([
-      { asset_id: "asset-c" },
-      { asset_id: "asset-a" },
-      { asset_id: "asset-b" },
-    ]);
-    await screen.findByRole("button", { name: "Create Run" });
-
-    fireEvent.click(screen.getByRole("button", { name: "Select None" }));
-
-    expect(screen.getByText("0 images selected")).toBeInTheDocument();
-    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
-  });
-
-  it("renders an empty library and reports listing errors without blocking editing", async () => {
-    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets: [] })) });
-    const { rerender } = render(<App api={api} />);
-
-    expect(await screen.findByText("This Project has no imported images.")).toBeInTheDocument();
-
-    const failingApi = makeApi({
-      listProjectAssets: vi.fn(async () => {
-        throw new ApiError("Asset index unavailable", "invalid_asset_data", 500);
-      }),
-    });
-    rerender(<App api={failingApi} />);
-
-    expect(await screen.findByText("Asset library: Asset index unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled();
-  });
-
-  it("preserves selection order and appends an asset when it is reselected", async () => {
-    const assets = [asset("asset-a", "a.png"), asset("asset-c", "c.png"), asset("asset-b", "b.png")];
-    const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
-    render(<App api={api} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Select a.png" }));
-    expect(screen.getByRole("button", { name: "Deselect a.png" }).querySelector("img")).toHaveAttribute(
-      "src",
-      "http://api.test/api/assets/asset-a",
-    );
-    expect(screen.getByRole("button", { name: "Deselect a.png" }).querySelector(".asset-preview-frame img"))
-      .toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select b.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Deselect c.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select c.png" }));
-    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-
-    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
-    expect(vi.mocked(api.previewBatch).mock.calls[0][0].references).toEqual([
-      { asset_id: "asset-a" },
-      { asset_id: "asset-b" },
-      { asset_id: "asset-c" },
-    ]);
-    const selected = screen.getByRole("list", { name: "Selected Reference Assets" });
-    expect([...selected.querySelectorAll("li > span")].map((item) => item.textContent)).toEqual([
-      "a.png",
-      "b.png",
-      "c.png",
-    ]);
-  });
-
-  it("clears scoped selections and ignores an A-B-A stale library response", async () => {
-    const oldLibrary = deferred<{ assets: AssetResponse[] }>();
-    const nextProject = projectResponse({ id: "project-2", filesystem_key: "project_2", name: "Next" });
-    let projectOneRequests = 0;
-    const api = makeApi({
-      listProjects: vi.fn(async () => ({
-        projects: [projectResponse(), nextProject],
-      })),
-      listProjectAssets: vi.fn((projectKey: string) => {
-        if (projectKey === "project_1") {
-          projectOneRequests += 1;
-          return projectOneRequests === 1
-            ? oldLibrary.promise
-            : Promise.resolve({ assets: [asset("asset-fresh", "fresh.png")] });
-        }
-        return Promise.resolve({ assets: [asset("asset-new", "new.png")] });
-      }),
-    });
-    render(<App api={api} />);
-    const selector = await screen.findByRole("combobox", { name: "Active Project" });
-    fireEvent.change(selector, { target: { value: nextProject.id } });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByRole("button", { name: "Select new.png" })).toBeInTheDocument();
-    expect(screen.queryByText("A studio portrait of {{subject}}.")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Batch name")).toHaveValue("First experiment");
-    fireEvent.click(screen.getByRole("button", { name: "Select new.png" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Active Project" }), {
-      target: { value: "project-1" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("button", { name: "Select fresh.png" })).toBeInTheDocument();
-    oldLibrary.resolve({ assets: [asset("asset-old", "old.png")] });
-
-    await waitFor(() => expect(api.listProjectAssets).toHaveBeenCalledTimes(3));
-    expect(screen.queryByRole("button", { name: /old\.png/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Selected Reference Assets" })).not.toBeInTheDocument();
-    await waitFor(() => expect(loadWorkingSession().selectedProjectId).toBe("project-1"));
-  });
-
-  it("merges imported assets, deduplicates them, and selects new imports", async () => {
-    const existing = asset("asset-a", "a.png");
-    const imported = asset("asset-b", "b.png");
-    const api = makeApi({
-      listProjectAssets: vi.fn(async () => ({ assets: [existing] })),
-      uploadProjectAssets: vi.fn(async () => ({ assets: [existing, imported, imported] })),
-    });
-    render(<App api={api} />);
-    await screen.findByRole("button", { name: "Select a.png" });
-
-    fireEvent.change(screen.getByLabelText("Import images"), {
-      target: { files: [new File(["image"], "b.png", { type: "image/png" })] },
-    });
-
-    expect(await screen.findByRole("button", { name: "Deselect b.png" })).toBeInTheDocument();
-    expect(screen.getAllByText("b.png")).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: /b\.png/ })).toHaveLength(1);
-    expect(api.uploadProjectAssets).toHaveBeenCalledWith("project_1", expect.any(Array));
+    expect(loadWorkingSession().form.imageBindings).toEqual([{ slot_key: "source", values: ["asset-1"] }]);
   });
 });
 
@@ -882,8 +823,8 @@ describe("Run creation", () => {
           { name: "subject", value: "cat" },
           { name: "style", value: "editorial" },
         ],
-        reference_asset_id: null,
-        reference_filename: null,
+        resolved_image_inputs: [{ slot_key: "source", label: "Source image", asset_id: null, filename: null }],
+        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: null }],
         seed: 123,
       },
       {
@@ -895,8 +836,8 @@ describe("Run creation", () => {
           { name: "subject", value: "dog" },
           { name: "style", value: "editorial" },
         ],
-        reference_asset_id: null,
-        reference_filename: null,
+        resolved_image_inputs: [{ slot_key: "source", label: "Source image", asset_id: "asset-1", filename: "portrait.png" }],
+        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: 30 }],
         seed: 456,
       },
     ];
@@ -904,7 +845,8 @@ describe("Run creation", () => {
       { id: "prompt-b", prompt_id: "prompt-2", version_number: 2, name: "Editorial", text: "Editorial {{subject}}" },
       { id: "prompt-a", prompt_id: "prompt-1", version_number: 4, name: "Portrait", text: "Portrait {{subject}}" },
     ];
-    frozen.batch_snapshot.references = [];
+    frozen.batch_snapshot.image_bindings = [{ slot_key: "source", values: [null, "asset-1"] }];
+    frozen.batch_snapshot.parameter_bindings = [{ parameter_key: "steps", values: [30] }];
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
     frozen.batch_snapshot.variable_bindings.push({ placeholder: "style", values: ["editorial"] });
     const api = makeApi({
@@ -916,7 +858,7 @@ describe("Run creation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await screen.findByRole("button", { name: "View Run Plan" });
-    expect(screen.getByText(/2 prompts · 2 variable combinations · Base workflow · 2 seeds/))
+    expect(screen.getByText(/2 prompts · 2 variable combinations · 1 image slot · 2 alternatives · 2 seeds/))
       .toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Edited afterward" } });
     fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
@@ -931,6 +873,11 @@ describe("Run creation", () => {
     expect(within(dialog).getByText("Random · 2 requested")).toBeInTheDocument();
     expect(within(dialog).getByText("123, 456")).toBeInTheDocument();
     expect(within(dialog).getAllByText("Base workflow").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("portrait.png").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("asset-1").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Steps").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("30").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("steps").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("Editorial cat")).toBeInTheDocument();
@@ -1015,7 +962,7 @@ describe("Discard unstarted Run", () => {
     expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Run 7" })).getByText("run-discarded")).toBeInTheDocument();
     expect(within(currentRunSection()).getByText("run-next")).toBeInTheDocument();
-    expect(loadWorkingSession().sessionRunIds).toEqual(["run-discarded", "run-next"]);
+    await waitFor(() => expect(loadWorkingSession().sessionRunIds).toEqual(["run-discarded", "run-next"]));
   });
 
   it("keeps an ineligible created Run inspectable without wedging the workspace", async () => {
@@ -1553,8 +1500,11 @@ describe("Result lightbox", () => {
   }
 
   it("opens on image click and closes via the explicit Close control", async () => {
+    const frozen = runLookupResponse();
+    frozen.plan.jobs[0].resolved_parameters = [{ parameter_key: "enabled", label: "Enabled", value: false }];
     const api = completedRunApi({
       getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+      getRun: vi.fn(async () => frozen),
     });
     render(<App api={api} pollIntervalMs={5} />);
     await createRunAndStart();
@@ -1566,6 +1516,9 @@ describe("Result lightbox", () => {
     fireEvent.click(within(lightbox).getByRole("button", { name: "ⓘ Details" }));
     const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(within(details).getByText("A studio portrait of cat.", { exact: false })).toBeInTheDocument();
+    expect(within(details).getByText("Enabled")).toBeInTheDocument();
+    expect(within(details).getByText("false")).toBeInTheDocument();
+    expect(within(details).getByText("enabled")).toBeInTheDocument();
     fireEvent.click(within(details).getByRole("button", { name: "Close" }));
     expect(screen.getByRole("dialog", { name: "Result image preview" })).toBeInTheDocument();
 
@@ -1705,8 +1658,10 @@ describe("Result Details", () => {
         { name: "style", value: "cinematic" },
       ],
       seed: 38192831,
-      reference_asset_id: "ref-02",
-      reference_filename: "ref-02.png",
+      resolved_image_inputs: [
+        { slot_key: "style", label: "Style image", asset_id: "ref-02", filename: "ref-02.png" },
+        { slot_key: "pose", label: "Pose image", asset_id: null, filename: null },
+      ],
     };
     frozen.plan.jobs[1] = {
       ...frozen.plan.jobs[1],
@@ -1716,8 +1671,10 @@ describe("Result Details", () => {
         { name: "style", value: "natural" },
       ],
       seed: 992211,
-      reference_asset_id: "ref-03",
-      reference_filename: "ref-03.png",
+      resolved_image_inputs: [
+        { slot_key: "style", label: "Style image", asset_id: "ref-03", filename: "ref-03.png" },
+        { slot_key: "pose", label: "Pose image", asset_id: null, filename: null },
+      ],
     };
     return frozen;
   }
@@ -1763,10 +1720,11 @@ describe("Result Details", () => {
     expect(getRun).toHaveBeenCalledTimes(1);
   });
 
-  it("shows Base workflow when the frozen Job has no reference", async () => {
+  it("shows Base workflow for a frozen named slot", async () => {
     const frozen = frozenProvenanceRun();
-    frozen.plan.jobs[0].reference_asset_id = null;
-    frozen.plan.jobs[0].reference_filename = null;
+    frozen.plan.jobs[0].resolved_image_inputs = [
+      { slot_key: "source", label: "Source image", asset_id: null, filename: null },
+    ];
     const api = makeApi({
       getRun: vi.fn(async () => frozen),
       getExecution: vi.fn(async () => execution("succeeded")),
@@ -1821,7 +1779,7 @@ describe("Result Details", () => {
 
   it("uses the correct cached frozen Run for Batch Results", async () => {
     const form = populatedBatchForm();
-    form.referenceAssetIds = ["asset-1"];
+    form.imageBindings = [{ slot_key: "source", values: ["asset-1"] }];
     saveWorkingSession(form, null, ["run-a", "run-b"]);
     const runA = frozenProvenanceRun("run-a", 10);
     runA.plan.jobs[0].resolved_prompt = "Frozen prompt from Run A";
@@ -1966,7 +1924,7 @@ describe("Batch working-session Results gallery", () => {
 
   it("restores multiple session Runs once without executing or duplicating the current Run", async () => {
     const form = populatedBatchForm();
-    form.referenceAssetIds = ["asset-1"];
+    form.imageBindings = [{ slot_key: "source", values: ["asset-1"] }];
     saveWorkingSession(form, "run-b", ["run-a", "run-b", "run-b"]);
     const api = makeApi({
       getRun: vi.fn(async (runId: string) =>
@@ -2034,7 +1992,8 @@ describe("Batch working-session Results gallery", () => {
         archived_at: null,
         prompt_selections: [],
         variable_bindings: [],
-        reference_selections: [],
+        image_bindings: [],
+        parameter_bindings: [],
         selected_workflow_version: null,
         selected_workflow_profile_name: null,
         selected_workflow_profile_archived_at: null,
@@ -2059,7 +2018,7 @@ describe("Batch working-session Results gallery", () => {
 
   it("keeps healthy historical Results when another session Run is unavailable", async () => {
     const form = populatedBatchForm();
-    form.referenceAssetIds = ["asset-1"];
+    form.imageBindings = [{ slot_key: "source", values: ["asset-1"] }];
     saveWorkingSession(form, null, ["run-bad", "run-good"]);
     const api = makeApi({
       getRun: vi.fn(async (runId: string) => {
@@ -2166,7 +2125,7 @@ function makeApi(
   };
 }
 
-function previewResponse(jobCount = 2, referenceAssetId: string | null = "asset-1"): PreviewResponse {
+function previewResponse(jobCount = 2, imageAssetId: string | null = "asset-1"): PreviewResponse {
   const subjects = ["cat", "dog", "bird"];
   return {
     job_count: jobCount,
@@ -2181,7 +2140,13 @@ function previewResponse(jobCount = 2, referenceAssetId: string | null = "asset-
         prompt_version_name: "Portrait",
         resolved_prompt: `A studio portrait of ${subject}.`,
         resolved_variables: [{ name: "subject", value: subject }],
-        reference_asset_id: referenceAssetId,
+        resolved_image_inputs: [{
+          slot_key: "source",
+          label: "Source image",
+          asset_id: imageAssetId,
+          filename: imageAssetId ? "portrait.png" : null,
+        }],
+        resolved_parameters: [],
         seed: 1,
       };
     }),
@@ -2225,13 +2190,10 @@ function runLookupResponse(
       warnings: [
         { code: "unused_binding", message: "Unused binding variable", placeholder: "unused" },
       ],
-      jobs: previewResponse().jobs.map((job) => ({
-        ...job,
-        reference_filename: job.reference_asset_id ? "portrait.png" : null,
-      })),
+      jobs: previewResponse().jobs,
     },
     batch_snapshot: {
-      snapshot_version: 2,
+      snapshot_version: 4,
       project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
       source_saved_batch: { id: "batch-1", revision: 3 },
       batch: {
@@ -2255,7 +2217,8 @@ function runLookupResponse(
           values: ["cat", "dog"],
         },
       ],
-      references: [{ asset_id: "asset-1" }],
+      image_bindings: [{ slot_key: "source", values: ["asset-1"] }],
+      parameter_bindings: [],
       seed_intent: { mode: "fixed", values: [1], random_seed_count: null },
       workflow_selection: {
         workflow_id: "workflow-1",
@@ -2267,7 +2230,9 @@ function runLookupResponse(
         workflow_profile_name: "General",
         workflow_profile_version_number: 4,
         workflow: {},
-        workflow_profile: {},
+        workflow_profile: JSON.parse(profileJson([
+          { key: "source", label: "Source image", node_id: "1", input_name: "image" },
+        ])),
       },
     },
     execution: execution(status, runId),
@@ -2385,12 +2350,20 @@ function populatedBatchForm() {
   prompt.snapshotName = "Portrait";
   prompt.text = "A studio portrait of {{subject}}.";
   form.prompts = [prompt];
+  form.workflowProfileJson = profileJson([
+    { key: "source", label: "Source image", node_id: "1", input_name: "image" },
+  ]);
+  form.imageBindings = [{ slot_key: "source", values: [null] }];
   return form;
+}
+
+function profileJson(imageInputs: unknown[]): string {
+  return JSON.stringify({ mappings: {}, image_inputs: imageInputs, parameters: [] });
 }
 
 function seedWorkingSession(runId: string) {
   const form = populatedBatchForm();
-  form.referenceAssetIds = ["asset-1"];
+  form.imageBindings = [{ slot_key: "source", values: ["asset-1"] }];
   saveWorkingSession(form, runId, [runId], "project-1");
 }
 
@@ -2495,7 +2468,7 @@ function promptCards(): HTMLElement[] {
 }
 
 async function enterAsset() {
-  fireEvent.click(await screen.findByRole("button", { name: "Select portrait.png" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add portrait.png to Source image" }));
 }
 
 async function reachPreview() {

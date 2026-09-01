@@ -64,7 +64,8 @@ export function PreviewPanel({
               <th scope="col">Prompt</th>
               <th scope="col">Resolved prompt</th>
               <th scope="col">Variables</th>
-              <th scope="col">Reference</th>
+              <th scope="col">Image Inputs</th>
+              <th scope="col">Parameters</th>
               <th scope="col">Seed</th>
             </tr>
           </thead>
@@ -84,11 +85,27 @@ export function PreviewPanel({
                     : "None"}
                 </td>
                 <td>
-                  {job.reference_asset_id === null ? "Base workflow" : (
-                    <details className="inline-details">
-                      <summary>Reference selected</summary>
-                      <code>{job.reference_asset_id}</code>
-                    </details>
+                  {job.resolved_image_inputs.length === 0 ? "None" : (
+                    <dl className="named-image-inputs">
+                      {job.resolved_image_inputs.map((input) => (
+                        <div key={input.slot_key}>
+                          <dt>{input.label}</dt>
+                          <dd>{input.asset_id === null ? "Base workflow" : input.filename ?? "Project Asset"}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                </td>
+                <td>
+                  {job.resolved_parameters.length === 0 ? "None" : (
+                    <dl className="named-image-inputs">
+                      {job.resolved_parameters.map((parameter) => (
+                        <div key={parameter.parameter_key}>
+                          <dt>{parameter.label}</dt>
+                          <dd>{formatParameterValue(parameter.value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
                   )}
                 </td>
                 <td><code>{job.seed}</code></td>
@@ -124,4 +141,10 @@ export function PreviewPanel({
       </div>
     </section>
   );
+}
+
+function formatParameterValue(value: string | number | boolean | null): string {
+  if (value === null) return "Base workflow";
+  if (typeof value === "string") return value === "" ? '"" (empty string)' : value;
+  return String(value);
 }

@@ -27,6 +27,7 @@ from batchcraft.comfyui.workflow import (
     validate_workflow,
     validate_workflow_profile,
     workflow_profile_image_inputs,
+    workflow_profile_parameters,
 )
 
 __all__ = [
@@ -56,4 +57,5 @@ __all__ = [
     "validate_workflow",
     "validate_workflow_profile",
     "workflow_profile_image_inputs",
+    "workflow_profile_parameters",
 ]

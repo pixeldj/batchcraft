@@ -2,13 +2,15 @@ import {
   initialBatchForm,
   newPrompt,
   newVariableBinding,
+  profileParameters,
+  reconcileParameterBindings,
   type BatchFormState,
   type PromptForm,
   type VariableBindingForm,
 } from "../batch/form";
 
 export const WORKING_SESSION_KEY = "batchcraft.working-session";
-const WORKING_SESSION_VERSION = 9;
+const WORKING_SESSION_VERSION = 11;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
 type StoredPrompt = Omit<PromptForm, "key">;
@@ -18,8 +20,8 @@ interface StoredBatchForm extends Omit<BatchFormState, "prompts" | "variableBind
   variableBindings: StoredVariableBinding[];
 }
 
-interface WorkingSessionEnvelopeV9 {
-  version: 9;
+interface WorkingSessionEnvelopeV11 {
+  version: 11;
   form: StoredBatchForm;
   current_run_id: string | null;
   session_run_ids: string[];
@@ -50,7 +52,7 @@ export function loadWorkingSession(
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (!isWorkingSessionEnvelopeV9(value)) {
+    if (!isWorkingSessionEnvelopeV11(value)) {
       return defaultSession();
     }
     return restoredSession(value);
@@ -71,7 +73,7 @@ export function saveWorkingSession(
   if (!storage) {
     return;
   }
-  const envelope: WorkingSessionEnvelopeV9 = {
+  const envelope: WorkingSessionEnvelopeV11 = {
     version: WORKING_SESSION_VERSION,
     form: dehydrateForm(form),
     current_run_id: currentRunId,
@@ -125,6 +127,10 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
       ...binding,
       key: newVariableBinding().key,
     })),
+    parameterBindings: reconcileParameterBindings(
+      form.parameterBindings,
+      profileParameters(form.workflowProfileJson),
+    ),
   };
 }
 
@@ -140,7 +146,7 @@ function defaultSession(): RestoredWorkingSession {
   };
 }
 
-function restoredSession(value: WorkingSessionEnvelopeV9): RestoredWorkingSession {
+function restoredSession(value: WorkingSessionEnvelopeV11): RestoredWorkingSession {
   return {
     form: hydrateForm(value.form),
     currentRunId: value.current_run_id,
@@ -160,7 +166,7 @@ function browserSessionStorage(): Storage | null {
   }
 }
 
-function isWorkingSessionEnvelopeV9(value: unknown): value is WorkingSessionEnvelopeV9 {
+function isWorkingSessionEnvelopeV11(value: unknown): value is WorkingSessionEnvelopeV11 {
   return (
     isRecord(value) &&
     hasExactKeys(value, [
@@ -215,7 +221,8 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
       "batchDescription",
       "prompts",
       "variableBindings",
-      "referenceAssetIds",
+      "imageBindings",
+      "parameterBindings",
       "seedMode",
       "seedValues",
       "randomSeedCount",
@@ -239,7 +246,8 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
     value.prompts.every(isStoredPrompt) &&
     Array.isArray(value.variableBindings) &&
     value.variableBindings.every(isStoredVariableBinding) &&
-    isStringArray(value.referenceAssetIds) &&
+    isImageBindings(value.imageBindings) &&
+    isParameterBindings(value.parameterBindings) &&
     (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random") &&
     isNullableString(value.workflowLibraryProjectId) &&
     isNullableString(value.workflowId) &&
@@ -252,6 +260,34 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
     isNullableString(value.workflowProfileWorkflowVersionId) &&
     isNullableString(value.workflowProfileContentSha256)
   );
+}
+
+function isParameterBindings(value: unknown): boolean {
+  if (!Array.isArray(value) || !value.every((binding) => (
+    isRecord(binding)
+    && hasExactKeys(binding, ["parameterKey", "valueType", "mode", "value"])
+    && isNonEmptyString(binding.parameterKey)
+    && ["string", "integer", "float", "boolean"].includes(String(binding.valueType))
+    && (binding.mode === "base" || binding.mode === "override")
+    && typeof binding.value === "string"
+  ))) return false;
+  const keys = value.map((binding) => (binding as { parameterKey: string }).parameterKey);
+  return new Set(keys).size === keys.length;
+}
+
+function isImageBindings(value: unknown): boolean {
+  if (!Array.isArray(value) || !value.every((binding) => (
+    isRecord(binding)
+    && hasExactKeys(binding, ["slot_key", "values"])
+    && isNonEmptyString(binding.slot_key)
+    && Array.isArray(binding.values)
+    && binding.values.length >= 1
+    && binding.values.every((item) => item === null || isNonEmptyString(item))
+    && new Set(binding.values).size === binding.values.length
+    && (!binding.values.includes(null) || binding.values[0] === null)
+  ))) return false;
+  const keys = value.map((binding) => (binding as { slot_key: string }).slot_key);
+  return new Set(keys).size === keys.length;
 }
 
 function isStoredPrompt(value: unknown): value is StoredPrompt {

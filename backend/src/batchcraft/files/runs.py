@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 import shutil
 from collections.abc import Callable, Mapping
@@ -14,7 +15,12 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from batchcraft.comfyui import WorkflowPreparationError, workflow_profile_image_inputs
+from batchcraft.comfyui import (
+    WorkflowPreparationError,
+    validate_workflow_profile,
+    workflow_profile_image_inputs,
+    workflow_profile_parameters,
+)
 from batchcraft.domain import (
     BatchDefinition,
     CompilationError,
@@ -24,13 +30,18 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
+    ParameterBinding,
+    ParameterValueType,
     PromptVersion,
     ResolvedImageInput,
+    ResolvedParameter,
     ResolvedVariable,
     SeedInput,
     VariableBinding,
+    WorkflowParameter,
     compile_batch,
     validate_image_input_slot_key,
+    validate_parameter_scalar,
 )
 from batchcraft.files._io import (
     canonical_json_bytes,
@@ -53,10 +64,10 @@ from batchcraft.files.models import (
     PublishedRun,
 )
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
-from batchcraft.files.snapshots import BatchSnapshotV3
+from batchcraft.files.snapshots import BatchSnapshotV4
 
 RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 6
+MANIFEST_FORMAT_VERSION = 7
 OWNER_FORMAT_VERSION = 1
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
@@ -68,6 +79,7 @@ _CSV_COLUMNS = (
     "resolved_prompt",
     "resolved_variables_json",
     "resolved_image_inputs_json",
+    "resolved_parameters_json",
     "seed",
     "workflow_sha256",
     "workflow_profile_sha256",
@@ -300,6 +312,10 @@ class RunFilesystemStore:
             raise RunStoreError("workflow snapshot hash does not match Run provenance")
         if workflow_profile_sha256 != loaded.workflow_profile_sha256:
             raise RunStoreError("Workflow Profile snapshot hash does not match Run provenance")
+        try:
+            validate_workflow_profile(workflow, workflow_profile)
+        except WorkflowPreparationError as error:
+            raise RunStoreError(f"frozen workflow/Profile pair is invalid: {error}") from error
         _validate_batch_snapshot_consistency(
             loaded.batch_snapshot,
             project=loaded.project,
@@ -479,6 +495,17 @@ class RunFilesystemStore:
                     f"compiled plan image slot {slot.key!r} has incomplete metadata"
                 )
             slot_keys.add(slot.key)
+        parameter_keys: set[str] = set()
+        for parameter in plan.parameters:
+            if parameter.key in parameter_keys:
+                raise RunStoreError(
+                    f"compiled plan contains duplicate parameter: {parameter.key!r}"
+                )
+            if not parameter.label.strip() or not parameter.node_id or not parameter.input_name:
+                raise RunStoreError(
+                    f"compiled plan parameter {parameter.key!r} has incomplete metadata"
+                )
+            parameter_keys.add(parameter.key)
         expected_ordinals = tuple(range(1, plan.job_count + 1))
         if tuple(job.ordinal for job in plan.jobs) != expected_ordinals:
             raise RunStoreError("compiled Job ordinals must be one-based and contiguous")
@@ -508,6 +535,12 @@ class RunFilesystemStore:
                 for item in job.resolved_image_inputs
             ):
                 raise RunStoreError(f"compiled Job {job.ordinal} has a blank image asset ID")
+            if tuple(item.parameter_key for item in job.resolved_parameters) != tuple(
+                parameter.key for parameter in plan.parameters
+            ):
+                raise RunStoreError(
+                    f"compiled Job {job.ordinal} parameters do not match Profile order"
+                )
 
     def _new_id(self, kind: str) -> str:
         value = self._id_factory()
@@ -591,6 +624,16 @@ def _manifest(
             }
             for slot in plan.image_input_slots
         ],
+        "parameters": [
+            {
+                "parameter_key": parameter.key,
+                "parameter_label": parameter.label,
+                "node_id": parameter.node_id,
+                "input_name": parameter.input_name,
+                "value_type": parameter.value_type.value,
+            }
+            for parameter in plan.parameters
+        ],
         "compiler_warnings": [
             {
                 "code": warning.code.value,
@@ -626,6 +669,10 @@ def _manifest(
                         ),
                     }
                     for image_input in job.image_inputs
+                ],
+                "resolved_parameters": [
+                    {"parameter_key": item.parameter_key, "value": item.value}
+                    for item in job.compiled_job.resolved_parameters
                 ],
                 "seed": job.compiled_job.seed,
                 "workflow_sha256": workflow_sha256,
@@ -677,6 +724,14 @@ def _manifest_csv_bytes(
                             ),
                         }
                         for image_input in job.image_inputs
+                    ]
+                )
+                .decode()
+                .rstrip("\n"),
+                "resolved_parameters_json": canonical_json_bytes(
+                    [
+                        {"parameter_key": item.parameter_key, "value": item.value}
+                        for item in job.compiled_job.resolved_parameters
                     ]
                 )
                 .decode()
@@ -745,6 +800,10 @@ def _parse_run(
         _parse_image_input_slot(_object_item(value, "image input slot"))
         for value in _required_array(manifest_data, "image_input_slots")
     )
+    parameters = tuple(
+        _parse_parameter(_object_item(value, "workflow parameter"))
+        for value in _required_array(manifest_data, "parameters")
+    )
     warnings = tuple(
         _parse_warning(_object_item(value, "compiler warning"))
         for value in _required_array(manifest_data, "compiler_warnings")
@@ -760,10 +819,12 @@ def _parse_run(
     compiled_plan = CompiledRunPlan(
         prompt_versions=prompt_versions,
         image_input_slots=image_input_slots,
+        parameters=parameters,
         jobs=tuple(job.compiled_job for job in persisted_jobs),
         warnings=warnings,
     )
     expected_image_inputs = tuple((slot.key, slot.label) for slot in image_input_slots)
+    expected_parameters = tuple(parameter.key for parameter in parameters)
     for persisted_job in persisted_jobs:
         actual_image_inputs = tuple(
             (image_input.slot_key, image_input.slot_label)
@@ -773,6 +834,23 @@ def _parse_run(
             raise RunStoreError(
                 f"Job {persisted_job.compiled_job.ordinal} image input keys or labels do not match the frozen Profile"
             )
+        if (
+            tuple(item.parameter_key for item in persisted_job.compiled_job.resolved_parameters)
+            != expected_parameters
+        ):
+            raise RunStoreError(
+                f"Job {persisted_job.compiled_job.ordinal} parameter keys do not match the frozen Profile"
+            )
+        for definition, resolved in zip(
+            parameters,
+            persisted_job.compiled_job.resolved_parameters,
+            strict=True,
+        ):
+            if not _parameter_value_matches(definition.value_type, resolved.value):
+                raise RunStoreError(
+                    f"Job {persisted_job.compiled_job.ordinal} parameter "
+                    f"{definition.key!r} does not match its frozen type"
+                )
     if _non_negative_integer(run_data, "job_count") != compiled_plan.job_count:
         raise RunStoreError("job_count does not match manifest Jobs")
     expected_ordinals = tuple(range(1, compiled_plan.job_count + 1))
@@ -830,6 +908,10 @@ def _parse_job(
         _parse_persisted_image_input(_object_item(value, "resolved image input"))
         for value in _required_array(data, "resolved_image_inputs")
     )
+    resolved_parameters = tuple(
+        _parse_resolved_parameter(_object_item(value, "resolved parameter"))
+        for value in _required_array(data, "resolved_parameters")
+    )
     resolved_prompt = _required_string(data, "resolved_prompt", allow_empty=True)
     if "{{" in resolved_prompt or "}}" in resolved_prompt:
         raise RunStoreError("Job contains an unresolved prompt placeholder")
@@ -845,6 +927,7 @@ def _parse_job(
             )
             for image_input in image_inputs
         ),
+        resolved_parameters=resolved_parameters,
         seed=_integer(data, "seed"),
     )
     return PersistedJob(
@@ -861,6 +944,52 @@ def _parse_image_input_slot(data: dict[str, object]) -> ImageInputSlot:
         node_id=_required_string(data, "node_id"),
         input_name=_required_string(data, "input_name"),
     )
+
+
+def _parse_parameter(data: dict[str, object]) -> WorkflowParameter:
+    try:
+        value_type = ParameterValueType(_required_string(data, "value_type"))
+    except ValueError as error:
+        raise RunStoreError("workflow parameter has unsupported value_type") from error
+    return WorkflowParameter(
+        key=_required_string(data, "parameter_key"),
+        label=_required_string(data, "parameter_label"),
+        node_id=_required_string(data, "node_id"),
+        input_name=_required_string(data, "input_name"),
+        value_type=value_type,
+    )
+
+
+def _parse_resolved_parameter(data: dict[str, object]) -> ResolvedParameter:
+    if "value" not in data:
+        raise RunStoreError("resolved parameter must define value")
+    value = data["value"]
+    try:
+        scalar = None if value is None else validate_parameter_scalar(value)
+    except ValueError as error:
+        raise RunStoreError(f"invalid resolved parameter value: {error}") from error
+    return ResolvedParameter(
+        parameter_key=_required_string(data, "parameter_key"),
+        value=scalar,
+    )
+
+
+def _parameter_value_matches(value_type: ParameterValueType, value: object) -> bool:
+    if value is None:
+        return True
+    if value_type is ParameterValueType.STRING:
+        return isinstance(value, str)
+    if value_type is ParameterValueType.INTEGER:
+        return (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and -(2**53 - 1) <= value <= 2**53 - 1
+        )
+    if value_type is ParameterValueType.FLOAT:
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
+    return isinstance(value, bool)
 
 
 def _parse_persisted_image_input(data: dict[str, object]) -> PersistedImageInput:
@@ -961,12 +1090,12 @@ def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, 
 
 def _parse_batch_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
     try:
-        parsed = BatchSnapshotV3.model_validate(snapshot)
+        parsed = BatchSnapshotV4.model_validate(snapshot)
     except ValidationError as error:
-        raise RunStoreError(f"invalid Batch snapshot v3: {error}") from error
+        raise RunStoreError(f"invalid Batch snapshot v4: {error}") from error
     canonical = cast(dict[str, object], parsed.model_dump(mode="json"))
     if canonical != snapshot:
-        raise RunStoreError("invalid Batch snapshot v3: snapshot must use its complete shape")
+        raise RunStoreError("invalid Batch snapshot v4: snapshot must use its complete shape")
     return canonical
 
 
@@ -979,7 +1108,7 @@ def _validate_batch_snapshot_consistency(
     workflow: dict[str, object],
     workflow_profile: dict[str, object],
 ) -> None:
-    parsed = BatchSnapshotV3.model_validate(snapshot)
+    parsed = BatchSnapshotV4.model_validate(snapshot)
     if (
         parsed.project.id,
         parsed.project.filesystem_key,
@@ -1028,6 +1157,11 @@ def _validate_batch_snapshot_consistency(
                     ImageBinding(slot_key=item.slot_key, values=tuple(item.values))
                     for item in parsed.image_bindings
                 ),
+                parameters=_profile_parameters(workflow_profile),
+                parameter_bindings=tuple(
+                    ParameterBinding(parameter_key=item.parameter_key, values=tuple(item.values))
+                    for item in parsed.parameter_bindings
+                ),
                 seeds=seeds,
             ),
             max_jobs=plan.job_count,
@@ -1045,6 +1179,13 @@ def _profile_image_inputs(
         return workflow_profile_image_inputs(profile)
     except WorkflowPreparationError as error:
         raise RunStoreError(f"invalid Workflow Profile image inputs: {error}") from error
+
+
+def _profile_parameters(profile: dict[str, object]) -> tuple[WorkflowParameter, ...]:
+    try:
+        return workflow_profile_parameters(profile)
+    except WorkflowPreparationError as error:
+        raise RunStoreError(f"invalid Workflow Profile parameters: {error}") from error
 
 
 def _required_object(data: dict[str, object], name: str) -> dict[str, object]:

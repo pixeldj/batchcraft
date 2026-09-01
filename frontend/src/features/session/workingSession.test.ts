@@ -8,7 +8,7 @@ import {
 } from "./workingSession";
 
 describe("browser working session", () => {
-  it("round-trips a v9 draft and recovery metadata without UI keys", () => {
+  it("round-trips a v11 draft and recovery metadata without UI keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
@@ -38,7 +38,7 @@ describe("browser working session", () => {
     >;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.version).toBe(9);
+    expect(stored.version).toBe(11);
     expect(stored).toMatchObject({
       current_run_id: "run-42",
       session_run_ids: ["run-40", "run-42"],
@@ -80,7 +80,7 @@ describe("browser working session", () => {
     });
   });
 
-  it("round-trips an incomplete v9 draft", () => {
+  it("round-trips an incomplete v11 draft", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.prompts = [];
@@ -93,6 +93,26 @@ describe("browser working session", () => {
     expect(restored.form.variableBindings).toEqual([]);
     expect(restored.selectedProjectId).toBeNull();
     expect(restored.draftRestored).toBe(true);
+  });
+
+  it("reconciles restored Parameter bindings to stored Profile order and exact keys", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "integer" },
+      { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
+    ] });
+    form.parameterBindings = [
+      { parameterKey: "unknown", valueType: "string", mode: "override", value: "remove me" },
+      { parameterKey: "steps", valueType: "integer", mode: "override", value: "30" },
+    ];
+
+    saveWorkingSession(form, null, [], null, storage);
+
+    expect(loadWorkingSession(storage).form.parameterBindings).toEqual([
+      { parameterKey: "steps", valueType: "integer", mode: "override", value: "30" },
+      { parameterKey: "enabled", valueType: "boolean", mode: "base", value: "" },
+    ]);
   });
 
   it("round-trips zero values and one exact empty value distinctly", () => {
@@ -155,6 +175,14 @@ describe("browser working session", () => {
       const form = envelope.form as { variableBindings: Array<Record<string, unknown>> };
       form.variableBindings[0].values = ["wolf", 42];
     }],
+    ["empty Image Input alternatives", (envelope: Record<string, unknown>) => {
+      const form = envelope.form as { imageBindings: Array<Record<string, unknown>> };
+      form.imageBindings[0].values = [];
+    }],
+    ["duplicate Image Input alternatives", (envelope: Record<string, unknown>) => {
+      const form = envelope.form as { imageBindings: Array<Record<string, unknown>> };
+      form.imageBindings[0].values = [null, null];
+    }],
     ["selected Project ID", (envelope: Record<string, unknown>) => {
       envelope.selected_project_id = "";
     }],
@@ -171,7 +199,11 @@ describe("browser working session", () => {
     ["unknown envelope field", (envelope: Record<string, unknown>) => {
       envelope.legacy = true;
     }],
-  ] as const)("falls back for malformed v9 %s", (_name, mutate) => {
+    ["Parameter binding value", (envelope: Record<string, unknown>) => {
+      const form = envelope.form as { parameterBindings: Array<Record<string, unknown>> };
+      form.parameterBindings[0].value = 30;
+    }],
+  ] as const)("falls back for malformed v11 %s", (_name, mutate) => {
     const storage = new MemoryStorage();
     saveWorkingSession(
       populatedForm(),
@@ -192,7 +224,7 @@ describe("browser working session", () => {
     expectFreshSession(loadWorkingSession(storage));
   });
 
-  it.each([1, 8, 10, 99])("resets an old or unknown version %i", (version) => {
+  it.each([1, 8, 9, 10, 12, 99])("resets an old or unknown version %i", (version) => {
     const storage = new MemoryStorage();
     saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
@@ -207,7 +239,7 @@ describe("browser working session", () => {
 
   it.each([
     "not json",
-    JSON.stringify({ version: 9, form: { prompts: [] }, current_run_id: null }),
+    JSON.stringify({ version: 11, form: { prompts: [] }, current_run_id: null }),
   ])("falls back safely for malformed current data", (stored) => {
     const storage = new MemoryStorage();
     storage.setItem(WORKING_SESSION_KEY, stored);
@@ -245,12 +277,16 @@ function populatedForm(): BatchFormState {
     text: "Restored {{subject}}",
   }];
   form.variableBindings[0].values = ["wolf", "fox"];
-  form.referenceAssetIds = ["asset-b", "asset-a"];
+  form.imageBindings = [
+    { slot_key: "style", values: [null, "asset-b", "asset-a"] },
+    { slot_key: "composition", values: ["asset-c", "asset-d"] },
+  ];
+  form.parameterBindings = [{ parameterKey: "steps", valueType: "integer", mode: "override", value: "30" }];
   form.seedMode = "explicit";
   form.seedValues = "9, 3";
   form.randomSeedCount = "7";
   form.workflowJson = '{"workflow":true}';
-  form.workflowProfileJson = '{"profile":true}';
+  form.workflowProfileJson = '{"mappings":{},"image_inputs":[{"key":"style","label":"Style","node_id":"1","input_name":"image"},{"key":"composition","label":"Composition","node_id":"2","input_name":"image"}],"parameters":[{"key":"steps","label":"Steps","node_id":"3","input_name":"steps","value_type":"integer"}]}';
   form.workflowLibraryProjectId = "library-project";
   form.workflowId = "workflow-1";
   form.workflowName = "Portrait workflow";

@@ -8,7 +8,7 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 - reusable prompt templates;
 - reusable prompt variables and value lists;
-- reference image libraries and collections;
+- image Reference Asset libraries and collections;
 - imported ComfyUI workflow profiles;
 - batch construction and expansion;
 - application-controlled job queueing;
@@ -28,7 +28,7 @@ Users create and debug workflows in ComfyUI. batchcraft imports an API-format wo
 Typical exposed inputs include:
 
 - one mapped prompt input receiving each Job's resolved prompt;
-- reference image(s);
+- zero or more named image inputs;
 - seed;
 - steps;
 - guidance;
@@ -48,7 +48,7 @@ A **Run** is created from a compiled Batch. Its plan and provenance freeze when 
 
 Execution state remains mutable while the Run executes. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance without changing the frozen plan.
 
-Changing a prompt, reference collection, Variable List, Workflow Profile, or parameter after Run creation must not alter that Run plan.
+Changing a prompt, Reference Collection, Variable List, Workflow Profile, image binding, or parameter after Run creation must not alter that Run plan.
 
 Rerunning an experiment creates a new Run.
 
@@ -87,11 +87,16 @@ An imported ComfyUI API workflow plus a mapping between friendly batchcraft inpu
 Example:
 
 ```text
-prompt          -> node 104 / text
-reference_image -> node 221 / image
-seed            -> node 114 / seed
-save_prefix     -> node 309 / filename_prefix
+prompt                  -> node 104 / text
+seed                    -> node 114 / seed
+output_prefix           -> node 309 / filename_prefix
+Image Input "Identity"  -> node 221 / image
+Image Input "Pose"      -> node 225 / image
 ```
+
+The three core mappings are required. A ProfileVersion also has an ordered `image_inputs` array, which
+may be empty. Each named slot has a stable key, editable label, and exact workflow target. Slot keys are
+lowercase readable snake case, start with a letter, and do not change when labels are edited.
 
 ### Prompt Template
 
@@ -138,7 +143,7 @@ An editable experiment definition combining:
 - a Workflow Profile;
 - an ordered non-empty selection of PromptVersions;
 - Variable bindings;
-- Reference Assets or Collections;
+- ordered Image Input bindings chosen from Reference Assets or Base workflow;
 - seed policy;
 - exposed workflow parameters;
 - output configuration.
@@ -161,10 +166,16 @@ Example:
 
 ```text
 Prompt:    A cinematic photograph of a dog walking through a forest.
-Reference: ref-03.png
+Identity:  person-03.png
+Pose:      Base workflow
 Seed:      123456
 Steps:     20
 ```
+
+In Named Image Input Slots Pass 2B, each Profile slot contains one or more ordered Reference Asset or
+Base workflow alternatives and forms an independent Cartesian compiler dimension. Every Job still
+contains one concrete resolved value per slot. Zipped, row-linked, and collection-link semantics remain
+deferred.
 
 ### Result
 
@@ -201,7 +212,8 @@ location = [park, forest]
 
 creates six resolved prompt variants.
 
-Deterministic sampling, weighted values, and row-linked variables remain deferred.
+Deterministic sampling, weighted values, and row-linked prompt variables remain deferred. Named Image
+Input slots form separate independent dimensions after prompt-variable expansion.
 
 ## Result Review
 
@@ -236,7 +248,9 @@ Potential rerun scopes include:
 - selected Jobs with new seeds;
 - selected Jobs with modified parameters.
 
-Exact replay preserves generation inputs, the base workflow and Workflow Profile mapping, references, variables, parameters, seeds, and Job ordering. It allocates new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
+Exact replay preserves generation inputs, the base workflow, Workflow Profile core mappings and named
+Image Input metadata, selected Reference Assets, variables, parameters, seeds, and Job ordering. It
+allocates new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
 
 Only exact Run replay is required initially.
 
@@ -250,10 +264,10 @@ The first useful version should prove this complete path:
 
 1. Connect to a remote ComfyUI instance.
 2. Import an API-format workflow.
-3. Map prompt, one reference image, seed, and save prefix.
+3. Map prompt, seed, output prefix, and zero or more named image inputs.
 4. Enter a Prompt Template.
 5. Bind ordered values to one placeholder.
-6. Select multiple reference images.
+6. Choose ordered Reference Asset and Base workflow alternatives for each named Image Input slot.
 7. Preview the compiled Job matrix.
 8. Create a Run with a frozen plan.
 9. Execute Jobs through the batchcraft-owned queue.

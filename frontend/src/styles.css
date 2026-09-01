@@ -201,6 +201,16 @@ pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; over
 .asset-card-name { padding: 0.55rem 0.55rem 0.1rem; overflow: hidden; font-size: 0.76rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .asset-card-meta { padding: 0.1rem 0.55rem 0.55rem; color: var(--muted); font: 0.64rem "SFMono-Regular", monospace; }
 .selection-order { position: absolute; top: 0.45rem; right: 0.45rem; display: grid; place-items: center; width: 1.7rem; height: 1.7rem; color: #fff; background: var(--accent); border: 2px solid var(--paper-raised); border-radius: 50%; font: 700 0.7rem "SFMono-Regular", monospace; }
+.image-input-binding-list, .image-input-slot { display: grid; gap: 0.85rem; }
+.image-input-slot-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; }
+.image-input-slot-heading h3 { margin: 0; font-size: 0.9rem; }
+.image-input-slot-heading span { color: var(--muted); font: 0.68rem "SFMono-Regular", monospace; }
+.image-input-alternatives { padding-top: 0.15rem; }
+.asset-card:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.base-workflow-card { min-height: 11rem; align-content: end; }
+.base-workflow-mark { display: grid; min-height: 6.5rem; place-items: center; color: var(--muted); background: var(--paper); border-bottom: 1px solid var(--line); font: 800 1.15rem "SFMono-Regular", monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+.run-plan-image-alternatives { display: flex; flex-wrap: wrap; gap: 0.55rem 1rem; }
+.run-plan-image-alternatives > span { display: grid; gap: 0.15rem; }
 
 .button-primary, .button-secondary {
   min-height: 2.55rem;

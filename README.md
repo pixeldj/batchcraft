@@ -2,7 +2,7 @@
 
 **batchcraft** is a local-first experiment and batch orchestration application for ComfyUI.
 
-It is intended for workflows where prompts, reference images, seeds, and other parameters change frequently and where manually queueing every combination in ComfyUI becomes cumbersome.
+It is intended for workflows where prompts, named image inputs, seeds, and other parameters change frequently and where manually queueing every combination in ComfyUI becomes cumbersome.
 
 ComfyUI remains the workflow editor and generation engine. batchcraft sits above it to provide reusable prompts and variables, reference libraries, Batch compilation, queue orchestration, reproducible Runs, and visual result review.
 
@@ -13,9 +13,9 @@ Early production development.
 The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, sequential Run executor, thin FastAPI application boundary, and first React workflow are complete.
 
 The browser now supports ComfyUI status, SQLite-backed Project selection with create and explicit
-filesystem adoption, Project image import and collapsible ordered Reference Asset selection,
+filesystem adoption, Project image import and Profile-driven named Image Input binding,
 Project-scoped Prompt, Workflow, and Workflow Profile libraries with immutable version history,
-SQLite-backed Saved Batches with the Saved Batch selector, ordered multi-prompt Batch
+SQLite-backed Saved Batches with the Saved Batch selector, visual Workflow Profile building, ordered multi-prompt Batch
 editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, frontend Random seed
 materialization, repeated Run creation, and a Batch Results gallery restored within the current tab
@@ -129,6 +129,16 @@ variant, while multiple values form an ordered Cartesian dimension.
 
 batchcraft does not rely on ComfyUI dynamic-prompt nodes for its core batching behavior.
 
+## Named Image Inputs
+
+A ProfileVersion defines zero or more ordered Image Input Slots with stable keys, editable labels, and
+exact ComfyUI node/input targets. A Batch selects one or more ordered Reference Asset or Base workflow
+alternatives for each slot.
+Base workflow is stored as `null`, so execution performs no upload or mutation for that slot.
+
+Each Image Input slot is an independent Cartesian dimension represented by the ordered `values` array
+in its binding. Zipped, row-linked, and collection-link semantics remain deferred.
+
 ## Reproducibility
 
 A Run is compiled before execution into explicit Jobs. Its plan and provenance freeze before scheduling, while execution status, timestamps, ComfyUI IDs, errors, and Results may advance. A Job must not depend on mutable UI state, implicit folder iteration, unresolved prompt placeholders, or random choices made later inside ComfyUI.
@@ -186,7 +196,11 @@ The first technical milestone was a disposable ComfyUI integration spike that pr
 5. observe execution;
 6. retrieve the generated result to the Mac.
 
-Production code now includes pure prompt-variable resolution, deterministic Batch compilation, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects, Prompts, and Saved Batches, a thin FastAPI boundary under `backend/`, and the first browser workflow under `frontend/`.
+Production code now includes pure prompt-variable resolution, deterministic Batch compilation, named
+Image Input Slots, content-addressed Project assets, atomic durable Run publication, isolated ComfyUI
+HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects, Prompts, Workflows,
+Workflow Profiles, and Saved Batches, a thin FastAPI boundary under `backend/`, and the first browser
+workflow under `frontend/`.
 
 Later application slices will add filesystem-derived indexes, scheduler selection, and deeper Result review.
 

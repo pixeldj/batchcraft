@@ -102,7 +102,10 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded in Run and Job pr
 
 ## `workflow-profile.json`
 
-Contains the Workflow Profile metadata and friendly-input-to-node-input mappings snapshotted for the Run. This file is immutable once successful Run creation completes.
+Contains the Workflow Profile metadata, required core mappings, ordered named Image Input targets, and
+ordered typed generic parameters snapshotted for the Run. The `image_inputs` and `parameters` arrays may
+be empty. Parameter entries contain `key`, `label`, `node_id`, `input_name`, and `value_type`. This file
+is immutable once successful Run creation completes.
 
 Together, `workflow.json`, `workflow-profile.json`, and the per-Job values in `manifest.json` describe the concrete workflow mutations required for replay.
 
@@ -112,7 +115,7 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded separately from t
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The current v5 manifest contains:
+The current manifest has `format_version: 7` and contains:
 
 - Run ID, number, creation timestamp, and Project/Batch identity snapshots;
 - ordered PromptVersion snapshots containing ID, name, and exact Prompt Template text;
@@ -122,30 +125,54 @@ The current v5 manifest contains:
 - each Job's source PromptVersion ID;
 - resolved variables;
 - resolved final prompt;
-- either `null` or Reference Asset ID, original filename, MIME type, byte size, Project-relative
-  content path, creation timestamp, and SHA-256;
+- ordered Profile Image Input slots with frozen key, label, node ID, and input name;
+- each Job's ordered `resolved_image_inputs`, with slot key, frozen label, and either `null` or complete
+  Reference Asset provenance;
+- ordered Profile parameter definitions and each Job's ordered typed `resolved_parameters`;
 - seed;
 - per-Job workflow and Workflow Profile hashes.
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v5 creation manifest contains immutable plan and
+`manifest.json` is authoritative for exact replay. The v7 creation manifest contains immutable plan and
 provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
 versioned execution representation.
 
-Every Job must contain a `reference_asset` key. Its value is the complete Reference Asset object when
-selected or explicit JSON `null` when the Job preserves the base workflow's mapped reference-image
-input.
+Every Job contains `resolved_image_inputs` in Profile order. Each entry is shaped as:
 
-Manifest v5 requires a top-level `batch_snapshot` object with `snapshot_version: 2`. It stores variable
+```json
+{
+  "slot_key": "identity",
+  "slot_label": "Identity",
+  "asset": null
+}
+```
+
+`asset` is the complete Reference Asset object when selected or explicit JSON `null` for Base
+workflow. A `null` asset means execution performs no upload and does not mutate that slot's target.
+The top-level `image_input_slots` array freezes each slot's `slot_key`, `slot_label`, `node_id`, and
+`input_name`.
+
+The top-level `parameters` array freezes each generic parameter's key, label, target, and value type.
+Every Job contains ordered `resolved_parameters` entries shaped as
+`{ "parameter_key": string, "value": scalar | null }`. `null` preserves the Base workflow value.
+Parameters are scalar inputs in Pass 3A and do not multiply Jobs.
+
+Manifest v7 requires a top-level `batch_snapshot` object with `snapshot_version: 4`. It stores variable
 bindings canonically as `{ "placeholder": string, "values": string[] }`. Zero values may
 appear in mutable Saved Batch drafts but a successfully compiled Run cannot use a zero-value binding.
 An empty string is one concrete value. New writes reject exact duplicate values, including duplicate
 empty strings.
+The snapshot stores ordered image bindings as `{ "slot_key": string, "values": [asset_id | null] }`.
+Each Profile slot requires one or more ordered, unique alternatives. Every slot is an independent
+Cartesian compiler dimension, while each concrete manifest Job stores only its one resolved choice.
+Base workflow is `null` and appears first when included.
+The snapshot also stores one typed scalar or `null` per Profile parameter in ordered bindings shaped as
+`{ "parameter_key": string, "values": [scalar | null] }`.
 Snapshots may also preserve optional human-readable Workflow and Profile names plus immutable version
 numbers. These labels support historical UI inspection and are not required for replay.
 
-Manifest v1-v4 and snapshot v1 are unsupported. The loader rejects them and never rewrites Run files.
+Manifest v1-v6 and snapshot v1-v3 are unsupported. The loader rejects them and never rewrites Run files.
 
 ## `manifest.csv`
 
@@ -157,7 +184,7 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-The columns emitted alongside a v5 JSON manifest are:
+The columns emitted alongside a v7 JSON manifest are:
 
 ```text
 job_ordinal
@@ -167,9 +194,8 @@ prompt_version_name
 prompt_template
 resolved_prompt
 resolved_variables_json
-reference_asset_id
-reference_original_filename
-reference_sha256
+resolved_image_inputs_json
+resolved_parameters_json
 seed
 workflow_sha256
 workflow_profile_sha256
@@ -178,9 +204,8 @@ workflow_profile_sha256
 `manifest.json`'s `format_version` identifies the CSV schema that accompanies the Run; the CSV has no
 independent version field.
 
-For a Job without a Reference Asset, `reference_asset_id`, `reference_original_filename`, and
-`reference_sha256` are empty strings. The JSON `null` remains authoritative and distinguishes this
-valid case from incomplete provenance.
+`resolved_image_inputs_json` contains the same ordered slot objects as the canonical Job JSON. The JSON
+manifest remains authoritative, including explicit `null` asset values for Base workflow.
 
 For structures that do not map naturally to flat columns, encode compact JSON in a column rather than losing information.
 
@@ -261,9 +286,9 @@ Human-readable suffixes may be added later, but path length and unsafe character
 
 ## Input Provenance
 
-A Run records the stable identity and hash of each selected input Reference Asset. A Job without one
-records explicit `null` provenance and relies on the immutable base workflow snapshot for the mapped
-input value.
+A Run records the stable identity and hash of each Reference Asset selected for a named Image Input.
+Every Profile slot appears in every Job. A slot with no selected asset records explicit `null`
+provenance and relies on the immutable base workflow snapshot for that target's value.
 
 Reference Asset bytes live immutably in the Project's content-addressed asset store. Runs do not copy every input asset into their own directories by default.
 
@@ -291,31 +316,35 @@ Human review metadata such as ratings and notes may be stored separately or in e
 
 ## Import and Rerun
 
-batchcraft should support importing the current manifest v5 for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
+batchcraft should support importing the current manifest v7 for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
 
 The application should recognize enough metadata to:
 
 - identify the prior Batch/Run if present locally;
 - reconstruct the Job plan from authoritative JSON;
-- validate required workflow/reference assets;
+- validate required workflow snapshots and selected Image Input assets;
 - create a **new** Run;
 - preserve the original Run unchanged.
 
-Exact replay preserves generation inputs, the base workflow, Workflow Profile mapping, references, variables, parameters, seeds, and Job ordering. The new Run receives new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
+Exact replay preserves generation inputs, the base workflow, Workflow Profile mappings and named Image
+Input metadata, selected Reference Assets, variables, parameters, seeds, and Job ordering. The new Run
+receives new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
 
 Modified reruns can be added later.
 
 ## Loading and Validation
 
-Loading a published Run requires `run.json`, canonical manifest v5, `manifest.csv`, both snapshot
-files, and `outputs/`. Manifest v5 requires a batch snapshot with `snapshot_version: 2`, a non-empty
+Loading a published Run requires `run.json`, canonical manifest v7, `manifest.csv`, both snapshot
+files, and `outputs/`. Manifest v7 requires a batch snapshot with `snapshot_version: 4`, a non-empty
 ordered PromptVersion collection, unique PromptVersion IDs, required names, and every Job's
-association with a known PromptVersion. Each Job must contain either a complete Reference Asset object
-or explicit `null`; a missing key is invalid.
+association with a known PromptVersion. The loader validates ordered, unique Profile slot metadata and
+requires every Job to contain the same ordered slot keys. Each resolved slot must contain either a
+complete Reference Asset object or explicit `null`; a missing slot or asset key is invalid.
 
 The loader also validates Run/Project/Batch identity consistency, one-based contiguous Job ordinals,
 unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata,
-size, and content hash. The Batch snapshot must contain the same identities and Workflow/Profile
+size, and content hash. It also validates frozen parameter definitions, ordered Job keys, and each
+resolved value against its declared type. The Batch snapshot must contain the same identities and Workflow/Profile
 content and must recompile to the exact frozen plan. The loader reconstructs the original
 `CompiledRunPlan`, compiler warnings, execution
 identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be
@@ -336,7 +365,7 @@ Example:
 }
 ```
 
-The pre-release baseline supports `run.json` v1, manifest v5 with required snapshot v2, execution v2,
+The pre-release baseline supports `run.json` v1, manifest v7 with required snapshot v4, execution v2,
 and `asset.json` v1. Unsupported development versions fail closed. The application does not rewrite
 or delete them automatically. Version fields and migration boundaries remain so a future change can
 add an explicit compatibility path when released data requires one.

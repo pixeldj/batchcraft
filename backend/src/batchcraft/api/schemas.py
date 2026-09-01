@@ -3,10 +3,18 @@ from datetime import datetime
 from typing import Annotated, Literal, Self
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    model_validator,
+)
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
-from batchcraft.comfyui import workflow_profile_image_inputs
+from batchcraft.comfyui import workflow_profile_image_inputs, workflow_profile_parameters
 from batchcraft.db import (
     ProjectRecord,
     PromptListRecord,
@@ -16,6 +24,7 @@ from batchcraft.db import (
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
     SavedBatchListRecord,
+    SavedBatchParameterBinding,
     SavedBatchPromptSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
@@ -36,10 +45,13 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
+    ParameterBinding,
     PromptVersion,
     SeedInput,
     SeedMode,
     VariableBinding,
+    WorkflowParameter,
+    validate_parameter_scalar,
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
 from batchcraft.files import (
@@ -47,7 +59,7 @@ from batchcraft.files import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
-    BatchSnapshotV3,
+    BatchSnapshotV4,
     ProjectIdentity,
     PublishedRun,
 )
@@ -85,6 +97,17 @@ class ImageBindingRequest(ApiModel):
 
 
 SafeSeed = Annotated[int, Field(strict=True, ge=0, le=2**53 - 1)]
+SafeSignedInteger = Annotated[int, Field(strict=True, ge=-(2**53 - 1), le=2**53 - 1)]
+FiniteFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+ParameterScalarRequest = Annotated[
+    StrictStr | SafeSignedInteger | FiniteFloat | StrictBool,
+    BeforeValidator(validate_parameter_scalar),
+]
+
+
+class ParameterBindingRequest(ApiModel):
+    parameter_key: str
+    values: list[ParameterScalarRequest | None]
 
 
 class SeedRequest(ApiModel):
@@ -98,10 +121,11 @@ class BatchRequest(ApiModel):
     prompt_versions: list[PromptVersionRequest] = Field(min_length=1)
     variable_bindings: list[VariableBindingRequest] = Field(default_factory=list)
     image_bindings: list[ImageBindingRequest]
+    parameter_bindings: list[ParameterBindingRequest]
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
-    batch_snapshot: BatchSnapshotV3
+    batch_snapshot: BatchSnapshotV4
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
@@ -142,6 +166,10 @@ class BatchRequest(ApiModel):
             (item.slot_key, item.values) for item in self.image_bindings
         ]:
             raise ValueError("Batch snapshot image bindings do not match")
+        if [(item.parameter_key, item.values) for item in snapshot.parameter_bindings] != [
+            (item.parameter_key, item.values) for item in self.parameter_bindings
+        ]:
+            raise ValueError("Batch snapshot parameter bindings do not match")
         workflow = snapshot.workflow_selection
         if workflow.workflow != self.workflow or workflow.workflow_profile != self.workflow_profile:
             raise ValueError("Batch snapshot Workflow selection does not match")
@@ -189,6 +217,13 @@ class BatchRequest(ApiModel):
                 image_bindings=tuple(
                     ImageBinding(slot_key=binding.slot_key, values=tuple(binding.values))
                     for binding in self.image_bindings
+                ),
+                parameters=_profile_parameters(self.workflow_profile),
+                parameter_bindings=tuple(
+                    ParameterBinding(
+                        parameter_key=binding.parameter_key, values=tuple(binding.values)
+                    )
+                    for binding in self.parameter_bindings
                 ),
                 seeds=SeedInput(mode=self.seeds.mode, values=tuple(self.seeds.values)),
             ),
@@ -301,6 +336,11 @@ class SavedBatchImageBindingRequest(ApiModel):
         return self
 
 
+class SavedBatchParameterBindingRequest(ApiModel):
+    parameter_key: str
+    values: list[ParameterScalarRequest | None]
+
+
 class SavedBatchSeedIntentRequest(ApiModel):
     mode: SavedBatchSeedMode
     values: list[SafeSeed]
@@ -354,6 +394,7 @@ class SavedBatchDefinitionRequest(ApiModel):
     prompt_selections: list[SavedBatchPromptSelectionRequest] = Field(default_factory=list)
     variable_bindings: list[SavedBatchVariableBindingRequest] = Field(default_factory=list)
     image_bindings: list[SavedBatchImageBindingRequest] = Field(default_factory=list)
+    parameter_bindings: list[SavedBatchParameterBindingRequest] = Field(default_factory=list)
     seed_intent: SavedBatchSeedIntentRequest
     selected_workflow_version: SavedBatchWorkflowVersionRequest | None = None
     selected_workflow_profile_id: str | None = Field(default=None, min_length=1)
@@ -395,6 +436,10 @@ class SavedBatchDefinitionRequest(ApiModel):
             image_bindings=tuple(
                 SavedBatchImageBinding(item.slot_key, tuple(item.values))
                 for item in self.image_bindings
+            ),
+            parameter_bindings=tuple(
+                SavedBatchParameterBinding(item.parameter_key, tuple(item.values))
+                for item in self.parameter_bindings
             ),
             selected_workflow_version=(
                 None
@@ -466,6 +511,7 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
     prompt_selections: list[SavedBatchPromptSelectionRequest]
     variable_bindings: list[SavedBatchVariableBindingRequest]
     image_bindings: list[SavedBatchImageBindingRequest]
+    parameter_bindings: list[SavedBatchParameterBindingRequest]
     selected_workflow_version: SavedBatchWorkflowVersionRequest | None
     selected_workflow_profile_name: str | None
     selected_workflow_profile_archived_at: datetime | None
@@ -497,6 +543,10 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
                 "image_bindings": [
                     {"slot_key": item.slot_key, "values": list(item.values)}
                     for item in batch.image_bindings
+                ],
+                "parameter_bindings": [
+                    {"parameter_key": item.parameter_key, "values": list(item.values)}
+                    for item in batch.parameter_bindings
                 ],
                 "selected_workflow_version": (
                     None
@@ -730,6 +780,7 @@ class WorkflowProfileCreateRequest(ApiModel):
     workflow_version_id: str = Field(min_length=1)
     mappings: dict[str, object]
     image_inputs: list[dict[str, object]] = Field(default_factory=list)
+    parameters: list[dict[str, object]]
     note: str | None = None
 
 
@@ -750,6 +801,7 @@ class WorkflowProfileVersionCreateRequest(ApiModel):
     workflow_version_id: str = Field(min_length=1)
     mappings: dict[str, object]
     image_inputs: list[dict[str, object]] = Field(default_factory=list)
+    parameters: list[dict[str, object]]
     note: str | None = None
 
 
@@ -886,6 +938,12 @@ class ResolvedImageInputResponse(ApiModel):
     filename: str | None = None
 
 
+class ResolvedParameterResponse(ApiModel):
+    parameter_key: str
+    label: str
+    value: ParameterScalarRequest | None
+
+
 class JobPreviewResponse(ApiModel):
     ordinal: int
     prompt_version_id: str
@@ -893,6 +951,7 @@ class JobPreviewResponse(ApiModel):
     resolved_prompt: str
     resolved_variables: list[ResolvedVariableResponse]
     resolved_image_inputs: list["ResolvedImageInputResponse"]
+    resolved_parameters: list[ResolvedParameterResponse]
     seed: int
 
     @classmethod
@@ -901,6 +960,7 @@ class JobPreviewResponse(ApiModel):
         job: CompiledJob,
         prompt_version_name: str,
         slot_labels: dict[str, str],
+        parameter_labels: dict[str, str],
         image_assets: dict[str, AssetRecord] | None = None,
     ) -> Self:
         return cls(
@@ -925,6 +985,14 @@ class JobPreviewResponse(ApiModel):
                 )
                 for item in job.resolved_image_inputs
             ],
+            resolved_parameters=[
+                ResolvedParameterResponse(
+                    parameter_key=item.parameter_key,
+                    label=parameter_labels[item.parameter_key],
+                    value=item.value,
+                )
+                for item in job.resolved_parameters
+            ],
             seed=job.seed,
         )
 
@@ -940,6 +1008,7 @@ class PreviewResponse(ApiModel):
     ) -> Self:
         prompt_names = {version.id: version.name for version in plan.prompt_versions}
         slot_labels = {slot.key: slot.label for slot in plan.image_input_slots}
+        parameter_labels = {parameter.key: parameter.label for parameter in plan.parameters}
         return cls(
             job_count=plan.job_count,
             warnings=[WarningResponse.from_warning(warning) for warning in plan.warnings],
@@ -948,6 +1017,7 @@ class PreviewResponse(ApiModel):
                     job,
                     prompt_names[job.prompt_version_id],
                     slot_labels,
+                    parameter_labels,
                     image_assets,
                 )
                 for job in plan.jobs
@@ -1046,6 +1116,9 @@ class RunPlanResponse(ApiModel):
     def from_run(cls, run: PublishedRun) -> Self:
         prompt_names = {version.id: version.name for version in run.compiled_plan.prompt_versions}
         slot_labels = {slot.key: slot.label for slot in run.compiled_plan.image_input_slots}
+        parameter_labels = {
+            parameter.key: parameter.label for parameter in run.compiled_plan.parameters
+        }
         return cls(
             job_count=run.compiled_plan.job_count,
             warnings=[
@@ -1058,6 +1131,7 @@ class RunPlanResponse(ApiModel):
                             persisted.compiled_job,
                             prompt_names[persisted.compiled_job.prompt_version_id],
                             slot_labels,
+                            parameter_labels,
                         ).model_dump(),
                         "resolved_image_inputs": [
                             ResolvedImageInputResponse(
@@ -1082,7 +1156,7 @@ class RunResponse(RunCreatedResponse):
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
     plan: RunPlanResponse
-    batch_snapshot: BatchSnapshotV3
+    batch_snapshot: BatchSnapshotV4
     execution: ExecutionResponse
 
     @classmethod
@@ -1103,7 +1177,7 @@ class RunResponse(RunCreatedResponse):
                 for job in run.compiled_plan.jobs
             ],
             plan=RunPlanResponse.from_run(run),
-            batch_snapshot=BatchSnapshotV3.model_validate(run.batch_snapshot),
+            batch_snapshot=BatchSnapshotV4.model_validate(run.batch_snapshot),
             execution=ExecutionResponse.from_state(state),
         )
 
@@ -1157,6 +1231,10 @@ def _validate_image_binding_values(values: list[str | None]) -> None:
 
 def _profile_image_inputs(profile: dict[str, object]) -> tuple[tuple[str, str, str, str], ...]:
     return workflow_profile_image_inputs(profile)
+
+
+def _profile_parameters(profile: dict[str, object]) -> tuple[WorkflowParameter, ...]:
+    return workflow_profile_parameters(profile)
 
 
 class ErrorDetail(ApiModel):

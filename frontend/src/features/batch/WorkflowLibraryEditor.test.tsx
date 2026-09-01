@@ -86,7 +86,7 @@ describe("WorkflowLibraryEditor", () => {
   it("keeps the logical Profile selected when a new WorkflowVersion has no compatible version", async () => {
     const first = workflowVersion();
     const next = workflowVersion({ id: "workflow-v2", version_number: 2, workflow: { node: "changed" } });
-    const source = profileVersion();
+    const source = profileVersion({ profile: visualProfileSnapshot() });
     const logicalProfile = workflowProfile("profile-1", "Mapping", source);
     const api = makeApi({
       listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", first)] })),
@@ -99,9 +99,15 @@ describe("WorkflowLibraryEditor", () => {
         )],
       })),
       listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [source] })),
+      getWorkflowVersion: vi.fn(async () => first),
+      getWorkflowProfileVersion: vi.fn(async () => source),
       createWorkflowVersion: vi.fn(async () => next),
     });
     let current = linkedForm(first, source);
+    current.imageBindings = [
+      { slot_key: "style", values: [null, "asset-style-b", "asset-style-a"] },
+      { slot_key: "pose", values: ["asset-pose-b", "asset-pose-a"] },
+    ];
     const onChange = vi.fn((form: BatchFormState) => { current = form; view.rerender(rendered()); });
     const rendered = () => <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={onChange} onMetadataChange={() => undefined} />;
     const view = render(rendered());
@@ -121,6 +127,10 @@ describe("WorkflowLibraryEditor", () => {
     expect(current.workflowProfileId).toBe(logicalProfile.id);
     expect(current.workflowProfileVersionId).toBeNull();
     expect(current.workflowProfileJson).toBe("{}");
+    expect(current.imageBindings).toEqual([
+      { slot_key: "style", values: [null, "asset-style-b", "asset-style-a"] },
+      { slot_key: "pose", values: ["asset-pose-b", "asset-pose-a"] },
+    ]);
     expect(screen.getByText("Profile required")).toBeInTheDocument();
     expect(await screen.findByRole("option", { name: "Mapping (no compatible version)" })).toBeInTheDocument();
     expect(screen.getByTestId("no-compatible-profile-version")).toHaveTextContent(
@@ -196,11 +206,19 @@ describe("WorkflowLibraryEditor", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Review mappings for this Workflow version" }));
     const dialog = await screen.findByRole("dialog", { name: "New ProfileVersion" });
     expect(within(dialog).getByLabelText("Prompt node")).toHaveValue("34");
+    expect(within(dialog).getByLabelText("Image Input 1 label")).toHaveValue("Style image");
+    expect(within(dialog).getByLabelText("Image Input 2 label")).toHaveValue("Pose image");
     expect(api.createWorkflowProfileVersion).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole("button", { name: "New ProfileVersion" }));
     await waitFor(() => expect(api.createWorkflowProfileVersion).toHaveBeenCalledWith(
       logicalProfile.id,
-      { workflow_version_id: v2.id, mappings: visualProfileSnapshot().mappings, note: null },
+      {
+        workflow_version_id: v2.id,
+        mappings: visualProfileSnapshot().mappings,
+        image_inputs: visualProfileSnapshot().image_inputs,
+        parameters: visualProfileSnapshot().parameters,
+        note: null,
+      },
     ));
 
     expect(createProfile).not.toHaveBeenCalled();
@@ -243,7 +261,13 @@ describe("WorkflowLibraryEditor", () => {
 
     await waitFor(() => expect(createVersion).toHaveBeenLastCalledWith(
       logicalProfile.id,
-      { workflow_version_id: v2.id, mappings: visualProfileSnapshot("35").mappings, note: null },
+      {
+        workflow_version_id: v2.id,
+        mappings: visualProfileSnapshot("35").mappings,
+        image_inputs: visualProfileSnapshot("35").image_inputs,
+        parameters: visualProfileSnapshot("35").parameters,
+        note: null,
+      },
     ));
     expect(current.workflowProfileVersionId).toBe(repaired.id);
   });
@@ -344,23 +368,31 @@ function profileVersion(overrides: Partial<LibraryWorkflowProfileVersion> = {}):
 }
 
 function workflowProfileSnapshot(mappings: Record<string, unknown>) {
-  return { id: "profile-1", name: "Mapping", mappings };
+  return { id: "profile-1", name: "Mapping", mappings, image_inputs: [], parameters: [] };
 }
 
 function visualWorkflow(promptNodeId = "34") {
   return {
     "7": { class_type: "KSampler", inputs: { model: ["2", 0], seed: 1 } },
+    "25": { class_type: "LoadImage", inputs: { image: "style.png" } },
+    "26": { class_type: "LoadImage", inputs: { image: "pose.png" } },
     [promptNodeId]: { class_type: "CLIPTextEncode", inputs: { clip: ["3", 0], text: "base prompt" } },
     "41": { class_type: "SaveImage", inputs: { filename_prefix: "output", images: ["8", 0] } },
   };
 }
 
 function visualProfileSnapshot(promptNodeId = "34") {
-  return workflowProfileSnapshot({
-    prompt: { node_id: promptNodeId, input_name: "text", value_type: "string" },
-    seed: { node_id: "7", input_name: "seed", value_type: "integer" },
-    output_prefix: { node_id: "41", input_name: "filename_prefix", value_type: "string" },
-  });
+  return {
+    ...workflowProfileSnapshot({
+      prompt: { node_id: promptNodeId, input_name: "text", value_type: "string" },
+      seed: { node_id: "7", input_name: "seed", value_type: "integer" },
+      output_prefix: { node_id: "41", input_name: "filename_prefix", value_type: "string" },
+    }),
+    image_inputs: [
+      { key: "style", label: "Style image", node_id: "25", input_name: "image" },
+      { key: "pose", label: "Pose image", node_id: "26", input_name: "image" },
+    ],
+  };
 }
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {

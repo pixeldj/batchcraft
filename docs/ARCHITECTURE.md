@@ -43,7 +43,7 @@ The frontend is responsible for:
 - project navigation;
 - prompt editing;
 - Variable List management;
-- reference selection;
+- named Image Input binding;
 - Workflow Profile configuration;
 - Batch construction;
 - materializing Random seed intent into explicit values before Preview;
@@ -133,7 +133,7 @@ Result data; they are not a Project-wide history index. Preview and Run creation
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into manifest v5. SQLite now owns current Project metadata, the immutable-version Prompt,
+provenance into manifest v7 with Batch snapshot v4. SQLite now owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, and mutable Saved Batches; searchable filesystem-derived
 indexes remain a later slice.
 
@@ -193,25 +193,28 @@ Within Batch compilation, the Prompt Resolver produces explicit resolved prompt 
 The Batch Compiler then combines dimensions in this order:
 
 ```text
-PromptVersion -> prompt variables -> reference bindings -> seeds -> parameter sweeps
+PromptVersion -> prompt variables -> Image Input slots -> seeds
 ```
 
 PromptVersion is the first Batch dimension. Selected PromptVersions preserve user order, and each is
 templated independently against the bindings it references. The rightmost dimension varies fastest.
 Each compiled Job still resolves to one final prompt string mapped to one friendly workflow prompt
-input; multiple workflow prompt or text slots are deferred.
+input. Every Profile Image Input slot is an independent ordered Cartesian dimension, while every
+compiled Job contains one resolved value per slot. Fixed generic parameters are copied into every Job
+after validation and add no dimension in Pass 3A. Future parameter sweeps, if implemented, follow seeds.
+Multiple workflow prompt or text slots are deferred.
 
 No prompt expansion should occur inside ComfyUI for core batchcraft functionality.
 
 ## Workflow Profile Boundary
 
 A logical Workflow Profile belongs to one Project-scoped Workflow. Its immutable versions each target
-one exact immutable WorkflowVersion and store a complete `{id, name, mappings}` snapshot. Changing a
+one exact immutable WorkflowVersion and store a complete `{id, name, mappings, image_inputs, parameters}` snapshot. Changing a
 WorkflowVersion never edits or retargets an existing ProfileVersion.
 
 Logical Profiles remain discoverable when the selected WorkflowVersion has no compatible
 ProfileVersion. The frontend derives a visual node/input catalog from the selected immutable API-format
-WorkflowVersion and writes the existing mapping JSON contract; it does not introduce a second mapper
+WorkflowVersion and writes the Profile JSON contract; it does not introduce a second mapper
 state or infer workflow intent at execution time. Connected inputs are visible but unavailable as
 writable targets. Raw generated Profile JSON is an advanced read-only view.
 
@@ -222,12 +225,18 @@ A Workflow Profile snapshot stores:
 
 - friendly exposed input definitions;
 - mappings from those inputs to node IDs and input fields;
-- metadata describing required input types.
+- an ordered array of named image inputs and their exact workflow targets;
+- an ordered array of typed generic parameters and their exact literal workflow targets.
 
 The separately selected WorkflowVersion supplies the complete immutable API-format ComfyUI workflow.
-The current Profile contract requires `prompt`, `seed`, and `output_prefix` mappings and permits an
-optional `reference_image` mapping. Selecting Reference Assets requires `reference_image`; without
-selected assets, omitting it leaves the base workflow unchanged.
+The current Profile contract requires core `prompt`, `seed`, and `output_prefix` mappings. It also
+requires an `image_inputs` array, which may contain zero or more ordered entries shaped as
+`{key, label, node_id, input_name}`. Keys use lowercase readable snake case, start with a letter, and
+are unique. The Profile Builder derives a key from the first label and keeps it stable through later
+label edits.
+The required `parameters` array may also be empty. Each entry has `key`, `label`, `node_id`,
+`input_name`, and `value_type`. Supported types are `string`, `integer`, `float`, and `boolean`.
+Core mappings, Image Input slots, and generic parameters share one writable-target uniqueness rule.
 
 A Workflow/Profile pair may be the active selection on a mutable Saved Batch; that mutable selection
 state does not change how the immutable version snapshots are stored or validated.
@@ -239,27 +248,45 @@ Example mapping:
 
 ```json
 {
-  "prompt": {
-    "node_id": "104",
-    "input_name": "text",
-    "value_type": "string"
+  "mappings": {
+    "prompt": {"node_id": "104", "input_name": "text", "value_type": "string"},
+    "seed": {"node_id": "114", "input_name": "seed", "value_type": "integer"},
+    "output_prefix": {
+      "node_id": "309",
+      "input_name": "filename_prefix",
+      "value_type": "string"
+    }
   },
-  "reference_image": {
-    "node_id": "221",
-    "input_name": "image",
-    "value_type": "image"
-  }
+  "image_inputs": [
+    {"key": "identity", "label": "Identity", "node_id": "221", "input_name": "image"},
+    {"key": "pose", "label": "Pose", "node_id": "225", "input_name": "image"}
+  ],
+  "parameters": [
+    {"key": "cfg", "label": "CFG", "node_id": "114", "input_name": "cfg", "value_type": "float"},
+    {"key": "steps", "label": "Steps", "node_id": "114", "input_name": "steps", "value_type": "integer"}
+  ]
 }
 ```
 
 Jobs refer to friendly exposed fields. ComfyUI-specific node mutation happens inside the workflow adapter.
+
+Batch/API/Saved Batch image bindings are entries shaped as
+`{"slot_key": "identity", "values": [null, "asset-a", "asset-b"]}`. Every Profile slot requires one
+or more ordered, unique alternatives and forms an independent Cartesian dimension. JSON `null` means
+Base workflow, so the executor performs no upload and the adapter leaves that target unchanged for that
+concrete Job.
+
+Batch/API/Saved Batch parameter bindings use
+`{"parameter_key":"cfg","values":[7.5]}` or `{"parameter_key":"cfg","values":[null]}`.
+Pass 3A requires exactly one value. `null` leaves the base workflow input unchanged. A concrete scalar
+is validated against the Profile type and copied into every Job without changing Job count.
 
 ## Saved Batch vs Run Boundary
 
 Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
 boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
 Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
-the plan and provenance into manifest v5. Editing a Saved Batch after Run creation never alters the
+the plan and provenance into manifest v7 with Batch snapshot v4. Editing a Saved Batch after Run creation never alters the
 existing Run.
 
 ## Persistence Strategy
@@ -272,7 +299,7 @@ SQLite currently stores:
 - logical Prompts and immutable PromptVersions;
 - logical Workflows and immutable WorkflowVersions;
 - logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
-- mutable Saved Batches with ordered prompt, variable-binding, and reference selections.
+- mutable Saved Batches with ordered prompt, variable, named image, and typed fixed parameter bindings.
 
 Later migrations may add:
 
@@ -291,7 +318,7 @@ The filesystem stores durable Run artifacts and binaries:
 - CSV manifest;
 - Run metadata;
 - workflow snapshot;
-- Workflow Profile mapping snapshot;
+- Workflow Profile core mapping and named Image Input snapshot;
 - immutable Project asset identities and hashes;
 - downloaded outputs.
 

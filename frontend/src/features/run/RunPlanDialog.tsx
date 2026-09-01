@@ -23,12 +23,33 @@ export function RunPlanDialog({ run, onClose }: Props) {
         {snapshot.batch.description ? <p>{snapshot.batch.description}</p> : null}
         <dl>
           <div><dt>Total Jobs</dt><dd>{run.plan.job_count}</dd></div>
-          <div><dt>References</dt><dd>{referenceSummary(run)}</dd></div>
+          <div><dt>Image Inputs</dt><dd>{imageInputSummary(run)}</dd></div>
+          <div><dt>Parameters</dt><dd>{parameterSummary(run)}</dd></div>
           <div><dt>Seed intent</dt><dd>{seedIntentSummary(snapshot)}</dd></div>
           <div><dt>Materialized seeds</dt><dd>{materializedSeeds(run)}</dd></div>
           <div><dt>Workflow</dt><dd>{workflowSummary(snapshot)}</dd></div>
           <div><dt>Profile</dt><dd>{profileSummary(snapshot)}</dd></div>
         </dl>
+      </section>
+
+      <section className="run-plan-section" aria-labelledby="run-plan-parameters-title">
+        <h3 id="run-plan-parameters-title">Parameters</h3>
+        {snapshot.parameter_bindings.length ? (
+          <dl className="run-plan-bindings">
+            {snapshot.parameter_bindings.map((binding) => {
+              const resolved = run.plan.jobs[0]?.resolved_parameters.find((item) => item.parameter_key === binding.parameter_key);
+              return (
+                <div key={binding.parameter_key}>
+                  <dt>{resolved?.label ?? binding.parameter_key}</dt>
+                  <dd>
+                    {formatParameterValue(binding.values[0] ?? null)}
+                    <code>{binding.parameter_key}</code>
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        ) : <p className="empty-note">This Profile has no fixed parameters.</p>}
       </section>
 
       <section className="run-plan-section" aria-labelledby="run-plan-prompts-title">
@@ -63,6 +84,27 @@ export function RunPlanDialog({ run, onClose }: Props) {
         ) : <p className="empty-note">No variable bindings were preserved.</p>}
       </section>
 
+      <section className="run-plan-section" aria-labelledby="run-plan-images-title">
+        <h3 id="run-plan-images-title">Image Inputs</h3>
+        {snapshot.image_bindings.length ? (
+          <dl className="run-plan-bindings">
+            {imageInputAlternatives(run).map((input) => (
+              <div key={input.slotKey}>
+                <dt>{input.label}</dt>
+                <dd className="run-plan-image-alternatives">
+                  {input.values.map((value, index) => (
+                    <span key={`${value.assetId ?? "base"}-${index}`}>
+                      {value.name}
+                      {value.assetId ? <code>{value.assetId}</code> : null}
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : <p className="empty-note">This Profile has no Image Input slots.</p>}
+      </section>
+
       {run.plan.warnings.length ? (
         <div className="warning-box" role="status">
           <strong>Compiler warnings</strong>
@@ -82,14 +124,16 @@ export function RunPlanDialog({ run, onClose }: Props) {
 
 function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
   const variables = job.resolved_variables.map((variable) => variable.value).join(" · ");
-  const reference = job.reference_filename ?? (job.reference_asset_id ? "Selected reference" : "Base workflow");
+  const imageInputs = job.resolved_image_inputs.map((input) => `${input.label}: ${input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}`).join(" · ");
+  const parameters = job.resolved_parameters.map((parameter) => `${parameter.label}: ${formatParameterValue(parameter.value)}`).join(" · ");
   return (
     <details className="run-plan-job">
       <summary>
         <span className="ordinal">{String(job.ordinal).padStart(3, "0")}</span>
         <strong>{job.prompt_version_name}</strong>
         {variables ? <span>{variables}</span> : null}
-        <span>{reference}</span>
+        {imageInputs ? <span>{imageInputs}</span> : null}
+        {parameters ? <span>{parameters}</span> : null}
         <code>seed {job.seed}</code>
       </summary>
       <div>
@@ -98,7 +142,21 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
           {job.resolved_variables.map((variable) => (
             <div key={variable.name}><dt>{variable.name}</dt><dd>{variable.value}</dd></div>
           ))}
-          <div><dt>Reference</dt><dd>{reference}</dd></div>
+          {job.resolved_image_inputs.map((input) => (
+            <div key={input.slot_key}>
+              <dt>{input.label}</dt>
+              <dd>
+                {input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}
+                {input.asset_id ? <code>{input.asset_id}</code> : null}
+              </dd>
+            </div>
+          ))}
+          {job.resolved_parameters.map((parameter) => (
+            <div key={parameter.parameter_key}>
+              <dt>{parameter.label}</dt>
+              <dd>{formatParameterValue(parameter.value)} <code>{parameter.parameter_key}</code></dd>
+            </div>
+          ))}
           <div><dt>Seed</dt><dd><code>{job.seed}</code></dd></div>
         </dl>
       </div>
@@ -117,14 +175,51 @@ function materializedSeeds(run: RunResponse): string {
   return [...new Set(run.plan.jobs.map((job) => job.seed))].join(", ");
 }
 
-function referenceSummary(run: RunResponse): string {
-  const references = new Map<string, string>();
+function imageInputSummary(run: RunResponse): string {
+  const inputs = imageInputAlternatives(run);
+  if (inputs.length === 0) return "No slots";
+  return inputs
+    .map((input) => `${input.label}: ${input.values.length} ${input.values.length === 1 ? "alternative" : "alternatives"}`)
+    .join(" · ");
+}
+
+function parameterSummary(run: RunResponse): string {
+  const parameters = run.plan.jobs[0]?.resolved_parameters ?? [];
+  if (parameters.length === 0) return "No fixed parameters";
+  return parameters.map((parameter) => `${parameter.label}: ${formatParameterValue(parameter.value)}`).join(" · ");
+}
+
+function formatParameterValue(value: string | number | boolean | null): string {
+  if (value === null) return "Base workflow";
+  if (typeof value === "string") return value === "" ? '"" (empty string)' : value;
+  return String(value);
+}
+
+function imageInputAlternatives(run: RunResponse): Array<{
+  slotKey: string;
+  label: string;
+  values: Array<{ name: string; assetId: string | null }>;
+}> {
+  const labels = new Map(
+    (run.plan.jobs[0]?.resolved_image_inputs ?? []).map((input) => [input.slot_key, input.label]),
+  );
+  const filenames = new Map<string, string>();
   for (const job of run.plan.jobs) {
-    if (job.reference_asset_id) {
-      references.set(job.reference_asset_id, job.reference_filename ?? "Selected reference");
+    for (const input of job.resolved_image_inputs) {
+      if (input.asset_id && input.filename) filenames.set(input.asset_id, input.filename);
     }
   }
-  return references.size ? [...references.values()].join(", ") : "Base workflow";
+  const bindings = new Map(
+    run.batch_snapshot.image_bindings.map((binding) => [binding.slot_key, binding.values]),
+  );
+  return (run.plan.jobs[0]?.resolved_image_inputs ?? []).map((input) => ({
+    slotKey: input.slot_key,
+    label: labels.get(input.slot_key) ?? input.slot_key,
+    values: (bindings.get(input.slot_key) ?? []).map((value) => ({
+      name: value === null ? "Base workflow" : filenames.get(value) ?? "Project Asset",
+      assetId: value,
+    })),
+  }));
 }
 
 function workflowSummary(snapshot: EditableBatchSnapshot): string {

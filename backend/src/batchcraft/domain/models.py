@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -38,6 +39,46 @@ class ImageBinding:
     values: tuple[str | None, ...]
 
 
+class ParameterValueType(StrEnum):
+    STRING = "string"
+    INTEGER = "integer"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+
+
+ParameterScalar = str | int | float | bool
+MAX_SAFE_INTEGER = 2**53 - 1
+
+
+def validate_parameter_scalar(value: object) -> ParameterScalar:
+    if isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int):
+        if -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
+            return value
+        raise ValueError(
+            f"integer parameter values must be from {-MAX_SAFE_INTEGER} through {MAX_SAFE_INTEGER}"
+        )
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError("parameter values must be finite JSON strings, numbers, or booleans")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowParameter:
+    key: str
+    label: str
+    node_id: str
+    input_name: str
+    value_type: ParameterValueType
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterBinding:
+    parameter_key: str
+    values: tuple[ParameterScalar | None, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class SeedInput:
     mode: SeedMode
@@ -59,6 +100,8 @@ class BatchDefinition:
     image_input_slots: tuple[ImageInputSlot, ...]
     image_bindings: tuple[ImageBinding, ...]
     seeds: SeedInput
+    parameters: tuple[WorkflowParameter, ...] = ()
+    parameter_bindings: tuple[ParameterBinding, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +114,12 @@ class ResolvedVariable:
 class ResolvedImageInput:
     slot_key: str
     asset_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedParameter:
+    parameter_key: str
+    value: ParameterScalar | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +137,7 @@ class CompiledJob:
     resolved_variables: tuple[ResolvedVariable, ...]
     resolved_image_inputs: tuple[ResolvedImageInput, ...]
     seed: int
+    resolved_parameters: tuple[ResolvedParameter, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +146,7 @@ class CompiledRunPlan:
     image_input_slots: tuple[ImageInputSlot, ...]
     jobs: tuple[CompiledJob, ...]
     warnings: tuple[CompilationWarning, ...]
+    parameters: tuple[WorkflowParameter, ...] = ()
 
     @property
     def job_count(self) -> int:

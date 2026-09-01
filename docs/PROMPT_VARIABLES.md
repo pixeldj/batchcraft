@@ -167,7 +167,10 @@ Rule:
 
 This keeps previews, manifests, comparisons, and tests stable.
 
-Prompt-variable expansion is one part of the complete compiler order. The full order is PromptVersion, prompt variables, reference bindings, seeds, then parameter sweeps. The rightmost dimension varies fastest, and all dimensions preserve user selection order.
+Prompt-variable expansion is one part of the complete compiler order. The full dimensional order is
+PromptVersion, prompt variables, Profile Image Input slots, seeds, then parameter sweeps. The rightmost
+dimension varies fastest, and all dimensions preserve user selection order. Image Input slots appear in
+Profile order and each forms an independent Cartesian dimension.
 
 PromptVersion is the first Batch dimension. PromptVersions preserve user selection order. Within each
 PromptVersion, placeholders are resolved independently in that template's first-occurrence order. A

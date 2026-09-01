@@ -224,6 +224,11 @@ async def _execute_job(
             WorkflowPreparationValues(
                 prompt=persisted_job.compiled_job.resolved_prompt,
                 image_inputs=uploaded_image_inputs,
+                parameters={
+                    item.parameter_key: item.value
+                    for item in persisted_job.compiled_job.resolved_parameters
+                    if item.value is not None
+                },
                 seed=persisted_job.compiled_job.seed,
                 output_prefix=f"batchcraft/{run.run_id}/{persisted_job.job_id}/result",
             ),

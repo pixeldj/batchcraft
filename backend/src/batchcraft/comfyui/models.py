@@ -1,6 +1,8 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+
+from batchcraft.domain import ParameterScalar
 
 
 class SubmissionDisposition(StrEnum):
@@ -85,3 +87,4 @@ class WorkflowPreparationValues:
     image_inputs: Mapping[str, str]
     seed: int
     output_prefix: str
+    parameters: Mapping[str, ParameterScalar] = field(default_factory=dict)

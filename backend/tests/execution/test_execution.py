@@ -27,8 +27,11 @@ from batchcraft.domain import (
     BatchDefinition,
     ImageBinding,
     ImageInputSlot,
+    ParameterBinding,
+    ParameterValueType,
     PromptVersion,
     SeedInput,
+    WorkflowParameter,
     compile_batch,
 )
 from batchcraft.execution import (
@@ -53,7 +56,7 @@ FIXED_TIME = datetime(2026, 8, 27, 20, 0, tzinfo=UTC)
 PROJECT = ProjectIdentity(id="project-id", filesystem_key="project_key", name="Project")
 BATCH = BatchIdentity(id="batch-id", filesystem_key="batch_key", name="Batch")
 WORKFLOW: dict[str, object] = {
-    "7": {"class_type": "KSampler", "inputs": {"seed": 0}},
+    "7": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 20}},
     "25": {"class_type": "LoadImage", "inputs": {"image": "original.png"}},
     "26": {"class_type": "LoadImage", "inputs": {"image": "second-original.png"}},
     "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
@@ -74,6 +77,15 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "image_inputs": [
         {"key": "identity", "label": "Identity", "node_id": "25", "input_name": "image"},
         {"key": "pose", "label": "Pose", "node_id": "26", "input_name": "image"},
+    ],
+    "parameters": [
+        {
+            "key": "steps",
+            "label": "Steps",
+            "node_id": "7",
+            "input_name": "steps",
+            "value_type": "integer",
+        }
     ],
 }
 
@@ -241,6 +253,7 @@ def _published_run(
     with_images: bool = True,
     vary_prompt_and_seed: bool = False,
     image_alternatives: bool = False,
+    parameter_value: int | None = -5,
 ) -> tuple[PublishedRun, tuple[bytes, ...]]:
     projects_path = tmp_path / "projects"
     project_path = projects_path / PROJECT.filesystem_key
@@ -291,6 +304,10 @@ def _published_run(
             image_input_slots=slots,
             image_bindings=image_bindings,
             seeds=seeds,
+            parameters=(
+                WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
+            ),
+            parameter_bindings=(ParameterBinding("steps", (parameter_value,)),),
         )
     )
     run_ids = SequentialValues(
@@ -304,7 +321,7 @@ def _published_run(
         project=PROJECT,
         batch=BATCH,
         batch_snapshot={
-            "snapshot_version": 3,
+            "snapshot_version": 4,
             "project": {
                 "id": PROJECT.id,
                 "filesystem_key": PROJECT.filesystem_key,
@@ -332,6 +349,7 @@ def _published_run(
                 {"slot_key": binding.slot_key, "values": list(binding.values)}
                 for binding in image_bindings
             ],
+            "parameter_bindings": [{"parameter_key": "steps", "values": [parameter_value]}],
             "seed_intent": {
                 "mode": seed_mode,
                 "values": list(seeds.values),
@@ -553,10 +571,10 @@ def test_each_job_uses_its_own_compiled_prompt_and_seed(tmp_path: Path) -> None:
     ]
 
 
-def test_null_image_bindings_skip_upload_and_preserve_base_workflow_images(
+def test_null_bindings_skip_upload_and_preserve_base_workflow_values(
     tmp_path: Path,
 ) -> None:
-    run, _ = _published_run(tmp_path, job_count=1, with_images=False)
+    run, _ = _published_run(tmp_path, job_count=1, with_images=False, parameter_value=None)
     client = FakeExecutionClient(
         submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
         histories={"prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED)]},
@@ -577,7 +595,9 @@ def test_null_image_bindings_skip_upload_and_preserve_base_workflow_images(
     assert state.jobs[0].status is JobExecutionStatus.SUCCEEDED
     assert client.uploads == []
     assert [dict(values.image_inputs) for values in preparation_values] == [{}]
+    assert [dict(values.parameters) for values in preparation_values] == [{}]
     assert len(client.submitted_workflows) == 1
+    assert client.submitted_workflows[0]["7"]["inputs"]["steps"] == 20  # type: ignore[index]
     assert client.submitted_workflows[0]["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
     assert client.submitted_workflows[0]["26"]["inputs"]["image"] == "second-original.png"  # type: ignore[index]
 

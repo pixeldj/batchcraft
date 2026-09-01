@@ -219,40 +219,45 @@ archived_at
 An immutable mapping snapshot targeting one exact WorkflowVersion of the Profile's Workflow. It stores
 the parent Profile, Workflow, Project, and target WorkflowVersion IDs; a monotonic version number; the
 Profile name snapshot; canonical profile JSON; its SHA-256; an optional note; and timestamps. The
-canonical JSON has the Run-compatible shape `{ "id": ..., "name": ..., "mappings": {...} }`.
+canonical JSON has the Run-compatible shape
+`{ "id": ..., "name": ..., "mappings": {...}, "image_inputs": [...], "parameters": [...] }`.
 
 Compatibility is version-specific rather than a property of the logical Profile. Listing Profiles for
 a target WorkflowVersion therefore retains the logical Profile even when no compatible version exists.
 Creating compatibility for a newer WorkflowVersion appends a new validated ProfileVersion under the
 same logical Profile; it never retargets an existing version or creates a replacement logical Profile.
-The current mapping set requires `prompt`, `seed`, and `output_prefix`. `reference_image` is optional;
-its absence represents a text-only Profile rather than an incomplete Profile. The mapping JSON shape
-is unchanged, so this behavior does not require a database migration.
+The current mapping set requires `prompt`, `seed`, and `output_prefix`. The Profile JSON also requires
+an ordered `image_inputs` array, which may be empty. Each image input has exactly `key`, `label`,
+`node_id`, and `input_name`. Keys use readable lowercase ASCII snake case, start with a letter, and are
+unique within the Profile. The Profile Builder derives a key from the first nonblank label. Later label
+edits do not change that key.
+The Profile JSON also requires an ordered `parameters` array, which may be empty. Parameter entries
+have exactly `key`, `label`, `node_id`, `input_name`, and `value_type`. Parameter keys follow the same
+stable-key rules. Supported types are `string`, `integer`, `float`, and `boolean`. Every parameter must
+target a compatible literal input. One global uniqueness check covers core mappings, Image Input slots,
+and parameters.
 
 Exposed inputs may conceptually resemble:
 
 ```json
 {
-  "prompt": {
-    "node_id": "104",
-    "input_name": "text",
-    "value_type": "string"
+  "mappings": {
+    "prompt": {"node_id": "104", "input_name": "text", "value_type": "string"},
+    "seed": {"node_id": "114", "input_name": "seed", "value_type": "integer"},
+    "output_prefix": {
+      "node_id": "301",
+      "input_name": "filename_prefix",
+      "value_type": "string"
+    }
   },
-  "reference_image": {
-    "node_id": "221",
-    "input_name": "image",
-    "value_type": "image"
-  },
-  "seed": {
-    "node_id": "114",
-    "input_name": "seed",
-    "value_type": "integer"
-  },
-  "output_prefix": {
-    "node_id": "301",
-    "input_name": "filename_prefix",
-    "value_type": "string"
-  }
+  "image_inputs": [
+    {"key": "identity", "label": "Identity", "node_id": "221", "input_name": "image"},
+    {"key": "pose", "label": "Pose", "node_id": "225", "input_name": "image"}
+  ],
+  "parameters": [
+    {"key": "cfg", "label": "CFG", "node_id": "114", "input_name": "cfg", "value_type": "float"},
+    {"key": "steps", "label": "Steps", "node_id": "114", "input_name": "steps", "value_type": "integer"}
+  ]
 }
 ```
 
@@ -281,7 +286,7 @@ A Batch also owns configuration such as:
 
 - an ordered, non-empty collection of selected PromptVersions;
 - VariableBindings;
-- zero or more ordered reference bindings;
+- zero or more ordered named image bindings;
 - seed policy;
 - exposed workflow parameter values or dimensions;
 - output naming configuration.
@@ -300,17 +305,33 @@ Ordered child tables complete the aggregate:
 - `batch_prompt_selection` — ordered `prompt_version_id` foreign keys.
 - `batch_variable_binding` — ordered embedded canonical bindings carrying `placeholder` and ordered
   executable `values`.
-- `batch_reference_selection` — ordered `asset_id` strings with no foreign key.
+- `batch_image_binding` — ordered unique `slot_key` records.
+- `batch_image_binding_value` — ordered Project Asset IDs or JSON-equivalent `null` values for each binding.
+- `batch_parameter_binding` — ordered unique stable parameter keys.
+- `batch_parameter_binding_value` — one typed JSON scalar or `null` Base-workflow value per parameter in Pass 3A.
 
 Saved Batches may be intentionally incomplete: they may have zero prompt selections, zero values for
-a variable binding, no workflow/profile selection, and zero reference selections. Preview remains the
-executable specification validator and rejects a zero-value binding required by a selected
-PromptVersion. An empty string is one concrete value, not missing data. Saved Batch writes reject exact
-duplicate values, including duplicate empty strings. Reads reject malformed arrays and duplicate
-values rather than normalizing them.
+a variable binding, no workflow/profile selection, and zero image bindings when no Profile is selected
+or the selected Profile has no slots. Preview remains the executable specification validator and
+rejects a zero-value variable binding required by a selected PromptVersion. An empty string is one
+concrete value, not missing data. Saved Batch writes reject exact duplicate values, including duplicate
+empty strings. Reads reject malformed arrays and duplicate values rather than normalizing them.
 
 The current `batch_variable_binding` table stores only `batch_id`, `position`, `placeholder`, and
 `values_json`. It does not retain Variable List identity, a source revision, or a binding mode.
+
+Image bindings use `{ "slot_key": string, "values": [asset_id | null, ...] }`. Saved Batch writes
+persist the exact selected Profile slot set in Profile order. Preview and Run creation require one
+binding for every Profile slot but may receive binding records in any order; compilation resolves them
+by stable slot key. Every slot has at least one ordered, unique alternative. `null` means Base workflow
+and appears first when included. Each slot is an independent Cartesian dimension. Zipped, row-linked,
+and collection-link semantics remain unsupported.
+
+Parameter bindings use `{ "parameter_key": string, "values": [scalar | null] }`. Saved Batch writes
+persist the exact selected Profile parameter set in Profile order. Preview and Run creation may receive
+binding records in any order and resolve them by stable key. Pass 3A requires exactly one value per
+parameter. `null` means Base workflow and is distinct from empty string, zero, and false. Parameters do
+not form compiler dimensions until Pass 3B.
 
 Editing a Saved Batch increments its `revision`; concurrent conflicting saves fail rather than
 silently overwrite. Detached Prompt or Workflow-Profile snapshots must be explicitly imported or
@@ -353,7 +374,7 @@ The Run snapshot must include effective copies of:
 - Workflow Profile/workflow;
 - PromptVersions;
 - variable bindings and values;
-- selected references, which may be empty;
+- ordered named image bindings and selected asset provenance, which may use Base workflow;
 - seed policy and resolved seeds;
 - exposed workflow parameters;
 - output naming configuration;
@@ -390,19 +411,21 @@ A Job additionally records:
 
 - the PromptVersion ID that produced it;
 - resolved variable name/value pairs;
-- an optional bound Reference Asset;
+- ordered `resolved_image_inputs`, one per Profile slot, each carrying a slot key and optional asset;
 - resolved workflow parameters;
 - expected output prefix;
 - workflow hash.
 
-The compiler orders Job dimensions as PromptVersion, prompt variables, reference bindings, seeds,
-then parameter sweeps. PromptVersion order is the Batch's selected order. Each PromptVersion expands
+The compiler orders Job dimensions as PromptVersion, prompt variables, Profile Image Input slots,
+seeds, then parameter sweeps.
+PromptVersion order is the Batch's selected order. Each PromptVersion expands
 only the bindings it references, in placeholder first-occurrence order. The rightmost dimension varies
 fastest, and each dimension preserves user selection order.
 
-The empty reference dimension has one identity value. It therefore does not reduce the Job count;
-the compiled Job records no Reference Asset, and execution preserves the mapped reference-image value
-from the base workflow.
+Each named Image Input slot is an independent Batch dimension. The Batch snapshot preserves all
+alternatives, while every Job's `resolved_image_inputs` contains one concrete choice per Profile slot.
+Each entry records `slot_key` and `asset_id`, where `null` means Base workflow. Frozen Run persistence
+adds the Profile's slot label and complete asset provenance.
 
 A Job must never contain unresolved prompt variables.
 

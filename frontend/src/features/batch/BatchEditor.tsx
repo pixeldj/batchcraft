@@ -5,6 +5,8 @@ import type { ProjectResponse } from "../../api/types";
 import { Field, TextAreaField } from "../../components/Field";
 import { ProjectSelector } from "../project/ProjectSelector";
 import { ConfigurationSection } from "./ConfigurationSection";
+import { ImageInputBindingsEditor } from "./ImageInputBindingsEditor";
+import { ParameterBindingsEditor } from "./ParameterBindingsEditor";
 import {
   MAX_RANDOM_SEED_COUNT,
   newVariableBinding,
@@ -13,7 +15,6 @@ import {
   type VariableBindingForm,
 } from "./form";
 import { PromptLibraryEditor } from "./PromptLibraryEditor";
-import { ReferenceAssetPicker } from "./ReferenceAssetPicker";
 import { SavedBatchSelector, type SavedBatchCreateInput } from "./SavedBatchSelector";
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
@@ -126,7 +127,7 @@ export function BatchEditor({
         hasProjectScopedSelections={
           hasUnsavedChanges ||
           form.prompts.length > 0 ||
-          form.referenceAssetIds.length > 0 ||
+          form.imageBindings.some((binding) => binding.values.some((value) => value !== null)) ||
           Boolean(form.workflowId) ||
           form.workflowJson.trim() !== "{}"
         }
@@ -302,28 +303,26 @@ export function BatchEditor({
         </div>
       </ConfigurationSection>
 
-      <fieldset>
-        <legend>Reference Assets</legend>
-        <ReferenceAssetPicker
-          api={api}
-          projectKey={
-            projectVerified && selectedProjectId === form.projectId
-              ? form.projectFilesystemKey
-              : ""
-          }
-          selectedAssetIds={form.referenceAssetIds}
-          onSelectedAssetIdsChange={(referenceAssetIds) =>
-            update("referenceAssetIds", referenceAssetIds)
-          }
-        />
-      </fieldset>
-
       <WorkflowLibraryEditor
         api={api}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
         form={form}
         onChange={onChange}
         onMetadataChange={onWorkflowMetadataChange}
+      />
+
+      <ImageInputBindingsEditor
+        api={api}
+        projectKey={projectVerified && selectedProjectId === form.projectId ? form.projectFilesystemKey : ""}
+        profileJson={form.workflowProfileJson}
+        imageBindings={form.imageBindings}
+        onChange={(imageBindings) => update("imageBindings", imageBindings)}
+      />
+
+      <ParameterBindingsEditor
+        profileJson={form.workflowProfileJson}
+        parameterBindings={form.parameterBindings}
+        onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
       />
 
       {error ? <p className="operation-error" role="alert">{error}</p> : null}

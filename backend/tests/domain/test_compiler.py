@@ -8,11 +8,14 @@ from batchcraft.domain import (
     CompilationWarningCode,
     ImageBinding,
     ImageInputSlot,
+    ParameterBinding,
+    ParameterValueType,
     PromptVersion,
     ResolvedImageInput,
     SeedInput,
     SeedMode,
     VariableBinding,
+    WorkflowParameter,
     compile_batch,
     preview_batch,
 )
@@ -30,6 +33,8 @@ def batch_definition(
     image_slots: tuple[ImageInputSlot, ...] = (),
     image_bindings: tuple[ImageBinding, ...] = (),
     seeds: SeedInput | None = None,
+    parameters: tuple[WorkflowParameter, ...] = (),
+    parameter_bindings: tuple[ParameterBinding, ...] = (),
 ) -> BatchDefinition:
     return BatchDefinition(
         prompt_versions=prompt_versions
@@ -38,6 +43,8 @@ def batch_definition(
         image_input_slots=image_slots,
         image_bindings=image_bindings,
         seeds=seeds or SeedInput.fixed(123),
+        parameters=parameters,
+        parameter_bindings=parameter_bindings,
     )
 
 
@@ -53,6 +60,69 @@ def test_simple_substitution() -> None:
     assert [(item.name, item.value) for item in plan.jobs[0].resolved_variables] == [
         ("animal", "cat")
     ]
+
+
+def test_parameters_resolve_in_profile_order_without_changing_job_count() -> None:
+    parameters = (
+        WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
+        WorkflowParameter("enabled", "Enabled", "7", "enabled", ParameterValueType.BOOLEAN),
+    )
+    batch = batch_definition(
+        "{{animal}}",
+        bindings=(binding("animal", "cat", "dog"),),
+        seeds=SeedInput.explicit((1, 2)),
+        parameters=parameters,
+        parameter_bindings=(
+            ParameterBinding("enabled", (None,)),
+            ParameterBinding("steps", (-12,)),
+        ),
+    )
+
+    plan = compile_batch(batch)
+
+    assert plan.job_count == 4
+    assert plan.parameters == parameters
+    assert [
+        [(item.parameter_key, item.value) for item in job.resolved_parameters] for job in plan.jobs
+    ] == [[("steps", -12), ("enabled", None)]] * 4
+
+
+@pytest.mark.parametrize("values", ((), (1, 2)))
+def test_parameters_require_exactly_one_value(values: tuple[int, ...]) -> None:
+    with pytest.raises(CompilationError, match="exactly one value"):
+        compile_batch(
+            batch_definition(
+                "prompt",
+                parameters=(
+                    WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
+                ),
+                parameter_bindings=(ParameterBinding("steps", values),),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("value_type", "value"),
+    (
+        (ParameterValueType.STRING, 1),
+        (ParameterValueType.INTEGER, True),
+        (ParameterValueType.INTEGER, 2**53),
+        (ParameterValueType.FLOAT, True),
+        (ParameterValueType.FLOAT, float("inf")),
+        (ParameterValueType.BOOLEAN, 1),
+    ),
+)
+def test_parameters_reject_wrong_or_unsafe_scalar_types(
+    value_type: ParameterValueType, value: object
+) -> None:
+    with pytest.raises(CompilationError, match="must be"):
+        compile_batch(
+            batch_definition(
+                "prompt",
+                parameters=(WorkflowParameter("value", "Value", "7", "value", value_type),),
+                parameter_bindings=(ParameterBinding("value", (value,)),),  # type: ignore[arg-type]
+            )
+        )
 
 
 def test_multiple_variables_form_cartesian_product_in_first_occurrence_order() -> None:

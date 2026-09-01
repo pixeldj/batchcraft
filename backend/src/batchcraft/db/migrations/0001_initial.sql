@@ -277,3 +277,31 @@ CREATE TABLE batch_image_binding_value (
     FOREIGN KEY (batch_id, binding_position) REFERENCES batch_image_binding(batch_id, position)
         ON UPDATE RESTRICT ON DELETE CASCADE
 ) STRICT;
+
+CREATE TABLE batch_parameter_binding (
+    batch_id TEXT NOT NULL CHECK (length(trim(batch_id)) > 0),
+    position INTEGER NOT NULL CHECK (position >= 1),
+    parameter_key TEXT NOT NULL CHECK (
+        parameter_key GLOB '[a-z]*'
+        AND parameter_key NOT GLOB '*[^a-z0-9_]*'
+        AND parameter_key NOT GLOB '*__*'
+        AND substr(parameter_key, -1) != '_'
+    ),
+    PRIMARY KEY (batch_id, position),
+    UNIQUE (batch_id, parameter_key),
+    FOREIGN KEY (batch_id) REFERENCES batch(id) ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE batch_parameter_binding_value (
+    batch_id TEXT NOT NULL,
+    binding_position INTEGER NOT NULL CHECK (binding_position >= 1),
+    value_position INTEGER NOT NULL CHECK (value_position = 1),
+    value_json TEXT NOT NULL CHECK (
+        json_valid(value_json)
+        AND json_type(value_json) IN ('null', 'text', 'integer', 'real', 'true', 'false')
+    ),
+    PRIMARY KEY (batch_id, binding_position, value_position),
+    FOREIGN KEY (batch_id, binding_position)
+        REFERENCES batch_parameter_binding(batch_id, position)
+        ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT;

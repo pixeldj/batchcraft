@@ -22,6 +22,7 @@ from batchcraft.api import Settings, create_app
 from batchcraft.api.schemas import (
     BatchRequest,
     ExecutionResponse,
+    ParameterBindingRequest,
     PreviewResponse,
     ResultsResponse,
     SavedBatchVariableBindingRequest,
@@ -59,9 +60,44 @@ from batchcraft.files import (
     PublishedRun,
     RunFilesystemStore,
 )
+from batchcraft.files.snapshots import SnapshotParameterBinding
 
 PNG_A = b"\x89PNG\r\n\x1a\nimage-a"
 PNG_B = b"\x89PNG\r\n\x1a\nimage-b"
+
+
+@pytest.mark.parametrize(
+    "value",
+    (-(2**53 - 1), 2**53 - 1, 1.25, "", True, None),
+)
+def test_parameter_scalar_api_and_snapshot_boundaries_preserve_valid_values(
+    value: object,
+) -> None:
+    api = ParameterBindingRequest.model_validate({"parameter_key": "value", "values": [value]})
+    snapshot = SnapshotParameterBinding.model_validate(
+        {"parameter_key": "value", "values": [value]}
+    )
+
+    assert api.values == [value]
+    assert snapshot.values == [value]
+    if isinstance(value, int) and not isinstance(value, bool):
+        assert isinstance(api.values[0], int)
+        assert isinstance(snapshot.values[0], int)
+
+
+@pytest.mark.parametrize(
+    "value",
+    (-(2**53), 2**53, float("inf"), float("-inf"), float("nan"), [], {}),
+)
+def test_parameter_scalar_api_and_snapshot_boundaries_reject_invalid_values(
+    value: object,
+) -> None:
+    payload = {"parameter_key": "value", "values": [value]}
+
+    with pytest.raises(ValueError):
+        ParameterBindingRequest.model_validate(payload)
+    with pytest.raises(ValueError):
+        SnapshotParameterBinding.model_validate(payload)
 
 
 class FakeEventSource:
@@ -244,6 +280,7 @@ def _batch_request(
             {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"},
             {"key": "style", "label": "Style", "node_id": "26", "input_name": "image"},
         ],
+        "parameters": [],
     }
     if invalid_profile:
         mappings = profile["mappings"]
@@ -276,17 +313,19 @@ def _batch_request(
         "prompt_versions": prompt_versions,
         "variable_bindings": bindings,
         "image_bindings": image_bindings,
+        "parameter_bindings": [],
         "seeds": seeds,
         "workflow": workflow,
         "workflow_profile": profile,
         "batch_snapshot": {
-            "snapshot_version": 3,
+            "snapshot_version": 4,
             "project": copy.deepcopy(project),
             "source_saved_batch": None,
             "batch": {**batch, "description": None},
             "prompt_versions": copy.deepcopy(prompt_versions),
             "variable_bindings": copy.deepcopy(bindings),
             "image_bindings": copy.deepcopy(image_bindings),
+            "parameter_bindings": [],
             "seed_intent": {**seeds, "random_seed_count": None},
             "workflow_selection": {
                 "workflow_id": None,
@@ -306,6 +345,7 @@ def _sync_batch_snapshot(request: dict[str, object]) -> None:
     snapshot["prompt_versions"] = request["prompt_versions"]
     snapshot["variable_bindings"] = request["variable_bindings"]
     snapshot["image_bindings"] = request["image_bindings"]
+    snapshot["parameter_bindings"] = request["parameter_bindings"]
     workflow_selection = snapshot["workflow_selection"]
     assert isinstance(workflow_selection, dict)
     workflow_selection["workflow"] = request["workflow"]
@@ -316,6 +356,55 @@ def _create_run(http: TestClient, request: dict[str, object]) -> str:
     response = http.post("/api/runs", json=request)
     assert response.status_code == 201, response.text
     return str(response.json()["run_id"])
+
+
+def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+    workflow = request["workflow"]
+    profile = request["workflow_profile"]
+    assert isinstance(workflow, dict)
+    assert isinstance(profile, dict)
+    workflow["7"]["inputs"]["steps"] = 20
+    profile["parameters"] = [
+        {
+            "key": "steps",
+            "label": "Steps",
+            "node_id": "7",
+            "input_name": "steps",
+            "value_type": "integer",
+        }
+    ]
+    request["parameter_bindings"] = [{"parameter_key": "steps", "values": [-5]}]
+    _sync_batch_snapshot(request)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        preview = http.post("/api/batches/preview", json=request)
+        created = http.post("/api/runs", json=request)
+        run = http.get(f"/api/runs/{created.json()['run_id']}")
+
+        zero = copy.deepcopy(request)
+        zero_bindings = cast(list[dict[str, object]], zero["parameter_bindings"])
+        zero_bindings[0]["values"] = []
+        _sync_batch_snapshot(zero)
+        multiple = copy.deepcopy(request)
+        multiple_bindings = cast(list[dict[str, object]], multiple["parameter_bindings"])
+        multiple_bindings[0]["values"] = [1, 2]
+        _sync_batch_snapshot(multiple)
+
+        assert http.post("/api/batches/preview", json=zero).status_code == 422
+        assert http.post("/api/batches/preview", json=multiple).status_code == 422
+
+    assert preview.status_code == 200
+    assert preview.json()["jobs"][0]["resolved_parameters"] == [
+        {"parameter_key": "steps", "label": "Steps", "value": -5}
+    ]
+    assert created.status_code == 201
+    assert run.json()["plan"]["jobs"][0]["resolved_parameters"] == [
+        {"parameter_key": "steps", "label": "Steps", "value": -5}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -399,6 +488,7 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
             "workflow_version_id": workflow_version["id"],
             "mappings": mappings,
             "image_inputs": profile["image_inputs"],
+            "parameters": profile["parameters"],
         },
     ).json()
     profile_version = profile_created["version"]
@@ -422,6 +512,7 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
             {"slot_key": "reference", "values": ["asset-2"]},
             {"slot_key": "style", "values": [None]},
         ],
+        "parameter_bindings": [],
         "seed_intent": {"mode": "explicit", "values": [9, 3], "random_seed_count": None},
         "selected_workflow_version": {
             "id": workflow_version["id"],
@@ -666,6 +757,7 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
                 "name": "Default profile",
                 "workflow_version_id": workflow_version_one["id"],
                 "mappings": mappings,
+                "parameters": [],
             },
         )
         assert profile_created_response.status_code == 201
@@ -680,6 +772,7 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
             "name": "Default profile",
             "mappings": mappings,
             "image_inputs": [],
+            "parameters": [],
         }
 
         assert (
@@ -700,6 +793,7 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
             json={
                 "workflow_version_id": workflow_version_two["id"],
                 "mappings": mappings,
+                "parameters": [],
             },
         )
         assert profile_version_two_response.status_code == 201
@@ -787,6 +881,7 @@ def test_workflow_profile_api_rejects_invalid_mapping_and_cross_project_target(
                 "name": "Invalid",
                 "workflow_version_id": target["id"],
                 "mappings": invalid_mappings,
+                "parameters": [],
             },
         )
         foreign = http.post(
@@ -795,6 +890,7 @@ def test_workflow_profile_api_rejects_invalid_mapping_and_cross_project_target(
                 "name": "Foreign",
                 "workflow_version_id": foreign_target["id"],
                 "mappings": mappings,
+                "parameters": [],
             },
         )
 
@@ -1270,11 +1366,12 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
                 {"slot_key": "reference", "values": [None]},
                 {"slot_key": "style", "values": [None]},
             ],
+            "parameter_bindings": [],
             "seeds": {"mode": "fixed", "values": [11]},
             "workflow": workflow["workflow"],
             "workflow_profile": profile["profile"],
             "batch_snapshot": {
-                "snapshot_version": 3,
+                "snapshot_version": 4,
                 "project": {
                     "id": project["id"],
                     "filesystem_key": project["filesystem_key"],
@@ -1301,6 +1398,7 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
                     {"slot_key": "reference", "values": [None]},
                     {"slot_key": "style", "values": [None]},
                 ],
+                "parameter_bindings": [],
                 "seed_intent": {
                     "mode": "fixed",
                     "values": [11],
@@ -1676,7 +1774,7 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
     assert response.json()["error"]["code"] == "invalid_request"
 
 
-def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v6(
+def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v7(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -1712,7 +1810,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v6
     assert created.status_code == 201
     run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert manifest["format_version"] == 6
+    assert manifest["format_version"] == 7
     expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
     assert manifest["batch_snapshot"] == expected_snapshot
     assert [job["seed"] for job in manifest["jobs"]] == [
@@ -1747,7 +1845,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v6
     assert mismatch.json()["error"]["code"] == "invalid_request"
 
 
-def test_run_api_requires_complete_snapshot_v3_and_rejects_malformed_durable_snapshot(
+def test_run_api_requires_complete_snapshot_v4_and_rejects_malformed_durable_snapshot(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)

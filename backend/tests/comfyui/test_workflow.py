@@ -53,6 +53,7 @@ def _profile() -> dict[str, object]:
         "image_inputs": [
             {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"}
         ],
+        "parameters": [],
     }
 
 
@@ -83,6 +84,110 @@ def test_prepare_workflow_maps_values_without_mutating_snapshots() -> None:
     assert workflow == original_workflow
     assert profile == original_profile
     assert prepared is not workflow
+
+
+def test_prepare_workflow_applies_typed_parameter_scalars_and_omits_base() -> None:
+    workflow = _workflow()
+    sampler = cast(dict[str, object], workflow["7"])
+    cast(dict[str, object], sampler["inputs"]).update(
+        {"cfg": 7.5, "enabled": False, "scheduler": "normal", "notes": "base"}
+    )
+    profile = _profile()
+    profile["parameters"] = [
+        {
+            "key": "steps",
+            "label": "Steps",
+            "node_id": "7",
+            "input_name": "steps",
+            "value_type": "integer",
+        },
+        {
+            "key": "cfg",
+            "label": "CFG",
+            "node_id": "7",
+            "input_name": "cfg",
+            "value_type": "float",
+        },
+        {
+            "key": "enabled",
+            "label": "Enabled",
+            "node_id": "7",
+            "input_name": "enabled",
+            "value_type": "boolean",
+        },
+        {
+            "key": "scheduler",
+            "label": "Scheduler",
+            "node_id": "7",
+            "input_name": "scheduler",
+            "value_type": "string",
+        },
+        {
+            "key": "notes",
+            "label": "Notes",
+            "node_id": "7",
+            "input_name": "notes",
+            "value_type": "string",
+        },
+    ]
+    values = _values()
+    prepared = prepare_workflow(
+        workflow,
+        profile,
+        WorkflowPreparationValues(
+            prompt=values.prompt,
+            image_inputs=values.image_inputs,
+            seed=values.seed,
+            output_prefix=values.output_prefix,
+            parameters={"steps": -4, "cfg": 8, "enabled": True, "scheduler": ""},
+        ),
+    )
+
+    inputs = prepared["7"]["inputs"]  # type: ignore[index]
+    assert inputs == {
+        "seed": 123456,
+        "steps": -4,
+        "cfg": 8,
+        "enabled": True,
+        "scheduler": "",
+        "notes": "base",
+    }
+
+
+def test_profile_parameter_validation_rejects_collisions_and_base_type_mismatch() -> None:
+    profile = _profile()
+    profile["parameters"] = [
+        {
+            "key": "steps",
+            "label": "Steps",
+            "node_id": "7",
+            "input_name": "seed",
+            "value_type": "integer",
+        }
+    ]
+    with pytest.raises(WorkflowPreparationError, match="maps multiple inputs"):
+        validate_workflow_profile(_workflow(), profile)
+
+    profile["parameters"][0]["input_name"] = "steps"  # type: ignore[index]
+    profile["parameters"][0]["value_type"] = "boolean"  # type: ignore[index]
+    with pytest.raises(WorkflowPreparationError, match="base value must be boolean"):
+        validate_workflow_profile(_workflow(), profile)
+
+
+def test_profile_parameter_validation_rejects_connected_target() -> None:
+    profile = _profile()
+    profile["parameters"] = [
+        {
+            "key": "clip",
+            "label": "Clip",
+            "node_id": "34",
+            "input_name": "clip",
+            "value_type": "string",
+        }
+    ]
+
+    with pytest.raises(WorkflowPreparationError, match="parameter 'clip'.*connected input"):
+        validate_workflow_profile(_workflow(), profile)
 
 
 def test_prepare_workflow_without_runtime_image_preserves_base_image_value() -> None:

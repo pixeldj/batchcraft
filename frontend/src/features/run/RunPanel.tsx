@@ -195,16 +195,19 @@ function summarizeDimensions(run: RunResponse): string {
           .map((variable) => [variable.name, variable.value]),
       )),
   );
-  const references = new Set(
-    run.plan.jobs.flatMap((job) => job.reference_asset_id === null ? [] : [job.reference_asset_id]),
-  );
+  const imageDimensions = run.batch_snapshot.image_bindings.map((binding) => binding.values.length);
+  const imageSummary = imageDimensions.length === 0
+    ? "No image inputs"
+    : imageDimensions.length === 1
+      ? `${countLabel(1, "image slot")} · ${countLabel(imageDimensions[0], "alternative")}`
+      : `${countLabel(imageDimensions.length, "image slot")} · ${imageDimensions.join(" × ")} alternatives`;
   const seeds = new Set(run.plan.jobs.map((job) => job.seed));
   return [
     countLabel(run.prompt_versions.length, "prompt"),
     variableCombinations.size
       ? countLabel(variableCombinations.size, "variable combination")
       : "No variables",
-    references.size ? countLabel(references.size, "reference") : "Base workflow",
+    imageSummary,
     countLabel(seeds.size, "seed"),
   ].join(" · ");
 }

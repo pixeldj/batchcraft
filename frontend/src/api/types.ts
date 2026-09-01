@@ -11,6 +11,34 @@ export interface VariableBindingRequest {
   values: string[];
 }
 
+export interface ImageBindingRequest {
+  slot_key: string;
+  values: Array<string | null>;
+}
+
+export type ParameterValueType = "string" | "integer" | "float" | "boolean";
+export type ParameterScalar = string | number | boolean;
+
+export interface ParameterBindingRequest {
+  parameter_key: string;
+  values: Array<ParameterScalar | null>;
+}
+
+export interface WorkflowProfileParameter {
+  key: string;
+  label: string;
+  node_id: string;
+  input_name: string;
+  value_type: ParameterValueType;
+}
+
+export interface WorkflowProfileImageInput {
+  key: string;
+  label: string;
+  node_id: string;
+  input_name: string;
+}
+
 export interface BatchRequest {
   project: IdentityRequest;
   batch: IdentityRequest;
@@ -20,7 +48,8 @@ export interface BatchRequest {
     text: string;
   }>;
   variable_bindings: VariableBindingRequest[];
-  references: Array<{ asset_id: string }>;
+  image_bindings: ImageBindingRequest[];
+  parameter_bindings: ParameterBindingRequest[];
   seeds: {
     mode: "fixed" | "explicit";
     values: number[];
@@ -31,7 +60,7 @@ export interface BatchRequest {
 }
 
 export interface EditableBatchSnapshot {
-  snapshot_version: 2;
+  snapshot_version: 4;
   project: IdentityRequest;
   source_saved_batch: { id: string; revision: number } | null;
   batch: IdentityRequest & { description: string | null };
@@ -43,7 +72,8 @@ export interface EditableBatchSnapshot {
     text: string;
   }>;
   variable_bindings: VariableBindingRequest[];
-  references: Array<{ asset_id: string }>;
+  image_bindings: ImageBindingRequest[];
+  parameter_bindings: ParameterBindingRequest[];
   seed_intent: SavedBatchSeedIntent;
   workflow_selection: {
     workflow_id: string | null;
@@ -175,7 +205,8 @@ export interface SavedBatchDefinitionRequest {
   description: string | null;
   prompt_selections: SavedBatchPromptSelection[];
   variable_bindings: SavedBatchVariableBinding[];
-  reference_selections: Array<{ asset_id: string }>;
+  image_bindings: ImageBindingRequest[];
+  parameter_bindings: ParameterBindingRequest[];
   seed_intent: SavedBatchSeedIntent;
   selected_workflow_version: SavedBatchWorkflowVersion | null;
   selected_workflow_profile_id: string | null;
@@ -217,7 +248,8 @@ export interface SavedBatchDetail extends SavedBatchListItem {
   created_at: string;
   prompt_selections: SavedBatchPromptSelection[];
   variable_bindings: SavedBatchVariableBinding[];
-  reference_selections: Array<{ asset_id: string }>;
+  image_bindings: ImageBindingRequest[];
+  parameter_bindings: ParameterBindingRequest[];
   selected_workflow_version: SavedBatchWorkflowVersion | null;
   selected_workflow_profile_version: SavedBatchWorkflowProfileVersion | null;
 }
@@ -390,6 +422,8 @@ export interface CreateWorkflowProfileRequest {
   description?: string | null;
   workflow_version_id: string;
   mappings: JsonObject;
+  image_inputs: WorkflowProfileImageInput[];
+  parameters: WorkflowProfileParameter[];
   note?: string | null;
 }
 
@@ -401,6 +435,8 @@ export interface CreateWorkflowProfileResponse {
 export interface CreateWorkflowProfileVersionRequest {
   workflow_version_id: string;
   mappings: JsonObject;
+  image_inputs: WorkflowProfileImageInput[];
+  parameters: WorkflowProfileParameter[];
   note?: string | null;
 }
 
@@ -425,8 +461,22 @@ export interface JobPreviewResponse {
   prompt_version_name: string;
   resolved_prompt: string;
   resolved_variables: Array<{ name: string; value: string }>;
-  reference_asset_id: string | null;
+  resolved_image_inputs: ResolvedImageInputResponse[];
+  resolved_parameters: ResolvedParameterResponse[];
   seed: number;
+}
+
+export interface ResolvedImageInputResponse {
+  slot_key: string;
+  label: string;
+  asset_id: string | null;
+  filename: string | null;
+}
+
+export interface ResolvedParameterResponse {
+  parameter_key: string;
+  label: string;
+  value: ParameterScalar | null;
 }
 
 export interface PreviewResponse {
@@ -455,9 +505,7 @@ export interface RunResponse extends RunCreatedResponse {
   execution: ExecutionResponse;
 }
 
-export interface RunPlanJobResponse extends JobPreviewResponse {
-  reference_filename: string | null;
-}
+export type RunPlanJobResponse = JobPreviewResponse;
 
 export interface RunPlanResponse {
   job_count: number;

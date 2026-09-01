@@ -5,8 +5,9 @@
 This document defines the expected development workflow for **batchcraft**.
 
 The project has entered production application development. The backend has a thin FastAPI boundary,
-the first React browser workflow is implemented, and SQLite provides migrations, Projects, and the
-immutable-version Prompt, Workflow, and Workflow Profile libraries.
+the first React browser workflow is implemented, and SQLite provides migrations, Projects, the
+immutable-version Prompt, Workflow, and Workflow Profile libraries, Saved Batches, and named Image
+Input slots.
 
 ## Supported Development Environment
 
@@ -160,7 +161,7 @@ The slice accepts an ephemeral complete Batch request for preview and Run creati
 Completed.
 
 Production code under `frontend/` provides one screen for ComfyUI status, ephemeral Batch editing,
-Project image import and collapsible ordered Reference Asset selection, backend-compiled Job preview,
+Project image import and backend-compiled Job preview,
 durable Run creation, repeated terminal Run creation, execution start and polling, non-cropping
 Result rendering, and a tab-scoped Batch Results gallery across session Runs. The browser uses only
 the FastAPI endpoints documented in `docs/API.md`.
@@ -169,8 +170,8 @@ Batch editing includes an ordered repeatable list of immutable PromptVersion sna
 Project's persistent Prompt library supplies new selections, version history, immutable version
 creation, and mutable logical Prompt names. Snapshot additions, removals, version changes, and ordering
 changes invalidate Preview; logical renames and exact library reconciliation do not. The browser
-session schema is v9 and stores both library linkage and the exact snapshot without UI keys. Other
-session versions are unsupported and start from clean working state.
+session restoration stores library linkage and exact immutable snapshots without UI keys. Named Image
+Input binding and browser session v10 supersede the original picker and session shape in Phase 2.4.
 
 This phase does not add durable editable Batch persistence, Reference Collections, asset deletion,
 Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
@@ -196,11 +197,11 @@ canonical, hashed versions. Each ProfileVersion targets one exact WorkflowVersio
 Run-compatible profile snapshot. Preview and Run creation still receive complete effective snapshots;
 library IDs never replace frozen Run provenance.
 
-The frontend session schema is version 9. It uses the Saved Batch selector, preserves exact
+At this phase the frontend session schema was version 10. It used the Saved Batch selector, preserved exact
 Workflow/Profile snapshots alongside optional library linkage, stores canonical Variable Bindings,
-and stores the `batch_snapshot` required by Preview and Run creation. The selector lists active SQLite
+ordered named Image Input bindings, and the `batch_snapshot` required by Preview and Run creation. The selector lists active SQLite
 Saved Batches keyed to the verified Project; selection loads the Batch's stored prompt, variable,
-reference, seed, and workflow intent. Manual Batch identity fields are no longer editable. Deliberately selecting an
+image, seed, and workflow intent. Manual Batch identity fields are no longer editable. Deliberately selecting an
 incompatible WorkflowVersion clears the effective Profile snapshot and blocks Preview until a
 compatible ProfileVersion is selected. The logical Profile remains selected and visible. The visual
 Profile mapper derives nodes and inputs from the selected immutable API-format WorkflowVersion, keeps
@@ -208,8 +209,56 @@ the generated Profile JSON as its source of truth, and exposes raw JSON read-onl
 latest active prior mappings for review, retain valid targets, and mark missing targets before creating
 a new immutable version under the same logical Profile. Switching back restores an existing compatible
 version. Unavailable or integrity-mismatched library records detach without rewriting their exact
-snapshots. The optional `reference_image` mapping changes neither the SQLite schema nor the stored JSON
-shape, so this feature requires no database reset or migration.
+snapshots.
+
+### Phase 2.4: Named Image Input Slots Pass 2A
+
+Completed. ProfileVersions keep the three required core mappings and add an ordered `image_inputs`
+array with zero or more `{key, label, node_id, input_name}` entries. The Profile Builder supports add,
+remove, move up, move down, editable labels, and target repair. It derives each stable key from the
+first label. Batch editing reconciles ordered bindings from the selected Profile. Preview, Run Plan,
+and Result Details display the named slots.
+
+Batch/API/Saved Batch bindings use ordered `{slot_key, values:[asset_id|null]}` entries. At this phase,
+Pass 2A required one effective value per Profile slot, and `null` preserved the Base workflow value. The
+compiler stores ordered `resolved_image_inputs` on every Job without adding an image dimension. The
+executor uploads selected slots in deterministic Profile order and the adapter maps them through
+Profile metadata. Multi-value and Cartesian semantics were deferred at this phase and completed in
+Phase 2.5; zipped, row-linked, and collection-link semantics remain deferred.
+
+This change establishes manifest v6, Batch snapshot v3, and browser session v10. Run v1, execution v2,
+and asset v1 remain current. The consolidated `0001_initial.sql` baseline was replaced. Existing
+development databases, old Runs, and old browser drafts are unsupported. Recreate the database
+manually after inspecting local data; batchcraft never deletes or rewrites it automatically.
+
+### Phase 2.5: Named Image Input Slots Pass 2B
+
+Completed. Every Profile Image Input slot accepts one or more ordered Project Asset or Base workflow
+alternatives. Slots form independent Cartesian dimensions between prompt variables and seeds. The
+rightmost slot and then seeds vary fastest. Each compiled Job and executor input remains fully resolved
+to one `asset_id | null` per slot.
+
+At completion of this phase, manifest v6, Batch snapshot v3, browser session v10, and the SQLite schema remained current
+because their arrays and normalized value rows already represent ordered alternatives. No database or
+browser-state reset was required. Zipped, linked, random, collection, and file/video semantics remain
+deferred. Fixed generic parameters were completed in Phase 2.6.
+
+### Phase 2.6: Generic Workflow Parameters Pass 3A
+
+Completed end to end. Workflow Profiles require an ordered `parameters` array with stable keys,
+literal targets, and string, integer, float, or boolean types. Executable Batches require one typed
+scalar or Base workflow value per parameter. Parameters are copied into every Job without changing
+Cartesian expansion, and the executor forwards only concrete overrides.
+
+The Profile Builder infers compatible types from literal workflow values and preserves copied definitions
+for repair. The Batch editor provides Base/Override controls with strict typed request construction.
+Preview, Run Plan, and Result Details display resolved values. Browser sessions use v11.
+
+This change establishes manifest v7 and Batch snapshot v4. Run v1 and execution v2 remain current.
+The consolidated `0001_initial.sql` baseline was replaced with normalized Saved Batch parameter rows.
+Existing development databases and Runs are unsupported and must be inspected and recreated manually;
+batchcraft never deletes or rewrites them automatically. Browser v10 drafts reset automatically.
+Parameter sweeps remain deferred.
 
 ## Python Conventions
 
@@ -249,10 +298,12 @@ uv run batchcraft-api
 The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATCHCRAFT_SERVER_PORT` override it. See `docs/API.md` for all application settings and endpoint behavior.
 
 SQL migrations live under `backend/src/batchcraft/db/migrations/`. The current pre-release schema is
-one consolidated `0001_initial.sql` baseline. The migration runner, ordered discovery, checksums, and
-transactional application remain the forward-change mechanism. An existing development database with
-unsupported migration history fails startup and must be reset manually; the application never erases
-it. Once preserving a baseline is required, add only the next contiguous `NNNN_name.sql` file and do
+one consolidated `0001_initial.sql` baseline. Generic Workflow Parameters Pass 3A replaced the prior
+consolidated 0001 bytes and schema with normalized parameter binding storage. Any
+database created from the prior baseline has unsupported migration history and must be recreated
+manually. The application fails startup and never erases it. The migration runner, ordered discovery,
+checksums, and transactional application remain the forward-change mechanism. Once preserving a
+baseline is required, add only the next contiguous `NNNN_name.sql` file and do
 not change applied migration bytes. Test migration behavior against file-backed temporary databases
 rather than only `:memory:`.
 
@@ -273,15 +324,15 @@ working session. Reconnect a saved Project only by exact Project ID and filesyst
 Project-scoped Prompt and Asset requests blank until that verification succeeds. Restore Run,
 execution, and Result state from the backend only when the Run matches the current Project and Batch,
 and require a fresh compiler Preview after restoring a form draft. Never store Result metadata or
-bytes as browser truth. Switching Project clears PromptVersion and Reference Asset selections and the
+bytes as browser truth. Switching Project clears PromptVersion and named Image Input selections and the
 session gallery while retaining Batch identity, variables, seeds, and workflow inputs. Changing Batch
-identity resets the session gallery; editing prompts, references, seeds, or display names does not.
+identity resets the session gallery; editing prompts, image bindings, seeds, or display names does not.
 
-The Reference Asset picker starts expanded with no selection and may start collapsed when a restored
-selection exists. Its collapsed state renders only the selected count. Select All preserves current
-selection order and appends unselected Project assets in deterministic picker order; Select None
-clears the selection. Both are semantic form changes and must invalidate Preview. An empty selection
-is valid and compiles Jobs that preserve the base workflow's mapped reference-image value.
+The selected Profile drives the named Image Input editor. It renders slots in Profile order and lets
+each choose ordered Project Asset alternatives plus an independent Base workflow alternative. Profile
+changes reconcile by stable slot key, preserve complete matching value order, add new slots as Base
+workflow, and remove deleted slots. Missing assets remain visible and block Preview until repaired. Any
+binding change invalidates Preview.
 
 Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it
 once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact
@@ -393,7 +444,8 @@ High-value unit-test areas include:
 - re-indexing complete filesystem Runs;
 - manifest round-tripping;
 - rerun creation;
-- Workflow Profile input mapping.
+- Workflow Profile core and named Image Input mapping;
+- named Image Input key, order, binding, frozen provenance, deterministic upload, and Base workflow behavior.
 
 A preview and an actual Run must be produced by the same underlying compiler behavior. Tests should protect this invariant.
 

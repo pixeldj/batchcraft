@@ -660,6 +660,7 @@ def create_app(
             workflow_version_id=request.workflow_version_id,
             mappings=request.mappings,
             image_inputs=request.image_inputs,
+            parameters=request.parameters,
             note=request.note,
         )
         return WorkflowProfileCreatedResponse(
@@ -737,6 +738,7 @@ def create_app(
             workflow_version_id=request.workflow_version_id,
             mappings=request.mappings,
             image_inputs=request.image_inputs,
+            parameters=request.parameters,
             note=request.note,
         )
         return WorkflowProfileVersionResponse.from_record(version)

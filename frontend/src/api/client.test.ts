@@ -314,8 +314,8 @@ describe("BatchcraftApiClient", () => {
     await client.createWorkflow("project one", { name: "Portrait", workflow: { node: 1 } });
     await client.createWorkflowVersion("workflow one", { workflow: { node: 2 }, note: null });
     await client.listWorkflowProfiles("workflow/one", undefined, signal);
-    await client.createWorkflowProfile("workflow one", { name: "Default", workflow_version_id: "version-1", mappings: { prompt: {} } });
-    await client.createWorkflowProfileVersion("profile one", { workflow_version_id: "version-2", mappings: { prompt: {} } });
+    await client.createWorkflowProfile("workflow one", { name: "Default", workflow_version_id: "version-1", mappings: { prompt: {} }, image_inputs: [], parameters: [] });
+    await client.createWorkflowProfileVersion("profile one", { workflow_version_id: "version-2", mappings: { prompt: {} }, image_inputs: [], parameters: [] });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "http://api.test/api/projects/project%2Fone/workflows",
@@ -367,7 +367,8 @@ function batchRequest() {
   const project = { id: "project", filesystem_key: "project", name: "Project" };
   const batch = { id: "batch", filesystem_key: "batch", name: "Batch" };
   const promptVersions = [{ id: "prompt", name: "Portrait", text: "Portrait" }];
-  const references = [{ asset_id: "asset" }];
+  const imageBindings = [{ slot_key: "source", values: ["asset"] as [string] }];
+  const parameterBindings: [] = [];
   const seeds = { mode: "fixed" as const, values: [1] };
   const workflow = {};
   const workflowProfile = {};
@@ -376,12 +377,13 @@ function batchRequest() {
     batch,
     prompt_versions: promptVersions,
     variable_bindings: [],
-    references,
+    image_bindings: imageBindings,
+    parameter_bindings: parameterBindings,
     seeds,
     workflow,
     workflow_profile: workflowProfile,
     batch_snapshot: {
-      snapshot_version: 2 as const,
+      snapshot_version: 4 as const,
       project,
       source_saved_batch: null,
       batch: { ...batch, description: null },
@@ -391,7 +393,8 @@ function batchRequest() {
         version_number: null,
       })),
       variable_bindings: [],
-      references,
+      image_bindings: imageBindings,
+      parameter_bindings: parameterBindings,
       seed_intent: { mode: "fixed" as const, values: [1], random_seed_count: null },
       workflow_selection: {
         workflow_id: null,

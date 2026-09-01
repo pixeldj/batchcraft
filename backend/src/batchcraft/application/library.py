@@ -415,6 +415,7 @@ class LibraryService:
         workflow_version_id: str,
         mappings: Mapping[str, object],
         image_inputs: Sequence[object],
+        parameters: Sequence[object],
         note: str | None,
     ) -> tuple[WorkflowProfileRecord, WorkflowProfileVersionRecord]:
         return self._workflow_profiles.create(
@@ -423,6 +424,7 @@ class LibraryService:
             workflow_version_id,
             mappings,
             image_inputs,
+            parameters,
             description=description,
             note=note,
         )
@@ -476,10 +478,11 @@ class LibraryService:
         workflow_version_id: str,
         mappings: Mapping[str, object],
         image_inputs: Sequence[object],
+        parameters: Sequence[object],
         note: str | None,
     ) -> WorkflowProfileVersionRecord:
         return self._workflow_profiles.create_version(
-            profile_id, workflow_version_id, mappings, image_inputs, note=note
+            profile_id, workflow_version_id, mappings, image_inputs, parameters, note=note
         )
 
     def archive_workflow_profile_version(self, version_id: str) -> WorkflowProfileVersionRecord:

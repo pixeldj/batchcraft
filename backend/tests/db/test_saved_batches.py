@@ -14,6 +14,7 @@ from batchcraft.db import (
     SavedBatchDefinition,
     SavedBatchImageBinding,
     SavedBatchIntegrityError,
+    SavedBatchParameterBinding,
     SavedBatchPromptSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
@@ -34,7 +35,7 @@ NOW = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 
 def _workflow() -> dict[str, object]:
     return {
-        "7": {"class_type": "KSampler", "inputs": {"seed": 1}},
+        "7": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": 20, "cfg": 7.0}},
         "25": {
             "class_type": "LoadImage",
             "inputs": {"image": "input.png", "mask": "mask.png"},
@@ -60,6 +61,25 @@ def _image_inputs() -> list[object]:
     return [
         {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"},
         {"key": "mask", "label": "Mask", "node_id": "25", "input_name": "mask"},
+    ]
+
+
+def _parameters() -> list[object]:
+    return [
+        {
+            "key": "steps",
+            "label": "Steps",
+            "node_id": "7",
+            "input_name": "steps",
+            "value_type": "integer",
+        },
+        {
+            "key": "cfg",
+            "label": "CFG",
+            "node_id": "7",
+            "input_name": "cfg",
+            "value_type": "float",
+        },
     ]
 
 
@@ -104,6 +124,7 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
         version.id,
         _mappings(),
         _image_inputs(),
+        _parameters(),
         profile_id=f"profile-{project_id}",
         version_id=f"profile-version-{project_id}",
     )
@@ -122,6 +143,10 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
         image_bindings=(
             SavedBatchImageBinding("reference", (None, "asset-2", "asset-1")),
             SavedBatchImageBinding("mask", ("asset-mask-2", "asset-mask-1")),
+        ),
+        parameter_bindings=(
+            SavedBatchParameterBinding("cfg", (8,)),
+            SavedBatchParameterBinding("steps", (30,)),
         ),
         selected_workflow_version=SavedBatchWorkflowVersionSnapshot(
             version.id, version.content_sha256, version.workflow
@@ -178,6 +203,10 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     )
     assert saved.variable_bindings == definition.variable_bindings
     assert saved.image_bindings == definition.image_bindings
+    assert saved.parameter_bindings == (
+        SavedBatchParameterBinding("steps", (30,)),
+        SavedBatchParameterBinding("cfg", (8,)),
+    )
     assert saved.selected_workflow_version is not None
     assert definition.selected_workflow_version is not None
     assert saved.selected_workflow_version.id == definition.selected_workflow_version.id
@@ -228,6 +257,7 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     logical_profile_only = replace(
         definition,
         image_bindings=(),
+        parameter_bindings=(),
         selected_workflow_profile_version=None,
     )
     saved_without_profile_version = SavedBatchStore(path).create(
@@ -240,6 +270,63 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     assert saved_without_profile_version.selected_workflow_profile_id == "profile-project-1"
     assert saved_without_profile_version.selected_workflow_profile_name == "Profile"
     assert saved_without_profile_version.selected_workflow_profile_version is None
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ("wrong_type", "unsafe_integer", "malformed_value", "missing_value", "extra_value"),
+)
+def test_saved_batch_reads_reject_corrupt_persisted_parameter_values(
+    tmp_path: Path, corruption: str
+) -> None:
+    path = _database(tmp_path)
+    definition = _complete_definition(path)
+    SavedBatchStore(path, clock=lambda: NOW).create(
+        "project-1", "complete", definition, batch_id="batch-complete"
+    )
+    with closing(open_connection(path)) as connection:
+        if corruption == "wrong_type":
+            connection.execute(
+                "UPDATE batch_parameter_binding_value SET value_json = ? "
+                "WHERE batch_id = ? AND binding_position = 1",
+                ('"thirty"\n', "batch-complete"),
+            )
+            message = "does not match its Profile type"
+        elif corruption == "unsafe_integer":
+            connection.execute(
+                "UPDATE batch_parameter_binding_value SET value_json = ? "
+                "WHERE batch_id = ? AND binding_position = 2",
+                (f"{2**53}\n", "batch-complete"),
+            )
+            message = "integer parameter values"
+        elif corruption == "malformed_value":
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            connection.execute(
+                "UPDATE batch_parameter_binding_value SET value_json = ? "
+                "WHERE batch_id = ? AND binding_position = 1",
+                ("not-json", "batch-complete"),
+            )
+            message = "invalid JSON"
+        elif corruption == "missing_value":
+            connection.execute(
+                "DELETE FROM batch_parameter_binding_value "
+                "WHERE batch_id = ? AND binding_position = 1",
+                ("batch-complete",),
+            )
+            message = "value position"
+        else:
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            connection.execute(
+                "INSERT INTO batch_parameter_binding_value "
+                "(batch_id, binding_position, value_position, value_json) "
+                "VALUES (?, ?, ?, ?)",
+                ("batch-complete", 1, 2, "31\n"),
+            )
+            message = "positions must be one-based and contiguous"
+        connection.commit()
+
+    with pytest.raises(SavedBatchStoreError, match=message):
+        SavedBatchStore(path).get("batch-complete")
 
 
 @pytest.mark.parametrize("values", (("cat", "cat"), ("", "")))

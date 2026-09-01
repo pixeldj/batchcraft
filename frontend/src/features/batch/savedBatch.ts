@@ -12,6 +12,12 @@ import {
   newPrompt,
   newVariableBinding,
   normalizedBindingValues,
+  buildParameterBindings,
+  reconcileImageBindings,
+  reconcileParameterBindings,
+  profileImageInputs,
+  profileParameters,
+  validateImageBindings,
   type BatchFormState,
 } from "./form";
 
@@ -23,6 +29,18 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
   const profile = emptyWorkflow && !form.workflowVersionId
     ? {}
     : parseObject(form.workflowProfileJson, "Workflow Profile");
+  if (!form.workflowProfileVersionId && form.imageBindings.length > 0) {
+    throw new FormBuildError(
+      "workflow_profile",
+      "Complete the Workflow Profile version before saving its Image Input bindings.",
+    );
+  }
+  if (!form.workflowProfileVersionId && form.parameterBindings.length > 0) {
+    throw new FormBuildError(
+      "workflow_profile",
+      "Complete the Workflow Profile version before saving its Parameter bindings.",
+    );
+  }
 
   const detachedPrompt = form.prompts.find((prompt) =>
     prompt.libraryProjectId !== form.projectId || !prompt.promptId || prompt.versionNumber === null
@@ -55,6 +73,11 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
     );
   }
 
+  const imageBindings = reconcileImageBindings(form.imageBindings, profileImageInputs(profile));
+  validateImageBindings(imageBindings);
+  const parameterBindings = buildParameterBindings(
+    reconcileParameterBindings(form.parameterBindings, profileParameters(profile)),
+  );
   return {
     name: required(form.batchName, "Batch name"),
     description: form.batchDescription.trim() || null,
@@ -72,7 +95,8 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
       placeholder: binding.placeholder.trim(),
       values: normalizedBindingValues(binding.values),
     })),
-    reference_selections: form.referenceAssetIds.map((assetId) => ({ asset_id: assetId })),
+    image_bindings: imageBindings,
+    parameter_bindings: parameterBindings,
     seed_intent: savedSeedIntent(form),
     selected_workflow_version: emptyWorkflow ? null : {
       id: form.workflowVersionId as string,
@@ -148,7 +172,11 @@ export function savedBatchToForm(
       placeholder: binding.placeholder,
       values: [...binding.values],
     })),
-    referenceAssetIds: detail.reference_selections.map((selection) => selection.asset_id),
+    imageBindings: reconcileImageBindings(detail.image_bindings, profile ? profileImageInputs(profile.profile) : []),
+    parameterBindings: savedParameterBindingsToForm(
+      detail.parameter_bindings,
+      profile ? profileParameters(profile.profile) : [],
+    ),
     seedMode: detail.seed_mode,
     seedValues: detail.seed_values.join("\n"),
     randomSeedCount: String(detail.random_seed_count ?? 1),
@@ -185,7 +213,8 @@ export function canonicalBatchIntent(form: BatchFormState): string {
       placeholder: binding.placeholder.trim(),
       values: normalizedBindingValues(binding.values),
     })),
-    references: form.referenceAssetIds,
+    imageBindings: form.imageBindings,
+    parameterBindings: form.parameterBindings,
     seed: form.seedMode === "random"
       ? { mode: "random", randomSeedCount: form.randomSeedCount.trim() }
       : { mode: form.seedMode, values: splitSeeds(form.seedValues) },
@@ -203,6 +232,23 @@ export function canonicalBatchIntent(form: BatchFormState): string {
       profileContentSha256: form.workflowProfileContentSha256,
       profileSnapshot: objectOrText(form.workflowProfileJson),
     },
+  });
+}
+
+function savedParameterBindingsToForm(
+  bindings: SavedBatchDetail["parameter_bindings"],
+  parameters: ReturnType<typeof profileParameters>,
+): BatchFormState["parameterBindings"] {
+  const byKey = new Map(bindings.map((binding) => [binding.parameter_key, binding.values]));
+  return parameters.map((parameter) => {
+    const values = byKey.get(parameter.key);
+    const value = values?.[0];
+    return {
+      parameterKey: parameter.key,
+      valueType: parameter.value_type,
+      mode: value === null || value === undefined ? "base" : "override",
+      value: value === null || value === undefined ? "" : String(value),
+    };
   });
 }
 

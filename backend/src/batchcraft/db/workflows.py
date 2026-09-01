@@ -353,6 +353,7 @@ class WorkflowProfileStore:
         workflow_version_id: str,
         mappings: Mapping[str, object],
         image_inputs: Sequence[object],
+        parameters: Sequence[object] = (),
         *,
         description: str | None = None,
         note: str | None = None,
@@ -382,7 +383,7 @@ class WorkflowProfileStore:
                 parent_workflow = _profile_workflow(connection, workflow_id)
                 target = _profile_target(connection, workflow_version_id, workflow_id)
                 canonical, digest = _canonical_profile(
-                    profile_id, name, mappings, image_inputs, target.workflow
+                    profile_id, name, mappings, image_inputs, parameters, target.workflow
                 )
                 _check_logical_conflict(
                     connection,
@@ -567,6 +568,7 @@ class WorkflowProfileStore:
         workflow_version_id: str,
         mappings: Mapping[str, object],
         image_inputs: Sequence[object],
+        parameters: Sequence[object] = (),
         *,
         note: str | None = None,
         version_id: str | None = None,
@@ -596,7 +598,7 @@ class WorkflowProfileStore:
                     profile_id,
                 )
                 canonical, digest = _canonical_profile(
-                    profile.id, profile.name, mappings, image_inputs, target.workflow
+                    profile.id, profile.name, mappings, image_inputs, parameters, target.workflow
                 )
                 _insert_profile_version(
                     connection,
@@ -653,6 +655,7 @@ def _canonical_profile(
     name: str,
     mappings: Mapping[str, object],
     image_inputs: Sequence[object],
+    parameters: Sequence[object],
     workflow: Mapping[str, object],
 ) -> tuple[str, str]:
     try:
@@ -661,6 +664,7 @@ def _canonical_profile(
             "name": name,
             "mappings": dict(mappings),
             "image_inputs": list(image_inputs),
+            "parameters": list(parameters),
         }
         validate_workflow_profile(workflow, profile)
         return _canonical(profile)

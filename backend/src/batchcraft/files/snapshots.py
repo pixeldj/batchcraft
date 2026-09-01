@@ -1,7 +1,16 @@
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    model_validator,
+)
 
+from batchcraft.domain import validate_parameter_scalar
 from batchcraft.domain.image_slots import validate_image_input_slot_key
 
 
@@ -10,6 +19,12 @@ class SnapshotModel(BaseModel):
 
 
 SnapshotSeed = Annotated[int, Field(strict=True, ge=0, le=2**53 - 1)]
+SnapshotInteger = Annotated[int, Field(strict=True, ge=-(2**53 - 1), le=2**53 - 1)]
+SnapshotFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+SnapshotParameterScalar = Annotated[
+    StrictStr | SnapshotInteger | SnapshotFloat | StrictBool,
+    BeforeValidator(validate_parameter_scalar),
+]
 
 
 class SnapshotIdentity(SnapshotModel):
@@ -65,6 +80,11 @@ class SnapshotImageBinding(SnapshotModel):
         return self
 
 
+class SnapshotParameterBinding(SnapshotModel):
+    parameter_key: str
+    values: list[SnapshotParameterScalar | None]
+
+
 class SnapshotSeedIntent(SnapshotModel):
     mode: Literal["fixed", "explicit", "random"]
     values: list[SnapshotSeed]
@@ -94,14 +114,15 @@ class SnapshotWorkflowSelection(SnapshotModel):
     workflow_profile: dict[str, object]
 
 
-class BatchSnapshotV3(SnapshotModel):
-    snapshot_version: int = Field(strict=True, ge=3, le=3)
+class BatchSnapshotV4(SnapshotModel):
+    snapshot_version: int = Field(strict=True, ge=4, le=4)
     project: SnapshotIdentity
     source_saved_batch: SnapshotSourceSavedBatch | None
     batch: SnapshotBatch
     prompt_versions: list[SnapshotPromptVersion]
     variable_bindings: list[SnapshotVariableBinding]
     image_bindings: list[SnapshotImageBinding]
+    parameter_bindings: list[SnapshotParameterBinding]
     seed_intent: SnapshotSeedIntent
     workflow_selection: SnapshotWorkflowSelection
 

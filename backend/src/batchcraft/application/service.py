@@ -226,6 +226,11 @@ class BatchcraftService:
                     for item in first_job.resolved_image_inputs
                     if item.asset_id is not None
                 },
+                parameters={
+                    item.parameter_key: item.value
+                    for item in first_job.resolved_parameters
+                    if item.value is not None
+                },
                 seed=first_job.seed,
                 output_prefix="batchcraft/validation",
             ),

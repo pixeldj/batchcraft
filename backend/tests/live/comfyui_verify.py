@@ -34,6 +34,7 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "image_inputs": [
         {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"}
     ],
+    "parameters": [],
 }
 
 

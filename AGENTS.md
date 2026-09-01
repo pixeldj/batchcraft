@@ -30,6 +30,7 @@ Use these terms consistently:
 - **Variable List** — reusable ordered values that can be bound to a placeholder.
 - **Reference Asset** — an input file, initially an image.
 - **Reference Collection** — reusable grouping of Reference Assets.
+- **Image Input Slot** — ordered, named Workflow Profile target bound by stable slot key to one or more ordered Reference Asset or Base workflow alternatives.
 - **Batch** — mutable experiment definition.
 - **Run** — execution whose compiled plan and provenance freeze at successful Run creation.
 - **Job** — one completely resolved ComfyUI execution.
@@ -161,12 +162,28 @@ The pure deterministic Batch compiler is implemented under `backend/`.
 
 The Run filesystem store is implemented under `backend/`, including execution identity, canonical manifests, workflow and Workflow Profile snapshots, content-addressed Project assets, loading, and atomic filesystem publication.
 
-The production ComfyUI adapter is implemented under `backend/`, including pure Workflow Profile mapping and typed async HTTP/WebSocket operations. It does not own scheduling, retries, execution-state persistence, or Run filesystem mutation.
+The production ComfyUI adapter is implemented under `backend/`, including pure Workflow Profile core,
+named Image Input, and typed fixed parameter mapping plus typed async HTTP/WebSocket operations. It
+does not own scheduling, retries, execution-state persistence, or Run filesystem mutation.
 
 The sequential Run executor is implemented under `backend/`, including versioned mutable execution state, queue-depth-1 Job orchestration, history reconciliation, and Result ingestion. It executes one published Run against one ComfyUI client and does not provide global scheduling or automatic recovery.
 
-The first FastAPI application boundary is implemented under `backend/`. It exposes SQLite-backed Project and Prompt library operations, ComfyUI status, ephemeral Batch preview, durable Run creation and filesystem lookup, in-process background execution start, execution polling, and safe Result retrieval through narrow application services.
+The first FastAPI application boundary is implemented under `backend/`. It exposes SQLite-backed
+Project, Prompt, Workflow, Workflow Profile, and Saved Batch operations; Project Asset import; ComfyUI
+status; Batch preview; durable Run creation and filesystem lookup; in-process background execution;
+execution polling; and safe Result retrieval through narrow application services.
 
-The first React frontend is implemented under `frontend/`. It provides one browser screen for ComfyUI status, ephemeral Batch configuration, deterministic Job preview, durable Run creation, execution polling, and Result rendering. It uses the FastAPI application as its only backend boundary.
+The first React frontend is implemented under `frontend/`. It provides one browser screen for ComfyUI
+status, Project and library management, Saved Batch editing, Workflow Profile building, Profile-driven
+named Image Input binding, deterministic Job preview, durable Run creation, execution polling, and
+Result rendering. It uses the FastAPI application as its only backend boundary.
 
-SQLite Phase 1 is implemented under `backend/`, including explicit migrations, Project owner publication/adoption, mutable Project metadata, logical Prompts, and immutable PromptVersions. Durable editable Batch persistence, filesystem-derived indexes, global scheduling, cancellation, retry, and automatic recovery remain deferred. Keep frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and persistence rules.
+Generic Workflow Parameters Pass 3A is implemented end to end. ProfileVersions store ordered typed
+`{key,label,node_id,input_name,value_type}` parameter definitions beside core mappings and Image Input
+slots. Batch/API/Saved Batch bindings store exactly one `string|integer|float|boolean|null` value per
+parameter inside a reserved `values` array. `null` preserves Base workflow. Parameters do not multiply
+Jobs in Pass 3A; every Job and Result provenance record carries one resolved scalar or Base state per
+Profile parameter. Manifest v7, Batch snapshot v4, browser session v11, and the replacement consolidated
+SQLite 0001 baseline are current. Parameter sweeps, ranges, enums, `/object_info`, and LoRA discovery
+remain deferred. Keep frontend HTTP types and UI state separate from backend compiler, filesystem,
+ComfyUI, execution, and persistence rules.

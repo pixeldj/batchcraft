@@ -157,10 +157,22 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
           </dd>
         </div>
         <Detail label="Seed" value={String(job.seed)} />
-        <Detail
-          label="Reference"
-          value={job.reference_filename ?? job.reference_asset_id ?? "Base workflow"}
-        />
+         {job.resolved_image_inputs.map((input) => (
+           <Detail
+              key={input.slot_key}
+              label={input.label}
+              value={input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}
+              code={input.asset_id ?? undefined}
+            />
+         ))}
+        {job.resolved_parameters.map((parameter) => (
+          <Detail
+            key={parameter.parameter_key}
+            label={parameter.label}
+            value={formatParameterValue(parameter.value)}
+            code={parameter.parameter_key}
+          />
+        ))}
         <Detail
           label="Workflow"
           value={formatVersioned(
@@ -236,4 +248,10 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatParameterValue(value: string | number | boolean | null): string {
+  if (value === null) return "Base workflow";
+  if (typeof value === "string") return value === "" ? '"" (empty string)' : value;
+  return String(value);
 }

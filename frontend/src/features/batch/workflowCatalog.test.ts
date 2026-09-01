@@ -119,7 +119,7 @@ describe("rankWorkflowInputCandidates", () => {
     ["prompt", "10.text"],
     ["seed", "7.seed"],
     ["output_prefix", "41.filename_prefix"],
-    ["reference_image", "3.image"],
+    ["image_input", "3.image"],
   ] as const)("places the obvious %s target first", (mappingKind, expected) => {
     const candidates = rankWorkflowInputCandidates(catalog, mappingKind);
 

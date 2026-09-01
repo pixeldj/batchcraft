@@ -65,6 +65,93 @@ describe("Saved Batch Variable Bindings", () => {
   });
 });
 
+describe("Saved Batch Image Inputs", () => {
+  it("round-trips ordered slot bindings against the exact Profile snapshot", () => {
+    const detail = savedBatchDetail();
+    detail.selected_workflow_version_id = "workflow-v1";
+    detail.selected_workflow_profile_id = "profile-1";
+    detail.selected_workflow_profile_version_id = "profile-v1";
+    detail.selected_workflow_version = {
+      id: "workflow-v1",
+      content_sha256: "workflow-sha",
+      workflow: { node: {} },
+      workflow_id: "workflow-1",
+      workflow_name: "Workflow",
+      version_number: 1,
+      name_snapshot: "Workflow",
+      workflow_archived_at: null,
+      version_archived_at: null,
+    };
+    detail.selected_workflow_profile_version = {
+      id: "profile-v1",
+      workflow_profile_id: "profile-1",
+      workflow_version_id: "workflow-v1",
+      content_sha256: "profile-sha",
+      profile: { mappings: {}, image_inputs: [
+        { key: "style", label: "Style", node_id: "1", input_name: "image" },
+        { key: "pose", label: "Pose", node_id: "2", input_name: "image" },
+      ], parameters: [] },
+      workflow_profile_name: "Profile",
+      version_number: 1,
+      name_snapshot: "Profile",
+      workflow_profile_archived_at: null,
+      version_archived_at: null,
+    };
+    detail.image_bindings = [
+      { slot_key: "pose", values: ["asset-pose-b", "asset-pose-a"] },
+      { slot_key: "removed", values: ["asset-old"] },
+      { slot_key: "style", values: [null, "asset-style"] },
+    ];
+
+    const form = savedBatchToForm(detail, project());
+
+    expect(form.imageBindings).toEqual([
+      { slot_key: "style", values: [null, "asset-style"] },
+      { slot_key: "pose", values: ["asset-pose-b", "asset-pose-a"] },
+    ]);
+    expect(buildSavedBatchDefinition(form).image_bindings).toEqual(form.imageBindings);
+  });
+});
+
+describe("Saved Batch Parameters", () => {
+  it("round-trips Profile-ordered typed Base and Override bindings and dirty identity", () => {
+    const detail = savedBatchDetail();
+    detail.selected_workflow_version_id = "workflow-v1";
+    detail.selected_workflow_profile_id = "profile-1";
+    detail.selected_workflow_profile_version_id = "profile-v1";
+    detail.selected_workflow_version = {
+      id: "workflow-v1", content_sha256: "workflow-sha", workflow: { node: {} },
+      workflow_id: "workflow-1", workflow_name: "Workflow", version_number: 1,
+      name_snapshot: "Workflow", workflow_archived_at: null, version_archived_at: null,
+    };
+    detail.selected_workflow_profile_version = {
+      id: "profile-v1", workflow_profile_id: "profile-1", workflow_version_id: "workflow-v1",
+      content_sha256: "profile-sha", workflow_profile_name: "Profile", version_number: 1,
+      name_snapshot: "Profile", workflow_profile_archived_at: null, version_archived_at: null,
+      profile: { mappings: {}, image_inputs: [], parameters: [
+        { key: "caption", label: "Caption", node_id: "1", input_name: "caption", value_type: "string" },
+        { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
+      ] },
+    };
+    detail.parameter_bindings = [
+      { parameter_key: "enabled", values: [false] },
+      { parameter_key: "caption", values: [null] },
+    ];
+
+    const form = savedBatchToForm(detail, project());
+    expect(form.parameterBindings).toEqual([
+      { parameterKey: "caption", valueType: "string", mode: "base", value: "" },
+      { parameterKey: "enabled", valueType: "boolean", mode: "override", value: "false" },
+    ]);
+    expect(buildSavedBatchDefinition(form).parameter_bindings).toEqual([
+      { parameter_key: "caption", values: [null] },
+      { parameter_key: "enabled", values: [false] },
+    ]);
+    const changed = { ...form, parameterBindings: form.parameterBindings.map((binding) => binding.parameterKey === "caption" ? { ...binding, mode: "override" as const } : binding) };
+    expect(canonicalBatchIntent(changed)).not.toBe(canonicalBatchIntent(form));
+  });
+});
+
 function project(): ProjectResponse {
   return {
     id: "project-1",
@@ -98,7 +185,8 @@ function savedBatchDetail(): SavedBatchDetail {
     archived_at: null,
     prompt_selections: [],
     variable_bindings: [{ placeholder: "subject", values: ["wolf", "fox"] }],
-    reference_selections: [],
+    image_bindings: [],
+    parameter_bindings: [],
     selected_workflow_version: null,
     selected_workflow_profile_version: null,
   };

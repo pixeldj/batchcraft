@@ -155,12 +155,14 @@ def test_profile_versions_validate_exact_target_and_list_latest_compatible(
         "name": "Profile",
         "mappings": _mappings(),
         "image_inputs": _image_inputs(),
+        "parameters": [],
     }
     assert duplicate.profile == {
         "id": profile.id,
         "name": "Renamed Profile",
         "mappings": _mappings(),
         "image_inputs": _image_inputs(),
+        "parameters": [],
     }
     assert duplicate.content_sha256 != first.content_sha256
     assert duplicate.name_snapshot == "Renamed Profile"
@@ -209,6 +211,7 @@ def test_profile_version_persists_without_image_inputs(tmp_path: Path) -> None:
 
     assert version.profile["mappings"] == mappings
     assert version.profile["image_inputs"] == []
+    assert version.profile["parameters"] == []
 
 
 def test_database_enforces_profile_project_target_and_version_immutability(

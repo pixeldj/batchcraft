@@ -4,7 +4,10 @@
 
 The first application boundary exposes the production compiler, Run filesystem store, execution state, sequential executor, and ComfyUI adapter through FastAPI.
 
-The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. SQLite owns current Project metadata plus the Prompt, Workflow, and Workflow Profile libraries. Authentication, a global scheduler, restart recovery, and in-flight cancellation remain deferred.
+The API is a local single-user development boundary. The first React frontend consumes it, and the
+browser never communicates directly with ComfyUI. SQLite owns current Project metadata, Prompt,
+Workflow, and Workflow Profile libraries, and Saved Batches. Authentication, a global scheduler,
+restart recovery, and in-flight cancellation remain deferred.
 
 ## Local Startup
 
@@ -148,21 +151,27 @@ version number, and creation time are immutable. Explicit duplicate saves alloca
 version. `GET /api/projects/{project_id}/workflows` includes the latest non-archived version.
 
 A Workflow Profile belongs to one Workflow and Project. Creating a Profile atomically creates its
-first immutable ProfileVersion against one exact WorkflowVersion. Create requests accept a `mappings`
-object. Version responses return a complete Run-compatible `profile` snapshot with `id`, `name`, and
-`mappings`, plus `content_sha256` and all parent identities. A target from another logical Workflow is
+first immutable ProfileVersion against one exact WorkflowVersion. Create and version requests accept a
+`mappings` object, an `image_inputs` array, and a required `parameters` array. Version responses return
+a complete Run-compatible `profile` snapshot with `id`, `name`, `mappings`, `image_inputs`, and
+`parameters`, plus `content_sha256` and all
+parent identities. A target from another logical Workflow is
 rejected. Filtering `GET /api/workflows/{workflow_id}/profiles` by `workflow_version_id` retains every
 logical Profile for the Workflow and exposes its latest compatible version as
 `latest_compatible_version`, or `null` when no version targets that WorkflowVersion. A client can use
 an earlier ProfileVersion's mappings to create a new immutable version under the same logical Profile;
 the API validates those mappings against the new target WorkflowVersion.
 
-The current mapping contract requires `prompt`, `seed`, and `output_prefix`; `reference_image` is
-optional. Unknown mapping names are rejected. Every mapping names a node ID, input name, and expected
-value type, must target an input on the exact WorkflowVersion, and must not target a ComfyUI connection
-array. Preview and Run creation accept a Profile without `reference_image` when no Reference Asset is
-selected. A selected Reference Asset without that mapping is rejected with an actionable validation
-error.
+The current core mapping contract requires exactly `prompt`, `seed`, and `output_prefix`. Unknown
+mapping names are rejected. Every mapping names a node ID, input name, and expected value type, must
+target an input on the exact WorkflowVersion, and must not target a ComfyUI connection array.
+
+`image_inputs` is ordered and may be empty. Each entry has exactly `key`, `label`, `node_id`, and
+`input_name`. Keys use readable lowercase ASCII snake case, start with a letter, and are unique within
+the Profile. Image inputs must target distinct literal inputs and cannot reuse core mapping targets.
+Each parameter entry has exactly `key`, `label`, `node_id`, `input_name`, and `value_type`. Supported
+types are `string`, `integer`, `float`, and `boolean`. The target must hold a compatible literal base
+value. Core mappings, Image Input slots, and parameters cannot share targets.
 
 Archive operations set archive timestamps through `POST .../archive`; they do not delete historical
 versions. Canonical JSON and stored hashes are checked when versions are read.
@@ -171,8 +180,10 @@ versions. Canonical JSON and stored hashes are checked when versions are read.
 required `batch_snapshot` object containing the full editable Saved Batch state. The request carries
 Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
 template text, canonical variable bindings shaped as `{ "placeholder": string, "values": string[] }`,
-an ordered `references` array, seed input, the API-format
-workflow, and its Workflow Profile mapping. The singular `prompt_version` field is not accepted.
+ordered image bindings shaped as `{ "slot_key": string, "values": [asset_id | null] }`, seed input,
+ordered parameter bindings shaped as `{ "parameter_key": string, "values": [scalar | null] }`,
+the API-format workflow, and its Workflow Profile snapshot. Preview and Run creation require exactly one
+typed value or `null` per Profile parameter. The singular `prompt_version` field is not accepted.
 The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
 a Random seed intent that stores only `mode` and `count`.
 
@@ -184,10 +195,12 @@ Project assets, and publishes through `RunFilesystemStore`.
 The compact Run creation response is unchanged. `GET /api/runs/{run_id}` additionally returns the
 ordered frozen PromptVersion snapshots, each Job ordinal's PromptVersion ID association, and a
 `plan` projection loaded from the published Run manifest. The plan contains compiler warnings and
-every concrete Job's resolved prompt, resolved variables, Reference Asset identity and frozen
-filename when selected, and materialized seed. The required `batch_snapshot` exposes canonical
+every concrete Job's resolved prompt, resolved variables, ordered `resolved_image_inputs`, ordered
+`resolved_parameters`, and
+materialized seed. Each resolved image entry has `slot_key`, frozen `label`, nullable `asset_id`, and a
+nullable frozen filename. The required `batch_snapshot` exposes canonical
 editable intent, including optional frozen Workflow/Profile display labels and version numbers. The
-Run loader supports manifest v5 with `snapshot_version: 2`; unsupported manifest or snapshot versions
+Run loader supports manifest v7 with `snapshot_version: 4`; unsupported manifest or snapshot versions
 make the Run invalid rather than producing a partial response.
 
 ## Project Assets
@@ -231,6 +244,23 @@ are allowed because Saved Batches are drafts. The empty string is a concrete val
 and executable Preview/Run requests reject exact duplicate values, including duplicate empty strings.
 Requests containing removed binding fields such as `mode`, `fixed_value`, or `selected_values` are
 invalid; the API does not normalize them.
+
+Saved Batch request and detail schemas expose `image_bindings` entries with `slot_key` and `values`.
+When a Profile is selected, Saved Batch writes require the exact Profile slot set in Profile order with
+one or more ordered, unique alternatives per slot. A Profile with no slots uses an empty binding list.
+Each value is either a nonblank Reference Asset ID or `null`; `null` means Base workflow, appears first
+when included, and does not upload or mutate that slot for its concrete Job. Every slot is an independent
+Cartesian dimension. Zipped, row-linked, and collection-link semantics are not supported.
+
+Saved Batch request and detail schemas also expose ordered `parameter_bindings`. When a Profile is
+selected, writes require the exact Profile parameter set in Profile order and exactly one typed scalar
+or `null` per parameter. `null` means Base workflow. Empty string, zero, and false remain concrete
+overrides. The backend rejects wrong scalar types, non-finite numbers, and integers outside the signed
+JavaScript-safe range.
+
+Executable Preview and Run requests may supply binding records in any order. Compilation resolves them
+by stable slot key and expands dimensions in Profile slot order. Alternative order inside each binding
+is significant and preserved.
 
 Random seed intent stores `mode` and `count` in the `batch_snapshot`; the frontend materializes the
 concrete ordered seed list before Preview or Run creation.

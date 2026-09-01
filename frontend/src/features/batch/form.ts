@@ -1,4 +1,14 @@
-import type { BatchRequest, EditableBatchSnapshot, JsonObject } from "../../api/types";
+import type {
+  BatchRequest,
+  EditableBatchSnapshot,
+  ImageBindingRequest,
+  JsonObject,
+  ParameterBindingRequest,
+  ParameterScalar,
+  ParameterValueType,
+  WorkflowProfileImageInput,
+  WorkflowProfileParameter,
+} from "../../api/types";
 
 export interface VariableBindingForm {
   key: number;
@@ -17,6 +27,13 @@ export interface PromptForm {
   text: string;
 }
 
+export interface ParameterBindingForm {
+  parameterKey: string;
+  valueType: ParameterValueType;
+  mode: "base" | "override";
+  value: string;
+}
+
 export interface BatchFormState {
   projectId: string;
   projectFilesystemKey: string;
@@ -27,7 +44,8 @@ export interface BatchFormState {
   batchDescription: string;
   prompts: PromptForm[];
   variableBindings: VariableBindingForm[];
-  referenceAssetIds: string[];
+  imageBindings: ImageBindingRequest[];
+  parameterBindings: ParameterBindingForm[];
   seedMode: "fixed" | "explicit" | "random";
   seedValues: string;
   randomSeedCount: string;
@@ -93,7 +111,8 @@ export function initialBatchForm(): BatchFormState {
     batchDescription: "",
     prompts: [],
     variableBindings: [binding],
-    referenceAssetIds: [],
+    imageBindings: [],
+    parameterBindings: [],
     seedMode: "fixed",
     seedValues: "1",
     randomSeedCount: "1",
@@ -104,10 +123,11 @@ export function initialBatchForm(): BatchFormState {
         name: "Workflow Profile",
         mappings: {
           prompt: { node_id: "", input_name: "", value_type: "string" },
-          reference_image: { node_id: "", input_name: "", value_type: "image" },
           seed: { node_id: "", input_name: "", value_type: "integer" },
           output_prefix: { node_id: "", input_name: "", value_type: "string" },
         },
+        image_inputs: [],
+        parameters: [],
       },
       null,
       2,
@@ -155,7 +175,8 @@ export function buildBatchRequest(
     },
     prompt_versions: batchSnapshot.prompt_versions.map(({ id, name, text }) => ({ id, name, text })),
     variable_bindings: batchSnapshot.variable_bindings,
-    references: batchSnapshot.references,
+    image_bindings: batchSnapshot.image_bindings,
+    parameter_bindings: batchSnapshot.parameter_bindings,
     seeds: seedInput,
     workflow: batchSnapshot.workflow_selection.workflow,
     workflow_profile: batchSnapshot.workflow_selection.workflow_profile,
@@ -199,8 +220,6 @@ export function buildEditableBatchSnapshot(
       );
     }
   }
-  const references = form.referenceAssetIds;
-
   const project = {
     id: required(form.projectId, "project", "Project ID"),
     filesystem_key: required(form.projectFilesystemKey, "project", "Project filesystem key"),
@@ -220,12 +239,22 @@ export function buildEditableBatchSnapshot(
     placeholder: required(binding.placeholder, "variables", "Placeholder"),
     values: normalizedBindingValues(binding.values),
   }));
-  const referenceRequests = references.map((assetId) => ({ asset_id: assetId }));
   const workflow = parseJsonObject(form.workflowJson, "workflow", "Workflow");
   const workflowProfile = parseJsonObject(
     form.workflowProfileJson,
     "workflow_profile",
     "Workflow Profile",
+  );
+  if (!Array.isArray(workflowProfile.image_inputs) || !Array.isArray(workflowProfile.parameters)) {
+    throw new FormBuildError(
+      "workflow_profile",
+      "Workflow Profile JSON must define image_inputs and parameters arrays.",
+    );
+  }
+  const imageBindings = reconcileImageBindings(form.imageBindings, profileImageInputs(workflowProfile));
+  validateImageBindings(imageBindings);
+  const parameterBindings = buildParameterBindings(
+    reconcileParameterBindings(form.parameterBindings, profileParameters(workflowProfile)),
   );
   const seedIntent = form.seedMode === "random"
     ? {
@@ -240,7 +269,7 @@ export function buildEditableBatchSnapshot(
     };
 
   return {
-    snapshot_version: 2,
+    snapshot_version: 4,
     project,
     source_saved_batch: context.sourceSavedBatch,
     batch: { ...batch, description: form.batchDescription.trim() || null },
@@ -250,7 +279,8 @@ export function buildEditableBatchSnapshot(
       version_number: form.prompts[index].versionNumber,
     })),
     variable_bindings: variableBindings,
-    references: referenceRequests,
+    image_bindings: imageBindings,
+    parameter_bindings: parameterBindings,
     seed_intent: seedIntent,
     workflow_selection: {
       workflow_id: form.workflowId,
@@ -265,6 +295,186 @@ export function buildEditableBatchSnapshot(
       workflow_profile: workflowProfile,
     },
   };
+}
+
+export function profileImageInputs(profile: JsonObject | string): WorkflowProfileImageInput[] {
+  const parsed = typeof profile === "string" ? parseJsonObject(profile, "workflow_profile", "Workflow Profile") : profile;
+  if (!Array.isArray(parsed.image_inputs)) return [];
+  return parsed.image_inputs.flatMap((value) => {
+    if (!isJsonObject(value)) return [];
+    if (
+      typeof value.key !== "string"
+      || typeof value.label !== "string"
+      || typeof value.node_id !== "string"
+      || typeof value.input_name !== "string"
+    ) return [];
+    return [{ key: value.key, label: value.label, node_id: value.node_id, input_name: value.input_name }];
+  });
+}
+
+export function profileParameters(profile: JsonObject | string): WorkflowProfileParameter[] {
+  const parsed = typeof profile === "string" ? parseJsonObject(profile, "workflow_profile", "Workflow Profile") : profile;
+  if (!Array.isArray(parsed.parameters)) return [];
+  return parsed.parameters.flatMap((value) => {
+    if (!isJsonObject(value)) return [];
+    if (
+      typeof value.key !== "string"
+      || typeof value.label !== "string"
+      || typeof value.node_id !== "string"
+      || typeof value.input_name !== "string"
+      || !isParameterValueType(value.value_type)
+    ) return [];
+    return [{
+      key: value.key,
+      label: value.label,
+      node_id: value.node_id,
+      input_name: value.input_name,
+      value_type: value.value_type,
+    }];
+  });
+}
+
+export function reconcileImageBindings(
+  current: ImageBindingRequest[],
+  slots: WorkflowProfileImageInput[],
+): ImageBindingRequest[] {
+  const byKey = new Map(current.map((binding) => [binding.slot_key, binding.values]));
+  return slots.map((slot) => ({
+    slot_key: slot.key,
+    values: normalizeImageBindingValues(byKey.get(slot.key)),
+  }));
+}
+
+export function reconcileFormImageBindings(form: BatchFormState, profileJson: string): BatchFormState {
+  return {
+    ...form,
+    imageBindings: reconcileImageBindings(form.imageBindings, profileImageInputs(profileJson)),
+  };
+}
+
+export function reconcileParameterBindings(
+  current: ParameterBindingForm[],
+  parameters: WorkflowProfileParameter[],
+): ParameterBindingForm[] {
+  const byKey = new Map(current.map((binding) => [binding.parameterKey, binding]));
+  return parameters.map((parameter) => {
+    const existing = byKey.get(parameter.key);
+    if (!existing) return {
+      parameterKey: parameter.key,
+      valueType: parameter.value_type,
+      mode: "base",
+      value: "",
+    };
+    if (existing.valueType === parameter.value_type) return existing;
+    let compatible = false;
+    try {
+      const scalar = parseParameterValue(existing.value, existing.valueType, parameter.label);
+      compatible = parameterScalarCompatible(scalar, parameter.value_type);
+    } catch {
+      // An invalid draft is not compatible with a changed declared type.
+    }
+    if (existing.mode === "base") {
+      return {
+        ...existing,
+        valueType: parameter.value_type,
+        value: compatible ? existing.value : "",
+      };
+    }
+    if (compatible) return { ...existing, valueType: parameter.value_type };
+    return { parameterKey: parameter.key, valueType: parameter.value_type, mode: "base", value: "" };
+  });
+}
+
+export function reconcileFormBindings(form: BatchFormState, profileJson: string): BatchFormState {
+  return {
+    ...form,
+    imageBindings: reconcileImageBindings(form.imageBindings, profileImageInputs(profileJson)),
+    parameterBindings: reconcileParameterBindings(form.parameterBindings, profileParameters(profileJson)),
+  };
+}
+
+export function buildParameterBindings(bindings: ParameterBindingForm[]): ParameterBindingRequest[] {
+  return bindings.map((binding) => ({
+    parameter_key: binding.parameterKey,
+    values: [binding.mode === "base"
+      ? null
+      : parseParameterValue(binding.value, binding.valueType, binding.parameterKey)],
+  }));
+}
+
+export function parseParameterValue(
+  raw: string,
+  valueType: ParameterValueType,
+  label: string,
+): ParameterScalar {
+  if (valueType === "string") return raw;
+  if (valueType === "boolean") {
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    throw new FormBuildError("parameters", `${label} must be true or false.`);
+  }
+  const trimmed = raw.trim();
+  if (valueType === "integer") {
+    if (!/^[+-]?\d+$/.test(trimmed)) {
+      throw new FormBuildError("parameters", `${label} must be an exact signed integer.`);
+    }
+    const value = Number(trimmed);
+    if (!Number.isSafeInteger(value)) {
+      throw new FormBuildError("parameters", `${label} must be a JavaScript-safe integer.`);
+    }
+    return value;
+  }
+  if (!trimmed) throw new FormBuildError("parameters", `${label} must be a finite number.`);
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) {
+    throw new FormBuildError("parameters", `${label} must be a finite number.`);
+  }
+  return value;
+}
+
+function parameterScalarCompatible(value: ParameterScalar, valueType: ParameterValueType): boolean {
+  if (valueType === "string") return typeof value === "string";
+  if (valueType === "boolean") return typeof value === "boolean";
+  if (valueType === "integer") return typeof value === "number" && Number.isSafeInteger(value);
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isParameterValueType(value: unknown): value is ParameterValueType {
+  return value === "string" || value === "integer" || value === "float" || value === "boolean";
+}
+
+function normalizeImageBindingValues(values: (string | null)[] | undefined): Array<string | null> {
+  if (values === undefined) return [null];
+  return [...values];
+}
+
+export function validateImageBindings(bindings: ImageBindingRequest[]): void {
+  for (const binding of bindings) {
+    if (binding.values.length === 0) {
+      throw new FormBuildError(
+        "image_inputs",
+        `Image Input ${JSON.stringify(binding.slot_key)} must have at least one alternative.`,
+      );
+    }
+    if (binding.values.some((value) => typeof value === "string" && !value.trim())) {
+      throw new FormBuildError(
+        "image_inputs",
+        `Image Input ${JSON.stringify(binding.slot_key)} contains a blank Project Asset ID.`,
+      );
+    }
+    if (new Set(binding.values).size !== binding.values.length) {
+      throw new FormBuildError(
+        "image_inputs",
+        `Image Input ${JSON.stringify(binding.slot_key)} contains duplicate alternatives.`,
+      );
+    }
+    if (binding.values.includes(null) && binding.values[0] !== null) {
+      throw new FormBuildError(
+        "image_inputs",
+        `Image Input ${JSON.stringify(binding.slot_key)} must place Base workflow first.`,
+      );
+    }
+  }
 }
 
 export function editableBatchSnapshotIdentity(snapshot: EditableBatchSnapshot): string {
@@ -351,6 +561,10 @@ function parseJsonObject(value: string, field: string, label: string): JsonObjec
     throw new FormBuildError(field, `${label} JSON must have an object at its root.`);
   }
   return parsed as JsonObject;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function canonicalize(value: unknown): unknown {

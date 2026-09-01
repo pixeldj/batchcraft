@@ -482,7 +482,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       batchName: fresh.batchName,
       batchDescription: fresh.batchDescription,
       prompts: [],
-      referenceAssetIds: [],
+      imageBindings: [],
+      parameterBindings: [],
       workflowJson: "{}",
       workflowProfileJson: "{}",
       workflowLibraryProjectId: null,
@@ -621,12 +622,14 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       });
       const availableAssets = await api.listProjectAssets(request.project.filesystem_key);
       const availableAssetIds = new Set(availableAssets.assets.map((asset) => asset.asset_id));
-      const missingAssetIds = request.references
-        .map((reference) => reference.asset_id)
+      const selectedAssetIds = request.image_bindings.flatMap((binding) =>
+        binding.values.filter((value): value is string => value !== null)
+      );
+      const missingAssetIds = [...new Set(selectedAssetIds)]
         .filter((assetId) => !availableAssetIds.has(assetId));
       if (missingAssetIds.length > 0) {
         throw new Error(
-          `Selected Reference Assets are no longer available in this Project: ${missingAssetIds.join(", ")}`,
+          `Selected Image Input assets are no longer available in this Project: ${missingAssetIds.join(", ")}`,
         );
       }
       const nextPreview = await api.previewBatch(request);

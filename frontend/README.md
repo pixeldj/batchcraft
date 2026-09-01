@@ -1,31 +1,39 @@
 # batchcraft frontend
 
-The frontend is the first browser workflow for importing and ordering Project Reference Assets,
+The frontend is the first browser workflow for importing Reference Assets and binding them to named Image Inputs,
 selecting and configuring a saved or new Saved Batch, previewing its compiled Jobs, creating durable
 Runs, watching Job state, viewing the current Run's Results, and reviewing accumulated Batch Results
 from this browser working session. It communicates only with the batchcraft FastAPI application.
 
 The current tab stores a versioned working draft, selected Project ID, current Run ID, and ordered
-unique session Run IDs in `sessionStorage`. The current schema is version 9 and stores canonical
-Variable Bindings plus the `batch_snapshot` required by Preview and Run creation. Only a valid v9
+unique session Run IDs in `sessionStorage`. The current schema is version 11 and stores canonical
+Variable Bindings, ordered Image Input bindings, and fixed Parameter bindings plus the `batch_snapshot` required by Preview and Run creation. Only a valid v11
 session is restored; unsupported or malformed data starts a clean working session. A refresh restores
 the form and ordered prompt list, then reloads Run, execution, and Result data from FastAPI. Result metadata
 and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
 the restored draft again. Closing the tab or browser session may remove this working state.
 
-The Reference Asset picker is expanded when no references are selected and collapsed by default for
-a restored selection. The collapsed summary shows only the selected count. Select All preserves the
-existing selection order and appends unselected Project assets in deterministic display order; Select
-None clears the selection. Both operations invalidate Preview. Reference Assets are optional; an empty
-selection compiles Jobs from the base workflow.
+The selected ProfileVersion defines zero or more ordered, named Image Inputs. Each slot selects one or
+more ordered Base workflow and Reference Asset alternatives. Profile changes reconcile bindings by
+stable slot key, preserve matching selections, add new slots as Base workflow, and remove bindings for
+deleted slots. Missing Reference Assets remain visible and block Preview until repaired.
+
+The selected ProfileVersion also defines ordered fixed Parameters targeting literal workflow inputs.
+Each Parameter independently selects Base workflow or one typed string, integer, float, or boolean
+override. Profile changes reconcile these values by stable key and compatible declared type. Fixed
+Parameters are copied into every Job and do not change Job count.
+
+Preview and Result Details render every concrete Job slot by its frozen label and resolved Reference
+Asset or Base workflow value. Run Plan also shows all frozen Batch alternatives. Each slot independently
+multiplies Job count.
 
 Generated image cards render at their intrinsic aspect ratio without a fixed preview frame. Reference
-Asset cards retain a uniform contained thumbnail frame, so neither generated nor reference images are
+Asset cards retain a uniform contained thumbnail frame, so neither generated nor input images are
 cropped. The current Results section shows the active Run. The separate Batch Results section
 accumulates Runs for the current stable Project/Batch identity in session order and restores them once
 from FastAPI after refresh. Run restoration requires the stored Run to match the selected Project and
-Batch. Changing the Project resets Project-scoped PromptVersion and Reference Asset selections plus
-the gallery; changing Batch identity resets the gallery. Prompt, reference, seed, and display-name
+Batch. Changing the Project resets Project-scoped PromptVersion and Image Input selections plus
+the gallery; changing Batch identity resets the gallery. Prompt, image, seed, and display-name
 edits retain it.
 
 The Project selector lists active SQLite Projects and exposes compact create and adoption flows.
@@ -49,7 +57,12 @@ Preview identifies each Job's source PromptVersion. The Batch selection may be s
 Saved Batch or remain working-session state; the Prompt library is persistent.
 
 The Workflow editor selects Project-scoped immutable WorkflowVersions and exact compatible
-ProfileVersions. Selecting another WorkflowVersion clears an incompatible Profile selection and
+ProfileVersions. The visual Profile mapper keeps prompt, seed, and output-prefix mappings separate from
+ordered named Image Inputs and typed generic Parameters. Both collections support add, remove, move,
+editable labels, stable keys, and target repair. Parameter types are inferred from compatible literal
+workflow values and may be string, integer, float, or boolean. The Batch editor leaves each parameter
+at Base workflow or submits one strict typed override; fixed parameters do not multiply Jobs.
+Selecting another WorkflowVersion clears an incompatible Profile selection and
 blocks Preview until a compatible version is chosen. Library reconciliation never rewrites a restored
 snapshot with different content; unavailable or integrity-mismatched pairs remain detached and are
 validated by the backend during Preview. ComfyUI remains the workflow editor.
@@ -101,9 +114,9 @@ Frontend tests mock the typed API client. They do not require FastAPI or ComfyUI
 - Batch form state, current Run ID, and Batch gallery Run IDs live only in the browser session.
 - Browser working-session restoration is not a saved Batch; Saved Batch persistence lives in
   SQLite through the Saved Batch selector.
-- Reference image import currently accepts PNG, JPEG, and WebP. Selection order controls Reference
-  Asset expansion order in the compiled Batch.
-- Workflow and Workflow Profile configuration use JSON textareas. ComfyUI remains the workflow
-  editor.
+- Image import currently accepts PNG, JPEG, and WebP. Each Image Input currently has exactly one
+  one or more ordered alternatives: Base workflow and Project Assets.
+- Workflow snapshots can be edited as JSON. Workflow Profile mappings use the visual mapper. ComfyUI
+  remains the workflow editor.
 - Batch Results are not a durable Project-wide gallery or Run-history browser.
 - The screen has no Run recovery, cancellation, retry, rating, filtering, or historical Run browser.

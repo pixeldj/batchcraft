@@ -1,7 +1,8 @@
+import math
 import re
 from itertools import product
 
-from batchcraft.domain.image_slots import validate_image_input_slot_key
+from batchcraft.domain.image_slots import validate_image_input_slot_key, validate_stable_key
 from batchcraft.domain.models import (
     BatchDefinition,
     CompilationPreview,
@@ -10,10 +11,14 @@ from batchcraft.domain.models import (
     CompiledJob,
     CompiledRunPlan,
     ResolvedImageInput,
+    ResolvedParameter,
     ResolvedVariable,
     SeedMode,
     VariableBinding,
+    validate_parameter_scalar,
 )
+
+_MAX_SAFE_INTEGER = 2**53 - 1
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _PLACEHOLDER_PATTERN = re.compile(r"{{(.*?)}}", re.DOTALL)
@@ -170,6 +175,52 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
         )
     image_axes = tuple(bindings_by_slot[key] for key in slot_keys)
 
+    parameter_keys: list[str] = []
+    for parameter in batch.parameters:
+        try:
+            validate_stable_key(parameter.key)
+        except ValueError as error:
+            raise CompilationError(f"workflow parameter {error}") from error
+        if parameter.key in parameter_keys:
+            raise CompilationError(f"duplicate workflow parameter key: {parameter.key!r}")
+        if not parameter.label.strip() or not parameter.node_id or not parameter.input_name:
+            raise CompilationError(f"workflow parameter {parameter.key!r} has incomplete metadata")
+        parameter_keys.append(parameter.key)
+
+    parameter_values: dict[str, str | int | float | bool | None] = {}
+    for parameter_binding in batch.parameter_bindings:
+        try:
+            validate_stable_key(parameter_binding.parameter_key)
+        except ValueError as error:
+            raise CompilationError(f"workflow parameter {error}") from error
+        if parameter_binding.parameter_key in parameter_values:
+            raise CompilationError(
+                f"duplicate parameter binding for {parameter_binding.parameter_key!r}"
+            )
+        if len(parameter_binding.values) != 1:
+            raise CompilationError(
+                f"parameter binding for {parameter_binding.parameter_key!r} must contain exactly one value"
+            )
+        parameter_values[parameter_binding.parameter_key] = parameter_binding.values[0]
+    unknown_parameters = set(parameter_values) - set(parameter_keys)
+    missing_parameters = set(parameter_keys) - set(parameter_values)
+    if unknown_parameters:
+        raise CompilationError(
+            f"parameter bindings contain unknown parameters: {', '.join(sorted(unknown_parameters))}"
+        )
+    if missing_parameters:
+        raise CompilationError(
+            f"parameter bindings are missing parameters: {', '.join(sorted(missing_parameters))}"
+        )
+    for parameter in batch.parameters:
+        _validate_parameter_value(
+            parameter.key, parameter.value_type.value, parameter_values[parameter.key]
+        )
+    resolved_parameters = tuple(
+        ResolvedParameter(parameter_key=parameter.key, value=parameter_values[parameter.key])
+        for parameter in batch.parameters
+    )
+
     seeds = _seed_values(batch)
     if max_jobs is not None:
         if max_jobs < 0:
@@ -234,6 +285,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                             resolved_prompt=resolved_prompt,
                             resolved_variables=resolved_variables,
                             resolved_image_inputs=resolved_image_inputs,
+                            resolved_parameters=resolved_parameters,
                             seed=seed,
                         )
                     )
@@ -241,6 +293,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
     return CompiledRunPlan(
         prompt_versions=batch.prompt_versions,
         image_input_slots=batch.image_input_slots,
+        parameters=batch.parameters,
         jobs=tuple(jobs),
         warnings=warnings,
     )
@@ -249,3 +302,29 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
 def preview_batch(batch: BatchDefinition) -> CompilationPreview:
     plan = compile_batch(batch)
     return CompilationPreview(job_count=plan.job_count, warnings=plan.warnings)
+
+
+def _validate_parameter_value(key: str, value_type: str, value: object) -> None:
+    if value is None:
+        return
+    try:
+        validate_parameter_scalar(value)
+    except ValueError as error:
+        raise CompilationError(f"parameter binding for {key!r} is invalid: {error}") from error
+    valid = False
+    if value_type == "string":
+        valid = isinstance(value, str)
+    elif value_type == "integer":
+        valid = (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER
+        )
+    elif value_type == "float":
+        valid = (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
+    elif value_type == "boolean":
+        valid = isinstance(value, bool)
+    if not valid:
+        raise CompilationError(f"parameter binding for {key!r} must be {value_type} or null")

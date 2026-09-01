@@ -23,7 +23,7 @@ A Batch may provide:
 - Workflow Profile;
 - an ordered, non-empty collection of PromptVersions;
 - VariableBindings;
-- reference bindings;
+- ordered named Image Input bindings;
 - seed policy;
 - exposed workflow parameter values;
 - output naming configuration.
@@ -41,9 +41,9 @@ Prompt Resolver
        v
 Resolved Prompt Variants
        |
-       +---- Reference dimensions
+       +---- Named Image Input dimensions
        +---- Seed dimensions
-       +---- Workflow parameter dimensions
+       +---- Fixed workflow parameters (copied, not expanded)
        |
        v
 Expansion
@@ -95,11 +95,11 @@ dimension, while multiple ordered values contribute a Cartesian dimension. The c
 text; it is not a zero-value binding. Exact duplicate values, including duplicate empty strings, fail
 compilation.
 
-References:
+Named Image Inputs:
 
 ```text
-ref01.png
-ref02.png
+Identity = ref01.png
+Pose     = Base workflow
 ```
 
 Seed:
@@ -108,15 +108,12 @@ Seed:
 123456
 ```
 
-Compilation produces six Jobs:
+Compilation produces three Jobs:
 
 ```text
-001 cat   ref01  123456
-002 cat   ref02  123456
-003 dog   ref01  123456
-004 dog   ref02  123456
-005 bird  ref01  123456
-006 bird  ref02  123456
+001 cat   Identity=ref01  Pose=Base workflow  123456
+002 dog   Identity=ref01  Pose=Base workflow  123456
+003 bird  Identity=ref01  Pose=Base workflow  123456
 ```
 
 ## Deterministic Job Ordering
@@ -124,15 +121,18 @@ Compilation produces six Jobs:
 The compiler applies dimensions in this order:
 
 ```text
-PromptVersion -> prompt variables -> reference bindings -> seeds -> parameter sweeps
+PromptVersion -> prompt variables -> Image Input slots -> seeds
 ```
 
 PromptVersion is the first Batch dimension and preserves user selection order. Each PromptVersion is
 templated independently and expands only the bindings it references, in placeholder first-occurrence
-order. Reference bindings follow, then seeds, so the rightmost dimension varies fastest. User order is
-preserved within every dimension.
+order. Profile Image Input slots follow in Profile order, then seeds. The rightmost dimension varies
+fastest, so seeds vary fastest. User order is preserved within every dimension. Each resulting Job
+contains one resolved Image Input value per slot.
+Generic Workflow Parameters are scalar Job inputs, not dimensions in Pass 3A. Every Job receives the
+same ordered set of concrete or Base workflow parameter values.
 
-The example above therefore varies the reference dimension fastest. This ordering must be covered by preview, compilation, manifest round-trip, and rerun tests.
+This ordering must be covered by preview, compilation, manifest round-trip, and rerun tests.
 
 ## Job Count
 
@@ -143,14 +143,12 @@ For independent dimensions:
 ```text
 jobs =
 sum(prompt-variable combinations for each PromptVersion)
-× reference combinations
+× product(Image Input alternatives per Profile slot)
 × seed values
-× parameter sweep combinations
 ```
 
-An empty Reference Asset selection is an identity dimension with one combination, not a zero-sized
-dimension. Jobs compiled from it record no Reference Asset and retain the base workflow's mapped
-reference-image input during execution.
+A Profile may define zero Image Input slots, which contributes a multiplicative identity of one. Every
+defined slot supplies at least one ordered alternative: a Reference Asset ID or `null` for Base workflow.
 
 The UI should prominently display the resulting count.
 
@@ -163,9 +161,9 @@ Before execution, users should be able to preview at least:
 - total Job count;
 - source PromptVersion identity and name;
 - resolved prompt;
-- reference filename or thumbnail, or that the base workflow value will be used;
+- every named Image Input label and its selected filename or Base workflow state;
 - seed;
-- swept parameters.
+- resolved parameters or Base workflow state.
 
 The preview must use the same compiler logic as actual Run creation.
 
@@ -189,15 +187,9 @@ A fixed seed input must contain exactly one seed. An explicit seed list must con
 
 The browser supports Random seed intent without adding randomness to the pure logical compiler. It uses Web Crypto to materialize 1 through 100 unsigned 32-bit seeds into an explicit ordered seed input before Preview. Run creation submits that exact inspected request, and successful Run publication persists the resolved values in Run provenance before execution begins.
 
-## Reference Dimensions
+## Named Image Input Slots
 
-The first version supports at most one exposed `reference_image` slot in the Workflow Profile, and the
-mapping itself is optional. A non-empty Reference Asset selection requires that mapping and expands in
-user order. An empty selection produces one no-reference combination, records `null` reference
-provenance on each Job, and does not overwrite the base workflow. This keeps the optional reference
-dimension separate from the required prompt, seed, and output-prefix mappings.
-
-The data model should allow future Workflow Profiles with multiple reference slots, such as:
+A ProfileVersion defines zero or more ordered image slots, such as:
 
 ```text
 identity_reference
@@ -205,7 +197,17 @@ outfit_reference
 pose_reference
 ```
 
-Each binding must define its selected assets and expansion behavior explicitly.
+Each entry has `{key, label, node_id, input_name}`. Keys use readable lowercase ASCII snake case,
+start with a letter, and are unique. A Batch provides one
+`{slot_key, values:[asset_id|null]}` binding per Profile slot. Binding-record request order does not
+affect compilation; the compiler always uses Profile slot order.
+
+`values` contains one or more ordered, unique alternatives. Each Profile slot is an independent
+Cartesian dimension. Exact duplicate Assets and duplicate Base values are invalid; the same Asset may
+appear in different slots. When included, Base workflow appears first. The compiler emits each Job's
+ordered `resolved_image_inputs` with one `{slot_key, asset_id}` choice per slot. `asset_id: null` means
+Base workflow and requires no upload or workflow mutation. Zipped, row-linked, and collection-link
+semantics remain unsupported.
 
 ## Parameter Sweeps
 
@@ -219,7 +221,7 @@ Examples:
 - strength;
 - model choice.
 
-This should use the same compiler machinery as prompt variables and reference dimensions rather than separate ad hoc loops.
+This should use the same compiler machinery as prompt variables rather than separate ad hoc loops.
 
 Parameter sweeps are not part of the v1 pure compiler milestone. The implemented v1 expansion order therefore ends with seeds while preserving the documented position for future parameter dimensions.
 
@@ -230,7 +232,7 @@ Creating a Run should conceptually:
 1. validate the Batch;
 2. snapshot effective source data;
 3. resolve prompt variants;
-4. expand references, seeds, and parameter dimensions;
+4. resolve fixed parameters and expand named Image Input and seed dimensions;
 5. assign deterministic Job ordinals;
 6. determine output naming;
 7. publish the initial Run/manifest artifacts;
@@ -252,7 +254,9 @@ The compiler should be a pure or near-pure domain service wherever possible.
 
 Given the same immutable input snapshot, it should produce the same ordered Job plan.
 
-Exact rerun preserves generation inputs, base workflow, Workflow Profile mapping, references, variables, parameters, seeds, and ordering. It allocates new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
+Exact rerun preserves generation inputs, base workflow, Workflow Profile mappings and named image
+slots, selected Reference Assets, variables, parameters, seeds, and ordering. It allocates new Run and
+Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
 
 For multi-prompt Runs, generation inputs include the exact ordered PromptVersion snapshots and every
 Job's PromptVersion association. Prompt resolution is single-pass; variable values never become nested

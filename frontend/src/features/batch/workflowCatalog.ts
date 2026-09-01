@@ -6,7 +6,7 @@ export type WorkflowMappingKind =
   | "prompt"
   | "seed"
   | "output_prefix"
-  | "reference_image";
+  | "image_input";
 
 export interface WorkflowCatalogInput {
   name: string;
