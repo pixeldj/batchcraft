@@ -5,14 +5,14 @@ selecting and configuring a saved or new Saved Batch, previewing its compiled Jo
 Runs, watching Job state, viewing the current Run's Results, and reviewing accumulated Batch Results
 from this browser working session. It communicates only with the batchcraft FastAPI application.
 
-The current tab stores a versioned working draft, selected Project ID, current Run ID, and ordered
-unique session Run IDs in `sessionStorage`. The current schema is version 13 and stores canonical
-Variable Bindings, ordered Image Input bindings, and Parameter Values/Range drafts plus the
-`batch_snapshot` required by Preview and Run creation. Only a valid v13 session is restored;
-unsupported or malformed data starts a clean working session. A refresh restores
-the form and ordered prompt list, then reloads Run, execution, and Result data from FastAPI. Result metadata
-and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
-the restored draft again. Closing the tab or browser session may remove this working state.
+The browser stores one strict working-session recovery v1 record under
+`batchcraft.working-session-recovery.v1` in `localStorage`. It contains editable Batch intent, selected
+Project and Saved Batch pointers, current Run ID, and ordered unique session Run IDs. Linked
+Workflow/Profile JSON is reconstructed by immutable version ID; detached JSON remains draft state.
+Unsupported or malformed records start a clean working session. Refreshing or reopening a tab restores
+the draft, then reloads Run, execution, and Result data from FastAPI. Result metadata and bytes are never
+stored as browser truth. Preview is never restored as valid; the user must compile the recovered draft
+again. Old sessionStorage v13 data is discarded rather than migrated.
 
 The selected ProfileVersion defines zero or more ordered, named Image Inputs. Each slot selects one or
 more ordered Base workflow and Reference Asset alternatives. Profile changes reconcile bindings by
@@ -73,10 +73,10 @@ blocks Preview until a compatible version is chosen. Library reconciliation neve
 snapshot with different content; unavailable or integrity-mismatched pairs remain detached and are
 validated by the backend during Preview. ComfyUI remains the workflow editor.
 
-Closed-tab recovery remains a separate milestone. This frontend intentionally keeps tab-scoped
-`sessionStorage`; it does not yet restore the most recent Project/Saved Batch or active/recent Run IDs
-after a tab closes. That future work must reconstruct Run state from backend-authoritative data without
-restoring stale Preview state.
+Closing a tab does not cancel or restart backend execution. On reopen, the current Run is fetched from
+FastAPI with its execution and Results. Running state resumes the same polling loop used after a new Run
+starts. The ordered stored Run IDs rebuild only the prior working-session gallery; they do not query or
+display Project-wide Run history.
 
 ## Requirements
 
@@ -122,12 +122,12 @@ Frontend tests mock the typed API client. They do not require FastAPI or ComfyUI
 
 ## Current limits
 
-- Batch form state, current Run ID, and Batch gallery Run IDs live only in the browser session.
-- Browser working-session restoration is not a saved Batch; Saved Batch persistence lives in
-  SQLite through the Saved Batch selector.
+- Browser working-session recovery is local to one browser profile and uses last-writer-wins behavior.
+- Working-session recovery is not a Saved Batch; Saved Batch persistence lives in SQLite through the
+  Saved Batch selector.
 - Image import currently accepts PNG, JPEG, and WebP. Each Image Input currently has exactly one
   one or more ordered alternatives: Base workflow and Project Assets.
 - Workflow snapshots can be edited as JSON. Workflow Profile mappings use the visual mapper. ComfyUI
   remains the workflow editor.
 - Batch Results are not a durable Project-wide gallery or Run-history browser.
-- The screen has no Run recovery, cancellation, retry, rating, filtering, or historical Run browser.
+- The screen has no backend executor restart recovery, retry, rating, filtering, or Project-wide Run browser.

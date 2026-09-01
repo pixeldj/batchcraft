@@ -20,6 +20,7 @@ import {
   buildEditableBatchSnapshot,
   editableBatchSnapshotIdentity,
   initialBatchForm,
+  reconcileFormBindings,
   type BatchFormState,
 } from "./features/batch/form";
 import {
@@ -34,7 +35,10 @@ import {
   type BatchGalleryRun,
 } from "./features/results/BatchResultsGallery";
 import { RunWorkspace } from "./features/run/RunWorkspace";
-import { loadWorkingSession, saveWorkingSession } from "./features/session/workingSession";
+import {
+  loadWorkingSessionRecovery,
+  saveWorkingSessionRecovery,
+} from "./features/session/workingSessionRecovery";
 import { ComfyUIStatus } from "./features/status/ComfyUIStatus";
 import { errorMessage } from "./utils/errors";
 
@@ -69,6 +73,11 @@ interface SavedBatchLink {
   baseline: string;
 }
 
+interface SavedBatchRecoveryPointer {
+  id: string;
+  revision: number;
+}
+
 interface SavedBatchConflict {
   kind: "save" | "session";
   batchId: string;
@@ -82,7 +91,7 @@ interface RunSnapshotIdentity {
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked", "cancelled"]);
 
 export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
-  const [initialSession] = useState(loadWorkingSession);
+  const [initialSession] = useState(loadWorkingSessionRecovery);
   const [form, setForm] = useState<BatchFormState>(initialSession.form);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     initialSession.selectedProjectId,
@@ -109,19 +118,32 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [runRestoreUnresolved, setRunRestoreUnresolved] = useState(false);
   const [sessionMessage, setSessionMessage] = useState<string | null>(
     initialSession.draftRestored
-      ? "Draft restored from this browser session. Preview to verify the Job plan."
+      ? "Draft restored from this browser. Preview to verify the Job plan."
       : null,
   );
   const [batchError, setBatchError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [consistencyError, setConsistencyError] = useState<string | null>(null);
   const [savedBatchLink, setSavedBatchLink] = useState<SavedBatchLink | null>(null);
+  const [savedBatchRecoveryPointer, setSavedBatchRecoveryPointer] =
+    useState<SavedBatchRecoveryPointer | null>(() => (
+      initialSession.selectedSavedBatchId && initialSession.savedBatchBaseRevision
+        ? {
+          id: initialSession.selectedSavedBatchId,
+          revision: initialSession.savedBatchBaseRevision,
+        }
+        : null
+    ));
   const [savedBatchConflict, setSavedBatchConflict] = useState<SavedBatchConflict | null>(null);
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatchListRefresh, setSavedBatchListRefresh] = useState(0);
   const [saveAsRequest, setSaveAsRequest] = useState(false);
   const [savedBatchRestorePending, setSavedBatchRestorePending] = useState(
     initialSession.selectedSavedBatchId !== null,
+  );
+  const [snapshotRecoveryPending, setSnapshotRecoveryPending] = useState(
+    initialSession.workflowSnapshotRecoveryRequired ||
+      initialSession.profileSnapshotRecoveryRequired,
   );
   const formRevision = useRef(0);
   const runRevision = useRef(0);
@@ -171,20 +193,107 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     return request;
   }, [api, cacheFrozenRun]);
 
-  useEffect(() => {
-    saveWorkingSession(
-      form,
-      currentRunId,
-      sessionRunIds,
-      selectedProjectId,
+  const recoveryStateRef = useRef({
+    form,
+    currentRunId,
+    sessionRunIds,
+    selectedProjectId,
+    savedBatchRecoveryPointer,
+  });
+  recoveryStateRef.current = {
+    form,
+    currentRunId,
+    sessionRunIds,
+    selectedProjectId,
+    savedBatchRecoveryPointer,
+  };
+  const persistRecovery = useCallback(() => {
+    const state = recoveryStateRef.current;
+    saveWorkingSessionRecovery(
+      state.form,
+      state.currentRunId,
+      state.sessionRunIds,
+      state.selectedProjectId,
       undefined,
-      savedBatchLink?.id ?? null,
-      savedBatchLink?.revision ?? null,
+      state.savedBatchRecoveryPointer?.id ?? null,
+      state.savedBatchRecoveryPointer?.revision ?? null,
     );
-  }, [currentRunId, form, savedBatchLink, selectedProjectId, sessionRunIds]);
+  }, []);
+
+  useEffect(() => {
+    persistRecovery();
+  }, [currentRunId, form, persistRecovery, savedBatchRecoveryPointer, selectedProjectId, sessionRunIds]);
+
+  useEffect(() => {
+    window.addEventListener("pagehide", persistRecovery);
+    return () => window.removeEventListener("pagehide", persistRecovery);
+  }, [persistRecovery]);
 
   const formRef = useRef(form);
   formRef.current = form;
+
+  useEffect(() => {
+    if (!snapshotRecoveryPending || !projectVerified) return;
+    if (!selectedProjectId || selectedProjectId !== formRef.current.projectId) {
+      setSnapshotRecoveryPending(false);
+      return;
+    }
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const current = formRef.current;
+        const [workflowVersion, profileVersion] = await Promise.all([
+          initialSession.workflowSnapshotRecoveryRequired && current.workflowVersionId
+            ? api.getWorkflowVersion(current.workflowVersionId, controller.signal)
+            : null,
+          initialSession.profileSnapshotRecoveryRequired && current.workflowProfileVersionId
+            ? api.getWorkflowProfileVersion(current.workflowProfileVersionId, controller.signal)
+            : null,
+        ]);
+        if (controller.signal.aborted) return;
+        if (workflowVersion && (
+          workflowVersion.id !== current.workflowVersionId ||
+          workflowVersion.project_id !== current.projectId ||
+          workflowVersion.workflow_id !== current.workflowId
+        )) {
+          throw new Error("The recovered WorkflowVersion does not match this Project and Workflow.");
+        }
+        if (profileVersion && (
+          profileVersion.id !== current.workflowProfileVersionId ||
+          profileVersion.project_id !== current.projectId ||
+          profileVersion.workflow_id !== current.workflowId ||
+          profileVersion.workflow_profile_id !== current.workflowProfileId ||
+          profileVersion.workflow_version_id !== current.workflowVersionId
+        )) {
+          throw new Error("The recovered ProfileVersion does not match this Project and WorkflowVersion.");
+        }
+        setForm((latest) => {
+          let recovered = {
+            ...latest,
+            workflowJson: workflowVersion
+              ? JSON.stringify(workflowVersion.workflow, null, 2)
+              : latest.workflowJson,
+            workflowProfileJson: profileVersion
+              ? JSON.stringify(profileVersion.profile, null, 2)
+              : latest.workflowProfileJson,
+          };
+          if (profileVersion) {
+            recovered = reconcileFormBindings(recovered, recovered.workflowProfileJson);
+          }
+          return recovered;
+        });
+      } catch (caught) {
+        if (!isAbort(caught) && !controller.signal.aborted) {
+          setSessionMessage(
+            `The recovered Workflow/Profile snapshots could not be loaded. ${errorMessage(caught)}`,
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) setSnapshotRecoveryPending(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [api, initialSession, projectVerified, selectedProjectId, snapshotRecoveryPending]);
 
   useEffect(() => {
     if (!savedBatchRestorePending) return;
@@ -213,12 +322,14 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             revision: detail.revision,
             baseline: canonicalBatchIntent(baselineForm),
           });
+          setSavedBatchRecoveryPointer({ id: detail.id, revision: detail.revision });
         } else {
           setSavedBatchConflict({ kind: "session", batchId });
         }
       } catch (caught) {
         if (isAbort(caught) || controller.signal.aborted) return;
         if (caught instanceof ApiError && caught.code === "saved_batch_not_found") {
+          setSavedBatchRecoveryPointer(null);
           setSessionMessage(
             "The Saved Batch for this browser draft was not found. The draft remains unsaved; use Save As to keep it.",
           );
@@ -438,11 +549,22 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }
 
   function markProjectUnresolved() {
+    runRevision.current += 1;
     setSelectedProjectId(null);
     setProjectVerified(true);
-    if (initialSession.currentRunId) {
-      setRestoringRun(false);
-    }
+    setCurrentRunId(null);
+    setSessionRunIds([]);
+    setGalleryRunsById({});
+    setRun(null);
+    setRunStatus(null);
+    setRunSnapshotIdentity(null);
+    setRestoredRunSeed(null);
+    setRestoringRun(false);
+    setRunRestoreUnresolved(false);
+    setSavedBatchLink(null);
+    setSavedBatchRecoveryPointer(null);
+    setSavedBatchConflict(null);
+    setSavedBatchRestorePending(false);
   }
 
   function selectProject(project: ProjectResponse) {
@@ -469,6 +591,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setConsistencyError(null);
     setSessionMessage(null);
     setSavedBatchLink(null);
+    setSavedBatchRecoveryPointer(null);
     setSavedBatchConflict(null);
     setSavedBatchRestorePending(false);
     const fresh = initialBatchForm();
@@ -518,6 +641,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       revision: detail.revision,
       baseline: canonicalBatchIntent(nextForm),
     });
+    setSavedBatchRecoveryPointer({ id: detail.id, revision: detail.revision });
     setSavedBatchConflict(null);
     changeForm(nextForm);
   }
@@ -577,6 +701,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         revision: detail.revision,
         baseline: canonicalBatchIntent(sentForm),
       });
+      setSavedBatchRecoveryPointer({ id: detail.id, revision: detail.revision });
       setSavedBatchConflict(null);
       setSavedBatchListRefresh((token) => token + 1);
     } catch (caught) {
@@ -595,6 +720,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     if (!link) return;
     await api.archiveSavedBatch(link.id);
     setSavedBatchLink(null);
+    setSavedBatchRecoveryPointer(null);
     setSavedBatchListRefresh((token) => token + 1);
     setSessionMessage("Saved Batch archived. The current editor content remains as an unsaved draft.");
   }
@@ -681,9 +807,19 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       setRunSnapshotIdentity({ runId: nextRun.run_id, snapshot: snapshot.request.batch_snapshot });
       setRestoredRunSeed(null);
       setCurrentRunId(nextRun.run_id);
-      setSessionRunIds((current) =>
-        current.includes(nextRun.run_id) ? current : [...current, nextRun.run_id],
+      const nextSessionRunIds = sessionRunIds.includes(nextRun.run_id)
+        ? sessionRunIds
+        : [...sessionRunIds, nextRun.run_id];
+      saveWorkingSessionRecovery(
+        formRef.current,
+        nextRun.run_id,
+        nextSessionRunIds,
+        selectedProjectId,
+        undefined,
+        savedBatchRecoveryPointer?.id ?? null,
+        savedBatchRecoveryPointer?.revision ?? null,
       );
+      setSessionRunIds(nextSessionRunIds);
       setGalleryRunsById((current) => ({
         ...current,
         [nextRun.run_id]: {
@@ -951,8 +1087,16 @@ function batchRequestIdentity(request: BatchRequest): string {
 }
 
 function runMatchesBatch(run: RunCreatedResponse, identity: string): boolean {
-  const [projectId, , batchId] = JSON.parse(identity) as string[];
-  return run.project_id === projectId && run.batch_id === batchId;
+  const [projectId, projectFilesystemKey, batchId, batchFilesystemKey] = JSON.parse(identity) as string[];
+  if (run.project_id !== projectId || run.batch_id !== batchId) return false;
+  if (!("batch_snapshot" in run)) return true;
+  const snapshot = (run as RunResponse).batch_snapshot;
+  return (
+    snapshot.project.id === projectId &&
+    snapshot.project.filesystem_key === projectFilesystemKey &&
+    snapshot.batch.id === batchId &&
+    snapshot.batch.filesystem_key === batchFilesystemKey
+  );
 }
 
 function loadingGalleryRun(runId: string): BatchGalleryRun {

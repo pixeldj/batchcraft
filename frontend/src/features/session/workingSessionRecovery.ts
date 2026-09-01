@@ -9,20 +9,26 @@ import {
   type VariableBindingForm,
 } from "../batch/form";
 
-export const WORKING_SESSION_KEY = "batchcraft.working-session";
-const WORKING_SESSION_VERSION = 13;
+export const WORKING_SESSION_RECOVERY_KEY = "batchcraft.working-session-recovery.v1";
+const WORKING_SESSION_RECOVERY_VERSION = 1;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
 type StoredPrompt = Omit<PromptForm, "key">;
 
-interface StoredBatchForm extends Omit<BatchFormState, "prompts" | "variableBindings"> {
+interface StoredBatchForm extends Omit<
+  BatchFormState,
+  "prompts" | "variableBindings" | "workflowJson" | "workflowProfileJson"
+> {
   prompts: StoredPrompt[];
   variableBindings: StoredVariableBinding[];
+  workflowJson: string | null;
+  workflowProfileJson: string | null;
 }
 
-interface WorkingSessionEnvelopeV13 {
-  version: 13;
-  form: StoredBatchForm;
+interface WorkingSessionRecoveryV1 {
+  format_version: 1;
+  updated_at: string;
+  draft: StoredBatchForm;
   current_run_id: string | null;
   session_run_ids: string[];
   selected_project_id: string | null;
@@ -37,22 +43,24 @@ export interface RestoredWorkingSession {
   selectedProjectId: string | null;
   selectedSavedBatchId: string | null;
   savedBatchBaseRevision: number | null;
+  workflowSnapshotRecoveryRequired: boolean;
+  profileSnapshotRecoveryRequired: boolean;
   draftRestored: boolean;
 }
 
-export function loadWorkingSession(
-  storage: Storage | null = browserSessionStorage(),
+export function loadWorkingSessionRecovery(
+  storage: Storage | null = browserLocalStorage(),
 ): RestoredWorkingSession {
   if (!storage) {
     return defaultSession();
   }
   try {
-    const raw = storage.getItem(WORKING_SESSION_KEY);
+    const raw = storage.getItem(WORKING_SESSION_RECOVERY_KEY);
     if (raw === null) {
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (!isWorkingSessionEnvelopeV13(value)) {
+    if (!isWorkingSessionRecoveryV1(value)) {
       return defaultSession();
     }
     return restoredSession(value);
@@ -61,31 +69,36 @@ export function loadWorkingSession(
   }
 }
 
-export function saveWorkingSession(
+export function saveWorkingSessionRecovery(
   form: BatchFormState,
   currentRunId: string | null,
   sessionRunIds: string[] = [],
   selectedProjectId: string | null = null,
-  storage: Storage | null = browserSessionStorage(),
+  storage: Storage | null = browserLocalStorage(),
   selectedSavedBatchId: string | null = null,
   savedBatchBaseRevision: number | null = null,
 ): void {
   if (!storage) {
     return;
   }
-  const envelope: WorkingSessionEnvelopeV13 = {
-    version: WORKING_SESSION_VERSION,
-    form: dehydrateForm(form),
+  const normalizedRunIds = uniqueStrings(sessionRunIds);
+  if (currentRunId && !normalizedRunIds.includes(currentRunId)) {
+    normalizedRunIds.push(currentRunId);
+  }
+  const envelope: WorkingSessionRecoveryV1 = {
+    format_version: WORKING_SESSION_RECOVERY_VERSION,
+    updated_at: new Date().toISOString(),
+    draft: dehydrateForm(form),
     current_run_id: currentRunId,
-    session_run_ids: uniqueStrings(sessionRunIds),
+    session_run_ids: normalizedRunIds,
     selected_project_id: selectedProjectId,
     selected_saved_batch_id: selectedSavedBatchId,
     saved_batch_base_revision: savedBatchBaseRevision,
   };
   try {
-    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
+    storage.setItem(WORKING_SESSION_RECOVERY_KEY, JSON.stringify(envelope));
   } catch {
-    // Browser storage is only a convenience; the live editor remains authoritative.
+    // Recovery is best effort; the live editor remains usable without browser storage.
   }
 }
 
@@ -113,12 +126,17 @@ function dehydrateForm(form: BatchFormState): StoredBatchForm {
       placeholder,
       values: [...values],
     })),
+    workflowJson: form.workflowVersionId ? null : form.workflowJson,
+    workflowProfileJson: form.workflowProfileVersionId ? null : form.workflowProfileJson,
   };
 }
 
 function hydrateForm(form: StoredBatchForm): BatchFormState {
+  const workflowProfileJson = form.workflowProfileJson ?? "{}";
   return {
     ...form,
+    workflowJson: form.workflowJson ?? "{}",
+    workflowProfileJson,
     prompts: form.prompts.map((prompt) => ({
       ...prompt,
       key: newPrompt().key,
@@ -127,10 +145,12 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
       ...binding,
       key: newVariableBinding().key,
     })),
-    parameterBindings: reconcileParameterBindings(
-      form.parameterBindings,
-      profileParameters(form.workflowProfileJson),
-    ),
+    parameterBindings: form.workflowProfileJson === null
+      ? form.parameterBindings
+      : reconcileParameterBindings(
+        form.parameterBindings,
+        profileParameters(workflowProfileJson),
+      ),
   };
 }
 
@@ -142,52 +162,60 @@ function defaultSession(): RestoredWorkingSession {
     selectedProjectId: null,
     selectedSavedBatchId: null,
     savedBatchBaseRevision: null,
+    workflowSnapshotRecoveryRequired: false,
+    profileSnapshotRecoveryRequired: false,
     draftRestored: false,
   };
 }
 
-function restoredSession(value: WorkingSessionEnvelopeV13): RestoredWorkingSession {
+function restoredSession(value: WorkingSessionRecoveryV1): RestoredWorkingSession {
   return {
-    form: hydrateForm(value.form),
+    form: hydrateForm(value.draft),
     currentRunId: value.current_run_id,
     sessionRunIds: uniqueStrings(value.session_run_ids),
     selectedProjectId: value.selected_project_id,
     selectedSavedBatchId: value.selected_saved_batch_id,
     savedBatchBaseRevision: value.saved_batch_base_revision,
+    workflowSnapshotRecoveryRequired: value.draft.workflowJson === null,
+    profileSnapshotRecoveryRequired: value.draft.workflowProfileJson === null,
     draftRestored: true,
   };
 }
 
-function browserSessionStorage(): Storage | null {
+function browserLocalStorage(): Storage | null {
   try {
-    return typeof window === "undefined" ? null : window.sessionStorage;
+    return typeof window === "undefined" ? null : window.localStorage;
   } catch {
     return null;
   }
 }
 
-function isWorkingSessionEnvelopeV13(value: unknown): value is WorkingSessionEnvelopeV13 {
+function isWorkingSessionRecoveryV1(value: unknown): value is WorkingSessionRecoveryV1 {
   return (
     isRecord(value) &&
     hasExactKeys(value, [
-      "version",
-      "form",
+      "format_version",
+      "updated_at",
+      "draft",
       "current_run_id",
       "session_run_ids",
       "selected_project_id",
       "selected_saved_batch_id",
       "saved_batch_base_revision",
     ]) &&
-    value.version === WORKING_SESSION_VERSION &&
-    isStoredBatchForm(value.form) &&
+    value.format_version === WORKING_SESSION_RECOVERY_VERSION &&
+    isIsoTimestamp(value.updated_at) &&
+    isStoredBatchForm(value.draft) &&
     (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
     isStringArray(value.session_run_ids) &&
     value.session_run_ids.every(isNonEmptyString) &&
     new Set(value.session_run_ids).size === value.session_run_ids.length &&
+    (value.current_run_id === null || value.session_run_ids.includes(value.current_run_id)) &&
     (value.selected_project_id === null || isNonEmptyString(value.selected_project_id)) &&
     (value.selected_saved_batch_id === null || isNonEmptyString(value.selected_saved_batch_id)) &&
     (value.saved_batch_base_revision === null ||
-      (isInteger(value.saved_batch_base_revision) && value.saved_batch_base_revision >= 1))
+      (isInteger(value.saved_batch_base_revision) && value.saved_batch_base_revision >= 1)) &&
+    ((value.selected_saved_batch_id === null) === (value.saved_batch_base_revision === null))
   );
 }
 
@@ -205,8 +233,6 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
     "batchDescription",
     "seedValues",
     "randomSeedCount",
-    "workflowJson",
-    "workflowProfileJson",
     "workflowName",
     "workflowProfileName",
   ] as const;
@@ -242,6 +268,10 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
       "workflowProfileContentSha256",
     ]) &&
     stringFields.every((field) => typeof value[field] === "string") &&
+    (typeof value.workflowJson === "string" ||
+      (value.workflowJson === null && isNonEmptyString(value.workflowVersionId))) &&
+    (typeof value.workflowProfileJson === "string" ||
+      (value.workflowProfileJson === null && isNonEmptyString(value.workflowProfileVersionId))) &&
     Array.isArray(value.prompts) &&
     value.prompts.every(isStoredPrompt) &&
     Array.isArray(value.variableBindings) &&
@@ -350,6 +380,12 @@ function isNullableString(value: unknown): value is string | null {
 
 function isInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value);
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function isNullableInteger(value: unknown): value is number | null {

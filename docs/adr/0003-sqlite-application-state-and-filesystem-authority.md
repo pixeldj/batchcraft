@@ -2,7 +2,7 @@
 
 * Status: Accepted
 * Date: 2026-08-28
-* Superseded in part by: ADR 0004 for pre-release persistence compatibility and Variable Binding source-revision semantics.
+* Superseded in part by: ADR 0004 for pre-release persistence compatibility and Variable Binding source-revision semantics; ADR 0010 for durable frontend working-session recovery.
 
 ## Context
 
@@ -21,7 +21,8 @@ This includes:
 * Result metadata;
 * Result bytes under `outputs/`.
 
-The frontend currently carries editable working state primarily in tab-scoped `sessionStorage`.
+The frontend carries editable working state and backend identity pointers in the versioned `localStorage`
+record defined by ADR 0010. That browser record is a recovery cache, not execution or historical authority.
 
 Real use now requires durable mutable application state for:
 

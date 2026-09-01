@@ -185,7 +185,10 @@ numeric Range intent with decimal-text Start, End, Step, and independent Base in
 scaled-integer materializer resolves Range intent to explicit values before the existing compiler.
 Parameters remain independent Cartesian dimensions in Profile order between Image Input slots and
 seeds; every Job and Result provenance record carries one resolved scalar or Base state per Profile
-parameter. Manifest v7, Batch snapshot v5, browser session v13, and the replacement consolidated SQLite
-0001 baseline are current. Enums, `/object_info`, LoRA discovery, random values, linked or zipped
-parameters, and closed-tab session recovery remain deferred. Keep frontend HTTP types and UI state
-separate from backend compiler, filesystem, ComfyUI, execution, and persistence rules.
+parameter. Manifest v7, Batch snapshot v5, browser working-session recovery v1, and the replacement
+consolidated SQLite 0001 baseline are current. Recovery v1 stores editable intent and stable backend
+identity pointers in localStorage, always invalidates Preview on cold load, and reconstructs execution
+and Results from FastAPI. Enums, `/object_info`, LoRA discovery, random values, linked or zipped
+parameters, Project-wide Run history, and backend executor restart recovery remain deferred. Keep
+frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and
+persistence rules.

@@ -13,11 +13,16 @@ import type {
   ResultResponse,
   RunCreatedResponse,
   RunResponse,
+  SavedBatchDetail,
 } from "./api/types";
 import { initialBatchForm, newPrompt } from "./features/batch/form";
-import { loadWorkingSession, saveWorkingSession } from "./features/session/workingSession";
+import {
+  loadWorkingSessionRecovery as loadWorkingSession,
+  saveWorkingSessionRecovery as saveWorkingSession,
+} from "./features/session/workingSessionRecovery";
 
 beforeEach(() => {
+  localStorage.clear();
   sessionStorage.clear();
   saveWorkingSession(populatedBatchForm(), null, [], "project-1");
 });
@@ -51,7 +56,7 @@ describe("ComfyUI status", () => {
 
 describe("Project selection", () => {
   it("starts unscoped and does not load Prompt or Asset libraries before selection", async () => {
-    sessionStorage.clear();
+    localStorage.clear();
     const api = makeApi({ listProjects: vi.fn(async () => ({ projects: [] })) });
     render(<App api={api} />);
 
@@ -498,7 +503,7 @@ describe("Batch preview", () => {
     });
     const api = makeApi({ previewBatch: vi.fn(async () => parameterPreview) });
     render(<App api={api} />);
-    await screen.findByText(/Draft restored from this browser session/);
+    await screen.findByText(/Draft restored from this browser/);
     await expandConfiguration("Parameters");
 
     expect(screen.getByRole("checkbox", { name: "Include Base workflow for Caption" })).toBeChecked();
@@ -662,7 +667,7 @@ describe("Browser working-session restoration", () => {
 
     render(<App api={api} />);
 
-    expect(await screen.findByText(/Draft restored from this browser session/)).toBeInTheDocument();
+    expect(await screen.findByText(/Draft restored from this browser/)).toBeInTheDocument();
     expect(screen.getByText("Restored portrait of {{subject}}")).toBeInTheDocument();
     expect(screen.getByText("Editorial image of {{subject}}")).toBeInTheDocument();
     await expandConfiguration("Variable bindings");
@@ -677,7 +682,158 @@ describe("Browser working-session restoration", () => {
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
   });
 
-  it("keeps Preview usable when sessionStorage writes fail", async () => {
+  it("recovers linked Workflow/Profile snapshots from the backend while preserving Range text", async () => {
+    const form = populatedBatchForm();
+    form.workflowLibraryProjectId = "project-1";
+    form.workflowId = "workflow-1";
+    form.workflowVersionId = "workflow-v2";
+    form.workflowVersionNumber = 2;
+    form.workflowContentSha256 = "workflow-sha";
+    form.workflowProfileId = "profile-1";
+    form.workflowProfileVersionId = "profile-v3";
+    form.workflowProfileVersionNumber = 3;
+    form.workflowProfileWorkflowVersionId = "workflow-v2";
+    form.workflowProfileContentSha256 = "profile-sha";
+    form.workflowJson = '{"large":"browser copy must be omitted"}';
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "steps", label: "Steps", node_id: "3", input_name: "steps", value_type: "float" },
+    ] });
+    form.imageBindings = [];
+    form.parameterBindings = [{
+      parameterKey: "steps",
+      valueType: "float",
+      mode: "range",
+      alternatives: [{ kind: "override", value: "30" }],
+      range: { start: "30.00", end: "0.00", step: "-2.50", includeBase: true },
+    }];
+    saveWorkingSession(form, null, [], "project-1");
+    const stored = JSON.parse(localStorage.getItem("batchcraft.working-session-recovery.v1") ?? "{}") as {
+      draft: { workflowJson: unknown; workflowProfileJson: unknown };
+    };
+    expect(stored.draft.workflowJson).toBeNull();
+    expect(stored.draft.workflowProfileJson).toBeNull();
+
+    const api = makeApi({
+      getWorkflowVersion: vi.fn(async () => ({
+        id: "workflow-v2", workflow_id: "workflow-1", project_id: "project-1",
+        version_number: 2, name_snapshot: "Workflow", workflow: { node: "restored" },
+        content_sha256: "workflow-sha", note: null, created_at: "2026-08-27T12:00:00Z", archived_at: null,
+      })),
+      getWorkflowProfileVersion: vi.fn(async () => ({
+        id: "profile-v3", workflow_profile_id: "profile-1", workflow_id: "workflow-1",
+        project_id: "project-1", workflow_version_id: "workflow-v2", version_number: 3,
+        name_snapshot: "Profile", profile: { mappings: {}, image_inputs: [], parameters: [
+          { key: "steps", label: "Steps", node_id: "3", input_name: "steps", value_type: "float" },
+        ] }, content_sha256: "profile-sha", note: null,
+        created_at: "2026-08-27T12:00:00Z", archived_at: null,
+      })),
+    });
+    render(<App api={api} />);
+
+    await screen.findByRole("group", { name: "Parameters" });
+    await expandConfiguration("Parameters");
+    expect(screen.getByRole("button", { name: "Range" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Steps range start")).toHaveValue("30.00");
+    expect(screen.getByLabelText("Steps range end")).toHaveValue("0.00");
+    expect(screen.getByLabelText("Steps range step")).toHaveValue("-2.50");
+    expect(screen.getByRole("checkbox", { name: "Include Base workflow for Steps" })).toBeChecked();
+  });
+
+  it("restores an unsaved draft over its verified Saved Batch baseline", async () => {
+    const form = populatedBatchForm();
+    form.batchId = "batch-1";
+    form.batchFilesystemKey = "batch_1";
+    form.batchName = "Unsaved draft name";
+    form.variableBindings[0].values = ["unsaved fox"];
+    saveWorkingSession(form, null, [], "project-1", undefined, "batch-1", 4);
+    const detail = savedBatchDetail({
+      id: "batch-1",
+      filesystem_key: "batch_1",
+      name: "Persisted name",
+      revision: 4,
+      variable_bindings: [{ placeholder: "subject", values: ["persisted wolf"] }],
+    });
+    const api = makeApi({
+      listSavedBatches: vi.fn(async () => ({ batches: [detail] })),
+      getSavedBatch: vi.fn(async () => detail),
+    });
+
+    render(<App api={api} />);
+
+    expect(await screen.findByDisplayValue("Unsaved draft name")).toBeInTheDocument();
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+    await expandConfiguration("Variable bindings");
+    expect(screen.getByLabelText("Values")).toHaveValue("unsaved fox");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("recovers Random seed intent without recovering materialized Preview seeds", async () => {
+    const form = populatedBatchForm();
+    form.seedMode = "random";
+    form.randomSeedCount = "3";
+    form.seedValues = "111, 222, 333";
+    saveWorkingSession(form, null, [], "project-1");
+    const api = makeApi();
+
+    render(<App api={api} />);
+
+    await expandConfiguration("Seeds");
+    expect(screen.getByLabelText("Seed mode")).toHaveValue("random");
+    expect(loadWorkingSession().form.randomSeedCount).toBe("3");
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
+    const seeds = vi.mocked(api.previewBatch).mock.calls[0][0].seeds.values;
+    expect(seeds).toHaveLength(3);
+    expect(seeds).not.toEqual([111, 222, 333]);
+  });
+
+  it("reconstructs a running closed-tab session from backend truth and keeps Preview invalid", async () => {
+    const artifact = result(1, 1, "image/png", "recovered.png", 512);
+    const firstApi = makeApi({
+      createRun: vi.fn(async () => runResponse("run-live", 17)),
+      getRun: vi.fn(async () => runLookupResponse("running", "run-live", 17)),
+      getExecution: vi.fn(async () => execution("running", "run-live")),
+      getResults: vi.fn(async () => ({ run_id: "run-live", results: [artifact] })),
+    });
+    const firstMount = render(<App api={firstApi} pollIntervalMs={5} />);
+    await expandConfiguration("Variable bindings");
+    fireEvent.change(screen.getByLabelText("Values"), { target: { value: "closed-tab fox" } });
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByRole("heading", { name: "Run 17" });
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+    expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().currentRunId).toBe("run-live"));
+    window.dispatchEvent(new PageTransitionEvent("pagehide"));
+    firstMount.unmount();
+
+    const getExecution = vi
+      .fn<BatchcraftApi["getExecution"]>()
+      .mockResolvedValueOnce(execution("running", "run-live"))
+      .mockResolvedValueOnce(execution("succeeded", "run-live"));
+    const recoveredApi = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("running", "run-live", 17)),
+      getExecution,
+      getResults: vi.fn(async () => ({ run_id: "run-live", results: [artifact] })),
+    });
+    render(<App api={recoveredApi} pollIntervalMs={5} />);
+
+    expect(await screen.findByText(/Draft restored from this browser/)).toBeInTheDocument();
+    await expandConfiguration("Variable bindings");
+    expect(screen.getByLabelText("Values")).toHaveValue("closed-tab fox");
+    expect(await screen.findByRole("heading", { name: "Run 17" })).toBeInTheDocument();
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    expect(await screen.findAllByAltText("Result 1 from Job 1: recovered.png")).toHaveLength(1);
+    expect(await screen.findAllByAltText("Result 1 from Job 1: Run 17 / recovered.png")).toHaveLength(1);
+    expect(getExecution).toHaveBeenCalledTimes(2);
+    expect(recoveredApi.startRun).not.toHaveBeenCalled();
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Another Run" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Preview usable when localStorage writes fail", async () => {
     const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("Quota exceeded", "QuotaExceededError");
     });
@@ -1367,6 +1523,23 @@ describe("Current Run restoration", () => {
     expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     expect(await screen.findByRole("button", { name: "Create Another Run" })).toBeEnabled();
+  });
+
+  it.each([
+    ["failed", "Failed"],
+    ["blocked", "Blocked"],
+  ] as const)("restores a %s Run from backend execution state", async (status, label) => {
+    seedWorkingSession(`run-${status}`);
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse(status, `run-${status}`, 16)),
+      getExecution: vi.fn(async () => execution(status, `run-${status}`)),
+      getResults: vi.fn(async () => ({ run_id: `run-${status}`, results: [] })),
+    });
+
+    render(<App api={api} />);
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(api.startRun).not.toHaveBeenCalled();
   });
 
   it("restores a succeeded Run and its Results", async () => {
@@ -2107,6 +2280,34 @@ describe("Batch working-session Results gallery", () => {
     expect(within(gallery).getByText("Unavailable: Run data is invalid")).toBeInTheDocument();
     expect(api.getRun).toHaveBeenCalledTimes(2);
   });
+
+  it("prunes missing and cross-Batch historical pointers without blocking healthy Runs", async () => {
+    const form = populatedBatchForm();
+    form.imageBindings = [{ slot_key: "source", values: ["asset-1"] }];
+    saveWorkingSession(form, null, ["run-missing", "run-other", "run-good"]);
+    const api = makeApi({
+      getRun: vi.fn(async (runId: string) => {
+        if (runId === "run-missing") {
+          throw new ApiError("Run was not found", "run_not_found", 404);
+        }
+        if (runId === "run-other") {
+          return { ...runLookupResponse("succeeded", runId, 21), batch_id: "other-batch" };
+        }
+        return runLookupResponse("succeeded", runId, 22);
+      }),
+      getResults: vi.fn(async (runId: string) => ({
+        run_id: runId,
+        results: [result(1, 1, "image/png", "healthy.png", 100)],
+      })),
+    });
+
+    render(<App api={api} />);
+
+    const gallery = batchResultsSection();
+    expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 22 / healthy.png")).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().sessionRunIds).toEqual(["run-good"]));
+    expect(api.getResults).toHaveBeenCalledOnce();
+  });
 });
 
 function makeApi(
@@ -2423,6 +2624,35 @@ function populatedBatchForm() {
   ]);
   form.imageBindings = [{ slot_key: "source", values: [null] }];
   return form;
+}
+
+function savedBatchDetail(overrides: Partial<SavedBatchDetail> = {}): SavedBatchDetail {
+  return {
+    id: "batch-1",
+    project_id: "project-1",
+    filesystem_key: "batch_1",
+    name: "Batch",
+    description: null,
+    revision: 1,
+    seed_mode: "fixed",
+    seed_values: [1],
+    random_seed_count: null,
+    selected_workflow_version_id: null,
+    selected_workflow_profile_id: null,
+    selected_workflow_profile_version_id: null,
+    selected_workflow_profile_name: null,
+    selected_workflow_profile_archived_at: null,
+    created_at: "2026-08-30T00:00:00Z",
+    updated_at: "2026-08-30T00:00:00Z",
+    archived_at: null,
+    prompt_selections: [],
+    variable_bindings: [{ placeholder: "subject", values: ["wolf"] }],
+    image_bindings: [],
+    parameter_bindings: [],
+    selected_workflow_version: null,
+    selected_workflow_profile_version: null,
+    ...overrides,
+  };
 }
 
 function profileJson(imageInputs: unknown[]): string {

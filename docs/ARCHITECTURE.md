@@ -125,11 +125,13 @@ This layout is illustrative, not mandatory. Avoid creating abstractions before b
 
 The first application slice follows this split. `api/` owns HTTP DTOs, routes, status codes, CORS, configuration, and lifecycle. `application/` coordinates the existing production packages and provides narrow Run/asset discovery plus an in-process Run task registry. It contains no generic repository, command bus, event bus, or scheduler framework.
 
-Saved Batch definitions are durably persisted in SQLite with a monotonic `revision`; the browser may
-additionally retain a best-effort working draft and ordered Run identities in tab-scoped
-`sessionStorage`, but it must compile that restored draft again before Run creation. The Run
-identities rebuild a Batch-scoped working-session Results gallery from backend-authoritative Run and
-Result data; they are not a Project-wide history index. Preview and Run creation use the same complete
+Saved Batch definitions are durably persisted in SQLite with a monotonic `revision`. The browser also
+retains one strict working-session recovery v1 record in `localStorage`. That record contains editable
+Batch intent plus stable Project, Saved Batch, current Run, and ordered session Run identity pointers.
+It contains no Preview, execution, Job, Result, or frozen Run response. Linked Workflow/Profile JSON is
+reconstructed by version ID; detached JSON remains editable draft state. Every cold load requires a new
+Preview. Stored Run identities rebuild a Batch-scoped working-session Results gallery from
+backend-authoritative Run and Result data; they are not a Project-wide history index. Preview and Run creation use the same complete
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and

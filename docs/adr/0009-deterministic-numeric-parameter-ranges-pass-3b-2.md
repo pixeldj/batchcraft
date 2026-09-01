@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-01
 - **Supersedes:** ADR 0008's explicit-values-only editable parameter contract, Batch snapshot v4, browser session v12, and prior consolidated SQLite baseline.
+- **Superseded in part by:** ADR 0010 for durable working-session recovery v1.
 
 ## Context
 

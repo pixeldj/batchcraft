@@ -291,7 +291,7 @@ manifest Jobs, and Results remain scalar-only.
 Saved Batches reopen in their original Values or Range mode. Run Plan shows compact frozen Range intent
 while concrete Jobs and Result Details show exact scalar values. The Batch Parameters editor reuses
 `ConfigurationSection`; collapse state is local UI state and neither changes Batch semantics nor
-invalidates Preview. Browser sessions use v13.
+invalidates Preview. Tab-scoped browser session v13 was the current refresh-only format for this phase.
 
 This change establishes Batch snapshot v5 and replaces the consolidated SQLite baseline with
 mode-aware parameter intent storage. Manifest v7, CSV, Run v1, and execution v2 remain current. Existing
@@ -299,10 +299,17 @@ development databases, snapshot-v4 Runs, and browser v12 drafts are unsupported;
 inspected and recreated manually, while browser drafts reset automatically. Enums, random parameter
 values, linked or zipped dimensions, `/object_info`, and LoRA discovery remain deferred.
 
-Closed-tab recovery is also deferred to a dedicated milestone. It must restore the most recent
-Project/Saved Batch and active or recent Run IDs from backend-authoritative state, handle running and
-terminal Runs safely, and require a fresh Preview. Do not replace `sessionStorage` with `localStorage`
-without that complete design.
+### Phase 2.9: Durable working-session recovery
+
+Working-session recovery v1 replaces tab-scoped browser session v13. One strict localStorage record
+stores editable Batch intent, the selected Project and optional Saved Batch revision pointer, the current
+Run ID, and ordered unique session Run IDs. Linked Workflow/Profile JSON is reconstructed from stable
+version IDs; detached JSON remains draft state. Old sessionStorage data is not read or migrated.
+
+Every cold load starts with Preview invalid. Run, execution, and Result state is fetched from FastAPI.
+Running Runs enter the normal polling hook without another execution start. Missing or cross-identity
+Run pointers are pruned independently. This phase adds no backend endpoint, SQLite migration, Run index,
+Project-wide history, or executor restart recovery.
 
 ## Python Conventions
 
@@ -364,15 +371,17 @@ Keep API access in `src/api/`, feature components in `src/features/`, and small 
 `src/components/`. Treat HTTP responses as typed contracts. Keep Batch compilation, validation,
 execution transitions, and Result provenance on the backend.
 
-Browser `sessionStorage` is a best-effort refresh aid, not application persistence. Store semantic
-form values, the selected Project ID, current Run ID, and ordered unique Run IDs for the current Batch
-working session. Reconnect a saved Project only by exact Project ID and filesystem-key match. Keep
-Project-scoped Prompt and Asset requests blank until that verification succeeds. Restore Run,
-execution, and Result state from the backend only when the Run matches the current Project and Batch,
-and require a fresh compiler Preview after restoring a form draft. Never store Result metadata or
-bytes as browser truth. Switching Project clears PromptVersion and named Image Input selections and the
-session gallery while retaining Batch identity, variables, seeds, and workflow inputs. Changing Batch
-identity resets the session gallery; editing prompts, image bindings, seeds, or display names does not.
+Browser working-session recovery is a pointer/cache, not runtime authority. Store the strict recovery
+v1 record under `batchcraft.working-session-recovery.v1` in localStorage. It may contain semantic form
+values, selected Project and Saved Batch pointers, current Run ID, and ordered unique Run IDs for the
+current Batch working session. It must not contain Preview, execution, Job, Result, frozen Run response,
+or materialized Random seed data. Reconnect a saved Project only by exact Project ID and filesystem-key
+match. Keep Project-scoped Prompt and Asset requests blank until that verification succeeds. Restore
+Run, execution, and Result state from the backend only when the frozen Run matches current Project and
+Batch IDs plus filesystem keys. Require a fresh compiler Preview after every cold load. Switching
+Project starts a fresh Batch identity and clears Project-scoped Prompt, Workflow/Profile, Image Input,
+Parameter, Run, and gallery state. Changing Batch identity resets the gallery; semantic edits within the
+same Batch retain it and invalidate Preview. Presentation-only collapse changes do neither.
 
 The selected Profile drives the named Image Input editor. It renders slots in Profile order and lets
 each choose ordered Project Asset alternatives plus an independent Base workflow alternative. Profile

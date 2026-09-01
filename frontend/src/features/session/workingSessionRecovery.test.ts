@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { initialBatchForm, newPrompt, newVariableBinding, type BatchFormState } from "../batch/form";
 import {
-  loadWorkingSession,
-  saveWorkingSession,
-  WORKING_SESSION_KEY,
-} from "./workingSession";
+  loadWorkingSessionRecovery as loadWorkingSession,
+  saveWorkingSessionRecovery as saveWorkingSession,
+  WORKING_SESSION_RECOVERY_KEY as WORKING_SESSION_KEY,
+} from "./workingSessionRecovery";
 
-describe("browser working session", () => {
-  it("round-trips a v13 draft and recovery metadata without UI keys", () => {
+describe("durable browser working-session recovery", () => {
+  it("writes recovery v1 metadata and omits reconstructable snapshots and UI keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
@@ -38,7 +38,8 @@ describe("browser working session", () => {
     >;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.version).toBe(13);
+    expect(stored.format_version).toBe(1);
+    expect(stored.updated_at).toEqual(expect.any(String));
     expect(stored).toMatchObject({
       current_run_id: "run-42",
       session_run_ids: ["run-40", "run-42"],
@@ -46,7 +47,7 @@ describe("browser working session", () => {
       selected_saved_batch_id: "saved-batch-1",
       saved_batch_base_revision: 7,
     });
-    expect((stored.form as { prompts: unknown[] }).prompts).toEqual([
+    expect((stored.draft as { prompts: unknown[] }).prompts).toEqual([
       {
         libraryProjectId: "library-project",
         promptId: "prompt-logical",
@@ -66,21 +67,71 @@ describe("browser working session", () => {
         text: "Second {{subject}}",
       },
     ]);
-    expect((stored.form as { variableBindings: unknown[] }).variableBindings).toEqual([
+    expect((stored.draft as { variableBindings: unknown[] }).variableBindings).toEqual([
       { placeholder: "subject", values: ["wolf", "fox"] },
     ]);
-    expect(withoutKeys(restored.form)).toEqual(withoutKeys(form));
+    expect(stored.draft).toMatchObject({ workflowJson: null, workflowProfileJson: null });
+    expect(restored.form).toMatchObject({ workflowJson: "{}", workflowProfileJson: "{}" });
     expect(restored).toMatchObject({
       currentRunId: "run-42",
       sessionRunIds: ["run-40", "run-42"],
       selectedProjectId: "selected-project",
       selectedSavedBatchId: "saved-batch-1",
       savedBatchBaseRevision: 7,
+      workflowSnapshotRecoveryRequired: true,
+      profileSnapshotRecoveryRequired: true,
       draftRestored: true,
     });
   });
 
-  it("round-trips an incomplete v13 draft", () => {
+  it("stores no Preview, execution, Result, or artifact response fields", () => {
+    const storage = new MemoryStorage();
+    saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
+
+    const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as unknown;
+    const keys = collectKeys(stored);
+
+    expect(keys).not.toContain("preview");
+    expect(keys).not.toContain("preview_response");
+    expect(keys).not.toContain("execution");
+    expect(keys).not.toContain("results");
+    expect(keys).not.toContain("result_bytes");
+    expect(keys).not.toContain("status");
+  });
+
+  it("ignores old sessionStorage v13 instead of migrating it", () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    sessionStorage.setItem("batchcraft.working-session", JSON.stringify({
+      version: 13,
+      form: {},
+      current_run_id: "run-old",
+    }));
+
+    expectFreshSession(loadWorkingSession());
+    expect(localStorage.getItem(WORKING_SESSION_KEY)).toBeNull();
+
+    sessionStorage.clear();
+  });
+
+  it("preserves detached Workflow and Profile JSON as editable draft state", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.workflowVersionId = null;
+    form.workflowProfileVersionId = null;
+    form.workflowJson = '{"detached":"workflow"}';
+    form.workflowProfileJson = '{"mappings":{},"image_inputs":[],"parameters":[]}';
+
+    saveWorkingSession(form, null, [], "selected-project", storage);
+
+    const restored = loadWorkingSession(storage);
+    expect(restored.form.workflowJson).toBe(form.workflowJson);
+    expect(restored.form.workflowProfileJson).toBe(form.workflowProfileJson);
+    expect(restored.workflowSnapshotRecoveryRequired).toBe(false);
+    expect(restored.profileSnapshotRecoveryRequired).toBe(false);
+  });
+
+  it("round-trips an incomplete recovery draft", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.prompts = [];
@@ -95,7 +146,7 @@ describe("browser working session", () => {
     expect(restored.draftRestored).toBe(true);
   });
 
-  it("reconciles restored Parameter bindings to stored Profile order and exact keys", () => {
+  it("preserves Parameter drafts until the linked Profile snapshot is reconstructed", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
@@ -110,12 +161,12 @@ describe("browser working session", () => {
     saveWorkingSession(form, null, [], null, storage);
 
     expect(loadWorkingSession(storage).form.parameterBindings).toEqual([
+      parameterBinding("unknown", "string", [{ kind: "override", value: "remove me" }]),
       parameterBinding("steps", "integer", [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }]),
-      parameterBinding("enabled", "boolean", [{ kind: "base" }]),
     ]);
   });
 
-  it("round-trips retained Values and exact Range drafts in v13", () => {
+  it("round-trips retained Values and exact Range drafts", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.parameterBindings[0] = {
@@ -183,19 +234,19 @@ describe("browser working session", () => {
 
   it.each([
     ["prompt metadata", (envelope: Record<string, unknown>) => {
-      const form = envelope.form as { prompts: Array<Record<string, unknown>> };
+      const form = envelope.draft as { prompts: Array<Record<string, unknown>> };
       form.prompts[0].versionNumber = "7";
     }],
     ["Variable Binding values", (envelope: Record<string, unknown>) => {
-      const form = envelope.form as { variableBindings: Array<Record<string, unknown>> };
+      const form = envelope.draft as { variableBindings: Array<Record<string, unknown>> };
       form.variableBindings[0].values = ["wolf", 42];
     }],
     ["empty Image Input alternatives", (envelope: Record<string, unknown>) => {
-      const form = envelope.form as { imageBindings: Array<Record<string, unknown>> };
+      const form = envelope.draft as { imageBindings: Array<Record<string, unknown>> };
       form.imageBindings[0].values = [];
     }],
     ["duplicate Image Input alternatives", (envelope: Record<string, unknown>) => {
-      const form = envelope.form as { imageBindings: Array<Record<string, unknown>> };
+      const form = envelope.draft as { imageBindings: Array<Record<string, unknown>> };
       form.imageBindings[0].values = [null, null];
     }],
     ["selected Project ID", (envelope: Record<string, unknown>) => {
@@ -204,8 +255,14 @@ describe("browser working session", () => {
     ["Saved Batch revision", (envelope: Record<string, unknown>) => {
       envelope.saved_batch_base_revision = 0;
     }],
+    ["unpaired Saved Batch identity", (envelope: Record<string, unknown>) => {
+      envelope.saved_batch_base_revision = null;
+    }],
+    ["invalid update timestamp", (envelope: Record<string, unknown>) => {
+      envelope.updated_at = "yesterday";
+    }],
     ["removed Variable Binding field", (envelope: Record<string, unknown>) => {
-      const form = envelope.form as { variableBindings: Array<Record<string, unknown>> };
+      const form = envelope.draft as { variableBindings: Array<Record<string, unknown>> };
       form.variableBindings[0].mode = "all";
     }],
     ["duplicate session Run IDs", (envelope: Record<string, unknown>) => {
@@ -215,11 +272,11 @@ describe("browser working session", () => {
       envelope.legacy = true;
     }],
     ["Parameter binding value", (envelope: Record<string, unknown>) => {
-      const form = envelope.form as { parameterBindings: Array<Record<string, unknown>> };
+      const form = envelope.draft as { parameterBindings: Array<Record<string, unknown>> };
       const alternatives = form.parameterBindings[0].alternatives as Array<Record<string, unknown>>;
       alternatives[0].value = 30;
     }],
-  ] as const)("falls back for malformed v13 %s", (_name, mutate) => {
+  ] as const)("falls back for malformed recovery %s", (_name, mutate) => {
     const storage = new MemoryStorage();
     saveWorkingSession(
       populatedForm(),
@@ -240,14 +297,14 @@ describe("browser working session", () => {
     expectFreshSession(loadWorkingSession(storage));
   });
 
-  it.each([1, 8, 9, 10, 11, 12, 99])("resets an old or unknown version %i", (version) => {
+  it.each([0, 2, 13, 99])("resets an unsupported recovery version %i", (version) => {
     const storage = new MemoryStorage();
     saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
       string,
       unknown
     >;
-    envelope.version = version;
+    envelope.format_version = version;
     storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
 
     expectFreshSession(loadWorkingSession(storage));
@@ -255,7 +312,7 @@ describe("browser working session", () => {
 
   it.each([
     "not json",
-    JSON.stringify({ version: 13, form: { prompts: [] }, current_run_id: null }),
+    JSON.stringify({ format_version: 1, draft: { prompts: [] }, current_run_id: null }),
   ])("falls back safely for malformed current data", (stored) => {
     const storage = new MemoryStorage();
     storage.setItem(WORKING_SESSION_KEY, stored);
@@ -334,25 +391,6 @@ function parameterBinding(
   };
 }
 
-function withoutKeys(form: BatchFormState) {
-  return {
-    ...form,
-    prompts: form.prompts.map((prompt) => ({
-      libraryProjectId: prompt.libraryProjectId,
-      promptId: prompt.promptId,
-      promptName: prompt.promptName,
-      versionId: prompt.versionId,
-      versionNumber: prompt.versionNumber,
-      snapshotName: prompt.snapshotName,
-      text: prompt.text,
-    })),
-    variableBindings: form.variableBindings.map((binding) => ({
-      placeholder: binding.placeholder,
-      values: binding.values,
-    })),
-  };
-}
-
 function expectFreshSession(restored: ReturnType<typeof loadWorkingSession>): void {
   expect(restored.draftRestored).toBe(false);
   expect(restored.currentRunId).toBeNull();
@@ -360,6 +398,8 @@ function expectFreshSession(restored: ReturnType<typeof loadWorkingSession>): vo
   expect(restored.selectedProjectId).toBeNull();
   expect(restored.selectedSavedBatchId).toBeNull();
   expect(restored.savedBatchBaseRevision).toBeNull();
+  expect(restored.workflowSnapshotRecoveryRequired).toBe(false);
+  expect(restored.profileSnapshotRecoveryRequired).toBe(false);
   expect(restored.form.prompts).toEqual([]);
 }
 
@@ -420,4 +460,10 @@ class ThrowingStorage implements Storage {
     void value;
     throw new DOMException("Quota exceeded");
   }
+}
+
+function collectKeys(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectKeys);
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, nested]) => [key, ...collectKeys(nested)]);
 }
