@@ -8,6 +8,7 @@ from .models import (
     RunExecutionStatus,
 )
 from .state import (
+    DISCARDED_BEFORE_START,
     EXECUTION_FILENAME,
     EXECUTION_FORMAT_VERSION,
     ExecutionStateError,
@@ -18,6 +19,7 @@ from .state import (
 __all__ = [
     "EXECUTION_FILENAME",
     "EXECUTION_FORMAT_VERSION",
+    "DISCARDED_BEFORE_START",
     "EventSource",
     "ExecutionClient",
     "ExecutionConfig",

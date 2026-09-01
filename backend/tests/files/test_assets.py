@@ -70,6 +70,25 @@ def test_identical_content_deduplicates_independent_of_filename(tmp_path: Path) 
     assert len(content_files) == 1
 
 
+@pytest.mark.parametrize("invalid_version", (True, 1.0))
+def test_asset_format_version_requires_a_json_integer(
+    tmp_path: Path, invalid_version: object
+) -> None:
+    source = tmp_path / "portrait.png"
+    source.write_bytes(b"asset bytes")
+    store = ProjectAssetStore(tmp_path / "project", id_factory=lambda: "asset-1")
+    asset = store.import_file(source)
+    metadata_path = (store.project_path / asset.stored_path).with_name("asset.json")
+    metadata = json.loads(metadata_path.read_text())
+    metadata["format_version"] = invalid_version
+    metadata_path.write_text(json.dumps(metadata))
+
+    with pytest.raises(AssetStoreError, match="unsupported asset format version"):
+        store.read_metadata(asset.sha256)
+    with pytest.raises(AssetStoreError, match="unsupported asset format version"):
+        store.read_asset_id(asset.sha256)
+
+
 def test_different_content_remains_distinct(tmp_path: Path) -> None:
     first_source = tmp_path / "image.png"
     second_source = tmp_path / "image-copy.png"

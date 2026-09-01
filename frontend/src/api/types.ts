@@ -8,13 +8,7 @@ export interface IdentityRequest {
 
 export interface VariableBindingRequest {
   placeholder: string;
-  variable_list: {
-    id: string;
-    values: string[];
-  };
-  mode: "all" | "fixed";
-  selected_values: string[];
-  fixed_value: string | null;
+  values: string[];
 }
 
 export interface BatchRequest {
@@ -37,7 +31,7 @@ export interface BatchRequest {
 }
 
 export interface EditableBatchSnapshot {
-  snapshot_version: 1;
+  snapshot_version: 2;
   project: IdentityRequest;
   source_saved_batch: { id: string; revision: number } | null;
   batch: IdentityRequest & { description: string | null };
@@ -142,11 +136,7 @@ export interface SavedBatchPromptSelection {
 
 export interface SavedBatchVariableBinding {
   placeholder: string;
-  variable_list_id: string;
   values: string[];
-  selected_values: string[];
-  mode: "all" | "fixed";
-  fixed_value: string | null;
 }
 
 export interface SavedBatchSeedIntent {
@@ -461,7 +451,7 @@ export interface RunResponse extends RunCreatedResponse {
   prompt_versions: Array<{ id: string; name: string; text: string }>;
   jobs: Array<{ ordinal: number; prompt_version_id: string }>;
   plan: RunPlanResponse;
-  batch_snapshot: EditableBatchSnapshot | null;
+  batch_snapshot: EditableBatchSnapshot;
   execution: ExecutionResponse;
 }
 
@@ -475,7 +465,7 @@ export interface RunPlanResponse {
   jobs: RunPlanJobResponse[];
 }
 
-export type RunStatus = "created" | "running" | "succeeded" | "failed" | "blocked";
+export type RunStatus = "created" | "running" | "succeeded" | "failed" | "blocked" | "cancelled";
 
 export interface JobExecutionResponse {
   ordinal: number;

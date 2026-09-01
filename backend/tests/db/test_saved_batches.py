@@ -18,8 +18,9 @@ from batchcraft.db import (
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
     SavedBatchStore,
+    SavedBatchStoreError,
+    SavedBatchValidationError,
     SavedBatchVariableBinding,
-    SavedBatchVariableBindingMode,
     SavedBatchWorkflowProfileVersionSnapshot,
     SavedBatchWorkflowVersionSnapshot,
     WorkflowProfileStore,
@@ -109,16 +110,8 @@ def _complete_definition(path: Path, project_id: str = "project-1") -> SavedBatc
             SavedBatchPromptSelection(first.id, first.name_snapshot, first.text),
         ),
         variable_bindings=(
-            SavedBatchVariableBinding(
-                "subject",
-                "animals",
-                ("cat", "dog"),
-                ("dog", "cat"),
-                SavedBatchVariableBindingMode.ALL,
-            ),
-            SavedBatchVariableBinding(
-                "style", "styles", (), (), SavedBatchVariableBindingMode.FIXED, ""
-            ),
+            SavedBatchVariableBinding("subject", ("dog", "cat")),
+            SavedBatchVariableBinding("style", ("",)),
         ),
         reference_selections=(
             SavedBatchReferenceSelection("asset-2"),
@@ -144,9 +137,7 @@ def test_incomplete_saved_batch_roundtrips(tmp_path: Path) -> None:
         name="Draft",
         description=None,
         seed_intent=SavedBatchSeedIntent(SavedBatchSeedMode.RANDOM, random_seed_count=3),
-        variable_bindings=(
-            SavedBatchVariableBinding("", "", (), (), SavedBatchVariableBindingMode.ALL),
-        ),
+        variable_bindings=(SavedBatchVariableBinding("", ()),),
     )
 
     saved = SavedBatchStore(path, id_factory=lambda: "batch-1", clock=lambda: NOW).create(
@@ -159,9 +150,16 @@ def test_incomplete_saved_batch_roundtrips(tmp_path: Path) -> None:
     assert saved.selected_workflow_version is None
     assert saved.variable_bindings == definition.variable_bindings
     assert SavedBatchStore(path).list("project-1")[0].name == "Draft"
+    with closing(open_connection(path)) as connection:
+        assert connection.execute(
+            "SELECT placeholder, values_json FROM batch_variable_binding WHERE batch_id = ?",
+            (saved.id,),
+        ).fetchone() == ("", "[]\n")
 
 
-def test_complete_roundtrip_preserves_all_order_and_canonical_arrays(tmp_path: Path) -> None:
+def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
+    tmp_path: Path,
+) -> None:
     path = _database(tmp_path)
     definition = _complete_definition(path)
     saved = SavedBatchStore(path, clock=lambda: NOW).create(
@@ -198,9 +196,13 @@ def test_complete_roundtrip_preserves_all_order_and_canonical_arrays(tmp_path: P
             "SELECT seed_values_json FROM batch WHERE id = 'batch-complete'"
         ).fetchone() == ("[7,11]\n",)
         assert connection.execute(
-            "SELECT values_json FROM batch_variable_binding WHERE batch_id = 'batch-complete' "
+            "SELECT batch_id, position, placeholder, values_json "
+            "FROM batch_variable_binding WHERE batch_id = 'batch-complete' "
             "ORDER BY position"
-        ).fetchall() == [('["cat","dog"]\n',), ("[]\n",)]
+        ).fetchall() == [
+            ("batch-complete", 1, "subject", '["dog","cat"]\n'),
+            ("batch-complete", 2, "style", '[""]\n'),
+        ]
 
     logical_profile_only = replace(definition, selected_workflow_profile_version=None)
     saved_without_profile_version = SavedBatchStore(path).create(
@@ -213,6 +215,62 @@ def test_complete_roundtrip_preserves_all_order_and_canonical_arrays(tmp_path: P
     assert saved_without_profile_version.selected_workflow_profile_id == "profile-project-1"
     assert saved_without_profile_version.selected_workflow_profile_name == "Profile"
     assert saved_without_profile_version.selected_workflow_profile_version is None
+
+
+@pytest.mark.parametrize("values", (("cat", "cat"), ("", "")))
+def test_saved_batch_writes_reject_duplicate_binding_values(
+    tmp_path: Path, values: tuple[str, ...]
+) -> None:
+    path = _database(tmp_path)
+    invalid = SavedBatchDefinition(
+        "Draft",
+        None,
+        SavedBatchSeedIntent.fixed(1),
+        variable_bindings=(SavedBatchVariableBinding("animal", values),),
+    )
+    store = SavedBatchStore(path)
+
+    with pytest.raises(SavedBatchValidationError, match="exact duplicates"):
+        store.create("project-1", "duplicate", invalid)
+
+    created = store.create(
+        "project-1",
+        "valid",
+        SavedBatchDefinition("Valid", None, SavedBatchSeedIntent.fixed(1)),
+        batch_id="valid-batch",
+    )
+    with pytest.raises(SavedBatchValidationError, match="exact duplicates"):
+        store.update(created.id, invalid, expected_revision=created.revision)
+    assert store.get(created.id).revision == created.revision
+
+
+@pytest.mark.parametrize(
+    ("values_json", "message"),
+    (("[1]\n", "string array"), ('["cat","cat"]\n', "exact duplicates")),
+)
+def test_saved_batch_reads_reject_invalid_binding_values(
+    tmp_path: Path, values_json: str, message: str
+) -> None:
+    path = _database(tmp_path)
+    store = SavedBatchStore(path)
+    store.create(
+        "project-1",
+        "invalid",
+        SavedBatchDefinition("Invalid", None, SavedBatchSeedIntent.fixed(1)),
+        batch_id="invalid-batch",
+    )
+    with closing(open_connection(path)) as connection:
+        connection.execute(
+            """
+            INSERT INTO batch_variable_binding (batch_id, position, placeholder, values_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("invalid-batch", 1, "animal", values_json),
+        )
+        connection.commit()
+
+    with pytest.raises(SavedBatchStoreError, match=message):
+        store.get("invalid-batch")
 
 
 def test_update_is_atomic_increments_revision_and_rejects_stale_concurrent_saves(

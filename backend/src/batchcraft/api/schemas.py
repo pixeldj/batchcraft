@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Annotated, Literal, Self
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from batchcraft.application import ComfyUIStatus, RunCreationInput
 from batchcraft.db import (
@@ -19,7 +19,6 @@ from batchcraft.db import (
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
     SavedBatchVariableBinding,
-    SavedBatchVariableBindingMode,
     SavedBatchWorkflowProfileVersionSnapshot,
     SavedBatchWorkflowVersionSnapshot,
     WorkflowListRecord,
@@ -39,8 +38,6 @@ from batchcraft.domain import (
     SeedInput,
     SeedMode,
     VariableBinding,
-    VariableBindingMode,
-    VariableList,
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
 from batchcraft.files import (
@@ -48,6 +45,7 @@ from batchcraft.files import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
+    BatchSnapshotV2,
     ProjectIdentity,
     PublishedRun,
 )
@@ -69,17 +67,9 @@ class PromptVersionRequest(ApiModel):
     text: str
 
 
-class VariableListRequest(ApiModel):
-    id: str = Field(min_length=1)
-    values: list[str]
-
-
 class VariableBindingRequest(ApiModel):
     placeholder: str = Field(min_length=1)
-    variable_list: VariableListRequest
-    mode: VariableBindingMode
-    selected_values: list[str] = Field(default_factory=list)
-    fixed_value: str | None = None
+    values: list[str]
 
 
 class ReferenceRequest(ApiModel):
@@ -94,79 +84,6 @@ class SeedRequest(ApiModel):
     values: list[SafeSeed]
 
 
-class EditableSnapshotSourceSavedBatch(ApiModel):
-    id: str = Field(min_length=1)
-    revision: int = Field(strict=True, ge=1)
-
-
-class EditableSnapshotBatch(ApiModel):
-    id: str = Field(min_length=1)
-    filesystem_key: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    description: str | None = None
-
-
-class EditableSnapshotPromptVersion(ApiModel):
-    id: str = Field(min_length=1)
-    prompt_id: str | None = Field(default=None, min_length=1)
-    version_number: int | None = Field(default=None, strict=True, ge=1)
-    name: str = Field(min_length=1)
-    text: str
-
-
-class EditableSnapshotVariableBinding(ApiModel):
-    placeholder: str = Field(min_length=1)
-    variable_list: VariableListRequest
-    mode: VariableBindingMode
-    selected_values: list[str] = Field(default_factory=list)
-    fixed_value: str | None = None
-
-
-class EditableSnapshotReference(ApiModel):
-    asset_id: str = Field(min_length=1)
-
-
-class EditableSnapshotSeedIntent(ApiModel):
-    mode: Literal["fixed", "explicit", "random"]
-    values: list[SafeSeed]
-    random_seed_count: int | None = Field(default=None, strict=True, ge=1, le=100)
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> Self:
-        if self.mode == "fixed" and (len(self.values) != 1 or self.random_seed_count is not None):
-            raise ValueError("fixed seed intent requires one value and no random count")
-        if self.mode == "explicit" and (not self.values or self.random_seed_count is not None):
-            raise ValueError("explicit seed intent requires values and no random count")
-        if self.mode == "random" and (self.values or self.random_seed_count is None):
-            raise ValueError("random seed intent requires a count and no values")
-        return self
-
-
-class EditableSnapshotWorkflowSelection(ApiModel):
-    workflow_id: str | None = Field(default=None, min_length=1)
-    workflow_version_id: str | None = Field(default=None, min_length=1)
-    workflow_name: str | None = Field(default=None, min_length=1)
-    workflow_version_number: int | None = Field(default=None, strict=True, ge=1)
-    workflow_profile_id: str | None = Field(default=None, min_length=1)
-    workflow_profile_version_id: str | None = Field(default=None, min_length=1)
-    workflow_profile_name: str | None = Field(default=None, min_length=1)
-    workflow_profile_version_number: int | None = Field(default=None, strict=True, ge=1)
-    workflow: dict[str, object]
-    workflow_profile: dict[str, object]
-
-
-class EditableBatchSnapshot(ApiModel):
-    snapshot_version: Literal[1]
-    project: IdentityRequest
-    source_saved_batch: EditableSnapshotSourceSavedBatch | None
-    batch: EditableSnapshotBatch
-    prompt_versions: list[EditableSnapshotPromptVersion]
-    variable_bindings: list[EditableSnapshotVariableBinding]
-    references: list[EditableSnapshotReference]
-    seed_intent: EditableSnapshotSeedIntent
-    workflow_selection: EditableSnapshotWorkflowSelection
-
-
 class BatchRequest(ApiModel):
     project: IdentityRequest
     batch: IdentityRequest
@@ -176,12 +93,16 @@ class BatchRequest(ApiModel):
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
-    batch_snapshot: EditableBatchSnapshot
+    batch_snapshot: BatchSnapshotV2
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
         snapshot = self.batch_snapshot
-        if snapshot.project != self.project:
+        if (
+            snapshot.project.id,
+            snapshot.project.filesystem_key,
+            snapshot.project.name,
+        ) != (self.project.id, self.project.filesystem_key, self.project.name):
             raise ValueError("Batch snapshot Project identity does not match the request")
         if (
             snapshot.batch.id != self.batch.id
@@ -196,22 +117,14 @@ class BatchRequest(ApiModel):
         snapshot_bindings = [
             (
                 item.placeholder,
-                item.variable_list.id,
-                item.variable_list.values,
-                item.mode,
-                item.selected_values,
-                item.fixed_value,
+                item.values,
             )
             for item in snapshot.variable_bindings
         ]
         request_bindings = [
             (
                 item.placeholder,
-                item.variable_list.id,
-                item.variable_list.values,
-                item.mode,
-                item.selected_values,
-                item.fixed_value,
+                item.values,
             )
             for item in self.variable_bindings
         ]
@@ -255,13 +168,7 @@ class BatchRequest(ApiModel):
                 variable_bindings=tuple(
                     VariableBinding(
                         placeholder=binding.placeholder,
-                        variable_list=VariableList(
-                            id=binding.variable_list.id,
-                            values=tuple(binding.variable_list.values),
-                        ),
-                        mode=binding.mode,
-                        selected_values=tuple(binding.selected_values),
-                        fixed_value=binding.fixed_value,
+                        values=tuple(binding.values),
                     )
                     for binding in self.variable_bindings
                 ),
@@ -366,21 +273,7 @@ class SavedBatchPromptSelectionRequest(ApiModel):
 
 class SavedBatchVariableBindingRequest(ApiModel):
     placeholder: str
-    variable_list_id: str
     values: list[str]
-    selected_values: list[str]
-    mode: SavedBatchVariableBindingMode
-    fixed_value: str | None = None
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> Self:
-        if self.mode is SavedBatchVariableBindingMode.ALL and self.fixed_value is not None:
-            raise ValueError("all-mode binding cannot define a fixed value")
-        if self.mode is SavedBatchVariableBindingMode.FIXED and (
-            self.fixed_value is None or self.selected_values
-        ):
-            raise ValueError("fixed-mode binding requires a fixed value and no selected values")
-        return self
 
 
 class SavedBatchReferenceSelectionRequest(ApiModel):
@@ -474,11 +367,7 @@ class SavedBatchDefinitionRequest(ApiModel):
             variable_bindings=tuple(
                 SavedBatchVariableBinding(
                     placeholder=item.placeholder,
-                    variable_list_id=item.variable_list_id,
                     values=tuple(item.values),
-                    selected_values=tuple(item.selected_values),
-                    mode=item.mode,
-                    fixed_value=item.fixed_value,
                 )
                 for item in self.variable_bindings
             ),
@@ -579,11 +468,7 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
                 "variable_bindings": [
                     {
                         "placeholder": item.placeholder,
-                        "variable_list_id": item.variable_list_id,
                         "values": list(item.values),
-                        "selected_values": list(item.selected_values),
-                        "mode": item.mode,
-                        "fixed_value": item.fixed_value,
                     }
                     for item in batch.variable_bindings
                 ],
@@ -1131,7 +1016,7 @@ class RunResponse(RunCreatedResponse):
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
     plan: RunPlanResponse
-    batch_snapshot: EditableBatchSnapshot | None
+    batch_snapshot: BatchSnapshotV2
     execution: ExecutionResponse
 
     @classmethod
@@ -1152,20 +1037,9 @@ class RunResponse(RunCreatedResponse):
                 for job in run.compiled_plan.jobs
             ],
             plan=RunPlanResponse.from_run(run),
-            batch_snapshot=_validated_batch_snapshot(run.batch_snapshot),
+            batch_snapshot=BatchSnapshotV2.model_validate(run.batch_snapshot),
             execution=ExecutionResponse.from_state(state),
         )
-
-
-def _validated_batch_snapshot(
-    snapshot: dict[str, object] | None,
-) -> EditableBatchSnapshot | None:
-    if snapshot is None:
-        return None
-    try:
-        return EditableBatchSnapshot.model_validate(snapshot)
-    except ValidationError:
-        return None
 
 
 class ExecutionStartedResponse(ApiModel):

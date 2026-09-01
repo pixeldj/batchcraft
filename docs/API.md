@@ -4,7 +4,7 @@
 
 The first application boundary exposes the production compiler, Run filesystem store, execution state, sequential executor, and ComfyUI adapter through FastAPI.
 
-The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. SQLite owns current Project metadata plus the Prompt, Workflow, and Workflow Profile libraries. Authentication, a global scheduler, restart recovery, and cancellation remain deferred.
+The API is a local single-user development boundary. The first React frontend consumes it, and the browser never communicates directly with ComfyUI. SQLite owns current Project metadata plus the Prompt, Workflow, and Workflow Profile libraries. Authentication, a global scheduler, restart recovery, and in-flight cancellation remain deferred.
 
 ## Local Startup
 
@@ -97,14 +97,16 @@ POST /api/batches/preview
 POST /api/runs
 GET  /api/runs/{run_id}
 POST /api/runs/{run_id}/execute
+POST /api/runs/{run_id}/discard
 GET  /api/runs/{run_id}/execution
 GET  /api/runs/{run_id}/results
 GET  /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}
 ```
 
-The API applies all bundled SQL migrations before accepting requests. Startup fails on migration
-errors, newer database schemas, gaps, or changed checksums. Request handlers run each synchronous
-SQLite store operation through a worker thread rather than blocking the event loop.
+The API applies the current baseline SQL migration and any future contiguous migrations before
+accepting requests. Startup fails on migration errors, unsupported migration history, gaps, or changed
+checksums. It never deletes or rewrites an unsupported database automatically. Request handlers run
+each synchronous SQLite store operation through a worker thread rather than blocking the event loop.
 
 ## Projects And Prompts
 
@@ -155,13 +157,21 @@ logical Profile for the Workflow and exposes its latest compatible version as
 an earlier ProfileVersion's mappings to create a new immutable version under the same logical Profile;
 the API validates those mappings against the new target WorkflowVersion.
 
+The current mapping contract requires `prompt`, `seed`, and `output_prefix`; `reference_image` is
+optional. Unknown mapping names are rejected. Every mapping names a node ID, input name, and expected
+value type, must target an input on the exact WorkflowVersion, and must not target a ComfyUI connection
+array. Preview and Run creation accept a Profile without `reference_image` when no Reference Asset is
+selected. A selected Reference Asset without that mapping is rejected with an actionable validation
+error.
+
 Archive operations set archive timestamps through `POST .../archive`; they do not delete historical
 versions. Canonical JSON and stored hashes are checked when versions are read.
 
 `POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape plus a
 required `batch_snapshot` object containing the full editable Saved Batch state. The request carries
 Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
-template text, Variable List bindings, an ordered `references` array, seed input, the API-format
+template text, canonical variable bindings shaped as `{ "placeholder": string, "values": string[] }`,
+an ordered `references` array, seed input, the API-format
 workflow, and its Workflow Profile mapping. The singular `prompt_version` field is not accepted.
 The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
 a Random seed intent that stores only `mode` and `count`.
@@ -175,9 +185,10 @@ The compact Run creation response is unchanged. `GET /api/runs/{run_id}` additio
 ordered frozen PromptVersion snapshots, each Job ordinal's PromptVersion ID association, and a
 `plan` projection loaded from the published Run manifest. The plan contains compiler warnings and
 every concrete Job's resolved prompt, resolved variables, Reference Asset identity and frozen
-filename when selected, and materialized seed. A nullable `batch_snapshot` exposes manifest v4
-editable intent, including optional frozen Workflow/Profile display labels and version numbers.
-Runs loaded from manifest v1-v3 return `batch_snapshot: null` while retaining their concrete plan.
+filename when selected, and materialized seed. The required `batch_snapshot` exposes canonical
+editable intent, including optional frozen Workflow/Profile display labels and version numbers. The
+Run loader supports manifest v5 with `snapshot_version: 2`; unsupported manifest or snapshot versions
+make the Run invalid rather than producing a partial response.
 
 ## Project Assets
 
@@ -215,6 +226,12 @@ Structural integrity violations return `422 { "error": { "code": "saved_batch_in
 returns a single Saved Batch; `PATCH` updates it with the client-held `revision`; and
 `POST /api/batches/{batch_id}/archive` sets its archive timestamp.
 
+Saved Batch request and detail schemas expose the same canonical variable binding shape. Zero values
+are allowed because Saved Batches are drafts. The empty string is a concrete value. Saved Batch writes
+and executable Preview/Run requests reject exact duplicate values, including duplicate empty strings.
+Requests containing removed binding fields such as `mode`, `fixed_value`, or `selected_values` are
+invalid; the API does not normalize them.
+
 Random seed intent stores `mode` and `count` in the `batch_snapshot`; the frontend materializes the
 concrete ordered seed list before Preview or Run creation.
 
@@ -232,6 +249,8 @@ Candidates are constrained to the configured root. The filesystem layer reads on
 
 `POST /api/runs/{run_id}/execute` returns `202 Accepted` after retaining an in-process `asyncio.Task`. The task invokes the existing queue-depth-1 executor and all authoritative execution state remains in `execution.json`.
 
+`POST /api/runs/{run_id}/discard` durably marks a Run that has never started as `cancelled` and returns the existing execution response shape with `200 OK`. The Run directory and frozen provenance remain available through Run lookup and Run Plan inspection. Discard records `completed_at`, leaves `started_at`, `current_job_ordinal`, and `error` null, preserves every Job as pristine `pending`, and records the stable Run diagnostic `discarded_before_start`. Repeated discard is idempotent.
+
 The task registry:
 
 - permits at most one active Run task in the API process and rejects duplicate or concurrent starts;
@@ -239,7 +258,9 @@ The task registry:
 - removes completed task references;
 - cancels and observes active tasks during API shutdown.
 
-An execution request is accepted only when `execution.json` does not yet exist. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism.
+Start admission and discard are serialized by the same task-registry lock, so a Run cannot start and be discarded concurrently. Discard independently verifies that no task for the Run is active and that execution state is either absent or exactly the initial state derived from the frozen Run. It rejects any progression or submission evidence, including modified pending state, with `409 run_discard_not_eligible`.
+
+An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the discarded Run.
 
 A refreshed browser may reconnect to a Run already executing in the same backend process. It reads
 the existing state and resumes polling without calling the execution-start endpoint. This is UI
@@ -265,6 +286,6 @@ API errors use:
 Defined cases include invalid requests and Batches, Project/Prompt validation and conflicts,
 Project adoption/publication failures, invalid Workflow Profile mappings, unsafe Project keys,
 invalid image uploads, missing or invalid Project assets, missing Runs or Results, active or
-ineligible execution, Saved Batch revision conflicts, Saved Batch integrity violations, missing or
+ineligible execution, ineligible Run discard, Saved Batch revision conflicts, Saved Batch integrity violations, missing or
 invalid Saved Batches, asset or Run publication failure, invalid durable Run data, and unexpected
 internal errors. Python stack traces are logged server-side rather than returned to clients.

@@ -181,6 +181,31 @@ def test_profile_versions_validate_exact_target_and_list_latest_compatible(
     assert profiles.list("workflow-1")[0].latest_compatible_version == duplicate
 
 
+def test_profile_version_persists_without_reference_image_mapping(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    workflows = WorkflowStore(path, clock=lambda: NOW)
+    _, target = workflows.create(
+        "project-1",
+        "Workflow",
+        _workflow(),
+        workflow_id="workflow-1",
+        version_id="workflow-version-1",
+    )
+    mappings = _mappings()
+    mappings.pop("reference_image")
+
+    _, version = WorkflowProfileStore(path, clock=lambda: NOW).create(
+        "workflow-1",
+        "Text only",
+        target.id,
+        mappings,
+        profile_id="profile-1",
+        version_id="profile-version-1",
+    )
+
+    assert version.profile["mappings"] == mappings
+
+
 def test_database_enforces_profile_project_target_and_version_immutability(
     tmp_path: Path,
 ) -> None:

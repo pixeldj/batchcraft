@@ -118,11 +118,6 @@ class SavedBatchSeedMode(StrEnum):
     RANDOM = "random"
 
 
-class SavedBatchVariableBindingMode(StrEnum):
-    ALL = "all"
-    FIXED = "fixed"
-
-
 @dataclass(frozen=True, slots=True)
 class SavedBatchSeedIntent:
     mode: SavedBatchSeedMode
@@ -157,11 +152,7 @@ class SavedBatchPromptSelection:
 @dataclass(frozen=True, slots=True)
 class SavedBatchVariableBinding:
     placeholder: str
-    variable_list_id: str
     values: tuple[str, ...]
-    selected_values: tuple[str, ...]
-    mode: SavedBatchVariableBindingMode
-    fixed_value: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -108,7 +108,7 @@ Prompt Templates are versioned so historical Runs can identify the exact prompt 
 
 ### Variable List
 
-A named, reusable ordered list of values that can be bound to a prompt placeholder.
+A named, reusable ordered list of authoring values.
 
 Example:
 
@@ -119,9 +119,9 @@ Animals
 - bird
 ```
 
-The Prompt Template references `{{animal}}`; a Batch may bind that placeholder to the `Animals` Variable List.
-
-Variable Lists contain data. The Batch controls how that data is used.
+The Prompt Template references `{{animal}}`; a Batch may copy `cat`, `dog`, and `bird` from the
+`Animals` Variable List into that placeholder's binding. The binding retains the ordered values, not
+the Variable List identity.
 
 ### Reference Asset
 
@@ -186,14 +186,11 @@ A Prompt Template may contain:
 
 The placeholder syntax identifies a named slot only. It does not encode values or expansion behavior.
 
-Values live in structured Variable Lists, and the Batch decides how each placeholder is bound.
+A Batch binds each placeholder to an ordered list of concrete string values. Variable Lists may supply
+those values during authoring, but the binding itself has only `placeholder` and `values`.
 
-Initial binding modes:
-
-- **All values** — expand once for each selected value.
-- **Fixed value** — use one selected value.
-
-Multiple All-value bindings create a Cartesian product.
+One value contributes one variant. Multiple values contribute an ordered Cartesian dimension, and
+multiple bindings create a Cartesian product.
 
 Example:
 
@@ -204,7 +201,7 @@ location = [park, forest]
 
 creates six resolved prompt variants.
 
-Future modes may include deterministic sampling, weighted values, or row-linked variables.
+Deterministic sampling, weighted values, and row-linked variables remain deferred.
 
 ## Result Review
 
@@ -255,7 +252,7 @@ The first useful version should prove this complete path:
 2. Import an API-format workflow.
 3. Map prompt, one reference image, seed, and save prefix.
 4. Enter a Prompt Template.
-5. Bind one Variable List.
+5. Bind ordered values to one placeholder.
 6. Select multiple reference images.
 7. Preview the compiled Job matrix.
 8. Create a Run with a frozen plan.

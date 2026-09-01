@@ -10,6 +10,7 @@ class RunExecutionStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     BLOCKED = "blocked"
+    CANCELLED = "cancelled"
 
 
 class JobExecutionStatus(StrEnum):

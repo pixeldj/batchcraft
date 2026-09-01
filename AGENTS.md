@@ -88,6 +88,10 @@ Treat this as the current architecture unless an ADR explicitly changes it.
 - Avoid premature plugin systems, generic workflow engines, distributed queues, authentication systems, or multi-user architecture.
 - Do not implement speculative roadmap features while completing a narrower task.
 
+## Pre-release Persistence Policy
+
+For pre-release persistence changes, follow `docs/DEVELOPMENT.md`'s Pre-release Persistence Policy. Unless explicitly requested, support only the current database, Run, execution, and browser-session formats. Retain explicit versioning and migration machinery, fail closed on unsupported data, and never delete local data automatically.
+
 ## Testing Expectations
 
 Business rules require tests.

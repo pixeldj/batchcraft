@@ -114,7 +114,8 @@ Prompt Templates use simple named placeholders:
 A cinematic photo of {{animal}} in {{location}}.
 ```
 
-Values are stored separately as structured Variable Lists. A Batch binds placeholders to selected values and determines expansion behavior.
+Variable Lists provide reusable authoring values. A Batch binding copies an ordered value list for one
+placeholder; it does not retain Variable List identity or a separate expansion mode.
 
 For example:
 
@@ -123,7 +124,8 @@ animal   = [cat, dog, bird]
 location = [park, forest]
 ```
 
-with both bindings set to `all` produces six explicit prompt variants before execution.
+These bindings produce six explicit prompt variants before execution. One value contributes one
+variant, while multiple values form an ordered Cartesian dimension.
 
 batchcraft does not rely on ComfyUI dynamic-prompt nodes for its core batching behavior.
 

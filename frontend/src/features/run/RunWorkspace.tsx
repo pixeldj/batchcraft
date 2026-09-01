@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import type { BatchcraftApi } from "../../api/client";
+import type { BatchcraftApi, RunDiscardApi } from "../../api/client";
 import type {
   ExecutionResponse,
   ResultResponse,
@@ -13,16 +13,18 @@ import { RunPanel } from "./RunPanel";
 import { useRunExecution } from "./useRunExecution";
 
 interface Props {
-  api: BatchcraftApi;
+  api: BatchcraftApi & RunDiscardApi;
   run: RunCreatedResponse | RunResponse | null;
   pollIntervalMs: number;
   initialExecution: ExecutionResponse | null;
   initialResults: ResultResponse[];
   initialResultsError: string | null;
   onStatusChange(status: RunStatus | null): void;
+  onCreatedUnavailableChange(runId: string, unavailable: boolean): void;
   onResultsChange(runId: string, results: ResultResponse[]): void;
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
+  batchDiverged: boolean;
 }
 
 export function RunWorkspace({
@@ -33,9 +35,11 @@ export function RunWorkspace({
   initialResults,
   initialResultsError,
   onStatusChange,
+  onCreatedUnavailableChange,
   onResultsChange,
   getCachedRun,
   loadRun,
+  batchDiverged,
 }: Props) {
   const execution = useRunExecution(
     api,
@@ -53,15 +57,25 @@ export function RunWorkspace({
     }
   }, [execution.results, onResultsChange, run]);
 
+  useEffect(() => {
+    if (run) {
+      onCreatedUnavailableChange(run.run_id, execution.createdUnavailable);
+    }
+  }, [execution.createdUnavailable, onCreatedUnavailableChange, run]);
+
   return (
     <>
       <RunPanel
         run={run}
         execution={execution.execution}
         starting={execution.starting}
+        discarding={execution.discarding}
         polling={execution.polling}
         error={execution.error}
+        createdUnavailable={execution.createdUnavailable}
+        batchDiverged={batchDiverged}
         onStart={execution.start}
+        onDiscard={execution.discard}
       />
       <ResultsPanel
         api={api}

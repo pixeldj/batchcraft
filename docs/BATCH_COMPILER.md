@@ -88,6 +88,13 @@ Variable binding:
 animal = [cat, dog, bird]
 ```
 
+The canonical binding is `{placeholder: string, values: string[]}`. Zero values are valid mutable
+draft intent but fail compilation when the placeholder is used. One value contributes an identity
+dimension, while multiple ordered values contribute a Cartesian dimension. The compiler has no
+`all`, `fixed`, or Variable List source semantics. An empty string is a concrete value and inserts no
+text; it is not a zero-value binding. Exact duplicate values, including duplicate empty strings, fail
+compilation.
+
 References:
 
 ```text
@@ -184,10 +191,11 @@ The browser supports Random seed intent without adding randomness to the pure lo
 
 ## Reference Dimensions
 
-The first version requires one exposed reference-image slot in the Workflow Profile, but selecting a
-Reference Asset is optional. A non-empty selection expands in user order. An empty selection produces
-one no-reference combination, records `null` reference provenance on each Job, and does not overwrite
-the mapped input in the base workflow.
+The first version supports at most one exposed `reference_image` slot in the Workflow Profile, and the
+mapping itself is optional. A non-empty Reference Asset selection requires that mapping and expands in
+user order. An empty selection produces one no-reference combination, records `null` reference
+provenance on each Job, and does not overwrite the base workflow. This keeps the optional reference
+dimension separate from the required prompt, seed, and output-prefix mappings.
 
 The data model should allow future Workflow Profiles with multiple reference slots, such as:
 

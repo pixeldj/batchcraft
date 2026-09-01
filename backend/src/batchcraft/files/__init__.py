@@ -22,6 +22,7 @@ from batchcraft.files.project_owners import (
     ProjectOwnerStore,
 )
 from batchcraft.files.runs import RunFilesystemStore, RunStoreError
+from batchcraft.files.snapshots import BatchSnapshotV2
 
 __all__ = [
     "AdoptableProject",
@@ -29,6 +30,7 @@ __all__ = [
     "AssetRecord",
     "AssetStoreError",
     "BatchIdentity",
+    "BatchSnapshotV2",
     "BatchOwnerDiscoveryError",
     "BatchOwnerError",
     "BatchOwnerMissingError",

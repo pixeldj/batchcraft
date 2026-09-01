@@ -7,12 +7,27 @@ interface Props {
   run: RunCreatedResponse | RunResponse | null;
   execution: ExecutionResponse | null;
   starting: boolean;
+  discarding: boolean;
   polling: boolean;
   error: string | null;
+  createdUnavailable: boolean;
+  batchDiverged: boolean;
   onStart(): void;
+  onDiscard(): void;
 }
 
-export function RunPanel({ run, execution, starting, polling, error, onStart }: Props) {
+export function RunPanel({
+  run,
+  execution,
+  starting,
+  discarding,
+  polling,
+  error,
+  createdUnavailable,
+  batchDiverged,
+  onStart,
+  onDiscard,
+}: Props) {
   const [planOpen, setPlanOpen] = useState(false);
 
   if (!run) {
@@ -32,12 +47,12 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
   const current = execution?.current_job_ordinal;
   const frozenRun = "plan" in run ? run : null;
   const dimensions = frozenRun ? summarizeDimensions(frozenRun) : null;
-  const workflow = frozenRun?.batch_snapshot?.workflow_selection;
+  const workflow = frozenRun?.batch_snapshot.workflow_selection;
   const statusText =
     status === "running" && current
       ? `Running · Job ${current} of ${run.job_count}`
       : status === "created"
-        ? "Created · Ready to start"
+        ? createdUnavailable ? "Created · Not executable" : "Created · Ready to start"
         : status.charAt(0).toUpperCase() + status.slice(1);
 
   return (
@@ -117,12 +132,27 @@ export function RunPanel({ run, execution, starting, polling, error, onStart }: 
 
       {error ? <p className="operation-error" role="alert">{error}</p> : null}
       {status === "created" ? (
-        <div className="action-row">
-          <p>Execution submits one Job at a time to the configured ComfyUI server.</p>
-          <button className="button-primary" type="button" disabled={starting || polling} onClick={onStart}>
-            {starting ? "Starting..." : "Start Run"}
-          </button>
-        </div>
+        <>
+          <div className="frozen-run-note">
+            <p>{createdUnavailable
+              ? `Run ${run.run_number} is frozen, but its persisted execution state cannot be started or discarded.`
+              : `Run ${run.run_number} is frozen and ready to start.`}</p>
+            {batchDiverged ? <p>The current Batch has changed since this Run was created.</p> : null}
+          </div>
+          {!createdUnavailable ? (
+            <div className="action-row">
+              <p>Execution submits one Job at a time to the configured ComfyUI server.</p>
+              <div className="run-action-buttons">
+                <button className="button-primary" type="button" disabled={starting || polling || discarding} onClick={onStart}>
+                  {starting ? "Starting..." : "Start Run"}
+                </button>
+                <button className="button-secondary" type="button" disabled={starting || polling || discarding} onClick={onDiscard}>
+                  {discarding ? "Discarding..." : "Discard Run"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : null}
       {polling ? <p className="polling-note" aria-live="polite">Watching execution state...</p> : null}
       {frozenRun && planOpen ? (

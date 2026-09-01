@@ -12,13 +12,21 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from batchcraft.domain import (
+    BatchDefinition,
+    CompilationError,
     CompilationWarning,
     CompilationWarningCode,
     CompiledJob,
     CompiledRunPlan,
     PromptVersion,
+    ReferenceSelection,
     ResolvedVariable,
+    SeedInput,
+    VariableBinding,
+    compile_batch,
 )
 from batchcraft.files._io import (
     canonical_json_bytes,
@@ -40,9 +48,10 @@ from batchcraft.files.models import (
     PublishedRun,
 )
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
+from batchcraft.files.snapshots import BatchSnapshotV2
 
 RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 4
+MANIFEST_FORMAT_VERSION = 5
 OWNER_FORMAT_VERSION = 1
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 _CSV_COLUMNS = (
@@ -92,8 +101,9 @@ class RunFilesystemStore:
         self._validate_owner(project.id, project.filesystem_key, project.name, "Project")
         self._validate_owner(batch.id, batch.filesystem_key, batch.name, "Batch")
         self._validate_plan(plan)
-        batch_snapshot_object = _canonical_json_object(batch_snapshot, "batch_snapshot")
-        _validate_batch_snapshot(batch_snapshot_object)
+        batch_snapshot_object = _parse_batch_snapshot(
+            _canonical_json_object(batch_snapshot, "batch_snapshot")
+        )
         project_path = self.projects_path / project.filesystem_key
         batch_path = project_path / "batches" / batch.filesystem_key
         try:
@@ -128,6 +138,14 @@ class RunFilesystemStore:
 
             workflow_object = dict(workflow)
             workflow_profile_object = dict(workflow_profile)
+            _validate_batch_snapshot_consistency(
+                batch_snapshot_object,
+                project=project,
+                batch=batch,
+                plan=plan,
+                workflow=workflow_object,
+                workflow_profile=workflow_profile_object,
+            )
             workflow_bytes = canonical_json_bytes(workflow_object)
             workflow_profile_bytes = canonical_json_bytes(workflow_profile_object)
             workflow_sha256 = hashlib.sha256(workflow_bytes).hexdigest()
@@ -233,7 +251,7 @@ class RunFilesystemStore:
             raise RunStoreError(f"Run identity metadata is missing or unsafe: {run_path}")
         try:
             run_data = read_json_object(metadata_path)
-            if run_data.get("format_version") != RUN_FORMAT_VERSION:
+            if _integer(run_data, "format_version") != RUN_FORMAT_VERSION:
                 raise RunStoreError("unsupported run.json format version")
             return _required_string(run_data, "run_id")
         except (OSError, ValueError) as error:
@@ -272,6 +290,14 @@ class RunFilesystemStore:
             raise RunStoreError("workflow snapshot hash does not match Run provenance")
         if workflow_profile_sha256 != loaded.workflow_profile_sha256:
             raise RunStoreError("Workflow Profile snapshot hash does not match Run provenance")
+        _validate_batch_snapshot_consistency(
+            loaded.batch_snapshot,
+            project=loaded.project,
+            batch=loaded.batch,
+            plan=loaded.compiled_plan,
+            workflow=workflow,
+            workflow_profile=workflow_profile,
+        )
 
         asset_store = ProjectAssetStore(project_path)
         validated_assets: dict[str, AssetRecord] = {}
@@ -395,7 +421,7 @@ class RunFilesystemStore:
             existing = read_json_object(path)
         except ValueError as error:
             raise RunStoreError(f"invalid {kind} identity file {path}: {error}") from error
-        if existing.get("format_version") != OWNER_FORMAT_VERSION:
+        if _integer(existing, "format_version") != OWNER_FORMAT_VERSION:
             raise RunStoreError(f"unsupported {kind} identity format in {path}")
         if existing.get(f"{kind}_id") != owner_id:
             raise RunStoreError(
@@ -609,16 +635,12 @@ def _manifest_csv_bytes(
 def _parse_run(
     run_data: dict[str, object], manifest_data: dict[str, object], run_path: Path
 ) -> PublishedRun:
-    if run_data.get("format_version") != RUN_FORMAT_VERSION:
+    if _integer(run_data, "format_version") != RUN_FORMAT_VERSION:
         raise RunStoreError("unsupported run.json format version")
-    manifest_version = manifest_data.get("format_version")
-    if manifest_version not in {1, 2, 3, MANIFEST_FORMAT_VERSION}:
+    if _integer(manifest_data, "format_version") != MANIFEST_FORMAT_VERSION:
         raise RunStoreError("unsupported manifest.json format version")
 
-    batch_snapshot: dict[str, object] | None = None
-    if manifest_version == MANIFEST_FORMAT_VERSION:
-        batch_snapshot = _required_object(manifest_data, "batch_snapshot")
-        _validate_batch_snapshot(batch_snapshot)
+    batch_snapshot = _parse_batch_snapshot(_required_object(manifest_data, "batch_snapshot"))
 
     run_id = _required_string(run_data, "run_id")
     run_number = _positive_integer(run_data, "run_number")
@@ -652,28 +674,15 @@ def _parse_run(
     if _required_string(profile_snapshot, "sha256") != workflow_profile_sha256:
         raise RunStoreError("Workflow Profile hash differs between run.json and manifest.json")
 
-    prompt_versions: tuple[PromptVersion, ...]
-    if manifest_version == 1:
-        prompt_version_data = _required_object(manifest_data, "prompt_version")
-        legacy_prompt_id = _required_string(prompt_version_data, "prompt_version_id")
-        prompt_versions = (
-            PromptVersion(
-                id=legacy_prompt_id,
-                name=legacy_prompt_id,
-                text=_required_string(prompt_version_data, "prompt_template", allow_empty=True),
-            ),
-        )
-    else:
-        prompt_versions = tuple(
-            _parse_prompt_version(_object_item(value, "PromptVersion"))
-            for value in _required_array(manifest_data, "prompt_versions")
-        )
-        if not prompt_versions:
-            raise RunStoreError("manifest must contain at least one PromptVersion")
-        prompt_ids = tuple(version.id for version in prompt_versions)
-        if len(set(prompt_ids)) != len(prompt_ids):
-            raise RunStoreError("manifest contains duplicate PromptVersion IDs")
-        legacy_prompt_id = None
+    prompt_versions = tuple(
+        _parse_prompt_version(_object_item(value, "PromptVersion"))
+        for value in _required_array(manifest_data, "prompt_versions")
+    )
+    if not prompt_versions:
+        raise RunStoreError("manifest must contain at least one PromptVersion")
+    prompt_ids = tuple(version.id for version in prompt_versions)
+    if len(set(prompt_ids)) != len(prompt_ids):
+        raise RunStoreError("manifest contains duplicate PromptVersion IDs")
     known_prompt_ids = {version.id for version in prompt_versions}
     warnings = tuple(
         _parse_warning(_object_item(value, "compiler warning"))
@@ -684,8 +693,6 @@ def _parse_run(
             _object_item(value, "Job"),
             workflow_sha256,
             workflow_profile_sha256,
-            manifest_version=manifest_version,
-            legacy_prompt_id=legacy_prompt_id,
         )
         for value in _required_array(manifest_data, "jobs")
     )
@@ -729,9 +736,6 @@ def _parse_job(
     data: dict[str, object],
     workflow_sha256: str,
     workflow_profile_sha256: str,
-    *,
-    manifest_version: object,
-    legacy_prompt_id: str | None,
 ) -> PersistedJob:
     if _required_string(data, "workflow_sha256") != workflow_sha256:
         raise RunStoreError("Job workflow hash differs from the Run workflow hash")
@@ -750,28 +754,20 @@ def _parse_job(
     variable_names = tuple(variable.name for variable in variables)
     if len(set(variable_names)) != len(variable_names):
         raise RunStoreError("Job contains duplicate resolved variables")
-    asset: AssetRecord | None
-    if manifest_version in {1, 2}:
-        asset = _parse_asset(_required_object(data, "reference_asset"))
-    else:
-        if "reference_asset" not in data:
-            raise RunStoreError("Job must define reference_asset")
-        reference_asset = data["reference_asset"]
-        asset = (
-            None
-            if reference_asset is None
-            else _parse_asset(_object_item(reference_asset, "reference_asset"))
-        )
+    if "reference_asset" not in data:
+        raise RunStoreError("Job must define reference_asset")
+    reference_asset = data["reference_asset"]
+    asset = (
+        None
+        if reference_asset is None
+        else _parse_asset(_object_item(reference_asset, "reference_asset"))
+    )
     resolved_prompt = _required_string(data, "resolved_prompt", allow_empty=True)
     if "{{" in resolved_prompt or "}}" in resolved_prompt:
         raise RunStoreError("Job contains an unresolved prompt placeholder")
     compiled_job = CompiledJob(
         ordinal=_positive_integer(data, "ordinal"),
-        prompt_version_id=(
-            legacy_prompt_id
-            if legacy_prompt_id is not None
-            else _required_string(data, "prompt_version_id")
-        ),
+        prompt_version_id=_required_string(data, "prompt_version_id"),
         resolved_prompt=resolved_prompt,
         resolved_variables=variables,
         reference_asset_id=asset.asset_id if asset is not None else None,
@@ -869,9 +865,78 @@ def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, 
     return _object_item(loaded, name)
 
 
-def _validate_batch_snapshot(snapshot: dict[str, object]) -> None:
-    if _integer(snapshot, "snapshot_version") != 1:
-        raise RunStoreError("unsupported Batch snapshot version")
+def _parse_batch_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
+    try:
+        parsed = BatchSnapshotV2.model_validate(snapshot)
+    except ValidationError as error:
+        raise RunStoreError(f"invalid Batch snapshot v2: {error}") from error
+    canonical = cast(dict[str, object], parsed.model_dump(mode="json"))
+    if canonical != snapshot:
+        raise RunStoreError("invalid Batch snapshot v2: snapshot must use its complete shape")
+    return canonical
+
+
+def _validate_batch_snapshot_consistency(
+    snapshot: dict[str, object],
+    *,
+    project: ProjectIdentity,
+    batch: BatchIdentity,
+    plan: CompiledRunPlan,
+    workflow: dict[str, object],
+    workflow_profile: dict[str, object],
+) -> None:
+    parsed = BatchSnapshotV2.model_validate(snapshot)
+    if (
+        parsed.project.id,
+        parsed.project.filesystem_key,
+        parsed.project.name,
+    ) != (project.id, project.filesystem_key, project.name):
+        raise RunStoreError("Batch snapshot Project identity does not match the Run")
+    if (
+        parsed.batch.id,
+        parsed.batch.filesystem_key,
+        parsed.batch.name,
+    ) != (batch.id, batch.filesystem_key, batch.name):
+        raise RunStoreError("Batch snapshot identity does not match the Run")
+    selection = parsed.workflow_selection
+    if selection.workflow != workflow or selection.workflow_profile != workflow_profile:
+        raise RunStoreError("Batch snapshot Workflow selection does not match the Run snapshots")
+
+    seed_intent = parsed.seed_intent
+    if seed_intent.mode == "random":
+        random_count = seed_intent.random_seed_count
+        if random_count is None or len(plan.jobs) < random_count:
+            raise RunStoreError(
+                "Batch snapshot Random seed intent does not match the compiled plan"
+            )
+        seeds = SeedInput.explicit(tuple(job.seed for job in plan.jobs[:random_count]))
+    elif seed_intent.mode == "fixed":
+        seeds = SeedInput.fixed(seed_intent.values[0])
+    else:
+        seeds = SeedInput.explicit(tuple(seed_intent.values))
+
+    try:
+        snapshot_plan = compile_batch(
+            BatchDefinition(
+                prompt_versions=tuple(
+                    PromptVersion(id=item.id, name=item.name, text=item.text)
+                    for item in parsed.prompt_versions
+                ),
+                variable_bindings=tuple(
+                    VariableBinding(placeholder=item.placeholder, values=tuple(item.values))
+                    for item in parsed.variable_bindings
+                ),
+                references=tuple(
+                    ReferenceSelection(asset_id=item.asset_id) for item in parsed.references
+                ),
+                seeds=seeds,
+            ),
+            max_jobs=plan.job_count,
+        )
+    except CompilationError as error:
+        raise RunStoreError(f"Batch snapshot does not compile: {error}") from error
+    if snapshot_plan != plan:
+        raise RunStoreError("Batch snapshot does not reconstruct the compiled Run plan")
 
 
 def _required_object(data: dict[str, object], name: str) -> dict[str, object]:

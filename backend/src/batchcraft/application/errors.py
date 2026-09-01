@@ -80,3 +80,7 @@ class ExecutionAlreadyActiveError(ApplicationError):
 
 class ExecutionNotEligibleError(ApplicationError):
     pass
+
+
+class RunDiscardNotEligibleError(ApplicationError):
+    pass

@@ -112,7 +112,7 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded separately from t
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The current v4 manifest contains:
+The current v5 manifest contains:
 
 - Run ID, number, creation timestamp, and Project/Batch identity snapshots;
 - ordered PromptVersion snapshots containing ID, name, and exact Prompt Template text;
@@ -129,19 +129,23 @@ The current v4 manifest contains:
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v4 creation manifest contains immutable plan and
+`manifest.json` is authoritative for exact replay. The v5 creation manifest contains immutable plan and
 provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
 versioned execution representation.
 
-Manifest v3 requires every Job to contain a `reference_asset` key. Its value is the complete Reference
-Asset object when selected or explicit JSON `null` when the Job preserves the base workflow's mapped
-reference-image input. Manifest v1 and v2 continue to require the object and remain readable.
+Every Job must contain a `reference_asset` key. Its value is the complete Reference Asset object when
+selected or explicit JSON `null` when the Job preserves the base workflow's mapped reference-image
+input.
 
-Manifest v4 adds a required top-level `batch_snapshot` object with `snapshot_version: 1`, containing
-the editable Saved Batch intent that produced the Run. Manifest v4 is otherwise identical to v3;
-v1-v3 remain readable unchanged. New snapshots may also preserve optional human-readable Workflow
-and Profile names plus their immutable version numbers. These additive labels support historical UI
-inspection and are not required for replay; earlier v4 snapshots without them remain valid.
+Manifest v5 requires a top-level `batch_snapshot` object with `snapshot_version: 2`. It stores variable
+bindings canonically as `{ "placeholder": string, "values": string[] }`. Zero values may
+appear in mutable Saved Batch drafts but a successfully compiled Run cannot use a zero-value binding.
+An empty string is one concrete value. New writes reject exact duplicate values, including duplicate
+empty strings.
+Snapshots may also preserve optional human-readable Workflow and Profile names plus immutable version
+numbers. These labels support historical UI inspection and are not required for replay.
+
+Manifest v1-v4 and snapshot v1 are unsupported. The loader rejects them and never rewrites Run files.
 
 ## `manifest.csv`
 
@@ -153,7 +157,7 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-The columns emitted alongside a v4 JSON manifest are:
+The columns emitted alongside a v5 JSON manifest are:
 
 ```text
 job_ordinal
@@ -171,11 +175,10 @@ workflow_sha256
 workflow_profile_sha256
 ```
 
-The legacy CSV emitted alongside a v1 JSON manifest used the same order without
-`prompt_version_name`. `manifest.json`'s `format_version` identifies which CSV schema accompanies
-the Run; the CSV has no independent version field.
+`manifest.json`'s `format_version` identifies the CSV schema that accompanies the Run; the CSV has no
+independent version field.
 
-For a v3 Job without a Reference Asset, `reference_asset_id`, `reference_original_filename`, and
+For a Job without a Reference Asset, `reference_asset_id`, `reference_original_filename`, and
 `reference_sha256` are empty strings. The JSON `null` remains authoritative and distinguishes this
 valid case from incomplete provenance.
 
@@ -189,11 +192,13 @@ A standalone CSV file is not sufficient for guaranteed exact replay. Exact repla
 
 `execution.json` is the versioned mutable execution record. It is reconstructable without SQLite and remains separate from generation-significant data in `manifest.json`.
 
-The v1 shape is:
+Only execution format v2 is supported. Execution format v1 is intentionally unsupported and has no compatibility loader. This version change does not alter `run.json` or `manifest.json` versions.
+
+The v2 shape is:
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "run_id": "...",
   "status": "running",
   "started_at": "...",
@@ -222,7 +227,9 @@ The v1 shape is:
 }
 ```
 
-Legal Run transitions are `created -> running -> succeeded | failed | blocked`; explicit reconciliation may move `blocked -> running | succeeded | failed`. Legal Job transitions are `pending -> preparing -> submitting`, then `submitting -> submitted | submission_unknown | failed`, and `submitted -> succeeded | failed`. Preparation may also transition directly to `failed`, while explicit reconciliation may move `submission_unknown -> submitted | failed`. `succeeded` and `failed` states are not silently rewritten.
+Legal Run transitions are `created -> running | cancelled`, then `running -> succeeded | failed | blocked`; explicit reconciliation may move `blocked -> running | succeeded | failed`. `cancelled` is Run-only: discarding does not add a Job status, and every Job remains pristine `pending`. Legal Job transitions are `pending -> preparing -> submitting`, then `submitting -> submitted | submission_unknown | failed`, and `submitted -> succeeded | failed`. Preparation may also transition directly to `failed`, while explicit reconciliation may move `submission_unknown -> submitted | failed`. `succeeded`, `failed`, and `cancelled` states are terminal and are not rewritten.
+
+A discarded state has Run status `cancelled`, `started_at: null`, a discard-clock `completed_at`, `current_job_ordinal: null`, `error: null`, and exactly one Run diagnostic: `discarded_before_start`. Every Job must exactly match its initial pending state, with no client ID, submission disposition or response, prompt ID, timestamps, errors, diagnostics, history, or Results.
 
 `submitting` means the one submission attempt has started. After a restart it must not be treated as never submitted. `submission_unknown` stops automatic progression and preserves correlation data; a future explicit reconciliation may prove that it was accepted or failed, but the executor never retries it automatically. `submitted` carries a known prompt ID; if bounded history reconciliation cannot prove a terminal outcome, the Job remains submitted and the Run becomes blocked.
 
@@ -284,7 +291,7 @@ Human review metadata such as ratings and notes may be stored separately or in e
 
 ## Import and Rerun
 
-batchcraft should support importing `manifest.json` for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
+batchcraft should support importing the current manifest v5 for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
 
 The application should recognize enough metadata to:
 
@@ -300,25 +307,26 @@ Modified reruns can be added later.
 
 ## Loading and Validation
 
-Loading a published Run requires `run.json`, canonical `manifest.json`, `manifest.csv`, both snapshot files, and `outputs/`. It validates format versions, Run/Project/Batch identity consistency, one-based contiguous Job ordinals, unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata, size, and content hash.
+Loading a published Run requires `run.json`, canonical manifest v5, `manifest.csv`, both snapshot
+files, and `outputs/`. Manifest v5 requires a batch snapshot with `snapshot_version: 2`, a non-empty
+ordered PromptVersion collection, unique PromptVersion IDs, required names, and every Job's
+association with a known PromptVersion. Each Job must contain either a complete Reference Asset object
+or explicit `null`; a missing key is invalid.
 
-Manifest v2 and v3 additionally validate a non-empty ordered PromptVersion collection, unique
-PromptVersion IDs, required names, and every Job's association with a known PromptVersion. Manifest
-v3 accepts either a complete Reference Asset object or explicit `null`; a missing key is invalid.
-Manifest v1 and v2 require a complete Reference Asset object. Manifest v4 requires the top-level
-`batch_snapshot` object with `snapshot_version: 1` containing the editable Saved Batch intent.
-The loader explicitly supports manifest v1 as a single-PromptVersion historical format: it assigns
-the one stored PromptVersion ID to every Job and uses that ID as the unavailable historical
-display-name fallback. v1-v3 remain readable unchanged. Existing Run directories
-are never rewritten. Unknown manifest versions are rejected.
-
-The loader reconstructs the original `CompiledRunPlan`, compiler warnings, execution identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be present in a complete v1 Run, but reformatting its line endings or quoting does not override or invalidate canonical JSON provenance.
+The loader also validates Run/Project/Batch identity consistency, one-based contiguous Job ordinals,
+unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata,
+size, and content hash. The Batch snapshot must contain the same identities and Workflow/Profile
+content and must recompile to the exact frozen plan. The loader reconstructs the original
+`CompiledRunPlan`, compiler warnings, execution
+identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be
+present in a complete current Run, but reformatting its line endings or quoting does not override or
+invalidate canonical JSON provenance. Unsupported versions are rejected and existing Run directories
+are never rewritten.
 
 ## Schema Versioning
 
-Every durable JSON format should include an explicit schema/format version.
-
-Import code must not infer versions solely from missing fields.
+Every durable JSON format includes an explicit schema or format version. Import code must not infer a
+version solely from missing fields.
 
 Example:
 
@@ -328,10 +336,10 @@ Example:
 }
 ```
 
-Future migrations should preserve old Run readability whenever practical. New Runs use manifest v4;
-manifest v1, v2, and v3 remain safely readable through explicit compatibility parsing. Manifest v4
-adds a required top-level `batch_snapshot` with `snapshot_version: 1`, containing the editable Saved
-Batch intent that produced the Run. The CSV format is unchanged from v3.
+The pre-release baseline supports `run.json` v1, manifest v5 with required snapshot v2, execution v2,
+and `asset.json` v1. Unsupported development versions fail closed. The application does not rewrite
+or delete them automatically. Version fields and migration boundaries remain so a future change can
+add an explicit compatibility path when released data requires one.
 
 ## Filesystem Publication and SQLite Indexing
 

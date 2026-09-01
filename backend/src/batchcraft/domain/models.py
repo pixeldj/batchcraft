@@ -2,11 +2,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
-class VariableBindingMode(StrEnum):
-    ALL = "all"
-    FIXED = "fixed"
-
-
 class SeedMode(StrEnum):
     FIXED = "fixed"
     EXPLICIT = "explicit"
@@ -24,18 +19,9 @@ class PromptVersion:
 
 
 @dataclass(frozen=True, slots=True)
-class VariableList:
-    id: str
-    values: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class VariableBinding:
     placeholder: str
-    variable_list: VariableList
-    mode: VariableBindingMode
-    selected_values: tuple[str, ...] = ()
-    fixed_value: str | None = None
+    values: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)

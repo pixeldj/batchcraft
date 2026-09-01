@@ -11,6 +11,7 @@ import {
   initialBatchForm,
   newPrompt,
   newVariableBinding,
+  normalizedBindingValues,
   type BatchFormState,
 } from "./form";
 
@@ -68,12 +69,8 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
       version_archived_at: null,
     })),
     variable_bindings: form.variableBindings.map((binding) => ({
-      placeholder: binding.placeholder,
-      variable_list_id: binding.variableListId,
-      values: splitLines(binding.values),
-      selected_values: binding.mode === "all" ? splitLines(binding.selectedValues) : [],
-      mode: binding.mode,
-      fixed_value: binding.mode === "fixed" ? binding.fixedValue : null,
+      placeholder: binding.placeholder.trim(),
+      values: normalizedBindingValues(binding.values),
     })),
     reference_selections: form.referenceAssetIds.map((assetId) => ({ asset_id: assetId })),
     seed_intent: savedSeedIntent(form),
@@ -149,11 +146,7 @@ export function savedBatchToForm(
     variableBindings: detail.variable_bindings.map((binding) => ({
       key: newVariableBinding().key,
       placeholder: binding.placeholder,
-      variableListId: binding.variable_list_id,
-      values: binding.values.join("\n"),
-      mode: binding.mode,
-      selectedValues: binding.selected_values.join("\n"),
-      fixedValue: binding.fixed_value ?? "",
+      values: [...binding.values],
     })),
     referenceAssetIds: detail.reference_selections.map((selection) => selection.asset_id),
     seedMode: detail.seed_mode,
@@ -189,12 +182,8 @@ export function canonicalBatchIntent(form: BatchFormState): string {
       text: prompt.text,
     })),
     variableBindings: form.variableBindings.map((binding) => ({
-      placeholder: binding.placeholder,
-      variableListId: binding.variableListId,
-      values: splitLines(binding.values),
-      mode: binding.mode,
-      selectedValues: binding.mode === "all" ? splitLines(binding.selectedValues) : [],
-      fixedValue: binding.mode === "fixed" ? binding.fixedValue : null,
+      placeholder: binding.placeholder.trim(),
+      values: normalizedBindingValues(binding.values),
     })),
     references: form.referenceAssetIds,
     seed: form.seedMode === "random"
@@ -242,10 +231,6 @@ function parseSeeds(value: string): number[] {
     if (!Number.isSafeInteger(seed)) throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is outside the safe integer range.`);
     return seed;
   });
-}
-
-function splitLines(value: string): string[] {
-  return value.split("\n").map((item) => item.trim()).filter(Boolean);
 }
 
 function splitSeeds(value: string): string[] {

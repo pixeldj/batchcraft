@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import hashlib
+import json
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
@@ -22,7 +23,13 @@ from batchcraft.comfyui import (
     WorkflowPreparationValues,
     prepare_workflow,
 )
-from batchcraft.domain import CompiledJob, CompiledRunPlan, PromptVersion
+from batchcraft.domain import (
+    BatchDefinition,
+    PromptVersion,
+    ReferenceSelection,
+    SeedInput,
+    compile_batch,
+)
 from batchcraft.execution import (
     ExecutionConfig,
     ExecutionStateError,
@@ -227,7 +234,11 @@ class FakeExecutionClient:
 
 
 def _published_run(
-    tmp_path: Path, *, job_count: int = 2, with_references: bool = True
+    tmp_path: Path,
+    *,
+    job_count: int = 2,
+    with_references: bool = True,
+    vary_prompt_and_seed: bool = False,
 ) -> tuple[PublishedRun, tuple[bytes, ...]]:
     projects_path = tmp_path / "projects"
     project_path = projects_path / PROJECT.filesystem_key
@@ -243,23 +254,34 @@ def _published_run(
             project_path, id_factory=asset_ids, clock=lambda: FIXED_TIME
         )
         assets = tuple(asset_store.import_file(source) for source in sources)
-    jobs = tuple(
-        CompiledJob(
-            ordinal=index,
-            prompt_version_id="prompt-version",
-            resolved_prompt=f"resolved prompt {index}",
-            resolved_variables=(),
-            reference_asset_id=assets[index - 1].asset_id if with_references else None,
-            seed=100 + index,
+    prompts: tuple[PromptVersion, ...]
+    if vary_prompt_and_seed:
+        assert not with_references
+        prompts = (
+            PromptVersion(id="prompt-1", name="Prompt 1", text="resolved prompt 1"),
+            PromptVersion(id="prompt-2", name="Prompt 2", text="resolved prompt 2"),
         )
-        for index in range(1, job_count + 1)
+        selected_assets: tuple[AssetRecord, ...] = ()
+        seeds = SeedInput.explicit((101, 102))
+        seed_mode = "explicit"
+    else:
+        prompts = (PromptVersion(id="prompt-version", name="Prompt", text="resolved prompt"),)
+        selected_assets = assets[:job_count]
+        seeds = SeedInput.fixed(101)
+        seed_mode = "fixed"
+    plan = compile_batch(
+        BatchDefinition(
+            prompt_versions=prompts,
+            variable_bindings=(),
+            references=tuple(
+                ReferenceSelection(asset_id=asset.asset_id) for asset in selected_assets
+            ),
+            seeds=seeds,
+        )
     )
-    plan = CompiledRunPlan(
-        prompt_versions=(PromptVersion(id="prompt-version", name="Prompt", text="template"),),
-        jobs=jobs,
-        warnings=(),
+    run_ids = SequentialValues(
+        "run-id", *(f"job-{index}" for index in range(1, plan.job_count + 1))
     )
-    run_ids = SequentialValues("run-id", *(f"job-{index}" for index in range(1, job_count + 1)))
     run = RunFilesystemStore(
         projects_path,
         id_factory=run_ids,
@@ -267,13 +289,56 @@ def _published_run(
     ).create_run(
         project=PROJECT,
         batch=BATCH,
-        batch_snapshot={"snapshot_version": 1},
+        batch_snapshot={
+            "snapshot_version": 2,
+            "project": {
+                "id": PROJECT.id,
+                "filesystem_key": PROJECT.filesystem_key,
+                "name": PROJECT.name,
+            },
+            "source_saved_batch": None,
+            "batch": {
+                "id": BATCH.id,
+                "filesystem_key": BATCH.filesystem_key,
+                "name": BATCH.name,
+                "description": None,
+            },
+            "prompt_versions": [
+                {
+                    "id": prompt.id,
+                    "prompt_id": None,
+                    "version_number": None,
+                    "name": prompt.name,
+                    "text": prompt.text,
+                }
+                for prompt in prompts
+            ],
+            "variable_bindings": [],
+            "references": [{"asset_id": asset.asset_id} for asset in selected_assets],
+            "seed_intent": {
+                "mode": seed_mode,
+                "values": list(seeds.values),
+                "random_seed_count": None,
+            },
+            "workflow_selection": {
+                "workflow_id": None,
+                "workflow_version_id": None,
+                "workflow_name": None,
+                "workflow_version_number": None,
+                "workflow_profile_id": None,
+                "workflow_profile_version_id": None,
+                "workflow_profile_name": None,
+                "workflow_profile_version_number": None,
+                "workflow": WORKFLOW,
+                "workflow_profile": WORKFLOW_PROFILE,
+            },
+        },
         plan=plan,
         reference_assets={asset.asset_id: asset for asset in assets},
         workflow=WORKFLOW,
         workflow_profile=WORKFLOW_PROFILE,
     )
-    return run, contents[:job_count]
+    return run, contents[: len(selected_assets)]
 
 
 def _outcome(
@@ -382,10 +447,10 @@ def test_two_jobs_execute_sequentially_with_frozen_inputs_and_ingested_results(
     assert client.max_active_prompts == 1
     assert [upload[1] for upload in client.uploads] == list(asset_contents)
     assert [call[2].prompt for call in preparation_calls] == [
-        "resolved prompt 1",
-        "resolved prompt 2",
+        "resolved prompt",
+        "resolved prompt",
     ]
-    assert [call[2].seed for call in preparation_calls] == [101, 102]
+    assert [call[2].seed for call in preparation_calls] == [101, 101]
     assert all(call[0] is run.workflow for call in preparation_calls)
     assert all(call[1] is run.workflow_profile for call in preparation_calls)
     first_reference = preparation_calls[0][2].reference_image
@@ -427,6 +492,42 @@ def test_two_jobs_execute_sequentially_with_frozen_inputs_and_ingested_results(
     assert all(
         (run.path / name).read_bytes() == content for name, content in immutable_files.items()
     )
+
+
+def test_each_job_uses_its_own_compiled_prompt_and_seed(tmp_path: Path) -> None:
+    run, _ = _published_run(
+        tmp_path,
+        with_references=False,
+        vary_prompt_and_seed=True,
+    )
+    prompt_ids = [f"prompt-{index}" for index in range(1, 5)]
+    client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(SubmissionDisposition.ACCEPTED, prompt_id) for prompt_id in prompt_ids
+        ],
+        histories={
+            prompt_id: [_outcome(prompt_id, ExecutionStatus.SUCCEEDED)] for prompt_id in prompt_ids
+        },
+    )
+    preparation_values: list[WorkflowPreparationValues] = []
+
+    def observing_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        preparation_values.append(values)
+        return prepare_workflow(workflow, profile, values)
+
+    state = _run(run, client, preparer=observing_preparer)
+
+    assert state.status is RunExecutionStatus.SUCCEEDED
+    assert [(values.prompt, values.seed) for values in preparation_values] == [
+        ("resolved prompt 1", 101),
+        ("resolved prompt 1", 102),
+        ("resolved prompt 2", 101),
+        ("resolved prompt 2", 102),
+    ]
 
 
 def test_job_without_reference_skips_upload_and_preserves_base_workflow_image(
@@ -715,6 +816,34 @@ def test_execution_state_round_trips_and_atomic_failure_preserves_previous_file(
     assert store.state_path.read_bytes() == state_bytes
     assert store.load(run) == initial
     assert not tuple(run.path.glob(".execution.json.*.tmp"))
+
+
+def test_execution_v2_rejects_v1_and_cancelled_is_terminal(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=1)
+    store = ExecutionStateStore(run.path)
+    initial = store.initialize(run)
+    cancelled = replace(
+        initial,
+        status=RunExecutionStatus.CANCELLED,
+        completed_at="2026-08-31T12:30:00Z",
+        diagnostics=("discarded_before_start",),
+    )
+    store.save(run, cancelled)
+
+    assert store.load(run) == cancelled
+    with pytest.raises(ExecutionStateError, match="terminal Run execution state"):
+        store.save(run, replace(cancelled, completed_at="later"))
+
+    data = json.loads(store.state_path.read_text())
+    assert data["format_version"] == 2
+    for invalid_version in (1, True, 2.0):
+        data["format_version"] = invalid_version
+        store.state_path.write_text(json.dumps(data))
+        with pytest.raises(
+            ExecutionStateError,
+            match="format_version must be a positive integer|unsupported execution state format",
+        ):
+            store.load(run)
 
 
 def test_blocked_and_unknown_states_allow_explicit_reconciliation(tmp_path: Path) -> None:

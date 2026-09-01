@@ -124,6 +124,10 @@ export interface BatchcraftApi {
   assetUrl(contentUrl: string): string;
 }
 
+export interface RunDiscardApi {
+  discardRun(runId: string): Promise<ExecutionResponse>;
+}
+
 export class BatchcraftApiClient implements BatchcraftApi {
   readonly baseUrl: string;
 
@@ -351,6 +355,10 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   startRun(runId: string): Promise<ExecutionStartedResponse> {
     return this.request(`/api/runs/${encodeURIComponent(runId)}/execute`, { method: "POST" });
+  }
+
+  discardRun(runId: string): Promise<ExecutionResponse> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/discard`, { method: "POST" });
   }
 
   getExecution(runId: string, signal?: AbortSignal): Promise<ExecutionResponse> {

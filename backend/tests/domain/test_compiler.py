@@ -11,33 +11,13 @@ from batchcraft.domain import (
     SeedInput,
     SeedMode,
     VariableBinding,
-    VariableBindingMode,
-    VariableList,
     compile_batch,
     preview_batch,
 )
 
 
-def variable_list(list_id: str, *values: str) -> VariableList:
-    return VariableList(id=list_id, values=values)
-
-
-def all_binding(placeholder: str, source: VariableList, *selected_values: str) -> VariableBinding:
-    return VariableBinding(
-        placeholder=placeholder,
-        variable_list=source,
-        mode=VariableBindingMode.ALL,
-        selected_values=selected_values,
-    )
-
-
-def fixed_binding(placeholder: str, source: VariableList, value: str) -> VariableBinding:
-    return VariableBinding(
-        placeholder=placeholder,
-        variable_list=source,
-        mode=VariableBindingMode.FIXED,
-        fixed_value=value,
-    )
+def binding(placeholder: str, *values: str) -> VariableBinding:
+    return VariableBinding(placeholder=placeholder, values=values)
 
 
 def batch_definition(
@@ -58,10 +38,9 @@ def batch_definition(
 
 
 def test_simple_substitution() -> None:
-    animals = variable_list("animals", "cat")
     batch = batch_definition(
         "A {{animal}} in a park.",
-        bindings=(fixed_binding("animal", animals, "cat"),),
+        bindings=(binding("animal", "cat"),),
     )
 
     plan = compile_batch(batch)
@@ -73,13 +52,11 @@ def test_simple_substitution() -> None:
 
 
 def test_multiple_variables_form_cartesian_product_in_first_occurrence_order() -> None:
-    animals = variable_list("animals", "cat", "dog")
-    locations = variable_list("locations", "park", "forest")
     batch = batch_definition(
         "A {{animal}} in a {{location}}.",
         bindings=(
-            all_binding("location", locations, "park", "forest"),
-            all_binding("animal", animals, "cat", "dog"),
+            binding("location", "park", "forest"),
+            binding("animal", "cat", "dog"),
         ),
     )
 
@@ -94,10 +71,9 @@ def test_multiple_variables_form_cartesian_product_in_first_occurrence_order() -
 
 
 def test_repeated_variable_uses_one_value_per_variant() -> None:
-    animals = variable_list("animals", "cat", "dog")
     batch = batch_definition(
         "A {{animal}} looking at another {{animal}}.",
-        bindings=(all_binding("animal", animals, "cat", "dog"),),
+        bindings=(binding("animal", "cat", "dog"),),
     )
 
     prompts = [job.resolved_prompt for job in compile_batch(batch).jobs]
@@ -108,11 +84,10 @@ def test_repeated_variable_uses_one_value_per_variant() -> None:
     ]
 
 
-def test_fixed_binding_produces_one_prompt_dimension_value() -> None:
-    lenses = variable_list("lenses", "35mm", "50mm")
+def test_one_binding_value_produces_one_prompt_dimension_value() -> None:
     batch = batch_definition(
         "Shot with {{lens}}.",
-        bindings=(fixed_binding("lens", lenses, "50mm"),),
+        bindings=(binding("lens", "50mm"),),
         references=("ref-a", "ref-b"),
     )
 
@@ -122,11 +97,10 @@ def test_fixed_binding_produces_one_prompt_dimension_value() -> None:
     assert {job.resolved_prompt for job in plan.jobs} == {"Shot with 50mm."}
 
 
-def test_all_binding_preserves_user_selection_order() -> None:
-    animals = variable_list("animals", "cat", "dog", "bird")
+def test_binding_preserves_value_order() -> None:
     batch = batch_definition(
         "A {{animal}}.",
-        bindings=(all_binding("animal", animals, "bird", "cat"),),
+        bindings=(binding("animal", "bird", "cat"),),
     )
 
     prompts = [job.resolved_prompt for job in compile_batch(batch).jobs]
@@ -134,33 +108,45 @@ def test_all_binding_preserves_user_selection_order() -> None:
     assert prompts == ["A bird.", "A cat."]
 
 
+@pytest.mark.parametrize(
+    ("values", "expected_prompts"),
+    (
+        (("",), ("A  portrait.",)),
+        (("", "foo"), ("A  portrait.", "A foo portrait.")),
+    ),
+)
+def test_empty_string_is_a_first_class_ordered_value(
+    values: tuple[str, ...], expected_prompts: tuple[str, ...]
+) -> None:
+    batch = batch_definition(
+        "A {{style}} portrait.",
+        bindings=(VariableBinding("style", values),),
+    )
+
+    assert tuple(job.resolved_prompt for job in compile_batch(batch).jobs) == expected_prompts
+
+
 def test_undefined_placeholder_fails() -> None:
     with pytest.raises(CompilationError, match="undefined.*'location'"):
         compile_batch(batch_definition("A {{location}}."))
 
 
-def test_empty_all_selection_fails() -> None:
-    animals = variable_list("animals", "cat")
-    batch = batch_definition("A {{animal}}.", bindings=(all_binding("animal", animals),))
+def test_required_binding_with_zero_values_fails() -> None:
+    batch = batch_definition("A {{animal}}.", bindings=(binding("animal"),))
 
-    with pytest.raises(CompilationError, match="no selected values"):
+    with pytest.raises(CompilationError, match="bindings with no values: 'animal'"):
         compile_batch(batch)
 
 
-def test_selected_value_must_exist_in_variable_list() -> None:
-    animals = variable_list("animals", "cat")
-    batch = batch_definition(
-        "A {{animal}}.",
-        bindings=(all_binding("animal", animals, "dog"),),
-    )
+def test_unused_binding_with_zero_values_is_a_warning_not_an_error() -> None:
+    plan = compile_batch(batch_definition("A fixed prompt.", bindings=(binding("animal"),)))
 
-    with pytest.raises(CompilationError, match="'dog'.*not in Variable List 'animals'"):
-        compile_batch(batch)
+    assert plan.job_count == 1
+    assert plan.warnings[0].placeholder == "animal"
 
 
 def test_unused_binding_produces_warning() -> None:
-    animals = variable_list("animals", "cat")
-    batch = batch_definition("A fixed prompt.", bindings=(fixed_binding("animal", animals, "cat"),))
+    batch = batch_definition("A fixed prompt.", bindings=(binding("animal", "cat"),))
 
     plan = compile_batch(batch)
 
@@ -169,21 +155,18 @@ def test_unused_binding_produces_warning() -> None:
 
 
 def test_placeholder_names_are_case_sensitive() -> None:
-    animals = variable_list("animals", "cat")
-    batch = batch_definition("A {{Animal}}.", bindings=(fixed_binding("animal", animals, "cat"),))
+    batch = batch_definition("A {{Animal}}.", bindings=(binding("animal", "cat"),))
 
     with pytest.raises(CompilationError, match="undefined.*'Animal'"):
         compile_batch(batch)
 
 
 def test_documented_dimension_order_and_rightmost_seed_variation() -> None:
-    animals = variable_list("animals", "cat", "dog")
-    locations = variable_list("locations", "park", "forest")
     batch = batch_definition(
         "{{animal}} {{location}}",
         bindings=(
-            all_binding("animal", animals, "cat", "dog"),
-            all_binding("location", locations, "park", "forest"),
+            binding("animal", "cat", "dog"),
+            binding("location", "park", "forest"),
         ),
         references=("ref-b", "ref-a"),
         seeds=SeedInput.explicit((20, 10)),
@@ -202,8 +185,6 @@ def test_documented_dimension_order_and_rightmost_seed_variation() -> None:
 
 
 def test_prompt_versions_are_outermost_with_prompt_specific_placeholder_axes() -> None:
-    animals = variable_list("animals", "cat", "dog")
-    styles = variable_list("styles", "ink", "oil")
     batch = batch_definition(
         "unused",
         prompt_versions=(
@@ -211,8 +192,8 @@ def test_prompt_versions_are_outermost_with_prompt_specific_placeholder_axes() -
             PromptVersion(id="styles", name="Styles", text="In {{style}}"),
         ),
         bindings=(
-            all_binding("animal", animals, "dog", "cat"),
-            all_binding("style", styles, "oil", "ink"),
+            binding("animal", "dog", "cat"),
+            binding("style", "oil", "ink"),
         ),
         references=("ref-b", "ref-a"),
         seeds=SeedInput.explicit((20, 10)),
@@ -249,28 +230,26 @@ def test_prompt_versions_are_outermost_with_prompt_specific_placeholder_axes() -
 
 
 def test_binding_used_by_any_prompt_does_not_warn() -> None:
-    animals = variable_list("animals", "cat")
     batch = batch_definition(
         "unused",
         prompt_versions=(
             PromptVersion(id="fixed", name="Fixed", text="Fixed"),
             PromptVersion(id="animal", name="Animal", text="{{animal}}"),
         ),
-        bindings=(fixed_binding("animal", animals, "cat"),),
+        bindings=(binding("animal", "cat"),),
     )
 
     assert compile_batch(batch).warnings == ()
 
 
 def test_binding_unused_by_all_prompts_warns_once() -> None:
-    unused = variable_list("unused", "value")
     batch = batch_definition(
         "unused",
         prompt_versions=(
             PromptVersion(id="one", name="One", text="One"),
             PromptVersion(id="two", name="Two", text="Two"),
         ),
-        bindings=(fixed_binding("unused", unused, "value"),),
+        bindings=(binding("unused", "value"),),
     )
 
     assert [warning.placeholder for warning in compile_batch(batch).warnings] == ["unused"]
@@ -337,10 +316,9 @@ def test_explicit_seed_order_is_preserved() -> None:
 
 
 def test_job_ordinals_are_one_based_and_contiguous() -> None:
-    animals = variable_list("animals", "cat", "dog")
     batch = batch_definition(
         "{{animal}}",
-        bindings=(all_binding("animal", animals, "cat", "dog"),),
+        bindings=(binding("animal", "cat", "dog"),),
         references=("ref-1", "ref-2"),
         seeds=SeedInput.explicit((1, 2)),
     )
@@ -351,13 +329,11 @@ def test_job_ordinals_are_one_based_and_contiguous() -> None:
 
 
 def test_preview_count_and_warnings_match_compilation() -> None:
-    animals = variable_list("animals", "cat", "dog")
-    unused = variable_list("unused", "value")
     batch = batch_definition(
         "{{animal}}",
         bindings=(
-            all_binding("animal", animals, "cat", "dog"),
-            fixed_binding("unused", unused, "value"),
+            binding("animal", "cat", "dog"),
+            binding("unused", "value"),
         ),
         references=("ref-1", "ref-2"),
         seeds=SeedInput.explicit((1, 2, 3)),
@@ -370,11 +346,23 @@ def test_preview_count_and_warnings_match_compilation() -> None:
     assert preview.warnings == plan.warnings
 
 
+def test_compilation_rejects_expansion_above_job_limit() -> None:
+    batch = batch_definition(
+        "{{animal}} in {{place}}",
+        bindings=(
+            binding("animal", "cat", "dog", "fox"),
+            binding("place", "woods", "city", "studio"),
+        ),
+    )
+
+    with pytest.raises(CompilationError, match="beyond the maximum of 8 Jobs"):
+        compile_batch(batch, max_jobs=8)
+
+
 def test_compilation_does_not_mutate_input_objects() -> None:
-    animals = variable_list("animals", "cat", "dog")
     batch = batch_definition(
         "{{animal}}",
-        bindings=(all_binding("animal", animals, "dog", "cat"),),
+        bindings=(binding("animal", "dog", "cat"),),
         references=("ref-2", "ref-1"),
         seeds=SeedInput.explicit((8, 3)),
     )
@@ -386,10 +374,9 @@ def test_compilation_does_not_mutate_input_objects() -> None:
 
 
 def test_compiled_jobs_have_no_unresolved_placeholders() -> None:
-    animals = variable_list("animals", "cat", "dog")
     batch = batch_definition(
         "A {{animal}}.",
-        bindings=(all_binding("animal", animals, "cat", "dog"),),
+        bindings=(binding("animal", "cat", "dog"),),
     )
 
     plan = compile_batch(batch)
@@ -408,10 +395,9 @@ def test_malformed_placeholders_fail(template: str) -> None:
 
 
 def test_variable_value_cannot_introduce_unresolved_placeholder() -> None:
-    animals = variable_list("animals", "{{other}}")
     batch = batch_definition(
         "A {{animal}}.",
-        bindings=(fixed_binding("animal", animals, "{{other}}"),),
+        bindings=(binding("animal", "{{other}}"),),
     )
 
     with pytest.raises(CompilationError, match="still contains placeholders.*'other'"):
@@ -419,11 +405,23 @@ def test_variable_value_cannot_introduce_unresolved_placeholder() -> None:
 
 
 def test_duplicate_bindings_fail() -> None:
-    animals = variable_list("animals", "cat")
-    binding = fixed_binding("animal", animals, "cat")
-    batch = batch_definition("{{animal}}", bindings=(binding, binding))
+    duplicate = binding("animal", "cat")
+    batch = batch_definition("{{animal}}", bindings=(duplicate, duplicate))
 
     with pytest.raises(CompilationError, match="duplicate binding"):
+        compile_batch(batch)
+
+
+@pytest.mark.parametrize("values", (("cat", "cat"), ("", "")))
+def test_duplicate_binding_values_fail_even_when_binding_is_unused(
+    values: tuple[str, ...],
+) -> None:
+    batch = batch_definition(
+        "No placeholders",
+        bindings=(VariableBinding("animal", values),),
+    )
+
+    with pytest.raises(CompilationError, match="contain exact duplicates"):
         compile_batch(batch)
 
 

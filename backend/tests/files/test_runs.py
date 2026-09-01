@@ -16,8 +16,6 @@ from batchcraft.domain import (
     ReferenceSelection,
     SeedInput,
     VariableBinding,
-    VariableBindingMode,
-    VariableList,
     compile_batch,
 )
 from batchcraft.files import (
@@ -51,23 +49,50 @@ WORKFLOW_PROFILE: dict[str, object] = {
     },
 }
 BATCH_SNAPSHOT: dict[str, object] = {
-    "snapshot_version": 1,
+    "snapshot_version": 2,
+    "project": {
+        "id": PROJECT.id,
+        "filesystem_key": PROJECT.filesystem_key,
+        "name": PROJECT.name,
+    },
+    "source_saved_batch": None,
+    "batch": {
+        "id": BATCH.id,
+        "filesystem_key": BATCH.filesystem_key,
+        "name": BATCH.name,
+        "description": None,
+    },
     "prompt_versions": [
         {
-            "prompt_version_id": "prompt-v3",
-            "prompt_version_name": "Portrait prompt",
-            "prompt_template": "Portrait of {{animal}}",
+            "id": "prompt-v3",
+            "prompt_id": None,
+            "version_number": None,
+            "name": "Portrait prompt",
+            "text": "Portrait of {{animal}}",
         }
     ],
     "variable_bindings": [
-        {
-            "placeholder": "animal",
-            "mode": "all",
-            "selected_values": ["dog", "cat"],
-        }
+        {"placeholder": "animal", "values": ["dog", "cat"]},
+        {"placeholder": "unused", "values": ["value"]},
     ],
     "references": [{"asset_id": "asset-id"}],
-    "seed": {"mode": "explicit", "values": [9, 3]},
+    "seed_intent": {
+        "mode": "explicit",
+        "values": [9, 3],
+        "random_seed_count": None,
+    },
+    "workflow_selection": {
+        "workflow_id": None,
+        "workflow_version_id": None,
+        "workflow_name": None,
+        "workflow_version_number": None,
+        "workflow_profile_id": None,
+        "workflow_profile_version_id": None,
+        "workflow_profile_name": None,
+        "workflow_profile_version_number": None,
+        "workflow": WORKFLOW,
+        "workflow_profile": WORKFLOW_PROFILE,
+    },
 }
 
 
@@ -122,8 +147,6 @@ class PostRenameFailureStore(RunFilesystemStore):
 
 
 def _fixture_plan(asset_id: str | None, *, seeds: tuple[int, ...] = (9, 3)) -> CompiledRunPlan:
-    animals = VariableList(id="animals", values=("cat", "dog"))
-    unused = VariableList(id="unused", values=("value",))
     return compile_batch(
         BatchDefinition(
             prompt_versions=(
@@ -134,15 +157,11 @@ def _fixture_plan(asset_id: str | None, *, seeds: tuple[int, ...] = (9, 3)) -> C
             variable_bindings=(
                 VariableBinding(
                     placeholder="animal",
-                    variable_list=animals,
-                    mode=VariableBindingMode.ALL,
-                    selected_values=("dog", "cat"),
+                    values=("dog", "cat"),
                 ),
                 VariableBinding(
                     placeholder="unused",
-                    variable_list=unused,
-                    mode=VariableBindingMode.FIXED,
-                    fixed_value="value",
+                    values=("value",),
                 ),
             ),
             references=(ReferenceSelection(asset_id=asset_id),) if asset_id is not None else (),
@@ -168,12 +187,30 @@ def _create(
     *,
     project: ProjectIdentity = PROJECT,
     batch: BatchIdentity = BATCH,
-    batch_snapshot: Mapping[str, object] = BATCH_SNAPSHOT,
+    batch_snapshot: Mapping[str, object] | None = None,
 ) -> PublishedRun:
     return store.create_run(
         project=project,
         batch=batch,
-        batch_snapshot=batch_snapshot,
+        batch_snapshot=(
+            batch_snapshot
+            if batch_snapshot is not None
+            else {
+                **BATCH_SNAPSHOT,
+                "project": {
+                    "id": project.id,
+                    "filesystem_key": project.filesystem_key,
+                    "name": project.name,
+                },
+                "batch": {
+                    "id": batch.id,
+                    "filesystem_key": batch.filesystem_key,
+                    "name": batch.name,
+                    "description": None,
+                },
+                "references": [] if asset is None else [{"asset_id": asset.asset_id}],
+            }
+        ),
         plan=plan,
         reference_assets={} if asset is None else {asset.asset_id: asset},
         workflow=WORKFLOW,
@@ -227,7 +264,7 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
             + "\n"
         ).encode()
     )
-    assert manifest["format_version"] == 4
+    assert manifest["format_version"] == 5
     assert manifest["batch_snapshot"] == BATCH_SNAPSHOT
     assert manifest["prompt_versions"] == [
         {
@@ -283,7 +320,7 @@ def test_published_run_reconstructs_without_sqlite(tmp_path: Path) -> None:
     assert loaded.jobs[0].reference_asset == asset
 
 
-def test_manifest_v4_round_trips_ordered_prompt_versions_and_job_associations(
+def test_manifest_v5_round_trips_ordered_prompt_versions_and_job_associations(
     tmp_path: Path,
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -297,9 +334,7 @@ def test_manifest_v4_round_trips_ordered_prompt_versions_and_job_associations(
             variable_bindings=(
                 VariableBinding(
                     placeholder="animal",
-                    variable_list=VariableList(id="animals", values=("cat", "dog")),
-                    mode=VariableBindingMode.ALL,
-                    selected_values=("dog", "cat"),
+                    values=("dog", "cat"),
                 ),
             ),
             references=(ReferenceSelection(asset_id=asset.asset_id),),
@@ -309,10 +344,27 @@ def test_manifest_v4_round_trips_ordered_prompt_versions_and_job_associations(
     batch_snapshot = {
         **BATCH_SNAPSHOT,
         "prompt_versions": [
-            {"id": "first", "name": "First", "text": "First {{animal}}"},
-            {"id": "second", "name": "Second", "text": "Second"},
+            {
+                "id": "first",
+                "prompt_id": None,
+                "version_number": None,
+                "name": "First",
+                "text": "First {{animal}}",
+            },
+            {
+                "id": "second",
+                "prompt_id": None,
+                "version_number": None,
+                "name": "Second",
+                "text": "Second",
+            },
         ],
-        "seed": {"mode": "fixed", "value": 7},
+        "variable_bindings": [{"placeholder": "animal", "values": ["dog", "cat"]}],
+        "seed_intent": {
+            "mode": "fixed",
+            "values": [7],
+            "random_seed_count": None,
+        },
     }
     created = _create(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
@@ -333,8 +385,11 @@ def test_manifest_v4_round_trips_ordered_prompt_versions_and_job_associations(
     ]
 
 
-@pytest.mark.parametrize("corruption", ("duplicate_prompt", "unknown_job_prompt"))
-def test_manifest_v4_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
+@pytest.mark.parametrize(
+    "corruption",
+    ("duplicate_prompt", "unknown_job_prompt", "missing_prompt_versions", "missing_job_prompt"),
+)
+def test_manifest_v5_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
     projects_path = tmp_path / "projects"
     asset = _asset_fixture(projects_path)
     created = _create(
@@ -346,115 +401,70 @@ def test_manifest_v4_rejects_invalid_prompt_provenance(tmp_path: Path, corruptio
     manifest = json.loads(manifest_path.read_text())
     if corruption == "duplicate_prompt":
         manifest["prompt_versions"].append(dict(manifest["prompt_versions"][0]))
-    else:
+    elif corruption == "unknown_job_prompt":
         manifest["jobs"][0]["prompt_version_id"] = "unknown"
+    elif corruption == "missing_prompt_versions":
+        manifest.pop("prompt_versions")
+    else:
+        manifest["jobs"][0].pop("prompt_version_id")
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
-    with pytest.raises(RunStoreError, match="duplicate PromptVersion|unknown PromptVersion"):
+    with pytest.raises(
+        RunStoreError,
+        match="duplicate PromptVersion|unknown PromptVersion|prompt_versions|prompt_version_id",
+    ):
         RunFilesystemStore(projects_path).load_run(created.path)
 
 
-def test_manifest_v1_loads_with_fallback_name_and_job_association(tmp_path: Path) -> None:
+@pytest.mark.parametrize("manifest_version", (1, 2, 3, 4))
+def test_manifest_v1_through_v4_are_rejected(tmp_path: Path, manifest_version: int) -> None:
     projects_path = tmp_path / "projects"
-    asset = _asset_fixture(projects_path)
     created = _create(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
-        _fixture_plan(asset.asset_id),
-        asset,
-    )
-    manifest_path = created.path / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest.pop("batch_snapshot")
-    version = manifest.pop("prompt_versions")[0]
-    manifest["format_version"] = 1
-    manifest["prompt_version"] = {
-        "prompt_version_id": version["prompt_version_id"],
-        "prompt_template": version["prompt_template"],
-    }
-    for job in manifest["jobs"]:
-        job.pop("prompt_version_id")
-    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
-    legacy_manifest_bytes = manifest_path.read_bytes()
-
-    loaded = RunFilesystemStore(projects_path).load_run(created.path)
-
-    assert loaded.compiled_plan.prompt_versions == (
-        PromptVersion(
-            id="prompt-v3",
-            name="prompt-v3",
-            text="Portrait of {{animal}}",
-        ),
-    )
-    assert {job.prompt_version_id for job in loaded.compiled_plan.jobs} == {"prompt-v3"}
-    assert loaded.batch_snapshot is None
-    assert manifest_path.read_bytes() == legacy_manifest_bytes
-
-
-def test_manifest_v2_loads_with_required_reference_asset_object(tmp_path: Path) -> None:
-    projects_path = tmp_path / "projects"
-    asset = _asset_fixture(projects_path)
-    plan = _fixture_plan(asset.asset_id)
-    created = _create(
-        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
-        plan,
-        asset,
-    )
-    manifest_path = created.path / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest.pop("batch_snapshot")
-    manifest["format_version"] = 2
-    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
-    legacy_manifest_bytes = manifest_path.read_bytes()
-
-    loaded = RunFilesystemStore(projects_path).load_run(created.path)
-
-    assert loaded.compiled_plan == plan
-    assert loaded.jobs[0].reference_asset == asset
-    assert loaded.batch_snapshot is None
-    assert manifest_path.read_bytes() == legacy_manifest_bytes
-
-
-def test_manifest_v3_loads_without_inventing_or_rewriting_batch_intent(tmp_path: Path) -> None:
-    projects_path = tmp_path / "projects"
-    plan = _fixture_plan(None)
-    created = _create(
-        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
-        plan,
+        _fixture_plan(None),
         None,
-        batch_snapshot={**BATCH_SNAPSHOT, "references": []},
     )
     manifest_path = created.path / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest.pop("batch_snapshot")
-    manifest["format_version"] = 3
+    manifest["format_version"] = manifest_version
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
-    legacy_manifest_bytes = manifest_path.read_bytes()
 
-    loaded = RunFilesystemStore(projects_path).load_run(created.path)
-
-    assert loaded.compiled_plan == plan
-    assert loaded.batch_snapshot is None
-    assert all(job.reference_asset is None for job in loaded.jobs)
-    assert manifest_path.read_bytes() == legacy_manifest_bytes
+    with pytest.raises(RunStoreError, match="unsupported manifest.json format version"):
+        RunFilesystemStore(projects_path).load_run(created.path)
 
 
 @pytest.mark.parametrize(
-    ("seed_mode", "seed_intent"),
+    ("seed_mode", "concrete_seeds", "seed_intent"),
     (
-        ("fixed", {"mode": "fixed", "value": 41}),
-        ("explicit", {"mode": "explicit", "values": [51, 52]}),
-        ("random", {"mode": "random", "count": 2}),
+        (
+            "fixed",
+            (41,),
+            {"mode": "fixed", "values": [41], "random_seed_count": None},
+        ),
+        (
+            "explicit",
+            (51, 52),
+            {"mode": "explicit", "values": [51, 52], "random_seed_count": None},
+        ),
+        (
+            "random",
+            (9001, 9002),
+            {"mode": "random", "values": [], "random_seed_count": 2},
+        ),
     ),
 )
-def test_manifest_v4_preserves_seed_intent_separately_from_concrete_job_seeds(
-    tmp_path: Path, seed_mode: str, seed_intent: dict[str, object]
+def test_manifest_v5_preserves_seed_intent_separately_from_concrete_job_seeds(
+    tmp_path: Path,
+    seed_mode: str,
+    concrete_seeds: tuple[int, ...],
+    seed_intent: dict[str, object],
 ) -> None:
     projects_path = tmp_path / seed_mode
-    plan = _fixture_plan(None, seeds=(9001,))
+    plan = _fixture_plan(None, seeds=concrete_seeds)
     batch_snapshot = {
         **BATCH_SNAPSHOT,
         "references": [],
-        "seed": seed_intent,
+        "seed_intent": seed_intent,
     }
 
     created = _create(
@@ -467,42 +477,41 @@ def test_manifest_v4_preserves_seed_intent_separately_from_concrete_job_seeds(
     manifest = json.loads((created.path / "manifest.json").read_text())
 
     assert loaded.batch_snapshot == batch_snapshot
-    assert manifest["batch_snapshot"]["seed"] == seed_intent
-    assert [job.compiled_job.seed for job in loaded.jobs] == [9001, 9001]
-    assert [job["seed"] for job in manifest["jobs"]] == [9001, 9001]
+    assert manifest["batch_snapshot"]["seed_intent"] == seed_intent
+    assert [job.compiled_job.seed for job in loaded.jobs] == list(concrete_seeds) * 2
+    assert [job["seed"] for job in manifest["jobs"]] == list(concrete_seeds) * 2
 
 
-def test_manifest_v4_snapshot_has_no_input_or_output_aliases(tmp_path: Path) -> None:
+def test_manifest_v5_snapshot_has_no_input_or_output_aliases(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     seed_values = [17, 18]
     batch_snapshot: dict[str, object] = {
-        "snapshot_version": 1,
-        "seed": {"mode": "explicit", "values": seed_values},
+        **BATCH_SNAPSHOT,
+        "references": [],
+        "seed_intent": {
+            "mode": "explicit",
+            "values": seed_values,
+            "random_seed_count": None,
+        },
     }
+    expected_snapshot = json.loads(json.dumps(batch_snapshot))
     created = _create(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
-        _fixture_plan(None),
+        _fixture_plan(None, seeds=(17, 18)),
         None,
         batch_snapshot=batch_snapshot,
     )
 
     seed_values.append(19)
-    assert created.batch_snapshot == {
-        "snapshot_version": 1,
-        "seed": {"mode": "explicit", "values": [17, 18]},
-    }
-    assert created.batch_snapshot is not None
+    assert created.batch_snapshot == expected_snapshot
     created.batch_snapshot["changed_after_publication"] = True
 
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
-    assert loaded.batch_snapshot == {
-        "snapshot_version": 1,
-        "seed": {"mode": "explicit", "values": [17, 18]},
-    }
+    assert loaded.batch_snapshot == expected_snapshot
 
 
-def test_manifest_v4_round_trips_jobs_without_reference_assets(tmp_path: Path) -> None:
+def test_manifest_v5_round_trips_jobs_without_reference_assets(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     plan = _fixture_plan(None)
     created = _create(
@@ -516,7 +525,11 @@ def test_manifest_v4_round_trips_jobs_without_reference_assets(tmp_path: Path) -
         batch_snapshot={
             **BATCH_SNAPSHOT,
             "references": [],
-            "seed": {"mode": "random", "count": 2},
+            "seed_intent": {
+                "mode": "random",
+                "values": [],
+                "random_seed_count": 2,
+            },
         },
     )
 
@@ -525,7 +538,7 @@ def test_manifest_v4_round_trips_jobs_without_reference_assets(tmp_path: Path) -
         rows = list(csv.DictReader(file))
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
-    assert manifest["format_version"] == 4
+    assert manifest["format_version"] == 5
     assert manifest["batch_snapshot"]["references"] == []
     assert all("reference_asset" in job for job in manifest["jobs"])
     assert all(job["reference_asset"] is None for job in manifest["jobs"])
@@ -542,37 +555,7 @@ def test_manifest_v4_round_trips_jobs_without_reference_assets(tmp_path: Path) -
     assert all(job.reference_asset is None for job in loaded.jobs)
 
 
-@pytest.mark.parametrize("manifest_version", (1, 2))
-def test_legacy_manifests_require_reference_asset_objects(
-    tmp_path: Path, manifest_version: int
-) -> None:
-    projects_path = tmp_path / "projects"
-    asset = _asset_fixture(projects_path)
-    created = _create(
-        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
-        _fixture_plan(asset.asset_id),
-        asset,
-    )
-    manifest_path = created.path / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest.pop("batch_snapshot")
-    manifest["format_version"] = manifest_version
-    if manifest_version == 1:
-        version = manifest.pop("prompt_versions")[0]
-        manifest["prompt_version"] = {
-            "prompt_version_id": version["prompt_version_id"],
-            "prompt_template": version["prompt_template"],
-        }
-        for job in manifest["jobs"]:
-            job.pop("prompt_version_id")
-    manifest["jobs"][0]["reference_asset"] = None
-    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
-
-    with pytest.raises(RunStoreError, match="reference_asset must be a JSON object"):
-        RunFilesystemStore(projects_path).load_run(created.path)
-
-
-def test_manifest_v4_rejects_missing_reference_asset_key(tmp_path: Path) -> None:
+def test_manifest_v5_rejects_missing_reference_asset_key(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     created = _create(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
@@ -589,17 +572,18 @@ def test_manifest_v4_rejects_missing_reference_asset_key(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("corruption", "expected_error"),
+    "corruption",
     (
-        ("missing", "batch_snapshot must be a JSON object"),
-        ("array", "batch_snapshot must be a JSON object"),
-        ("missing_version", "snapshot_version must be an integer"),
-        ("boolean_version", "snapshot_version must be an integer"),
-        ("unknown_version", "unsupported Batch snapshot version"),
+        "missing",
+        "array",
+        "version_one",
+        "incomplete",
+        "old_binding_field",
+        "duplicate_values",
     ),
 )
-def test_manifest_v4_rejects_missing_or_malformed_batch_snapshot(
-    tmp_path: Path, corruption: str, expected_error: str
+def test_manifest_v5_rejects_missing_or_malformed_batch_snapshot(
+    tmp_path: Path, corruption: str
 ) -> None:
     projects_path = tmp_path / "projects"
     created = _create(
@@ -613,32 +597,123 @@ def test_manifest_v4_rejects_missing_or_malformed_batch_snapshot(
         manifest.pop("batch_snapshot")
     elif corruption == "array":
         manifest["batch_snapshot"] = []
-    elif corruption == "missing_version":
-        manifest["batch_snapshot"] = {}
-    elif corruption == "boolean_version":
-        manifest["batch_snapshot"] = {"snapshot_version": True}
+    elif corruption == "version_one":
+        manifest["batch_snapshot"]["snapshot_version"] = 1
+    elif corruption == "incomplete":
+        manifest["batch_snapshot"].pop("workflow_selection")
+    elif corruption == "old_binding_field":
+        manifest["batch_snapshot"]["variable_bindings"][0]["mode"] = "all"
     else:
-        manifest["batch_snapshot"] = {"snapshot_version": 2}
+        manifest["batch_snapshot"]["variable_bindings"][0]["values"] = ["dog", "dog"]
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
-    with pytest.raises(RunStoreError, match=expected_error):
+    with pytest.raises(RunStoreError, match="batch_snapshot must|invalid Batch snapshot v2"):
         RunFilesystemStore(projects_path).load_run(created.path)
 
 
 @pytest.mark.parametrize(
-    "batch_snapshot",
-    ({}, {"snapshot_version": True}, {"snapshot_version": 2}),
+    "corruption",
+    ("project", "batch", "prompt", "binding", "references", "seed", "expansion", "workflow"),
 )
-def test_create_run_rejects_invalid_batch_snapshot_version(
-    tmp_path: Path, batch_snapshot: dict[str, object]
+def test_manifest_v5_rejects_batch_snapshot_that_contradicts_frozen_run(
+    tmp_path: Path, corruption: str
 ) -> None:
-    with pytest.raises(RunStoreError, match="snapshot_version|unsupported Batch snapshot version"):
+    projects_path = tmp_path / "projects"
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(None),
+        None,
+    )
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    snapshot = manifest["batch_snapshot"]
+    if corruption == "project":
+        snapshot["project"]["id"] = "other-project"
+    elif corruption == "batch":
+        snapshot["batch"]["name"] = "Other Batch"
+    elif corruption == "prompt":
+        snapshot["prompt_versions"][0]["text"] = "Changed {{animal}}"
+    elif corruption == "binding":
+        snapshot["variable_bindings"][0]["values"] = ["dog"]
+    elif corruption == "references":
+        snapshot["references"] = [{"asset_id": "other-asset"}]
+    elif corruption == "seed":
+        snapshot["seed_intent"]["values"] = [3, 9]
+    elif corruption == "expansion":
+        snapshot["variable_bindings"][0]["values"] = [f"value-{index}" for index in range(100)]
+    else:
+        snapshot["workflow_selection"]["workflow"] = {"changed": True}
+    manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
+
+    with pytest.raises(RunStoreError, match="Batch snapshot"):
+        RunFilesystemStore(projects_path).load_run(created.path)
+
+
+@pytest.mark.parametrize("corruption", ("version_one", "incomplete", "old_binding_field"))
+def test_create_run_rejects_malformed_snapshot_v2(tmp_path: Path, corruption: str) -> None:
+    batch_snapshot = json.loads(json.dumps({**BATCH_SNAPSHOT, "references": []}))
+    if corruption == "version_one":
+        batch_snapshot["snapshot_version"] = 1
+    elif corruption == "incomplete":
+        batch_snapshot.pop("workflow_selection")
+    else:
+        batch_snapshot["variable_bindings"][0]["fixed_value"] = "dog"
+
+    with pytest.raises(RunStoreError, match="invalid Batch snapshot v2"):
         _create(
             RunFilesystemStore(tmp_path / "projects"),
             _fixture_plan(None),
             None,
             batch_snapshot=batch_snapshot,
         )
+
+
+@pytest.mark.parametrize(
+    ("artifact", "invalid_version"),
+    (
+        ("run", True),
+        ("run", 1.0),
+        ("manifest", True),
+        ("manifest", 5.0),
+        ("snapshot", True),
+        ("snapshot", 2.0),
+    ),
+)
+def test_run_load_rejects_non_integer_format_versions(
+    tmp_path: Path, artifact: str, invalid_version: object
+) -> None:
+    projects_path = tmp_path / "projects"
+    created = _create(
+        RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
+        _fixture_plan(None),
+        None,
+    )
+    path = created.path / ("run.json" if artifact == "run" else "manifest.json")
+    data = json.loads(path.read_text())
+    if artifact == "snapshot":
+        data["batch_snapshot"]["snapshot_version"] = invalid_version
+    else:
+        data["format_version"] = invalid_version
+    path.write_text(json.dumps(data, separators=(",", ":"), sort_keys=True) + "\n")
+
+    with pytest.raises(RunStoreError):
+        RunFilesystemStore(projects_path).load_run(created.path)
+
+
+@pytest.mark.parametrize("invalid_version", (True, 1.0))
+def test_run_creation_rejects_non_integer_batch_owner_version(
+    tmp_path: Path, invalid_version: object
+) -> None:
+    projects_path = tmp_path / "projects"
+    store = RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME)
+    created = _create(store, _fixture_plan(None), None)
+    owner_path = created.path.parent / "batch.json"
+    owner = json.loads(owner_path.read_text())
+    owner["format_version"] = invalid_version
+    owner_path.write_text(json.dumps(owner))
+
+    with pytest.raises(RunStoreError, match="format_version must be an integer"):
+        _create(store, _fixture_plan(None), None)
 
 
 def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
@@ -651,7 +726,7 @@ def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
     )
     manifest_path = created.path / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["format_version"] = 5
+    manifest["format_version"] = 6
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
     with pytest.raises(RunStoreError, match="unsupported manifest.json format version"):
@@ -668,6 +743,14 @@ def test_run_load_validates_a_repeated_asset_only_once(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
         plan,
         asset,
+        batch_snapshot={
+            **BATCH_SNAPSHOT,
+            "seed_intent": {
+                "mode": "explicit",
+                "values": list(range(50)),
+                "random_seed_count": None,
+            },
+        },
     )
     original_validate = ProjectAssetStore.validate_record
     validation_count = 0

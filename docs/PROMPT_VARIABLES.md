@@ -69,7 +69,7 @@ Do not encode:
 
 The prompt text identifies a slot only.
 
-Structured Batch data decides what values are available and how they are expanded.
+Structured Batch data decides which ordered values are active and how they are expanded.
 
 ## Variable Lists
 
@@ -99,7 +99,7 @@ The same Variable List may be used by many Prompt Templates.
 
 ## Variable Binding
 
-A Batch binds a placeholder to a list or explicit values. The bindings apply across the Batch's
+A Batch binds a placeholder to an ordered list of concrete string values. The bindings apply across the Batch's
 ordered PromptVersion selection, while each PromptVersion expands only the placeholders it uses.
 Every resulting Job still supplies one resolved prompt string to the Workflow Profile's single
 friendly prompt input. Multiple workflow prompt or text inputs are deferred.
@@ -110,16 +110,13 @@ Example Prompt Template:
 A {{animal}} standing in a {{location}}.
 ```
 
-Bindings:
+Canonical bindings:
 
-```text
-animal:
-  source: Animals
-  mode: all
-
-location:
-  source: Outdoor Locations
-  mode: all
+```json
+[
+  {"placeholder": "animal", "values": ["cat", "dog", "bird"]},
+  {"placeholder": "location", "values": ["park", "forest"]}
+]
 ```
 
 If:
@@ -131,23 +128,16 @@ Outdoor Locations = [park, forest]
 
 then the Prompt Resolver produces six variants.
 
-## Initial Binding Modes
-
-### `all`
-
-Use each selected value.
-
-### `fixed`
-
-Use one selected value.
-
-These two modes are enough for the first implementation.
-
-Selected or fixed values must exist in the bound Variable List. An `all` binding stores its selected values in user order. A `fixed` binding stores exactly one fixed value. Defining the same placeholder binding more than once is a validation error.
+There is no active binding mode or source-list identity in the executable domain. Zero values represent
+an incomplete Saved Batch draft, one value has fixed semantics, and multiple values form a Cartesian
+dimension. Variable Lists remain an authoring convenience; copying values from one does not retain a
+runtime dependency on that list. The empty string is a value, so `[""]` produces one variant with no
+inserted text and `["", "foo"]` produces two variants in that order. Exact duplicate values, including
+two empty strings, are invalid. Defining the same placeholder binding more than once is also invalid.
 
 ## Multiple Variables
 
-Multiple `all` bindings form a Cartesian product.
+Multiple bindings with more than one value form a Cartesian product.
 
 Example:
 
@@ -194,7 +184,17 @@ If a Prompt Template references `{{location}}` but no binding exists, compilatio
 
 ### Empty values
 
-If an `all` binding has no selected values, compilation fails.
+Saved Batch drafts may retain a binding with zero values. Preview and Run compilation fail when a
+selected PromptVersion uses that binding. An unused zero-value binding remains a warning rather than
+preventing otherwise valid Jobs.
+
+The empty string is not the same as zero values. It resolves the placeholder to no text and still
+contributes one variant.
+
+### Duplicate values
+
+Every binding must contain unique exact string values. Preview, Run creation, and current Saved Batch
+reads and writes reject duplicates, including duplicate empty strings.
 
 ### Unused bindings
 
@@ -262,7 +262,7 @@ Useful interactions include:
 - show unresolved-variable errors inline;
 - show unused bindings;
 - show expansion preview/count;
-- open the bound Variable List directly from the prompt editor.
+- copy values from a Variable List into a binding.
 
 ## Deferred Features
 

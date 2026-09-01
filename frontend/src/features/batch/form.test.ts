@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBatchRequest,
+  buildEditableBatchSnapshot,
+  editableBatchSnapshotIdentity,
   generateRandomSeeds,
   initialBatchForm,
   MAX_RANDOM_SEED_COUNT,
@@ -46,10 +48,7 @@ describe("buildBatchRequest", () => {
       variable_bindings: [
         {
           placeholder: "subject",
-          variable_list: { id: "subjects", values: ["cat", "dog"] },
-          mode: "all",
-          selected_values: ["cat", "dog"],
-          fixed_value: null,
+          values: ["cat", "dog"],
         },
       ],
       references: [{ asset_id: "asset-1" }],
@@ -57,7 +56,7 @@ describe("buildBatchRequest", () => {
       workflow: { "7": { class_type: "KSampler", inputs: { seed: 0 } } },
       workflow_profile: expect.objectContaining({ id: "workflow-profile-1" }),
       batch_snapshot: expect.objectContaining({
-        snapshot_version: 1,
+        snapshot_version: 2,
         source_saved_batch: null,
       }),
     });
@@ -173,19 +172,42 @@ describe("buildBatchRequest", () => {
     expect(buildBatchRequest(form).prompt_versions[0].text).toBe("");
   });
 
-  it("preserves commas inside newline-separated variable values", () => {
+  it("trims binding values while preserving order, duplicates, and commas", () => {
     const form = populatedBatchForm();
     form.referenceAssetIds = ["asset-1"];
-    form.variableBindings[0].values = "red, white, and blue\nblue";
-    form.variableBindings[0].selectedValues = "red, white, and blue";
+    form.variableBindings[0].values = [
+      " red, white, and blue ",
+      "blue",
+      "red, white, and blue",
+      "  ",
+    ];
 
     const request = buildBatchRequest(form);
 
-    expect(request.variable_bindings[0].variable_list.values).toEqual([
+    expect(request.variable_bindings[0].values).toEqual([
       "red, white, and blue",
       "blue",
+      "red, white, and blue",
     ]);
-    expect(request.variable_bindings[0].selected_values).toEqual(["red, white, and blue"]);
+    expect(request.batch_snapshot.variable_bindings).toEqual(request.variable_bindings);
+  });
+
+  it("preserves an explicit empty value but filters whitespace-only entries", () => {
+    const form = populatedBatchForm();
+    form.variableBindings[0].values = ["", "  "];
+
+    expect(buildBatchRequest(form).variable_bindings).toEqual([
+      { placeholder: "subject", values: [""] },
+    ]);
+  });
+
+  it("sends a zero-value binding for backend compiler validation", () => {
+    const form = populatedBatchForm();
+    form.variableBindings[0].values = [];
+
+    expect(buildBatchRequest(form).variable_bindings).toEqual([
+      { placeholder: "subject", values: [] },
+    ]);
   });
 
   it("materializes the requested number of distinct unsigned 32-bit Random seeds", () => {
@@ -200,6 +222,35 @@ describe("buildBatchRequest", () => {
     };
 
     expect(generateRandomSeeds(2, cryptoSource)).toEqual([0, 4_294_967_295]);
+  });
+
+  it("builds Random snapshot identity without materializing execution seeds", () => {
+    const form = populatedBatchForm();
+    form.seedMode = "random";
+    form.randomSeedCount = "3";
+    const originalCrypto = globalThis.crypto;
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: { getRandomValues: () => { throw new Error("must not materialize"); } },
+    });
+
+    try {
+      const snapshot = buildEditableBatchSnapshot(form);
+      expect(snapshot.seed_intent).toEqual({ mode: "random", values: [], random_seed_count: 3 });
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+    }
+  });
+
+  it("canonicalizes nested object keys while preserving ordered snapshot arrays", () => {
+    const left = buildEditableBatchSnapshot(populatedBatchForm());
+    const right = structuredClone(left);
+    left.workflow_selection.workflow = { outer: { b: 2, a: 1 } };
+    right.workflow_selection.workflow = { outer: { a: 1, b: 2 } };
+
+    expect(editableBatchSnapshotIdentity(left)).toBe(editableBatchSnapshotIdentity(right));
+    right.variable_bindings[0].values.reverse();
+    expect(editableBatchSnapshotIdentity(left)).not.toBe(editableBatchSnapshotIdentity(right));
   });
 
   it.each(["", "0", "-1", "1.5", "two", String(MAX_RANDOM_SEED_COUNT + 1)])(

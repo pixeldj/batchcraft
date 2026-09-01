@@ -11,6 +11,7 @@ import type {
 import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
 import type { BatchFormState } from "./form";
+import { WorkflowProfileMapper } from "./WorkflowProfileMapper";
 
 interface Props {
   api: BatchcraftApi;
@@ -65,7 +66,6 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [linkStatus, setLinkStatus] = useState<LinkStatus>(linkedStatus(form));
-  const [copyingProfileVersion, setCopyingProfileVersion] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const loadTag = useRef(0);
   const detailTag = useRef(0);
@@ -112,7 +112,6 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
     const tag = ++loadTag.current;
     const controller = new AbortController();
     setDialog(null);
-    setCopyingProfileVersion(false);
     setDetail(EMPTY_DETAIL);
     setLinkStatus(linkedStatus(currentForm()));
     if (!requestedProjectId) {
@@ -150,20 +149,25 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       api.listWorkflowProfiles(workflowId, workflowVersionId ?? undefined, controller.signal),
     ]).then(([versionResponse, profileResponse]) => {
       if (tag !== detailTag.current || controller.signal.aborted) return;
-      setDetail({
+      setDetail((current) => ({
         workflowId,
         versions: versionResponse.workflow_versions,
         profiles: profileResponse.workflow_profiles,
         profileVersions: Object.fromEntries(
-          profileResponse.workflow_profiles.flatMap((profile) =>
-            profile.latest_compatible_version
-              ? [[profile.id, [profile.latest_compatible_version]]]
-              : [],
-          ),
+          profileResponse.workflow_profiles.map((profile) => {
+            const cached = current.workflowId === workflowId
+              ? current.profileVersions[profile.id] ?? []
+              : [];
+            const latest = profile.latest_compatible_version;
+            return [
+              profile.id,
+              latest ? [latest, ...cached.filter((version) => version.id !== latest.id)] : cached,
+            ];
+          }),
         ),
         loading: false,
         error: null,
-      });
+      }));
     }).catch((caught: unknown) => {
       if (tag !== detailTag.current || isAbort(caught)) return;
       setDetail({ ...EMPTY_DETAIL, workflowId, error: errorMessage(caught) });
@@ -344,53 +348,6 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
     });
   }
 
-  async function createProfileVersionFromSource() {
-    if (
-      copyingProfileVersion ||
-      !selectedProfile ||
-      !sourceProfileVersion ||
-      !form.workflowVersionId
-    ) return;
-    const requestedMutationTag = mutationContext.current.tag;
-    setCopyingProfileVersion(true);
-    try {
-      const version = await api.createWorkflowProfileVersion(selectedProfile.id, {
-        workflow_version_id: form.workflowVersionId,
-        mappings: profileMappings(sourceProfileVersion.profile),
-      });
-      if (mutationContext.current.tag !== requestedMutationTag) return;
-      setDetail((current) => ({
-        ...current,
-        profiles: current.profiles.map((profile) => profile.id === selectedProfile.id
-          ? { ...profile, latest_compatible_version: version }
-          : profile),
-        profileVersions: {
-          ...current.profileVersions,
-          [selectedProfile.id]: [
-            version,
-            ...(current.profileVersions[selectedProfile.id] ?? []),
-          ],
-        },
-      }));
-      onChange(applyProfile(formRef.current, selectedProfile, version));
-    } catch (caught) {
-      if (mutationContext.current.tag !== requestedMutationTag) return;
-      setDialog({
-        kind: "profile-version",
-        name: "",
-        workflowJson: formRef.current.workflowJson,
-        profileJson: pretty(sourceProfileVersion.profile),
-        note: "",
-        saving: false,
-        error: errorMessage(caught),
-      });
-    } finally {
-      if (mutationContext.current.tag === requestedMutationTag) {
-        setCopyingProfileVersion(false);
-      }
-    }
-  }
-
   async function submitDialog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!dialog || dialog.saving) return;
@@ -497,8 +454,8 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
         <div className="workflow-empty" data-testid="no-compatible-profile-version">
           <p className="empty-note">No compatible ProfileVersion exists for WorkflowVersion v{form.workflowVersionNumber}.</p>
           {sourceProfileVersion ? (
-            <button className="button-primary compact" type="button" disabled={copyingProfileVersion} onClick={() => void createProfileVersionFromSource()}>
-              {copyingProfileVersion ? "Creating ProfileVersion..." : "Create version for this Workflow version"}
+            <button className="button-primary compact" type="button" onClick={() => openDialog("profile-version")}>
+              Review mappings for this Workflow version
             </button>
           ) : <p className="empty-note">No existing ProfileVersion is available to copy.</p>}
         </div>
@@ -518,7 +475,15 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
         {form.workflowId ? <button className="button-link" type="button" onClick={() => openDialog("rename-workflow")}>Rename Workflow</button> : null}
         {form.workflowProfileId ? <button className="button-link" type="button" onClick={() => openDialog("rename-profile")}>Rename Profile</button> : null}
       </div>
-      {dialog ? <WorkflowDialog state={dialog} setState={setDialog} onSubmit={submitDialog} onCancel={() => setDialog(null)} /> : null}
+      {dialog ? (
+        <WorkflowDialog
+          state={dialog}
+          workflow={selectedVersion?.workflow ?? parseObjectOrNull(form.workflowJson) ?? {}}
+          setState={setDialog}
+          onSubmit={submitDialog}
+          onCancel={() => setDialog(null)}
+        />
+      ) : null}
     </ConfigurationSection>
   );
 }
@@ -539,15 +504,16 @@ function workflowSummary(form: BatchFormState) {
   );
 }
 
-function WorkflowDialog({ state, setState, onSubmit, onCancel }: { state: DialogState; setState(value: DialogState): void; onSubmit(event: FormEvent<HTMLFormElement>): void; onCancel(): void }) {
+function WorkflowDialog({ state, workflow, setState, onSubmit, onCancel }: { state: DialogState; workflow: JsonObject; setState(value: DialogState): void; onSubmit(event: FormEvent<HTMLFormElement>): void; onCancel(): void }) {
   const title = ({ import: "Import Workflow", "workflow-version": "New WorkflowVersion", profile: "Create Profile", "profile-version": "New ProfileVersion", "rename-workflow": "Rename Workflow", "rename-profile": "Rename Profile", raw: "Edit raw snapshots" } satisfies Record<DialogKind, string>)[state.kind];
   const showsWorkflow = state.kind === "import" || state.kind === "workflow-version" || state.kind === "raw";
-  const showsProfile = state.kind === "profile" || state.kind === "profile-version" || state.kind === "raw";
+  const showsProfileMapper = state.kind === "profile" || state.kind === "profile-version";
   const showsName = state.kind === "import" || state.kind === "profile" || state.kind.startsWith("rename-");
-  return <dialog className="prompt-dialog" open aria-label={title}><h2>{title}</h2><form onSubmit={onSubmit}>
+  return <dialog className={`prompt-dialog${showsProfileMapper ? " workflow-profile-dialog" : ""}`} open aria-label={title}><h2>{title}</h2><form onSubmit={onSubmit}>
     {showsName ? <label className="field"><span className="field-label">Name</span><input autoFocus required value={state.name} onChange={(event) => setState({ ...state, name: event.target.value })} /></label> : null}
     {showsWorkflow ? <label className="field"><span className="field-label">Workflow JSON</span><textarea className="json-editor" spellCheck={false} value={state.workflowJson} onChange={(event) => setState({ ...state, workflowJson: event.target.value })} /></label> : null}
-    {showsProfile ? <label className="field"><span className="field-label">Workflow Profile JSON</span><textarea className="json-editor" spellCheck={false} value={state.profileJson} onChange={(event) => setState({ ...state, profileJson: event.target.value })} /></label> : null}
+    {showsProfileMapper ? <WorkflowProfileMapper workflow={workflow} profileJson={state.profileJson} onChange={(profileJson) => setState({ ...state, profileJson })} /> : null}
+    {state.kind === "raw" ? <details className="raw-profile-json"><summary>Raw profile JSON</summary><textarea aria-label="Raw profile JSON" className="json-editor" readOnly spellCheck={false} value={state.profileJson} /></details> : null}
     {state.kind !== "raw" && !state.kind.startsWith("rename-") ? <label className="field"><span className="field-label">Version note (optional)</span><textarea value={state.note} onChange={(event) => setState({ ...state, note: event.target.value })} /></label> : null}
     {state.error ? <p className="operation-error" role="alert">{state.error}</p> : null}
     <button className="button-primary" type="submit" disabled={state.saving}>{state.saving ? "Saving..." : title}</button>

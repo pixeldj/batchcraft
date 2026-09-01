@@ -131,7 +131,9 @@ class ProjectAssetStore:
             raise AssetStoreError(f"invalid asset metadata for {sha256}: {error}") from error
 
         expected_stored_path = content_path.relative_to(self.project_path).as_posix()
-        if metadata.get("format_version") != ASSET_FORMAT_VERSION:
+        if type(metadata.get("format_version")) is not int or (
+            metadata["format_version"] != ASSET_FORMAT_VERSION
+        ):
             raise AssetStoreError(f"unsupported asset format version for {sha256}")
         _validate_asset_id(record.asset_id)
         if record.sha256 != sha256:
@@ -182,7 +184,9 @@ class ProjectAssetStore:
             raise AssetStoreError(f"asset identity metadata is missing or unsafe for {sha256}")
         try:
             metadata = read_json_object(metadata_path)
-            if metadata.get("format_version") != ASSET_FORMAT_VERSION:
+            if type(metadata.get("format_version")) is not int or (
+                metadata["format_version"] != ASSET_FORMAT_VERSION
+            ):
                 raise AssetStoreError(f"unsupported asset format version for {sha256}")
             asset_id = _required_string(metadata, "asset_id")
             _validate_asset_id(asset_id)

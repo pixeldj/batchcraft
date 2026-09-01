@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import { ApiError, type BatchcraftApi } from "./api/client";
+import { ApiError, type BatchcraftApi, type RunDiscardApi } from "./api/client";
 import type {
   AssetResponse,
   ExecutionResponse,
@@ -93,7 +93,7 @@ describe("Project selection", () => {
     expect(restored.workflowProfileJson).toBe("{}");
   });
 
-  it("confirms before clearing detached legacy Workflow snapshots", async () => {
+  it("confirms before clearing detached Workflow/Profile snapshots", async () => {
     const form = populatedBatchForm();
     form.prompts = [];
     form.referenceAssetIds = [];
@@ -102,8 +102,8 @@ describe("Project selection", () => {
     form.workflowVersionId = null;
     form.workflowProfileId = null;
     form.workflowProfileVersionId = null;
-    form.workflowJson = '{"legacy":"workflow"}';
-    form.workflowProfileJson = '{"legacy":"profile"}';
+    form.workflowJson = '{"detached":"workflow"}';
+    form.workflowProfileJson = '{"detached":"profile"}';
     saveWorkingSession(form, null, [], "project-1");
     const next = projectResponse({ id: "project-2", filesystem_key: "project_2", name: "Next" });
     const api = makeApi({ listProjects: vi.fn(async () => ({ projects: [projectResponse(), next] })) });
@@ -113,8 +113,8 @@ describe("Project selection", () => {
     fireEvent.change(selector, { target: { value: next.id } });
     expect(screen.getByRole("dialog", { name: "Change Project?" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(loadWorkingSession().form.workflowJson).toBe('{"legacy":"workflow"}');
-    expect(loadWorkingSession().form.workflowProfileJson).toBe('{"legacy":"profile"}');
+    expect(loadWorkingSession().form.workflowJson).toBe('{"detached":"workflow"}');
+    expect(loadWorkingSession().form.workflowProfileJson).toBe('{"detached":"profile"}');
 
     fireEvent.change(selector, { target: { value: next.id } });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -156,7 +156,7 @@ describe("Batch preview", () => {
     expect(within(prompts).queryByRole("button", { name: "Add Prompt" })).not.toBeInTheDocument();
 
     const bindings = screen.getByRole("group", { name: "Variable bindings" });
-    expect(bindings).toHaveTextContent("subject: cat, dog");
+    expect(bindings).toHaveTextContent("subject: 2 values · cat, dog");
     expect(within(bindings).getByRole("button", { name: "Edit" })).toHaveAttribute("aria-expanded", "false");
 
     const seeds = screen.getByRole("group", { name: "Seeds" });
@@ -179,6 +179,91 @@ describe("Batch preview", () => {
     const bindings = screen.getByRole("group", { name: "Variable bindings" });
     const addBinding = within(bindings).getByRole("button", { name: "Add Binding" });
     expect(addBinding.closest(".section-summary-actions")).not.toBeNull();
+    fireEvent.click(addBinding);
+    expect(within(bindings).getAllByLabelText("Values")).toHaveLength(2);
+  });
+
+  it("edits ordered Variable Binding lines and toggles one exact empty value", async () => {
+    render(<App api={makeApi()} />);
+    await expandConfiguration("Variable bindings");
+
+    const values = screen.getByLabelText("Values");
+    const draft = " fox, silver \n\n wolf  \nfox, silver\n";
+    fireEvent.change(values, { target: { value: draft } });
+
+    expect(values).toHaveValue(draft);
+    expect(screen.getByText("One value per non-empty line")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Add Value/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Move value/i })).not.toBeInTheDocument();
+
+    const includeEmpty = screen.getByRole("checkbox", { name: "Include empty value" });
+    fireEvent.click(includeEmpty);
+    expect(includeEmpty).toBeChecked();
+    expect(values).toHaveValue(draft);
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings[0].values).toEqual([
+      "",
+      " fox, silver ",
+      " wolf  ",
+      "fox, silver",
+    ]));
+
+    fireEvent.click(includeEmpty);
+    expect(includeEmpty).not.toBeChecked();
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings[0].values).toEqual([
+      " fox, silver ",
+      " wolf  ",
+      "fox, silver",
+    ]));
+  });
+
+  it("treats an empty value as configured and explains it in the summary", () => {
+    const form = populatedBatchForm();
+    form.variableBindings[0].values = [""];
+    saveWorkingSession(form, null, [], "project-1");
+
+    render(<App api={makeApi()} />);
+
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    expect(bindings).toHaveTextContent("subject: 1 value · (empty)");
+    expect(within(bindings).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("preserves an empty value's deterministic position while editing visible lines", async () => {
+    const form = populatedBatchForm();
+    form.variableBindings[0].values = ["cat", "", "dog"];
+    saveWorkingSession(form, null, [], "project-1");
+    render(<App api={makeApi()} />);
+    await expandConfiguration("Variable bindings");
+
+    const values = screen.getByLabelText("Values");
+    fireEvent.change(values, { target: { value: "fox\ndog" } });
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings[0].values).toEqual([
+      "fox",
+      "",
+      "dog",
+    ]));
+
+    fireEvent.change(values, { target: { value: "dog" } });
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings[0].values).toEqual([
+      "",
+      "dog",
+    ]));
+  });
+
+  it("ignores whitespace-only values when preserving an empty value's position", async () => {
+    const form = populatedBatchForm();
+    form.variableBindings[0].values = ["   ", "", "dog"];
+    saveWorkingSession(form, null, [], "project-1");
+    render(<App api={makeApi()} />);
+    await expandConfiguration("Variable bindings");
+
+    const values = screen.getByLabelText("Values");
+    expect(values).toHaveValue("dog");
+    fireEvent.change(values, { target: { value: "wolf" } });
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings[0].values).toEqual([
+      "",
+      "wolf",
+    ]));
   });
 
   it("places Seeds before Reference Assets in the Batch editor", () => {
@@ -209,7 +294,7 @@ describe("Batch preview", () => {
     expect(request.references).toEqual([{ asset_id: "asset-1" }]);
     expect(request.seeds).toEqual({ mode: "fixed", values: [1] });
     expect(request.variable_bindings[0]).toEqual(
-      expect.objectContaining({ placeholder: "subject", selected_values: ["cat", "dog"] }),
+      { placeholder: "subject", values: ["cat", "dog"] },
     );
   });
 
@@ -228,7 +313,7 @@ describe("Batch preview", () => {
   it("renders backend validation errors near the Batch editor", async () => {
     const api = makeApi({
       previewBatch: vi.fn(async () => {
-        throw new ApiError("Selected value is not in the Variable List", "invalid_batch", 422);
+        throw new ApiError("Binding values contain exact duplicates", "invalid_batch", 422);
       }),
     });
     render(<App api={api} />);
@@ -237,7 +322,7 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
     expect(
-      await screen.findByText("Selected value is not in the Variable List"),
+      await screen.findByText("Binding values contain exact duplicates"),
     ).toBeInTheDocument();
   });
 
@@ -494,7 +579,7 @@ describe("Browser working-session restoration", () => {
       snapshotName: "Editorial",
       text: "Editorial image of {{subject}}",
     });
-    form.variableBindings[0].values = "fox\nwolf";
+    form.variableBindings[0].values = ["fox", "wolf"];
     form.seedMode = "explicit";
     form.seedValues = "9, 3";
     form.workflowJson = '{"workflow":true}';
@@ -509,7 +594,7 @@ describe("Browser working-session restoration", () => {
     expect(screen.getByText("Editorial image of {{subject}}")).toBeInTheDocument();
     await expandConfiguration("Variable bindings");
     await expandConfiguration("Seeds");
-    expect(screen.getByLabelText(/Variable List values/)).toHaveValue("fox\nwolf");
+    expect(screen.getByLabelText("Values")).toHaveValue("fox\nwolf");
     expect(screen.getByLabelText("Seed mode")).toHaveValue("explicit");
     expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("9, 3");
     expect(screen.getByLabelText("Workflow JSON")).toHaveValue('{"workflow":true}');
@@ -740,6 +825,9 @@ describe("Run creation", () => {
     expect(await screen.findByRole("heading", { name: "Run 7" })).toBeInTheDocument();
     expect(within(currentRunSection()).getByText("run-123")).toBeInTheDocument();
     expect(screen.getByText("Created · Ready to start")).toBeInTheDocument();
+    expect(screen.getByText("Run 7 is frozen and ready to start.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Discard Run" })).toBeEnabled();
     expect(api.createRun).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "Create Another Run" })).toBeDisabled();
     expect(screen.getByText("Created as Run 7.")).toBeInTheDocument();
@@ -812,12 +900,13 @@ describe("Run creation", () => {
         seed: 456,
       },
     ];
-    frozen.batch_snapshot!.prompt_versions = [
+    frozen.batch_snapshot.prompt_versions = [
       { id: "prompt-b", prompt_id: "prompt-2", version_number: 2, name: "Editorial", text: "Editorial {{subject}}" },
       { id: "prompt-a", prompt_id: "prompt-1", version_number: 4, name: "Portrait", text: "Portrait {{subject}}" },
     ];
-    frozen.batch_snapshot!.references = [];
-    frozen.batch_snapshot!.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
+    frozen.batch_snapshot.references = [];
+    frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
+    frozen.batch_snapshot.variable_bindings.push({ placeholder: "style", values: ["editorial"] });
     const api = makeApi({
       createRun: vi.fn(async () => runResponse("run-plan", 27, 2)),
       getRun: vi.fn(async () => frozen),
@@ -837,7 +926,8 @@ describe("Run creation", () => {
     expect(dialog).not.toHaveTextContent("Edited afterward");
     expect([...dialog.querySelectorAll(".run-plan-prompts > li > strong")].map((node) => node.textContent))
       .toEqual(["Editorial", "Portrait"]);
-    expect(within(dialog).getByText("All values · cat, dog")).toBeInTheDocument();
+    expect(within(dialog).getByText("2 values · cat, dog")).toBeInTheDocument();
+    expect(within(dialog).getByText("1 value · editorial")).toBeInTheDocument();
     expect(within(dialog).getByText("Random · 2 requested")).toBeInTheDocument();
     expect(within(dialog).getByText("123, 456")).toBeInTheDocument();
     expect(within(dialog).getAllByText("Base workflow").length).toBeGreaterThan(0);
@@ -846,22 +936,192 @@ describe("Run creation", () => {
     expect(within(dialog).getByText("Editorial cat")).toBeInTheDocument();
   });
 
-  it("opens a completed legacy Run Plan with concrete Jobs and reduced intent detail", async () => {
-    const legacy = runLookupResponse("succeeded", "run-legacy", 28);
-    legacy.batch_snapshot = null;
-    saveWorkingSession(populatedBatchForm(), "run-legacy", ["run-legacy"], "project-1");
+  it("shows exact snapshot divergence and clears it after an exact revert", async () => {
     const api = makeApi({
-      getRun: vi.fn(async () => legacy),
-      getExecution: vi.fn(async () => execution("succeeded", "run-legacy")),
+      getRun: vi.fn(async (runId: string) => {
+        const frozen = runLookupResponse("created", runId, 7);
+        frozen.batch_snapshot = vi.mocked(api.previewBatch).mock.calls[0][0].batch_snapshot;
+        return frozen;
+      }),
     });
     render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "View Run Plan" }));
+    await screen.findByRole("button", { name: "View Run Plan" });
+    expect(screen.queryByText("The current Batch has changed since this Run was created.")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Edited afterward" } });
+    expect(screen.getByText("The current Batch has changed since this Run was created.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    expect(screen.getByRole("dialog", { name: "Run 7 Plan" })).toHaveTextContent("First experiment");
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Run 7 Plan" })).getByRole("button", { name: "Close" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Run 28 Plan" });
-    expect(within(dialog).getByText(/Editable Batch intent is unavailable/)).toBeInTheDocument();
-    expect(within(dialog).getByText("Frozen Workflow snapshot · version unavailable")).toBeInTheDocument();
-    expect(within(dialog).getByText("A studio portrait of cat.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "First experiment" } });
+    expect(screen.queryByText("The current Batch has changed since this Run was created.")).not.toBeInTheDocument();
+  });
+
+  it("uses the creation request snapshot before the frozen Run finishes loading", async () => {
+    const frozenRequest = deferred<RunResponse>();
+    const api = makeApi({ getRun: vi.fn(() => frozenRequest.promise) });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByText("Run 7 is frozen and ready to start.");
+
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Changed while loading" } });
+    expect(screen.getByText("The current Batch has changed since this Run was created.")).toBeInTheDocument();
+
+    const frozen = runLookupResponse("created");
+    frozen.batch_snapshot = vi.mocked(api.previewBatch).mock.calls[0][0].batch_snapshot;
+    frozenRequest.resolve(frozen);
+    await screen.findByRole("button", { name: "View Run Plan" });
+    expect(screen.getByText("The current Batch has changed since this Run was created.")).toBeInTheDocument();
+  });
+});
+
+describe("Discard unstarted Run", () => {
+  it("keeps discarded provenance inspectable and permits another immutable Run", async () => {
+    const createRun = vi
+      .fn<BatchcraftApi["createRun"]>()
+      .mockResolvedValueOnce(runResponse("run-discarded", 7))
+      .mockResolvedValueOnce(runResponse("run-next", 8));
+    const api = makeApi({
+      createRun,
+      discardRun: vi.fn(async (runId: string) => execution("cancelled", runId)),
+      getRun: vi.fn(async (runId: string) => {
+        const runNumber = runId === "run-discarded" ? 7 : 8;
+        const frozen = runLookupResponse("created", runId, runNumber);
+        frozen.batch_snapshot = vi.mocked(api.previewBatch).mock.calls[0][0].batch_snapshot;
+        return frozen;
+      }),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByRole("button", { name: "View Run Plan" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard Run" }));
+
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    expect(api.discardRun).toHaveBeenCalledWith("run-discarded");
+    expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View Run Plan" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
+    const createAnother = screen.getByRole("button", { name: "Create Another Run" });
+    expect(createAnother).toBeEnabled();
+    fireEvent.click(createAnother);
+
+    expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Run 7" })).getByText("run-discarded")).toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-next")).toBeInTheDocument();
+    expect(loadWorkingSession().sessionRunIds).toEqual(["run-discarded", "run-next"]);
+  });
+
+  it("keeps an ineligible created Run inspectable without wedging the workspace", async () => {
+    const createRun = vi
+      .fn<BatchcraftApi["createRun"]>()
+      .mockResolvedValueOnce(runResponse("run-ineligible", 7))
+      .mockResolvedValueOnce(runResponse("run-next", 8));
+    const api = makeApi({
+      createRun,
+      discardRun: vi.fn(async () => {
+        throw new ApiError("Run can no longer be discarded", "run_discard_not_eligible", 409);
+      }),
+      getExecution: vi.fn(async () => execution("created", "run-ineligible")),
+      getRun: vi.fn(async (runId: string) => {
+        const runNumber = runId === "run-ineligible" ? 7 : 8;
+        const frozen = runLookupResponse("created", runId, runNumber);
+        frozen.batch_snapshot = vi.mocked(api.previewBatch).mock.calls[0][0].batch_snapshot;
+        return frozen;
+      }),
+    });
+    render(<App api={api} pollIntervalMs={1} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByRole("button", { name: "Discard Run" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard Run" }));
+
+    expect(await screen.findByText("Created · Not executable")).toBeInTheDocument();
+    expect(screen.getByText("This Run's persisted execution state is not eligible to start or discard.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("run-ineligible")).toBeInTheDocument();
+    await waitFor(() => expect(
+      screen.getByRole("combobox", { name: "Active Project" }),
+    ).toBeEnabled());
+    const createAnother = screen.getByRole("button", { name: "Create Another Run" });
+    expect(createAnother).toBeEnabled();
+    fireEvent.click(createAnother);
+    expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
+    expect(createRun).toHaveBeenCalledTimes(2);
+    expect(api.getExecution).toHaveBeenCalledWith("run-ineligible");
+  });
+
+  it("reconciles a discarded Run when the response is lost", async () => {
+    const api = makeApi({
+      discardRun: vi.fn(async () => {
+        throw new ApiError("Cannot reach the batchcraft API", "network_error", null);
+      }),
+      getExecution: vi.fn(async () => execution("cancelled")),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard Run" }));
+
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    expect(screen.queryByText("Cannot reach the batchcraft API")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
+    expect(api.getExecution).toHaveBeenCalledWith("run-123");
+    expect(api.getExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles execution when Start wins the discard race", async () => {
+    const api = makeApi({
+      discardRun: vi.fn(async () => {
+        throw new ApiError("Run can no longer be discarded", "run_discard_not_eligible", 409);
+      }),
+      getExecution: vi.fn(async () => execution("running")),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard Run" }));
+
+    expect(await screen.findByText(/^Running/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
+    expect(api.getExecution).toHaveBeenCalledWith("run-123");
+  });
+
+  it("disables discard while Start is in progress", async () => {
+    const startRequest = deferred<{ run_id: string; status: string }>();
+    const api = makeApi({
+      startRun: vi.fn(() => startRequest.promise),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    await screen.findByRole("button", { name: "Discard Run" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+    expect(screen.getByRole("button", { name: "Discard Run" })).toBeDisabled();
+    startRequest.resolve({ run_id: "run-123", status: "accepted" });
+    await screen.findByText("Succeeded");
+  });
+
+  it("disables repeated discard while the request is in progress", async () => {
+    const discardRequest = deferred<ExecutionResponse>();
+    const api = makeApi({ discardRun: vi.fn(() => discardRequest.promise) });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard Run" }));
+    expect(screen.getByRole("button", { name: "Discarding..." })).toBeDisabled();
+    discardRequest.resolve(execution("cancelled"));
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
   });
 });
 
@@ -879,6 +1139,7 @@ describe("Run execution polling", () => {
     await createRunAndStart();
 
     expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
     expect(screen.queryByText("Job details")).not.toBeInTheDocument();
     expect(screen.getByText("prompt-1").closest(".job-secondary-metadata")).not.toBeNull();
     expect(api.startRun).toHaveBeenCalledWith("run-123");
@@ -886,6 +1147,7 @@ describe("Run execution polling", () => {
     await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
     secondPoll.resolve(execution("succeeded"));
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
     await pause(20);
     expect(api.getExecution).toHaveBeenCalledTimes(2);
   });
@@ -907,6 +1169,7 @@ describe("Run execution polling", () => {
     }
     await pause(20);
     expect(api.getExecution).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
   });
 
   it("does not overlap execution polls", async () => {
@@ -1097,7 +1360,25 @@ describe("Current Run restoration", () => {
 
     expect(await screen.findByRole("heading", { name: "Run 12" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Discard Run" })).toBeEnabled();
     expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("restores a cancelled Run as terminal, not startable, and not creation-blocking", async () => {
+    seedWorkingSession("run-cancelled");
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("cancelled", "run-cancelled", 15)),
+      getExecution: vi.fn(async () => execution("cancelled", "run-cancelled")),
+      getResults: vi.fn(async () => ({ run_id: "run-cancelled", results: [] })),
+    });
+    render(<App api={api} />);
+
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    expect(await screen.findByRole("button", { name: "Create Another Run" })).toBeEnabled();
   });
 
   it("restores a succeeded Run and its Results", async () => {
@@ -1415,7 +1696,7 @@ describe("Result lightbox", () => {
 describe("Result Details", () => {
   function frozenProvenanceRun(runId = "run-123", runNumber = 7) {
     const frozen = runLookupResponse("succeeded", runId, runNumber);
-    frozen.batch_snapshot!.prompt_versions[0].version_number = 3;
+    frozen.batch_snapshot.prompt_versions[0].version_number = 3;
     frozen.plan.jobs[0] = {
       ...frozen.plan.jobs[0],
       resolved_prompt: "A studio portrait of a cat in cinematic light.",
@@ -1568,30 +1849,6 @@ describe("Result Details", () => {
     dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(within(dialog).getByText("Frozen prompt from Run B", { exact: false })).toBeInTheDocument();
     expect(getRun).toHaveBeenCalledTimes(2);
-  });
-
-  it("degrades to concrete Job provenance for a legacy Run", async () => {
-    const legacy = frozenProvenanceRun();
-    legacy.batch_snapshot = null;
-    const api = makeApi({
-      getRun: vi.fn(async () => legacy),
-      getExecution: vi.fn(async () => execution("succeeded")),
-      getResults: vi.fn(async () => ({
-        run_id: "run-123",
-        results: [result(1, 1, "image/png", "legacy.png", 100)],
-      })),
-    });
-    render(<App api={api} pollIntervalMs={5} />);
-    await createRunAndStart();
-
-    fireEvent.click(await within(currentResultsSection()).findByRole("button", {
-      name: "Details for Job 1, artifact 1",
-    }));
-    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
-    expect(within(dialog).getByText("Portrait · version unavailable")).toBeInTheDocument();
-    expect(within(dialog).getByText("38192831")).toBeInTheDocument();
-    expect(within(dialog).getByText("ref-02.png")).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Unavailable for this legacy Run")).toHaveLength(3);
   });
 
   it("keeps a failed provenance load retryable inside Details", async () => {
@@ -1825,7 +2082,9 @@ describe("Batch working-session Results gallery", () => {
   });
 });
 
-function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
+function makeApi(
+  overrides: Partial<BatchcraftApi & RunDiscardApi> = {},
+): BatchcraftApi & RunDiscardApi {
   const prompt = {
     id: "prompt-1",
     project_id: "project-1",
@@ -1898,6 +2157,7 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     createRun: vi.fn(async () => runResponse()),
     getRun: vi.fn(async () => runLookupResponse()),
     startRun: vi.fn(async (runId: string) => ({ run_id: runId, status: "accepted" })),
+    discardRun: vi.fn(async (runId: string) => execution("cancelled", runId)),
     getExecution: vi.fn(async () => execution("succeeded")),
     getResults: vi.fn(async () => ({ run_id: "run-123", results: [] })),
     resultUrl: (url: string) => `http://api.test${url}`,
@@ -1971,7 +2231,7 @@ function runLookupResponse(
       })),
     },
     batch_snapshot: {
-      snapshot_version: 1,
+      snapshot_version: 2,
       project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
       source_saved_batch: { id: "batch-1", revision: 3 },
       batch: {
@@ -1992,10 +2252,7 @@ function runLookupResponse(
       variable_bindings: [
         {
           placeholder: "subject",
-          variable_list: { id: "subjects", values: ["cat", "dog"] },
-          mode: "all",
-          selected_values: ["cat", "dog"],
-          fixed_value: null,
+          values: ["cat", "dog"],
         },
       ],
       references: [{ asset_id: "asset-1" }],
@@ -2018,6 +2275,27 @@ function runLookupResponse(
 }
 
 function execution(status: ExecutionResponse["status"], runId = "run-123"): ExecutionResponse {
+  if (status === "created" || status === "cancelled") {
+    return {
+      run_id: runId,
+      status,
+      started_at: null,
+      completed_at: status === "cancelled" ? "2026-08-27T12:01:00Z" : null,
+      current_job_ordinal: null,
+      error: null,
+      diagnostics: status === "cancelled" ? ["discarded_before_start"] : [],
+      jobs: [1, 2].map((ordinal) => ({
+        ordinal,
+        status: "pending",
+        prompt_id: null,
+        started_at: null,
+        completed_at: null,
+        error: null,
+        diagnostics: [],
+        result_count: 0,
+      })),
+    };
+  }
   const terminal = status === "succeeded" || status === "failed" || status === "blocked";
   return {
     run_id: runId,
@@ -2174,15 +2452,31 @@ function projectPrompt(
 }
 
 async function addExistingPrompt(name: string) {
-  const section = screen.getByRole("group", { name: "Prompt Versions" });
   await pause(0);
-  await waitFor(() => expect(within(section).queryByText("Loading Prompt library...")).not.toBeInTheDocument());
-  const edit = within(section).queryByRole("button", { name: "Edit" });
-  if (edit?.getAttribute("aria-expanded") === "false") fireEvent.click(edit);
-  await waitFor(() => expect(within(section).getByRole("button", { name: "Add Prompt" })).toBeEnabled());
-  const add = within(section).getByRole("button", { name: "Add Prompt" });
-  fireEvent.click(add);
-  fireEvent.click(await screen.findByRole("button", { name: "Choose existing" }));
+  await waitFor(() => expect(
+    within(screen.getByRole("group", { name: "Prompt Versions" }))
+      .queryByText("Loading Prompt library..."),
+  ).not.toBeInTheDocument());
+  await waitFor(() => {
+    if (screen.queryByRole("heading", { name: "Choose an active Prompt" })) return;
+    const chooseExisting = screen.queryByRole("button", { name: "Choose existing" });
+    if (chooseExisting) {
+      fireEvent.click(chooseExisting);
+      throw new Error("Waiting for the Prompt list");
+    }
+    const section = screen.getByRole("group", { name: "Prompt Versions" });
+    const add = within(section).queryByRole("button", { name: "Add Prompt" });
+    if (add && !add.hasAttribute("disabled")) {
+      fireEvent.click(add);
+      throw new Error("Waiting for the Add Prompt dialog");
+    }
+    const edit = within(section).queryByRole("button", { name: "Edit" });
+    if (edit) {
+      fireEvent.click(edit);
+      throw new Error("Waiting for the Prompt editor");
+    }
+    throw new Error("Prompt section is not ready");
+  });
   const dialog = screen.getByRole("dialog", { name: "Add Prompt" });
   const nameNode = within(dialog).getByText(name, { selector: "strong" });
   const card = nameNode.closest(".repeater-card");

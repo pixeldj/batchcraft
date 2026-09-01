@@ -64,6 +64,7 @@ async def verify() -> dict[str, object]:
     execution_timeout = float(os.environ.get("COMFYUI_LIVE_EXECUTION_TIMEOUT", "900"))
     if not image_path.is_file() or not workflow_path.is_file():
         raise FileNotFoundError("live verification requires the configured image and workflow")
+    workflow = _load_json_object(workflow_path)
 
     verification_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
     projects_path = output_root / verification_id / "projects"
@@ -105,10 +106,52 @@ async def verify() -> dict[str, object]:
     run = RunFilesystemStore(projects_path).create_run(
         project=project,
         batch=batch,
-        batch_snapshot={"snapshot_version": 1},
+        batch_snapshot={
+            "snapshot_version": 2,
+            "project": {
+                "id": project.id,
+                "filesystem_key": project.filesystem_key,
+                "name": project.name,
+            },
+            "source_saved_batch": None,
+            "batch": {
+                "id": batch.id,
+                "filesystem_key": batch.filesystem_key,
+                "name": batch.name,
+                "description": None,
+            },
+            "prompt_versions": [
+                {
+                    "id": "live-prompt-version",
+                    "prompt_id": None,
+                    "version_number": None,
+                    "name": "Live verification prompt",
+                    "text": "live verification prompt",
+                }
+            ],
+            "variable_bindings": [],
+            "references": [{"asset_id": asset.asset_id}],
+            "seed_intent": {
+                "mode": "explicit",
+                "values": [123456789, 123456790],
+                "random_seed_count": None,
+            },
+            "workflow_selection": {
+                "workflow_id": None,
+                "workflow_version_id": None,
+                "workflow_name": None,
+                "workflow_version_number": None,
+                "workflow_profile_id": None,
+                "workflow_profile_version_id": None,
+                "workflow_profile_name": None,
+                "workflow_profile_version_number": None,
+                "workflow": workflow,
+                "workflow_profile": WORKFLOW_PROFILE,
+            },
+        },
         plan=plan,
         reference_assets={asset.asset_id: asset},
-        workflow=_load_json_object(workflow_path),
+        workflow=workflow,
         workflow_profile=WORKFLOW_PROFILE,
     )
     immutable = {

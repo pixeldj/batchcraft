@@ -5,7 +5,9 @@ from typing import cast
 from batchcraft.comfyui.errors import WorkflowPreparationError
 from batchcraft.comfyui.models import WorkflowPreparationValues
 
-_FRIENDLY_VALUES = ("prompt", "reference_image", "seed", "output_prefix")
+_REQUIRED_FRIENDLY_VALUES = ("prompt", "seed", "output_prefix")
+_OPTIONAL_FRIENDLY_VALUES = ("reference_image",)
+_FRIENDLY_VALUES = (*_REQUIRED_FRIENDLY_VALUES, *_OPTIONAL_FRIENDLY_VALUES)
 _EXPECTED_VALUE_TYPES = {
     "prompt": "string",
     "reference_image": "image",
@@ -33,13 +35,17 @@ def prepare_workflow(
     workflow = copy.deepcopy(dict(base_workflow))
     profile = copy.deepcopy(dict(workflow_profile))
     mappings = _required_object(profile, "mappings", "Workflow Profile")
+    if values.reference_image is not None and "reference_image" not in mappings:
+        raise WorkflowPreparationError(
+            "selected Reference Assets require a Workflow Profile reference_image mapping"
+        )
     friendly_values: dict[str, str | int | None] = {
         "prompt": values.prompt,
         "reference_image": values.reference_image,
         "seed": values.seed,
         "output_prefix": values.output_prefix,
     }
-    for friendly_name in _FRIENDLY_VALUES:
+    for friendly_name in mappings:
         mapping = _required_object(mappings, friendly_name, "Workflow Profile mappings")
         node_id = _required_string(mapping, "node_id", friendly_name)
         input_name = _required_string(mapping, "input_name", friendly_name)
@@ -77,13 +83,20 @@ def validate_workflow_profile(
 ) -> None:
     validate_workflow(workflow)
     mappings = _required_object(workflow_profile, "mappings", "Workflow Profile")
-    if set(mappings) != set(_FRIENDLY_VALUES):
-        required = ", ".join(repr(value) for value in _FRIENDLY_VALUES)
+    unknown = set(mappings) - set(_FRIENDLY_VALUES)
+    if unknown:
+        names = ", ".join(repr(value) for value in sorted(unknown))
         raise WorkflowPreparationError(
-            f"Workflow Profile mappings must contain exactly: {required}"
+            f"Workflow Profile mappings contain unsupported mapping names: {names}"
+        )
+    missing = set(_REQUIRED_FRIENDLY_VALUES) - set(mappings)
+    if missing:
+        required = ", ".join(repr(value) for value in _REQUIRED_FRIENDLY_VALUES)
+        raise WorkflowPreparationError(
+            f"Workflow Profile mappings must contain required mappings: {required}"
         )
     used_targets: set[tuple[str, str]] = set()
-    for friendly_name in _FRIENDLY_VALUES:
+    for friendly_name in mappings:
         mapping = _required_object(mappings, friendly_name, "Workflow Profile mappings")
         if set(mapping) != {"node_id", "input_name", "value_type"}:
             raise WorkflowPreparationError(
@@ -120,6 +133,11 @@ def validate_workflow_profile(
                 f"Workflow Profile mapping {friendly_name!r} references missing input "
                 f"{input_name!r} on node {node_id!r}"
             )
+        if _is_connection_value(inputs[input_name]):
+            raise WorkflowPreparationError(
+                f"Workflow Profile mapping {friendly_name!r} targets connected input "
+                f"{input_name!r} on node {node_id!r}; mappings must target literal input values"
+            )
 
 
 def _required_object(data: Mapping[str, object], name: str, context: str) -> dict[str, object]:
@@ -136,3 +154,15 @@ def _required_string(data: Mapping[str, object], name: str, friendly_name: str) 
             f"Workflow Profile mapping {friendly_name!r} must define non-empty {name!r}"
         )
     return value
+
+
+def _is_connection_value(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], str)
+        and bool(value[0])
+        and isinstance(value[1], int)
+        and not isinstance(value[1], bool)
+        and value[1] >= 0
+    )

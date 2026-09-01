@@ -66,7 +66,7 @@ WorkflowPreparer = Callable[
 
 
 class RunExecutionError(RuntimeError):
-    """A published Run cannot be safely executed by the v1 executor."""
+    """A published Run cannot be safely executed by the sequential executor."""
 
 
 async def execute_run(

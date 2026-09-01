@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-28
+- **Superseded in part by:** ADR 0004 for manifest v1 readability and maintained legacy parsers.
 
 ## Context
 

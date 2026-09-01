@@ -19,7 +19,6 @@ from batchcraft.db.models import (
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
     SavedBatchVariableBinding,
-    SavedBatchVariableBindingMode,
     SavedBatchWorkflowProfileVersionSnapshot,
     SavedBatchWorkflowVersionSnapshot,
 )
@@ -322,19 +321,12 @@ def _validate_seed_intent(seeds: SavedBatchSeedIntent) -> None:
 def _validate_binding(binding: SavedBatchVariableBinding) -> None:
     if not isinstance(binding, SavedBatchVariableBinding):
         raise SavedBatchValidationError("variable bindings must be typed records")
-    if not isinstance(binding.placeholder, str) or not isinstance(binding.variable_list_id, str):
-        raise SavedBatchValidationError("binding placeholder and Variable List ID must be strings")
-    if not isinstance(binding.mode, SavedBatchVariableBindingMode):
-        raise SavedBatchValidationError("binding mode must be all or fixed")
-    if any(not isinstance(value, str) for value in binding.values + binding.selected_values):
+    if not isinstance(binding.placeholder, str):
+        raise SavedBatchValidationError("binding placeholder must be a string")
+    if any(not isinstance(value, str) for value in binding.values):
         raise SavedBatchValidationError("binding values must be strings")
-    if binding.mode is SavedBatchVariableBindingMode.ALL and binding.fixed_value is not None:
-        raise SavedBatchValidationError("all-mode binding cannot define a fixed value")
-    if binding.mode is SavedBatchVariableBindingMode.FIXED:
-        if not isinstance(binding.fixed_value, str):
-            raise SavedBatchValidationError("fixed-mode binding must define a string fixed value")
-        if binding.selected_values:
-            raise SavedBatchValidationError("fixed-mode binding cannot define selected values")
+    if len(set(binding.values)) != len(binding.values):
+        raise SavedBatchValidationError("binding values must not contain exact duplicates")
 
 
 def _validate_workflow_snapshot(snapshot: SavedBatchWorkflowVersionSnapshot) -> None:
@@ -503,30 +495,35 @@ def _replace_children(
     connection.execute("DELETE FROM batch_variable_binding WHERE batch_id = ?", (batch_id,))
     connection.execute("DELETE FROM batch_reference_selection WHERE batch_id = ?", (batch_id,))
     connection.executemany(
-        "INSERT INTO batch_prompt_selection VALUES (?, ?, ?)",
+        """
+        INSERT INTO batch_prompt_selection (batch_id, position, prompt_version_id)
+        VALUES (?, ?, ?)
+        """,
         (
             (batch_id, position, selection.prompt_version_id)
             for position, selection in enumerate(definition.prompt_selections, 1)
         ),
     )
     connection.executemany(
-        "INSERT INTO batch_variable_binding VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        """
+        INSERT INTO batch_variable_binding (batch_id, position, placeholder, values_json)
+        VALUES (?, ?, ?, ?)
+        """,
         (
             (
                 batch_id,
                 position,
                 binding.placeholder,
-                binding.variable_list_id,
                 _canonical_array(binding.values),
-                _canonical_array(binding.selected_values),
-                binding.mode.value,
-                binding.fixed_value,
             )
             for position, binding in enumerate(definition.variable_bindings, 1)
         ),
     )
     connection.executemany(
-        "INSERT INTO batch_reference_selection VALUES (?, ?, ?)",
+        """
+        INSERT INTO batch_reference_selection (batch_id, position, asset_id)
+        VALUES (?, ?, ?)
+        """,
         (
             (batch_id, position, selection.asset_id)
             for position, selection in enumerate(definition.reference_selections, 1)
@@ -558,7 +555,7 @@ def _get_detail(connection: sqlite3.Connection, batch_id: str) -> SavedBatchDeta
     ).fetchall()
     bindings = connection.execute(
         """
-        SELECT placeholder, variable_list_id, values_json, selected_values_json, mode, fixed_value
+        SELECT placeholder, values_json
         FROM batch_variable_binding WHERE batch_id = ? ORDER BY position
         """,
         (batch_id,),
@@ -735,20 +732,12 @@ def _list_record(row: sqlite3.Row | tuple[object, ...]) -> SavedBatchListRecord:
 
 
 def _binding_from_row(row: sqlite3.Row | tuple[object, ...]) -> SavedBatchVariableBinding:
-    try:
-        mode = SavedBatchVariableBindingMode(_string(row[4], "binding.mode"))
-    except ValueError as error:
-        raise SavedBatchStoreError("binding.mode is unsupported") from error
-    fixed_value = row[5]
-    if fixed_value is not None and not isinstance(fixed_value, str):
-        raise SavedBatchStoreError("binding.fixed_value must be a string or null")
+    values = _string_array(row[1], "binding.values_json")
+    if len(set(values)) != len(values):
+        raise SavedBatchStoreError("binding.values_json must not contain exact duplicates")
     return SavedBatchVariableBinding(
         placeholder=_plain_string(row[0], "binding.placeholder"),
-        variable_list_id=_plain_string(row[1], "binding.variable_list_id"),
-        values=_string_array(row[2], "binding.values_json"),
-        selected_values=_string_array(row[3], "binding.selected_values_json"),
-        mode=mode,
-        fixed_value=fixed_value,
+        values=values,
     )
 
 

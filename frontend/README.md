@@ -6,11 +6,10 @@ Runs, watching Job state, viewing the current Run's Results, and reviewing accum
 from this browser working session. It communicates only with the batchcraft FastAPI application.
 
 The current tab stores a versioned working draft, selected Project ID, current Run ID, and ordered
-unique session Run IDs in `sessionStorage`. Version 8 replaces manual Batch identity fields with the
-Saved Batch selector and stores the `batch_snapshot` required by Preview and Run creation. It
-retains existing Run IDs, migrates older singular prompt state to one `Prompt 1` entry, and defaults
-Random seed count when needed. A refresh restores the form and ordered prompt list, then reloads
-Run, execution, and Result data from FastAPI. Result metadata
+unique session Run IDs in `sessionStorage`. The current schema is version 9 and stores canonical
+Variable Bindings plus the `batch_snapshot` required by Preview and Run creation. Only a valid v9
+session is restored; unsupported or malformed data starts a clean working session. A refresh restores
+the form and ordered prompt list, then reloads Run, execution, and Result data from FastAPI. Result metadata
 and bytes are never stored as browser truth. Preview is never restored as valid; the user must compile
 the restored draft again. Closing the tab or browser session may remove this working state.
 
@@ -52,8 +51,8 @@ Saved Batch or remain working-session state; the Prompt library is persistent.
 The Workflow editor selects Project-scoped immutable WorkflowVersions and exact compatible
 ProfileVersions. Selecting another WorkflowVersion clears an incompatible Profile selection and
 blocks Preview until a compatible version is chosen. Library reconciliation never rewrites a restored
-snapshot with different content; unavailable or legacy pairs remain detached and are validated by the
-backend during Preview. ComfyUI remains the workflow editor.
+snapshot with different content; unavailable or integrity-mismatched pairs remain detached and are
+validated by the backend during Preview. ComfyUI remains the workflow editor.
 
 ## Requirements
 

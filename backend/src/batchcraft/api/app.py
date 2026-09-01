@@ -3,6 +3,7 @@ import logging
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, closing
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, cast
@@ -30,6 +31,7 @@ from batchcraft.application import (
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
+    RunDiscardNotEligibleError,
     RunExecutor,
     RunNotFoundError,
     RunPublicationError,
@@ -164,6 +166,7 @@ def create_app(
     *,
     client_factory: ClientFactory | None = None,
     executor: RunExecutor = execute_run,
+    clock: Callable[[], datetime] | None = None,
 ) -> FastAPI:
     configured = settings or Settings.from_env()
     make_client = client_factory or _create_comfyui_client
@@ -181,6 +184,7 @@ def create_app(
             task_registry=registry,
             execution_config=configured.execution_config,
             executor=executor,
+            clock=clock,
         )
         app.state.library_service = LibraryService(
             project_store=ProjectStore(configured.database_path),
@@ -846,6 +850,13 @@ def create_app(
         run = service.get_run(run_id)
         return ExecutionResponse.from_state(service.get_execution_state(run))
 
+    @app.post("/api/runs/{run_id}/discard", response_model=ExecutionResponse)
+    async def discard_run(
+        run_id: str,
+        service: ServiceDependency,
+    ) -> ExecutionResponse:
+        return ExecutionResponse.from_state(await service.discard_run(run_id))
+
     @app.get("/api/runs/{run_id}/results", response_model=ResultsResponse)
     async def list_results(
         run_id: str,
@@ -1125,6 +1136,16 @@ def _register_error_handlers(app: FastAPI) -> None:
         return _error_response(
             status.HTTP_409_CONFLICT,
             "execution_not_eligible",
+            str(error),
+        )
+
+    @app.exception_handler(RunDiscardNotEligibleError)
+    async def ineligible_run_discard(
+        _request: Request, error: RunDiscardNotEligibleError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "run_discard_not_eligible",
             str(error),
         )
 

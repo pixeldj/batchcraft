@@ -2,8 +2,9 @@ import hashlib
 import os
 import re
 import stat
-from collections.abc import Coroutine, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -15,12 +16,14 @@ from batchcraft.comfyui import (
 )
 from batchcraft.domain import BatchDefinition, CompiledRunPlan, compile_batch
 from batchcraft.execution import (
+    DISCARDED_BEFORE_START,
     ExecutionClient,
     ExecutionConfig,
     ExecutionStateError,
     ExecutionStateStore,
     ResultRecord,
     RunExecutionState,
+    RunExecutionStatus,
     execute_run,
     initial_execution_state,
 )
@@ -46,6 +49,7 @@ from .errors import (
     ResultNotFoundError,
     RunCreationError,
     RunDataError,
+    RunDiscardNotEligibleError,
     RunNotFoundError,
     RunPublicationError,
 )
@@ -110,6 +114,7 @@ class BatchcraftService:
         execution_config: ExecutionConfig,
         run_store: RunFilesystemStore | None = None,
         executor: RunExecutor = execute_run,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.projects_root = projects_root
         self.comfyui_client = comfyui_client
@@ -117,6 +122,7 @@ class BatchcraftService:
         self.execution_config = execution_config
         self.run_store = run_store or RunFilesystemStore(projects_root)
         self._executor = executor
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def preview_batch(self, creation: RunCreationInput) -> CompiledRunPlan:
         return self._compile_and_validate(creation)
@@ -278,6 +284,38 @@ class BatchcraftService:
         await self.task_registry.start(run_id, create_execution)
         return run
 
+    async def discard_run(self, run_id: str) -> RunExecutionState:
+        run = self.get_run(run_id)
+
+        def discard() -> RunExecutionState:
+            store = ExecutionStateStore(run.path)
+            try:
+                if store.state_path.exists():
+                    state = store.read_for_query(run)
+                else:
+                    store.validate_storage(run)
+                    state = initial_execution_state(run)
+
+                if state.status is RunExecutionStatus.CANCELLED:
+                    return state
+                if state != initial_execution_state(run):
+                    raise RunDiscardNotEligibleError(
+                        f"Run {run_id!r} is not pristine and unstarted"
+                    )
+
+                cancelled = replace(
+                    state,
+                    status=RunExecutionStatus.CANCELLED,
+                    completed_at=_timestamp(self._clock),
+                    diagnostics=(DISCARDED_BEFORE_START,),
+                )
+                store.save(run, cancelled)
+                return cancelled
+            except ExecutionStateError as error:
+                raise RunDataError(f"execution state is invalid for Run {run.run_id!r}") from error
+
+        return await self.task_registry.discard(run_id, discard)
+
     def list_results(self, run: PublishedRun) -> tuple[ResultRecord, ...]:
         state = self.get_execution_state(run)
         return tuple(result for job in state.jobs for result in job.results)
@@ -383,6 +421,13 @@ class BatchcraftService:
 
 def _is_within(path: Path, root: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
+
+
+def _timestamp(clock: Callable[[], datetime]) -> str:
+    value = clock()
+    if value.tzinfo is None:
+        raise ValueError("application clock must return a timezone-aware datetime")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _device_name(device: dict[object, object]) -> str:

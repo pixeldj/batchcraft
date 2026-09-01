@@ -127,11 +127,8 @@ values:
   - bird
 ```
 
-Important distinction:
-
-**VariableList stores values. It does not define execution mode.**
-
-Whether a Batch uses all values, one fixed value, or a future sampling policy belongs to the Batch's VariableBinding.
+Variable Lists are an authoring library. An active VariableBinding copies its selected ordered values;
+it does not retain source-list identity or execution mode.
 
 ### Historical reproducibility
 
@@ -228,6 +225,9 @@ Compatibility is version-specific rather than a property of the logical Profile.
 a target WorkflowVersion therefore retains the logical Profile even when no compatible version exists.
 Creating compatibility for a newer WorkflowVersion appends a new validated ProfileVersion under the
 same logical Profile; it never retargets an existing version or creates a replacement logical Profile.
+The current mapping set requires `prompt`, `seed`, and `output_prefix`. `reference_image` is optional;
+its absence represents a text-only Profile rather than an incomplete Profile. The mapping JSON shape
+is unchanged, so this behavior does not require a database migration.
 
 Exposed inputs may conceptually resemble:
 
@@ -247,6 +247,11 @@ Exposed inputs may conceptually resemble:
     "node_id": "114",
     "input_name": "seed",
     "value_type": "integer"
+  },
+  "output_prefix": {
+    "node_id": "301",
+    "input_name": "filename_prefix",
+    "value_type": "string"
   }
 }
 ```
@@ -293,14 +298,19 @@ selection IDs, creation/update timestamps, and archive state.
 Ordered child tables complete the aggregate:
 
 - `batch_prompt_selection` — ordered `prompt_version_id` foreign keys.
-- `batch_variable_binding` — ordered embedded binding snapshots carrying the placeholder,
-  `variable_list_id`, ordered `values` snapshot, ordered `selected_values`, `mode`, and
-  `fixed_value`.
+- `batch_variable_binding` — ordered embedded canonical bindings carrying `placeholder` and ordered
+  executable `values`.
 - `batch_reference_selection` — ordered `asset_id` strings with no foreign key.
 
-Saved Batches may be intentionally incomplete: they may have zero prompt selections, no
-workflow/profile selection, and zero reference selections. Preview remains the executable
-specification validator.
+Saved Batches may be intentionally incomplete: they may have zero prompt selections, zero values for
+a variable binding, no workflow/profile selection, and zero reference selections. Preview remains the
+executable specification validator and rejects a zero-value binding required by a selected
+PromptVersion. An empty string is one concrete value, not missing data. Saved Batch writes reject exact
+duplicate values, including duplicate empty strings. Reads reject malformed arrays and duplicate
+values rather than normalizing them.
+
+The current `batch_variable_binding` table stores only `batch_id`, `position`, `placeholder`, and
+`values_json`. It does not retain Variable List identity, a source revision, or a binding mode.
 
 Editing a Saved Batch increments its `revision`; concurrent conflicting saves fail rather than
 silently overwrite. Detached Prompt or Workflow-Profile snapshots must be explicitly imported or
@@ -314,18 +324,11 @@ Conceptual fields:
 
 ```text
 placeholder
-source_variable_list_id
-mode
-selected_values
-fixed_value
+values
 ```
 
-Initial modes:
-
-```text
-all
-fixed
-```
+Zero values are valid draft state. One value, including the empty string, has fixed semantics;
+multiple unique values form an ordered Cartesian dimension.
 
 ## Run
 
@@ -360,7 +363,7 @@ Once Run creation succeeds, these effective values and the compiled Job plan are
 
 Run execution state is separate from immutable provenance. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance while execution proceeds.
 
-The v1 filesystem representation stores this mutable data in `execution.json`. Run states are `created`, `running`, `succeeded`, `failed`, and `blocked`. `blocked` means automatic progression stopped on an unresolved accepted or ambiguous submission and is not permission to retry. It remains available for a future explicit reconciliation operation; only `succeeded` and `failed` are immutable terminal Run states.
+The v2 filesystem representation stores this mutable data in `execution.json`; v1 execution state is unsupported. Run states are `created`, `running`, `succeeded`, `failed`, `blocked`, and `cancelled`. `blocked` means automatic progression stopped on an unresolved accepted or ambiguous submission and is not permission to retry. It remains available for a future explicit reconciliation operation. `cancelled` means the Run was explicitly discarded before any execution or submission evidence existed. It is a Run-only terminal state: Jobs remain pristine `pending`, frozen provenance remains inspectable, and the stable Run diagnostic is `discarded_before_start`. `succeeded`, `failed`, and `cancelled` are immutable terminal Run states.
 
 ## Job
 

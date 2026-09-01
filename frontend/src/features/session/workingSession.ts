@@ -8,101 +8,18 @@ import {
 } from "../batch/form";
 
 export const WORKING_SESSION_KEY = "batchcraft.working-session";
-const WORKING_SESSION_VERSION = 8;
+const WORKING_SESSION_VERSION = 9;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
 type StoredPrompt = Omit<PromptForm, "key">;
-interface StoredPromptV4 {
-  versionId: string;
-  name: string;
-  text: string;
-}
 
 interface StoredBatchForm extends Omit<BatchFormState, "prompts" | "variableBindings"> {
   prompts: StoredPrompt[];
   variableBindings: StoredVariableBinding[];
 }
 
-type StoredBatchFormV7 = Omit<StoredBatchForm,
-  "batchDescription" | "workflowContentSha256" | "workflowProfileContentSha256"
->;
-
-type StoredBatchFormV6 = Omit<StoredBatchFormV7,
-  | "workflowLibraryProjectId"
-  | "workflowId"
-  | "workflowName"
-  | "workflowVersionId"
-  | "workflowVersionNumber"
-  | "workflowProfileId"
-  | "workflowProfileName"
-  | "workflowProfileVersionId"
-  | "workflowProfileVersionNumber"
-  | "workflowProfileWorkflowVersionId"
->;
-
-type LegacyStoredBatchForm = Omit<StoredBatchFormV6, "prompts" | "randomSeedCount" | "seedMode"> & {
-  promptVersionId: string;
-  promptText: string;
-  seedMode: "fixed" | "explicit";
-};
-
-type LegacyStoredBatchFormV3 = Omit<StoredBatchFormV6, "prompts"> & {
-  promptVersionId: string;
-  promptText: string;
-};
-
-interface WorkingSessionEnvelopeV1 {
-  version: 1;
-  form: LegacyStoredBatchForm;
-  current_run_id: string | null;
-}
-
-interface WorkingSessionEnvelopeV2 {
-  version: 2;
-  form: LegacyStoredBatchForm;
-  current_run_id: string | null;
-  session_run_ids: string[];
-}
-
-interface WorkingSessionEnvelopeV3 {
-  version: 3;
-  form: LegacyStoredBatchFormV3;
-  current_run_id: string | null;
-  session_run_ids: string[];
-}
-
-interface WorkingSessionEnvelopeV4 {
-  version: 4;
-  form: Omit<StoredBatchFormV6, "prompts"> & { prompts: StoredPromptV4[] };
-  current_run_id: string | null;
-  session_run_ids: string[];
-}
-
-interface WorkingSessionEnvelopeV5 {
-  version: 5;
-  form: StoredBatchFormV6;
-  current_run_id: string | null;
-  session_run_ids: string[];
-}
-
-interface WorkingSessionEnvelopeV6 {
-  version: 6;
-  form: StoredBatchFormV6;
-  current_run_id: string | null;
-  session_run_ids: string[];
-  selected_project_id: string | null;
-}
-
-interface WorkingSessionEnvelopeV7 {
-  version: 7;
-  form: StoredBatchFormV7;
-  current_run_id: string | null;
-  session_run_ids: string[];
-  selected_project_id: string | null;
-}
-
-interface WorkingSessionEnvelopeV8 {
-  version: 8;
+interface WorkingSessionEnvelopeV9 {
+  version: 9;
   form: StoredBatchForm;
   current_run_id: string | null;
   session_run_ids: string[];
@@ -133,73 +50,10 @@ export function loadWorkingSession(
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (isWorkingSessionEnvelopeV8(value)) {
-      return restoredSession(
-        value.form,
-        value.current_run_id,
-        value.session_run_ids,
-        value.selected_project_id,
-        value.selected_saved_batch_id,
-        value.saved_batch_base_revision,
-      );
+    if (!isWorkingSessionEnvelopeV9(value)) {
+      return defaultSession();
     }
-    if (isWorkingSessionEnvelopeV7(value)) {
-      return restoredSession(
-        migrateV7Form(value.form),
-        value.current_run_id,
-        value.session_run_ids,
-        value.selected_project_id,
-      );
-    }
-    if (isWorkingSessionEnvelopeV6(value)) {
-      return restoredSession(
-        migrateV6Form(value.form),
-        value.current_run_id,
-        value.session_run_ids,
-        value.selected_project_id,
-      );
-    }
-    if (isWorkingSessionEnvelopeV5(value)) {
-      return restoredSession(
-        migrateV6Form(value.form),
-        value.current_run_id,
-        value.session_run_ids,
-        projectCandidate(value.form),
-      );
-    }
-    if (isWorkingSessionEnvelopeV4(value)) {
-      return restoredSession(
-        migrateV4Form(value.form),
-        value.current_run_id,
-        value.session_run_ids,
-        projectCandidate(value.form),
-      );
-    }
-    if (isWorkingSessionEnvelopeV3(value)) {
-      return restoredSession(
-        migrateLegacyForm(value.form),
-        value.current_run_id,
-        value.session_run_ids,
-        projectCandidate(value.form),
-      );
-    }
-    if (isWorkingSessionEnvelopeV2(value)) {
-      return restoredSession(
-        migrateLegacyForm(value.form),
-        value.current_run_id,
-        value.session_run_ids,
-        projectCandidate(value.form),
-      );
-    }
-    if (isWorkingSessionEnvelopeV1(value)) {
-      return restoredSession(
-        migrateLegacyForm(value.form),
-        value.current_run_id,
-        value.current_run_id === null ? [] : [value.current_run_id],
-        projectCandidate(value.form),
-      );
-    }
-    return defaultSession();
+    return restoredSession(value);
   } catch {
     return defaultSession();
   }
@@ -217,7 +71,7 @@ export function saveWorkingSession(
   if (!storage) {
     return;
   }
-  const envelope: WorkingSessionEnvelopeV8 = {
+  const envelope: WorkingSessionEnvelopeV9 = {
     version: WORKING_SESSION_VERSION,
     form: dehydrateForm(form),
     current_run_id: currentRunId,
@@ -253,13 +107,9 @@ function dehydrateForm(form: BatchFormState): StoredBatchForm {
       snapshotName,
       text,
     })),
-    variableBindings: form.variableBindings.map((binding) => ({
-      placeholder: binding.placeholder,
-      variableListId: binding.variableListId,
-      values: binding.values,
-      mode: binding.mode,
-      selectedValues: binding.selectedValues,
-      fixedValue: binding.fixedValue,
+    variableBindings: form.variableBindings.map(({ placeholder, values }) => ({
+      placeholder,
+      values: [...values],
     })),
   };
 }
@@ -278,64 +128,6 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
   };
 }
 
-function migrateLegacyForm(
-  form: LegacyStoredBatchForm | LegacyStoredBatchFormV3,
-): StoredBatchForm {
-  const { promptVersionId, promptText, ...rest } = form;
-  return migrateV6Form({
-    ...rest,
-    prompts: [detachedPrompt(promptVersionId, "Prompt 1", promptText)],
-    randomSeedCount: "randomSeedCount" in form ? form.randomSeedCount : "1",
-  });
-}
-
-function migrateV4Form(form: WorkingSessionEnvelopeV4["form"]): StoredBatchForm {
-  return migrateV6Form({
-    ...form,
-    prompts: form.prompts.map(({ versionId, name, text }) => detachedPrompt(versionId, name, text)),
-  });
-}
-
-function migrateV6Form(form: StoredBatchFormV6): StoredBatchForm {
-  return {
-    ...form,
-    workflowLibraryProjectId: null,
-    workflowId: null,
-    workflowName: "",
-    workflowVersionId: null,
-    workflowVersionNumber: null,
-    workflowContentSha256: null,
-    workflowProfileId: null,
-    workflowProfileName: "",
-    workflowProfileVersionId: null,
-    workflowProfileVersionNumber: null,
-    workflowProfileWorkflowVersionId: null,
-    workflowProfileContentSha256: null,
-    batchDescription: "",
-  };
-}
-
-function migrateV7Form(form: StoredBatchFormV7): StoredBatchForm {
-  return {
-    ...form,
-    batchDescription: "",
-    workflowContentSha256: null,
-    workflowProfileContentSha256: null,
-  };
-}
-
-function detachedPrompt(versionId: string, name: string, text: string): StoredPrompt {
-  return {
-    libraryProjectId: null,
-    promptId: null,
-    promptName: name,
-    versionId,
-    versionNumber: null,
-    snapshotName: name,
-    text,
-  };
-}
-
 function defaultSession(): RestoredWorkingSession {
   return {
     form: initialBatchForm(),
@@ -348,21 +140,14 @@ function defaultSession(): RestoredWorkingSession {
   };
 }
 
-function restoredSession(
-  form: StoredBatchForm,
-  currentRunId: string | null,
-  sessionRunIds: string[],
-  selectedProjectId: string | null,
-  selectedSavedBatchId: string | null = null,
-  savedBatchBaseRevision: number | null = null,
-): RestoredWorkingSession {
+function restoredSession(value: WorkingSessionEnvelopeV9): RestoredWorkingSession {
   return {
-    form: hydrateForm(form),
-    currentRunId,
-    sessionRunIds: uniqueStrings(sessionRunIds),
-    selectedProjectId,
-    selectedSavedBatchId,
-    savedBatchBaseRevision,
+    form: hydrateForm(value.form),
+    currentRunId: value.current_run_id,
+    sessionRunIds: uniqueStrings(value.session_run_ids),
+    selectedProjectId: value.selected_project_id,
+    selectedSavedBatchId: value.selected_saved_batch_id,
+    savedBatchBaseRevision: value.saved_batch_base_revision,
     draftRestored: true,
   };
 }
@@ -375,161 +160,32 @@ function browserSessionStorage(): Storage | null {
   }
 }
 
-function isWorkingSessionEnvelopeV1(value: unknown): value is WorkingSessionEnvelopeV1 {
-  if (!isRecord(value) || value.version !== 1 || !isLegacyStoredBatchForm(value.form)) {
-    return false;
-  }
-  return value.current_run_id === null || isNonEmptyString(value.current_run_id);
-}
-
-function isWorkingSessionEnvelopeV2(value: unknown): value is WorkingSessionEnvelopeV2 {
+function isWorkingSessionEnvelopeV9(value: unknown): value is WorkingSessionEnvelopeV9 {
   return (
     isRecord(value) &&
-    value.version === 2 &&
-    isLegacyStoredBatchForm(value.form) &&
-    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
-    isStringArray(value.session_run_ids) &&
-    value.session_run_ids.every(isNonEmptyString)
-  );
-}
-
-function isWorkingSessionEnvelopeV3(value: unknown): value is WorkingSessionEnvelopeV3 {
-  return (
-    isRecord(value) &&
-    value.version === 3 &&
-    isLegacyStoredBatchFormV3(value.form) &&
-    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
-    isStringArray(value.session_run_ids) &&
-    value.session_run_ids.every(isNonEmptyString)
-  );
-}
-
-function isWorkingSessionEnvelopeV4(value: unknown): value is WorkingSessionEnvelopeV4 {
-  return (
-    isRecord(value) &&
-    value.version === 4 &&
-    isStoredBatchFormV4(value.form) &&
-    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
-    isStringArray(value.session_run_ids) &&
-    value.session_run_ids.every(isNonEmptyString)
-  );
-}
-
-function isWorkingSessionEnvelopeV5(value: unknown): value is WorkingSessionEnvelopeV5 {
-  return (
-    isRecord(value) &&
-    value.version === 5 &&
-    isStoredBatchFormV6(value.form) &&
-    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
-    isStringArray(value.session_run_ids) &&
-    value.session_run_ids.every(isNonEmptyString)
-  );
-}
-
-function isWorkingSessionEnvelopeV6(value: unknown): value is WorkingSessionEnvelopeV6 {
-  return (
-    isRecord(value) &&
-    value.version === 6 &&
-    isStoredBatchFormV6(value.form) &&
-    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
-    isStringArray(value.session_run_ids) &&
-    value.session_run_ids.every(isNonEmptyString) &&
-    (value.selected_project_id === null || isNonEmptyString(value.selected_project_id))
-  );
-}
-
-function isWorkingSessionEnvelopeV7(value: unknown): value is WorkingSessionEnvelopeV7 {
-  return (
-    isRecord(value) &&
-    value.version === 7 &&
-    isStoredBatchFormV7(value.form) &&
-    (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
-    isStringArray(value.session_run_ids) &&
-    value.session_run_ids.every(isNonEmptyString) &&
-    (value.selected_project_id === null || isNonEmptyString(value.selected_project_id))
-  );
-}
-
-function isWorkingSessionEnvelopeV8(value: unknown): value is WorkingSessionEnvelopeV8 {
-  return (
-    isRecord(value) &&
+    hasExactKeys(value, [
+      "version",
+      "form",
+      "current_run_id",
+      "session_run_ids",
+      "selected_project_id",
+      "selected_saved_batch_id",
+      "saved_batch_base_revision",
+    ]) &&
     value.version === WORKING_SESSION_VERSION &&
     isStoredBatchForm(value.form) &&
     (value.current_run_id === null || isNonEmptyString(value.current_run_id)) &&
     isStringArray(value.session_run_ids) &&
     value.session_run_ids.every(isNonEmptyString) &&
+    new Set(value.session_run_ids).size === value.session_run_ids.length &&
     (value.selected_project_id === null || isNonEmptyString(value.selected_project_id)) &&
     (value.selected_saved_batch_id === null || isNonEmptyString(value.selected_saved_batch_id)) &&
-    (value.saved_batch_base_revision === null || (isInteger(value.saved_batch_base_revision) && value.saved_batch_base_revision >= 1))
+    (value.saved_batch_base_revision === null ||
+      (isInteger(value.saved_batch_base_revision) && value.saved_batch_base_revision >= 1))
   );
 }
 
 function isStoredBatchForm(value: unknown): value is StoredBatchForm {
-  const links = value as Record<string, unknown>;
-  return (
-    isStoredBatchFormV7(value) &&
-    typeof links.batchDescription === "string" &&
-    (links.workflowContentSha256 === null || typeof links.workflowContentSha256 === "string") &&
-    (links.workflowProfileContentSha256 === null || typeof links.workflowProfileContentSha256 === "string")
-  );
-}
-
-function isStoredBatchFormV7(value: unknown): value is StoredBatchFormV7 {
-  const links = value as Record<string, unknown>;
-  return (
-    isStoredBatchFormV6(value) &&
-    (links.workflowLibraryProjectId === null || typeof links.workflowLibraryProjectId === "string") &&
-    (links.workflowId === null || typeof links.workflowId === "string") &&
-    typeof links.workflowName === "string" &&
-    (links.workflowVersionId === null || typeof links.workflowVersionId === "string") &&
-    (links.workflowVersionNumber === null || isInteger(links.workflowVersionNumber)) &&
-    (links.workflowProfileId === null || typeof links.workflowProfileId === "string") &&
-    typeof links.workflowProfileName === "string" &&
-    (links.workflowProfileVersionId === null || typeof links.workflowProfileVersionId === "string") &&
-    (links.workflowProfileVersionNumber === null || isInteger(links.workflowProfileVersionNumber)) &&
-    (links.workflowProfileWorkflowVersionId === null || typeof links.workflowProfileWorkflowVersionId === "string")
-  );
-}
-
-function isStoredBatchFormV6(value: unknown): value is StoredBatchFormV6 {
-  return (
-    isStoredBatchFormShape(value) &&
-    Array.isArray(value.prompts) &&
-    value.prompts.every(isStoredPrompt) &&
-    typeof value.randomSeedCount === "string" &&
-    (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random")
-  );
-}
-
-function isInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value);
-}
-
-function isStoredBatchFormV4(value: unknown): value is WorkingSessionEnvelopeV4["form"] {
-  return (
-    isStoredBatchFormShape(value) &&
-    Array.isArray(value.prompts) &&
-    value.prompts.length > 0 &&
-    value.prompts.every(isStoredPromptV4) &&
-    typeof value.randomSeedCount === "string" &&
-    (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random")
-  );
-}
-
-function isLegacyStoredBatchForm(value: unknown): value is LegacyStoredBatchForm {
-  return isLegacyStoredBatchFormShape(value) &&
-    (value.seedMode === "fixed" || value.seedMode === "explicit");
-}
-
-function isLegacyStoredBatchFormV3(value: unknown): value is LegacyStoredBatchFormV3 {
-  return (
-    isLegacyStoredBatchFormShape(value) &&
-    typeof value.randomSeedCount === "string" &&
-    (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random")
-  );
-}
-
-function isStoredBatchFormShape(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) {
     return false;
   }
@@ -540,45 +196,82 @@ function isStoredBatchFormShape(value: unknown): value is Record<string, unknown
     "batchId",
     "batchFilesystemKey",
     "batchName",
+    "batchDescription",
     "seedValues",
+    "randomSeedCount",
     "workflowJson",
     "workflowProfileJson",
+    "workflowName",
+    "workflowProfileName",
   ] as const;
   return (
+    hasExactKeys(value, [
+      "projectId",
+      "projectFilesystemKey",
+      "projectName",
+      "batchId",
+      "batchFilesystemKey",
+      "batchName",
+      "batchDescription",
+      "prompts",
+      "variableBindings",
+      "referenceAssetIds",
+      "seedMode",
+      "seedValues",
+      "randomSeedCount",
+      "workflowJson",
+      "workflowProfileJson",
+      "workflowLibraryProjectId",
+      "workflowId",
+      "workflowName",
+      "workflowVersionId",
+      "workflowVersionNumber",
+      "workflowContentSha256",
+      "workflowProfileId",
+      "workflowProfileName",
+      "workflowProfileVersionId",
+      "workflowProfileVersionNumber",
+      "workflowProfileWorkflowVersionId",
+      "workflowProfileContentSha256",
+    ]) &&
     stringFields.every((field) => typeof value[field] === "string") &&
+    Array.isArray(value.prompts) &&
+    value.prompts.every(isStoredPrompt) &&
     Array.isArray(value.variableBindings) &&
     value.variableBindings.every(isStoredVariableBinding) &&
-    isStringArray(value.referenceAssetIds)
-  );
-}
-
-function isLegacyStoredBatchFormShape(value: unknown): value is Record<string, unknown> {
-  return (
-    isStoredBatchFormShape(value) &&
-    typeof value.promptVersionId === "string" &&
-    typeof value.promptText === "string"
+    isStringArray(value.referenceAssetIds) &&
+    (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random") &&
+    isNullableString(value.workflowLibraryProjectId) &&
+    isNullableString(value.workflowId) &&
+    isNullableString(value.workflowVersionId) &&
+    isNullableInteger(value.workflowVersionNumber) &&
+    isNullableString(value.workflowContentSha256) &&
+    isNullableString(value.workflowProfileId) &&
+    isNullableString(value.workflowProfileVersionId) &&
+    isNullableInteger(value.workflowProfileVersionNumber) &&
+    isNullableString(value.workflowProfileWorkflowVersionId) &&
+    isNullableString(value.workflowProfileContentSha256)
   );
 }
 
 function isStoredPrompt(value: unknown): value is StoredPrompt {
   return (
     isRecord(value) &&
-    (value.libraryProjectId === null || typeof value.libraryProjectId === "string") &&
-    (value.promptId === null || typeof value.promptId === "string") &&
+    hasExactKeys(value, [
+      "libraryProjectId",
+      "promptId",
+      "promptName",
+      "versionId",
+      "versionNumber",
+      "snapshotName",
+      "text",
+    ]) &&
+    isNullableString(value.libraryProjectId) &&
+    isNullableString(value.promptId) &&
     typeof value.promptName === "string" &&
     typeof value.versionId === "string" &&
-    (value.versionNumber === null ||
-      (typeof value.versionNumber === "number" && Number.isInteger(value.versionNumber))) &&
+    isNullableInteger(value.versionNumber) &&
     typeof value.snapshotName === "string" &&
-    typeof value.text === "string"
-  );
-}
-
-function isStoredPromptV4(value: unknown): value is StoredPromptV4 {
-  return (
-    isRecord(value) &&
-    typeof value.versionId === "string" &&
-    typeof value.name === "string" &&
     typeof value.text === "string"
   );
 }
@@ -586,17 +279,26 @@ function isStoredPromptV4(value: unknown): value is StoredPromptV4 {
 function isStoredVariableBinding(value: unknown): value is StoredVariableBinding {
   return (
     isRecord(value) &&
+    hasExactKeys(value, ["placeholder", "values"]) &&
     typeof value.placeholder === "string" &&
-    typeof value.variableListId === "string" &&
-    typeof value.values === "string" &&
-    (value.mode === "all" || value.mode === "fixed") &&
-    typeof value.selectedValues === "string" &&
-    typeof value.fixedValue === "string"
+    isStringArray(value.values)
   );
 }
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
+}
+
+function isNullableInteger(value: unknown): value is number | null {
+  return value === null || isInteger(value);
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -607,10 +309,11 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function projectCandidate(form: { projectId: string }): string | null {
-  return form.projectId.trim() || null;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
 }

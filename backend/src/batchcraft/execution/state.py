@@ -24,11 +24,15 @@ from .models import (
     RunExecutionStatus,
 )
 
-EXECUTION_FORMAT_VERSION = 1
+EXECUTION_FORMAT_VERSION = 2
 EXECUTION_FILENAME = "execution.json"
+DISCARDED_BEFORE_START = "discarded_before_start"
 _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}")
 _RUN_TRANSITIONS = {
-    RunExecutionStatus.CREATED: {RunExecutionStatus.RUNNING},
+    RunExecutionStatus.CREATED: {
+        RunExecutionStatus.RUNNING,
+        RunExecutionStatus.CANCELLED,
+    },
     RunExecutionStatus.RUNNING: {
         RunExecutionStatus.SUCCEEDED,
         RunExecutionStatus.FAILED,
@@ -36,6 +40,7 @@ _RUN_TRANSITIONS = {
     },
     RunExecutionStatus.SUCCEEDED: set(),
     RunExecutionStatus.FAILED: set(),
+    RunExecutionStatus.CANCELLED: set(),
     RunExecutionStatus.BLOCKED: {
         RunExecutionStatus.RUNNING,
         RunExecutionStatus.SUCCEEDED,
@@ -288,6 +293,7 @@ def _validate_transition(previous: RunExecutionState, current: RunExecutionState
         in {
             RunExecutionStatus.SUCCEEDED,
             RunExecutionStatus.FAILED,
+            RunExecutionStatus.CANCELLED,
         }
         and current != previous
     ):
@@ -400,6 +406,34 @@ def _validate_state(state: RunExecutionState) -> None:
         for job in state.jobs
     ):
         raise ExecutionStateError("blocked Run state requires an unresolved Job")
+    if state.status is RunExecutionStatus.CANCELLED and (
+        state.started_at is not None
+        or state.completed_at is None
+        or state.current_job_ordinal is not None
+        or state.error is not None
+        or state.diagnostics != (DISCARDED_BEFORE_START,)
+        or any(not _is_pristine_pending_job(job) for job in state.jobs)
+    ):
+        raise ExecutionStateError("cancelled Run state requires a pristine unstarted execution")
+
+
+def _is_pristine_pending_job(job: JobExecutionState) -> bool:
+    return job == JobExecutionState(
+        job_id=job.job_id,
+        ordinal=job.ordinal,
+        status=JobExecutionStatus.PENDING,
+        client_id=None,
+        submission_disposition=None,
+        submission_http_status=None,
+        submission_response=None,
+        prompt_id=None,
+        started_at=None,
+        completed_at=None,
+        error=None,
+        diagnostics=(),
+        history_status=None,
+        results=(),
+    )
 
 
 def _state_data(state: RunExecutionState) -> dict[str, object]:
@@ -455,7 +489,7 @@ def _result_data(result: ResultRecord) -> dict[str, object]:
 
 
 def _parse_state(data: dict[str, object]) -> RunExecutionState:
-    if data.get("format_version") != EXECUTION_FORMAT_VERSION:
+    if _required_integer(data, "format_version") != EXECUTION_FORMAT_VERSION:
         raise ExecutionStateError("unsupported execution state format version")
     state = RunExecutionState(
         run_id=_required_string(data, "run_id"),

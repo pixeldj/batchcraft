@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, apiClient, type BatchcraftApi } from "./api/client";
+import { ApiError, apiClient, type BatchcraftApi, type RunDiscardApi } from "./api/client";
 import type {
   BatchRequest,
+  EditableBatchSnapshot,
   ExecutionResponse,
   PreviewResponse,
   ProjectResponse,
@@ -16,6 +17,8 @@ import { BatchEditor } from "./features/batch/BatchEditor";
 import { PreviewPanel } from "./features/batch/PreviewPanel";
 import {
   buildBatchRequest,
+  buildEditableBatchSnapshot,
+  editableBatchSnapshotIdentity,
   initialBatchForm,
   type BatchFormState,
 } from "./features/batch/form";
@@ -36,7 +39,7 @@ import { ComfyUIStatus } from "./features/status/ComfyUIStatus";
 import { errorMessage } from "./utils/errors";
 
 interface Props {
-  api?: BatchcraftApi;
+  api?: BatchcraftApi & RunDiscardApi;
   pollIntervalMs?: number;
 }
 
@@ -71,7 +74,12 @@ interface SavedBatchConflict {
   batchId: string;
 }
 
-const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked"]);
+interface RunSnapshotIdentity {
+  runId: string;
+  snapshot: EditableBatchSnapshot;
+}
+
+const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked", "cancelled"]);
 
 export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [initialSession] = useState(loadWorkingSession);
@@ -90,6 +98,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [createdUnavailableRunId, setCreatedUnavailableRunId] = useState<string | null>(null);
+  const [runSnapshotIdentity, setRunSnapshotIdentity] = useState<RunSnapshotIdentity | null>(null);
   const [restoredRunSeed, setRestoredRunSeed] = useState<RestoredRunSeed | null>(null);
   const [previewRunAssociation, setPreviewRunAssociation] =
     useState<PreviewRunAssociation | null>(null);
@@ -130,6 +140,12 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
   const getCachedFrozenRun = useCallback((runId: string) => {
     return frozenRunCache.current.get(runId) ?? null;
+  }, []);
+
+  const changeCreatedUnavailable = useCallback((runId: string, unavailable: boolean) => {
+    setCreatedUnavailableRunId((current) => unavailable
+      ? runId
+      : current === runId ? null : current);
   }, []);
 
   const loadFrozenRun = useCallback((runId: string) => {
@@ -328,6 +344,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         }
         setRun(restoredRun);
         setRunStatus(execution.status);
+        setRunSnapshotIdentity({
+          runId: restoredRun.run_id,
+          snapshot: restoredRun.batch_snapshot,
+        });
         setRestoredRunSeed({ runId, execution, results, resultsError });
         if (
           !batchIdentityChanged.current &&
@@ -442,6 +462,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setGalleryRunsById({});
     setRun(null);
     setRunStatus(null);
+    setRunSnapshotIdentity(null);
     setRestoredRunSeed(null);
     setRestoringRun(false);
     setRunRestoreUnresolved(false);
@@ -483,6 +504,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     runRevision.current += 1;
     setRun(null);
     setRunStatus(null);
+    setRunSnapshotIdentity(null);
     setCurrentRunId(null);
     setRestoredRunSeed(null);
     setRestoringRun(false);
@@ -630,13 +652,14 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   async function createRun() {
     const snapshot = previewSnapshot;
     const requestedBatchIdentity = snapshot ? batchRequestIdentity(snapshot.request) : null;
-    const currentRunIsTerminal = runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus);
+    const currentRunAllowsReplacement = run?.run_id === createdUnavailableRunId
+      || (runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus));
     if (
       !snapshot ||
       creating ||
       restoringRun ||
       runRestoreUnresolved ||
-      (run !== null && !currentRunIsTerminal)
+      (run !== null && !currentRunAllowsReplacement)
     ) {
       return;
     }
@@ -652,6 +675,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       runRevision.current += 1;
       setRun(nextRun);
       setRunStatus("created");
+      setRunSnapshotIdentity({ runId: nextRun.run_id, snapshot: snapshot.request.batch_snapshot });
       setRestoredRunSeed(null);
       setCurrentRunId(nextRun.run_id);
       setSessionRunIds((current) =>
@@ -693,6 +717,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         }
         if (requestedBatchIdentity === currentBatchIdentityRef.current) {
           setRun(frozenRun);
+          setRunSnapshotIdentity({ runId: frozenRun.run_id, snapshot: frozenRun.batch_snapshot });
         }
       } catch (caught) {
         setCreateError(
@@ -706,7 +731,9 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     }
   }
 
-  const currentRunIsTerminal = runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus);
+  const currentRunCreatedUnavailable = run?.run_id === createdUnavailableRunId;
+  const currentRunIsTerminal = currentRunCreatedUnavailable
+    || (runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus));
   const currentIntent = canonicalBatchIntent(form);
   const pristineIntent = useRef(canonicalBatchIntent(initialBatchForm()));
   const savedBatchDirty = savedBatchLink !== null && currentIntent !== savedBatchLink.baseline;
@@ -717,7 +744,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     restoringRun ||
     runRestoreUnresolved ||
     savingBatch ||
-    runStatus === "created" ||
+    (runStatus === "created" && !currentRunCreatedUnavailable) ||
     runStatus === "running";
   const canCreateRun =
     previewSnapshot !== null &&
@@ -728,6 +755,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     ? "Restoring the previous Run before another Run can be created."
     : runRestoreUnresolved
       ? "The previous Run state is unknown. Refresh after the backend is available before creating another Run."
+      : currentRunCreatedUnavailable
+        ? "The current Run cannot be started or discarded. Create another immutable Run from this Preview."
       : runStatus === "created"
         ? "Start the current Run before creating another one."
         : runStatus === "running"
@@ -735,6 +764,24 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           : null;
   const matchingRestoredRunSeed =
     restoredRunSeed?.runId === run?.run_id ? restoredRunSeed : null;
+  const currentRunSnapshot = runSnapshotIdentity && runSnapshotIdentity.runId === run?.run_id
+    ? runSnapshotIdentity.snapshot
+    : null;
+  const currentSnapshotIdentity = (() => {
+    try {
+      return editableBatchSnapshotIdentity(buildEditableBatchSnapshot(form, {
+        sourceSavedBatch: savedBatchLink
+          ? { id: savedBatchLink.id, revision: savedBatchLink.revision }
+          : null,
+      }));
+    } catch {
+      return null;
+    }
+  })();
+  const batchDiverged = currentRunSnapshot !== null && (
+    currentSnapshotIdentity === null ||
+    currentSnapshotIdentity !== editableBatchSnapshotIdentity(currentRunSnapshot)
+  );
 
   function updateCurrentRunGalleryResults(runId: string, results: ResultResponse[]) {
     if (!sessionRunIds.includes(runId)) {
@@ -848,9 +895,11 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           initialResults={matchingRestoredRunSeed?.results ?? []}
           initialResultsError={matchingRestoredRunSeed?.resultsError ?? null}
           onStatusChange={setRunStatus}
+          onCreatedUnavailableChange={changeCreatedUnavailable}
           onResultsChange={updateCurrentRunGalleryResults}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
+          batchDiverged={batchDiverged}
         />
         <BatchResultsGallery
           api={api}

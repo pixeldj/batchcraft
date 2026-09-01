@@ -101,6 +101,17 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("discards a Run with POST and an encoded ID", async () => {
+    const fetchMock = successfulFetch({ run_id: "run/one", status: "cancelled" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new BatchcraftApiClient("http://api.test").discardRun("run/one");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/runs/run%2Fone/discard", {
+      method: "POST",
+    });
+  });
+
   it("lists active Projects without an archived query by default", async () => {
     const fetchMock = successfulFetch({ projects: [] });
     vi.stubGlobal("fetch", fetchMock);
@@ -370,7 +381,7 @@ function batchRequest() {
     workflow,
     workflow_profile: workflowProfile,
     batch_snapshot: {
-      snapshot_version: 1 as const,
+      snapshot_version: 2 as const,
       project,
       source_saved_batch: null,
       batch: { ...batch, description: null },

@@ -24,7 +24,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_schema WHERE type = 'table'"
             ).fetchall()
         }
-        assert {
+        assert tables == {
             "schema_migration",
             "project",
             "prompt",
@@ -37,7 +37,43 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "batch_prompt_selection",
             "batch_variable_binding",
             "batch_reference_selection",
-        } <= tables
+        }
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'index' AND sql IS NOT NULL"
+            ).fetchall()
+        }
+        assert indexes == {
+            "prompt_project_idx",
+            "prompt_version_prompt_idx",
+            "workflow_project_idx",
+            "workflow_version_workflow_idx",
+            "workflow_version_project_idx",
+            "workflow_profile_workflow_idx",
+            "workflow_profile_version_profile_idx",
+            "workflow_profile_version_target_idx",
+            "batch_project_idx",
+            "batch_workflow_version_idx",
+            "batch_workflow_profile_idx",
+            "batch_workflow_profile_version_idx",
+            "batch_prompt_selection_version_idx",
+        }
+        triggers = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'trigger'"
+            ).fetchall()
+        }
+        assert triggers == {
+            "prompt_version_immutable",
+            "workflow_version_immutable",
+            "workflow_profile_version_immutable",
+            "batch_identity_immutable",
+        }
+        assert [
+            row[1] for row in connection.execute("PRAGMA table_info(batch_variable_binding)")
+        ] == ["batch_id", "position", "placeholder", "values_json"]
 
         migration_path = (
             Path(__file__).parents[2]
@@ -48,16 +84,18 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             / "0001_initial.sql"
         )
         assert connection.execute(
-            "SELECT version, name, checksum, applied_at FROM schema_migration WHERE version = 1"
-        ).fetchone() == (
-            1,
-            "initial",
-            hashlib.sha256(migration_path.read_bytes()).hexdigest(),
-            "2026-08-28T12:30:00.000000Z",
-        )
+            "SELECT version, name, checksum, applied_at FROM schema_migration ORDER BY version"
+        ).fetchall() == [
+            (
+                1,
+                "initial",
+                hashlib.sha256(migration_path.read_bytes()).hexdigest(),
+                "2026-08-28T12:30:00.000000Z",
+            )
+        ]
 
         apply_migrations(connection, clock=lambda: pytest.fail("no migration should run"))
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (3,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (1,)
     finally:
         connection.close()
 
@@ -117,67 +155,55 @@ def test_changed_checksum_is_rejected(tmp_path: Path) -> None:
         connection.close()
 
 
-def test_workflow_library_migrates_an_existing_0001_database(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    migration_root = Path(__file__).parents[2] / "src" / "batchcraft" / "db" / "migrations"
-    package = _migration_package(
-        tmp_path,
-        "initial_only_migrations",
-        {"0001_initial.sql": (migration_root / "0001_initial.sql").read_text()},
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    importlib.invalidate_caches()
+def test_changed_name_is_rejected(tmp_path: Path) -> None:
     connection = open_connection(tmp_path / "batchcraft.sqlite3")
     try:
-        apply_migrations(connection, package=package)
-        connection.execute(
-            "INSERT INTO project VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("project-1", "project", "Project", None, "created", "updated", None),
-        )
+        apply_migrations(connection)
+        connection.execute("UPDATE schema_migration SET name = 'renamed' WHERE version = 1")
         connection.commit()
 
-        apply_migrations(connection)
-
-        assert connection.execute("SELECT count(*) FROM project").fetchone() == (1,)
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (3,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workflow_profile_version'"
-        ).fetchone() == ("workflow_profile_version",)
+        with pytest.raises(MigrationError, match="name changed"):
+            apply_migrations(connection)
     finally:
         connection.close()
 
 
-def test_saved_batches_migrate_an_existing_0002_database(
+def test_future_contiguous_migration_preserves_existing_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     migration_root = Path(__file__).parents[2] / "src" / "batchcraft" / "db" / "migrations"
     package = _migration_package(
         tmp_path,
-        "through_workflow_migrations",
+        "future_migrations",
         {
-            name: (migration_root / name).read_text()
-            for name in ("0001_initial.sql", "0002_workflow_library.sql")
+            "0001_initial.sql": (migration_root / "0001_initial.sql").read_text(),
+            "0002_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
     connection = open_connection(tmp_path / "batchcraft.sqlite3")
     try:
-        apply_migrations(connection, package=package)
+        apply_migrations(connection)
         connection.execute(
             "INSERT INTO project VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("project-1", "project", "Project", None, "created", "updated", None),
         )
         connection.commit()
 
-        apply_migrations(connection)
+        apply_migrations(connection, package=package)
 
-        assert connection.execute("SELECT count(*) FROM project").fetchone() == (1,)
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (3,)
+        assert connection.execute("SELECT id, filesystem_key, name FROM project").fetchone() == (
+            "project-1",
+            "project",
+            "Project",
+        )
         assert connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'batch'"
-        ).fetchone() == ("batch",)
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_marker'"
+        ).fetchone() == ("future_marker",)
+        assert connection.execute(
+            "SELECT version, name FROM schema_migration ORDER BY version"
+        ).fetchall() == [(1, "initial"), (2, "future")]
     finally:
         connection.close()
 
@@ -245,7 +271,7 @@ def test_concurrent_startup_serializes_migration_application(tmp_path: Path) -> 
 
     connection = open_connection(database_path)
     try:
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (3,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (1,)
     finally:
         connection.close()
 
@@ -255,7 +281,7 @@ def test_unknown_newer_database_and_history_gap_are_rejected(tmp_path: Path) -> 
     gap = open_connection(tmp_path / "gap.sqlite3")
     try:
         apply_migrations(newer)
-        newer.execute("INSERT INTO schema_migration VALUES (4, 'future', ?, 'now')", ("0" * 64,))
+        newer.execute("INSERT INTO schema_migration VALUES (2, 'future', ?, 'now')", ("0" * 64,))
         newer.commit()
         with pytest.raises(MigrationError, match="newer than application"):
             apply_migrations(newer)

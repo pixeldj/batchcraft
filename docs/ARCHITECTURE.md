@@ -133,7 +133,7 @@ Result data; they are not a Project-wide history index. Preview and Run creation
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into manifest v4. SQLite now owns current Project metadata, the immutable-version Prompt,
+provenance into manifest v5. SQLite now owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, and mutable Saved Batches; searchable filesystem-derived
 indexes remain a later slice.
 
@@ -167,7 +167,7 @@ Initial queue depth should be configurable, with `1` as a safe default.
 
 The first production executor fixes queue depth at exactly `1` and executes one published Run. It submits the next Job only after history proves the prior Job succeeded and every discovered Result is durable. Global Run selection, prioritization, concurrency, retries, and automatic recovery remain outside this layer.
 
-FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. It is not durable scheduler state: `execution.json` remains authoritative, and a restarted API refuses automatic recovery of non-created execution state.
+FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. Start admission and discard-before-start use the same registry lock: discard cannot race execution start and independently requires absent or exactly pristine initial state with no active task for that Run. Discard writes terminal `cancelled` execution state without deleting the Run or changing frozen provenance. The registry is not durable scheduler state: execution format v2 in `execution.json` remains authoritative, and a restarted API refuses automatic recovery of non-created execution state. Execution v1 is intentionally unsupported.
 
 Benefits:
 
@@ -210,15 +210,24 @@ one exact immutable WorkflowVersion and store a complete `{id, name, mappings}` 
 WorkflowVersion never edits or retargets an existing ProfileVersion.
 
 Logical Profiles remain discoverable when the selected WorkflowVersion has no compatible
-ProfileVersion. The frontend may copy mappings from the latest active prior version into a new version
-under the same logical Profile. That copy is validated against the new WorkflowVersion, and invalid
-mappings must be repaired before the immutable version is created.
+ProfileVersion. The frontend derives a visual node/input catalog from the selected immutable API-format
+WorkflowVersion and writes the existing mapping JSON contract; it does not introduce a second mapper
+state or infer workflow intent at execution time. Connected inputs are visible but unavailable as
+writable targets. Raw generated Profile JSON is an advanced read-only view.
+
+The frontend may prefill mappings from the latest active prior version into a review editor for a new
+version under the same logical Profile. Valid mappings remain selected, missing nodes or inputs are
+marked for repair, and no ProfileVersion is persisted until the user submits the reviewed mapping.
 A Workflow Profile snapshot stores:
 
-- an API-format ComfyUI workflow snapshot or version reference;
 - friendly exposed input definitions;
 - mappings from those inputs to node IDs and input fields;
 - metadata describing required input types.
+
+The separately selected WorkflowVersion supplies the complete immutable API-format ComfyUI workflow.
+The current Profile contract requires `prompt`, `seed`, and `output_prefix` mappings and permits an
+optional `reference_image` mapping. Selecting Reference Assets requires `reference_image`; without
+selected assets, omitting it leaves the base workflow unchanged.
 
 A Workflow/Profile pair may be the active selection on a mutable Saved Batch; that mutable selection
 state does not change how the immutable version snapshots are stored or validated.
@@ -232,13 +241,13 @@ Example mapping:
 {
   "prompt": {
     "node_id": "104",
-    "input": "text",
-    "type": "string"
+    "input_name": "text",
+    "value_type": "string"
   },
   "reference_image": {
     "node_id": "221",
-    "input": "image",
-    "type": "image"
+    "input_name": "image",
+    "value_type": "image"
   }
 }
 ```
@@ -250,7 +259,7 @@ Jobs refer to friendly exposed fields. ComfyUI-specific node mutation happens in
 Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
 boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
 Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
-the plan and provenance into manifest v4. Editing a Saved Batch after Run creation never alters the
+the plan and provenance into manifest v5. Editing a Saved Batch after Run creation never alters the
 existing Run.
 
 ## Persistence Strategy

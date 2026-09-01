@@ -11,7 +11,6 @@ from batchcraft.domain.models import (
     ResolvedVariable,
     SeedMode,
     VariableBinding,
-    VariableBindingMode,
 )
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -49,37 +48,13 @@ def _binding_values(binding: VariableBinding) -> tuple[str, ...]:
     if _IDENTIFIER_PATTERN.fullmatch(binding.placeholder) is None:
         raise CompilationError(f"binding has invalid placeholder name: {binding.placeholder!r}")
 
-    source_values = binding.variable_list.values
-    if binding.mode is VariableBindingMode.ALL:
-        if binding.fixed_value is not None:
-            raise CompilationError(
-                f"all binding for {binding.placeholder!r} cannot define fixed_value"
-            )
-        if not binding.selected_values:
-            raise CompilationError(
-                f"all binding for {binding.placeholder!r} has no selected values"
-            )
-        values = binding.selected_values
-    elif binding.mode is VariableBindingMode.FIXED:
-        if binding.selected_values:
-            raise CompilationError(
-                f"fixed binding for {binding.placeholder!r} cannot define selected_values"
-            )
-        if binding.fixed_value is None:
-            raise CompilationError(f"fixed binding for {binding.placeholder!r} has no value")
-        values = (binding.fixed_value,)
-    else:
+    if any(not isinstance(value, str) for value in binding.values):
+        raise CompilationError(f"binding values for {binding.placeholder!r} must be strings")
+    if len(set(binding.values)) != len(binding.values):
         raise CompilationError(
-            f"binding for {binding.placeholder!r} has unsupported mode: {binding.mode!r}"
+            f"binding values for {binding.placeholder!r} contain exact duplicates"
         )
-
-    for value in values:
-        if value not in source_values:
-            raise CompilationError(
-                f"value {value!r} for {binding.placeholder!r} is not in Variable List "
-                f"{binding.variable_list.id!r}"
-            )
-    return values
+    return binding.values
 
 
 def _seed_values(batch: BatchDefinition) -> tuple[int, ...]:
@@ -101,7 +76,7 @@ def _resolve_prompt(template: str, assignments: dict[str, str]) -> str:
     )
 
 
-def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
+def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> CompiledRunPlan:
     if not batch.prompt_versions:
         raise CompilationError("Batch must contain at least one PromptVersion")
     prompt_ids: set[str] = set()
@@ -134,6 +109,12 @@ def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
             raise CompilationError(
                 f"PromptVersion {prompt_version.id!r} has undefined placeholder bindings: {names}"
             )
+        empty = tuple(name for name in placeholder_names if not binding_values[name])
+        if empty:
+            names = ", ".join(repr(name) for name in empty)
+            raise CompilationError(
+                f"PromptVersion {prompt_version.id!r} has bindings with no values: {names}"
+            )
 
     for reference in batch.references:
         if not reference.asset_id:
@@ -141,6 +122,22 @@ def compile_batch(batch: BatchDefinition) -> CompiledRunPlan:
     references = batch.references or (None,)
 
     seeds = _seed_values(batch)
+    if max_jobs is not None:
+        if max_jobs < 0:
+            raise CompilationError("maximum Job count must not be negative")
+        expected_jobs = 0
+        for placeholder_names in prompt_placeholders:
+            prompt_jobs = len(references) * len(seeds)
+            remaining_jobs = max_jobs - expected_jobs
+            if prompt_jobs > remaining_jobs:
+                raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+            for name in placeholder_names:
+                value_count = len(binding_values[name])
+                if prompt_jobs > remaining_jobs // value_count:
+                    raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+                prompt_jobs *= value_count
+            expected_jobs += prompt_jobs
+
     globally_used_placeholders = {
         name for placeholder_names in prompt_placeholders for name in placeholder_names
     }

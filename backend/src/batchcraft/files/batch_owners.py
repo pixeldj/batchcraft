@@ -148,7 +148,9 @@ class BatchOwnerStore:
             if isinstance(error, BatchOwnerError):
                 raise
             raise BatchOwnerError(f"invalid Batch owner file {owner_path}: {error}") from error
-        if type(data.get("format_version")) is not int or data["format_version"] != 1:
+        if type(data.get("format_version")) is not int or (
+            data["format_version"] != BATCH_OWNER_FORMAT_VERSION
+        ):
             raise BatchOwnerError(f"unsupported Batch owner format in {owner_path}")
         batch_id = _required_string(data, "batch_id", owner_path)
         _validate_batch_id(batch_id)

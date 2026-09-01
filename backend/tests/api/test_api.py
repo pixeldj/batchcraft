@@ -6,17 +6,26 @@ import shutil
 import threading
 import time
 from collections.abc import AsyncIterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 import batchcraft.execution.state as execution_state_module
 from batchcraft.api import Settings, create_app
-from batchcraft.api.schemas import BatchRequest, ExecutionResponse, PreviewResponse, ResultsResponse
+from batchcraft.api.schemas import (
+    BatchRequest,
+    ExecutionResponse,
+    PreviewResponse,
+    ResultsResponse,
+    SavedBatchVariableBindingRequest,
+)
 from batchcraft.comfyui import (
     ComfyUIConnectionError,
     DownloadedArtifact,
@@ -35,6 +44,7 @@ from batchcraft.execution import (
     ExecutionConfig,
     ExecutionStateError,
     ExecutionStateStore,
+    JobExecutionStatus,
     RunExecutionState,
     RunExecutionStatus,
 )
@@ -208,18 +218,14 @@ def _batch_request(
     bindings: list[dict[str, object]] = [
         {
             "placeholder": "animal",
-            "variable_list": {"id": "animals", "values": ["cat", "dog"]},
-            "mode": "all",
-            "selected_values": ["dog", "cat"],
+            "values": ["dog", "cat"],
         }
     ]
     if include_unused_binding:
         bindings.append(
             {
                 "placeholder": "unused",
-                "variable_list": {"id": "unused-values", "values": ["value"]},
-                "mode": "fixed",
-                "fixed_value": "value",
+                "values": ["value"],
             }
         )
     profile = {
@@ -267,7 +273,7 @@ def _batch_request(
         "workflow": workflow,
         "workflow_profile": profile,
         "batch_snapshot": {
-            "snapshot_version": 1,
+            "snapshot_version": 2,
             "project": copy.deepcopy(project),
             "source_saved_batch": None,
             "batch": {**batch, "description": None},
@@ -303,6 +309,63 @@ def _create_run(http: TestClient, request: dict[str, object]) -> str:
     response = http.post("/api/runs", json=request)
     assert response.status_code == 201, response.text
     return str(response.json()["run_id"])
+
+
+@pytest.mark.parametrize(
+    ("old_field", "old_value"),
+    (
+        ("variable_list", {"id": "animals", "values": ["cat", "dog"]}),
+        ("mode", "all"),
+        ("selected_values", ["dog", "cat"]),
+        ("fixed_value", "dog"),
+    ),
+)
+def test_executable_bindings_reject_old_fields(old_field: str, old_value: object) -> None:
+    request = _batch_request(())
+    request["variable_bindings"] = [
+        {
+            "placeholder": "animal",
+            "values": ["dog", "cat"],
+            old_field: old_value,
+        }
+    ]
+    _sync_batch_snapshot(request)
+
+    with pytest.raises(ValueError):
+        BatchRequest.model_validate(request)
+
+
+@pytest.mark.parametrize(
+    ("old_field", "old_value"),
+    (
+        ("variable_list_id", "animals"),
+        ("selected_values", ["dog", "cat"]),
+        ("mode", "all"),
+        ("fixed_value", "dog"),
+    ),
+)
+def test_saved_batch_bindings_reject_old_fields(old_field: str, old_value: object) -> None:
+    with pytest.raises(ValueError):
+        SavedBatchVariableBindingRequest.model_validate(
+            {
+                "placeholder": "animal",
+                "values": ["dog", "cat"],
+                old_field: old_value,
+            }
+        )
+
+
+@pytest.mark.parametrize("invalid_version", (1, True, 2.0))
+def test_batch_request_rejects_snapshot_version_one_and_non_integer_aliases(
+    invalid_version: object,
+) -> None:
+    request = _batch_request(())
+    snapshot = request["batch_snapshot"]
+    assert isinstance(snapshot, dict)
+    snapshot["snapshot_version"] = invalid_version
+
+    with pytest.raises(ValueError):
+        BatchRequest.model_validate(request)
 
 
 def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, object]:
@@ -344,11 +407,7 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
         "variable_bindings": [
             {
                 "placeholder": "animal",
-                "variable_list_id": "animals",
-                "values": ["cat", "dog"],
-                "selected_values": ["dog", "cat"],
-                "mode": "all",
-                "fixed_value": None,
+                "values": ["dog", "cat"],
             }
         ],
         "reference_selections": [{"asset_id": "asset-2"}, {"asset_id": "asset-1"}],
@@ -540,8 +599,10 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
     profile_data = request["workflow_profile"]
     assert isinstance(workflow_data, dict)
     assert isinstance(profile_data, dict)
-    mappings = profile_data["mappings"]
-    assert isinstance(mappings, dict)
+    profile_mappings = profile_data["mappings"]
+    assert isinstance(profile_mappings, dict)
+    mappings = dict(profile_mappings)
+    mappings.pop("reference_image")
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -662,10 +723,11 @@ def test_workflow_and_profile_library_lifecycle_persists_across_restart(
         assert (
             restarted.get(f"/api/workflow-versions/{workflow_version_one['id']}").status_code == 200
         )
-        assert (
-            restarted.get(f"/api/workflow-profile-versions/{profile_version_one['id']}").status_code
-            == 200
+        persisted_profile = restarted.get(
+            f"/api/workflow-profile-versions/{profile_version_one['id']}"
         )
+        assert persisted_profile.status_code == 200
+        assert persisted_profile.json()["profile"]["mappings"] == mappings
         assert restarted.get(f"/api/projects/{project['id']}/workflows").json() == {"workflows": []}
         assert (
             len(
@@ -707,7 +769,7 @@ def test_workflow_profile_api_rejects_invalid_mapping_and_cross_project_target(
         ).json()["version"]
 
         invalid_mappings = dict(mappings)
-        invalid_mappings.pop("reference_image")
+        invalid_mappings.pop("prompt")
         invalid = http.post(
             f"/api/workflows/{target['workflow_id']}/profiles",
             json={
@@ -1013,11 +1075,7 @@ def test_saved_batch_lifecycle_is_durable_lightweight_and_project_scoped(
             "variable_bindings": [
                 {
                     "placeholder": "",
-                    "variable_list_id": "",
                     "values": [],
-                    "selected_values": [],
-                    "mode": "all",
-                    "fixed_value": None,
                 }
             ],
             "reference_selections": [],
@@ -1147,6 +1205,127 @@ def test_saved_batch_accepts_all_seed_intents(
         )
     assert response.status_code == 201, response.text
     assert response.json()["seed_mode"] == seed_intent["mode"]
+
+
+def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects",
+            json={"name": "Smoke Project", "filesystem_key": "smoke_project"},
+        ).json()
+        definition = _saved_batch_definition(http, project["id"])
+        definition["variable_bindings"] = [{"placeholder": "animal", "values": [""]}]
+        definition["reference_selections"] = []
+        definition["seed_intent"] = {
+            "mode": "fixed",
+            "values": [11],
+            "random_seed_count": None,
+        }
+        saved_response = http.post(
+            f"/api/projects/{project['id']}/batches",
+            json={"filesystem_key": "smoke_batch", **definition},
+        )
+        assert saved_response.status_code == 201, saved_response.text
+        saved = saved_response.json()
+        prompt = saved["prompt_selections"][0]
+        workflow = saved["selected_workflow_version"]
+        profile = saved["selected_workflow_profile_version"]
+        binding = {"placeholder": "animal", "values": [""]}
+        request = {
+            "project": {
+                "id": project["id"],
+                "filesystem_key": project["filesystem_key"],
+                "name": project["name"],
+            },
+            "batch": {
+                "id": saved["id"],
+                "filesystem_key": saved["filesystem_key"],
+                "name": saved["name"],
+            },
+            "prompt_versions": [
+                {
+                    "id": prompt["prompt_version_id"],
+                    "name": prompt["name_snapshot"],
+                    "text": prompt["text"],
+                }
+            ],
+            "variable_bindings": [binding],
+            "references": [],
+            "seeds": {"mode": "fixed", "values": [11]},
+            "workflow": workflow["workflow"],
+            "workflow_profile": profile["profile"],
+            "batch_snapshot": {
+                "snapshot_version": 2,
+                "project": {
+                    "id": project["id"],
+                    "filesystem_key": project["filesystem_key"],
+                    "name": project["name"],
+                },
+                "source_saved_batch": {"id": saved["id"], "revision": saved["revision"]},
+                "batch": {
+                    "id": saved["id"],
+                    "filesystem_key": saved["filesystem_key"],
+                    "name": saved["name"],
+                    "description": saved["description"],
+                },
+                "prompt_versions": [
+                    {
+                        "id": prompt["prompt_version_id"],
+                        "prompt_id": prompt["prompt_id"],
+                        "version_number": prompt["version_number"],
+                        "name": prompt["name_snapshot"],
+                        "text": prompt["text"],
+                    }
+                ],
+                "variable_bindings": [binding],
+                "references": [],
+                "seed_intent": {
+                    "mode": "fixed",
+                    "values": [11],
+                    "random_seed_count": None,
+                },
+                "workflow_selection": {
+                    "workflow_id": workflow["workflow_id"],
+                    "workflow_version_id": workflow["id"],
+                    "workflow_name": workflow["workflow_name"],
+                    "workflow_version_number": workflow["version_number"],
+                    "workflow_profile_id": profile["workflow_profile_id"],
+                    "workflow_profile_version_id": profile["id"],
+                    "workflow_profile_name": profile["workflow_profile_name"],
+                    "workflow_profile_version_number": profile["version_number"],
+                    "workflow": workflow["workflow"],
+                    "workflow_profile": profile["profile"],
+                },
+            },
+        }
+
+        preview = http.post("/api/batches/preview", json=request)
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["job_count"] == 1
+        assert preview.json()["jobs"][0]["resolved_prompt"] == "Portrait of "
+        created = http.post("/api/runs", json=request)
+        assert created.status_code == 201, created.text
+        run_id = created.json()["run_id"]
+        discarded = http.post(f"/api/runs/{run_id}/discard")
+        assert discarded.status_code == 200, discarded.text
+        assert discarded.json()["status"] == "cancelled"
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as restarted:
+        reloaded_batch = restarted.get(f"/api/batches/{saved['id']}")
+        reloaded_run = restarted.get(f"/api/runs/{run_id}")
+
+    assert reloaded_batch.status_code == 200
+    assert reloaded_batch.json()["variable_bindings"] == [binding]
+    assert reloaded_run.status_code == 200
+    assert reloaded_run.json()["batch_snapshot"]["variable_bindings"] == [binding]
+    assert reloaded_run.json()["execution"]["status"] == "cancelled"
 
 
 def _wait_for_status(http: TestClient, run_id: str, expected: str) -> ExecutionResponse:
@@ -1372,7 +1551,7 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
     elif mismatch == "bindings":
         bindings = snapshot["variable_bindings"]
         assert isinstance(bindings, list)
-        bindings[0] = {**bindings[0], "selected_values": ["cat"]}
+        bindings[0] = {**bindings[0], "values": ["cat"]}
     elif mismatch == "references":
         references = snapshot["references"]
         assert isinstance(references, list)
@@ -1395,7 +1574,7 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
     assert response.json()["error"]["code"] == "invalid_request"
 
 
-def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v4(
+def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v5(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -1431,7 +1610,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v4
     assert created.status_code == 201
     run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert manifest["format_version"] == 4
+    assert manifest["format_version"] == 5
     expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
     assert manifest["batch_snapshot"] == expected_snapshot
     assert [job["seed"] for job in manifest["jobs"]] == [
@@ -1466,9 +1645,45 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v4
     assert mismatch.json()["error"]["code"] == "invalid_request"
 
 
+def test_run_api_requires_complete_snapshot_v2_and_rejects_malformed_durable_snapshot(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    request = _batch_request(())
+    expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        run_id = _create_run(http, request)
+        valid = http.get(f"/api/runs/{run_id}")
+        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        manifest_path = run_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        snapshot = manifest["batch_snapshot"]
+        assert isinstance(snapshot, dict)
+        snapshot.pop("workflow_selection")
+        manifest_path.write_text(
+            json.dumps(manifest, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n"
+        )
+
+        malformed = http.get(f"/api/runs/{run_id}")
+
+    assert valid.status_code == 200
+    assert valid.json()["batch_snapshot"] == expected_snapshot
+    assert valid.json()["batch_snapshot"] is not None
+    assert malformed.status_code == 500
+    assert malformed.json()["error"]["code"] == "invalid_run_data"
+
+
 def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     request = _batch_request(())
+    profile = request["workflow_profile"]
+    assert isinstance(profile, dict)
+    mappings = profile["mappings"]
+    assert isinstance(mappings, dict)
+    mappings.pop("reference_image")
+    _sync_batch_snapshot(request)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -1489,6 +1704,29 @@ def test_preview_and_run_creation_allow_no_reference_assets(tmp_path: Path) -> N
     manifest = json.loads((run_path / "manifest.json").read_text())
     assert all(job["reference_asset"] is None for job in manifest["jobs"])
     assert not (settings.projects_root / "project_key" / "assets").exists()
+
+
+def test_preview_rejects_selected_references_without_reference_image_mapping(
+    tmp_path: Path,
+) -> None:
+    request = _batch_request(("asset-1",))
+    profile = request["workflow_profile"]
+    assert isinstance(profile, dict)
+    mappings = profile["mappings"]
+    assert isinstance(mappings, dict)
+    mappings.pop("reference_image")
+    _sync_batch_snapshot(request)
+
+    with TestClient(
+        create_app(_settings(tmp_path), client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/batches/preview", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "code": "invalid_workflow_profile",
+        "message": "selected Reference Assets require a Workflow Profile reference_image mapping",
+    }
 
 
 def test_api_requires_plural_prompts_and_returns_count_order_and_provenance(tmp_path: Path) -> None:
@@ -1603,7 +1841,7 @@ def test_invalid_binding_returns_api_error(tmp_path: Path) -> None:
     request = _batch_request(("asset-1",))
     bindings = request["variable_bindings"]
     assert isinstance(bindings, list)
-    bindings[0]["selected_values"] = ["horse"]
+    bindings[0]["values"] = []
     _sync_batch_snapshot(request)
 
     with TestClient(
@@ -1642,32 +1880,277 @@ def test_run_creation_and_lookup_use_real_durable_store(tmp_path: Path) -> None:
     assert missing.json()["error"]["code"] == "run_not_found"
 
 
-def test_run_lookup_degrades_gracefully_for_manifest_v3_without_batch_intent(
+def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
-    request = _batch_request(())
+    asset_id = _import_asset(settings, tmp_path)
+    client = FakeComfyUIClient()
+    discarded_at = datetime(2026, 8, 31, 12, 30, tzinfo=UTC)
+    request = _batch_request((asset_id,))
+
+    with TestClient(
+        create_app(
+            settings,
+            client_factory=lambda _settings: client,
+            clock=lambda: discarded_at,
+        )
+    ) as http:
+        run_id = _create_run(http, request)
+        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        immutable_before = {
+            name: (run_path / name).read_bytes()
+            for name in (
+                "run.json",
+                "manifest.json",
+                "manifest.csv",
+                "workflow.json",
+                "workflow-profile.json",
+            )
+        }
+
+        discarded = http.post(f"/api/runs/{run_id}/discard")
+        repeated = http.post(f"/api/runs/{run_id}/discard")
+        lookup = http.get(f"/api/runs/{run_id}")
+        plan = http.get(f"/api/runs/{run_id}").json()["plan"]
+        execute = http.post(f"/api/runs/{run_id}/execute")
+
+        changed_request = copy.deepcopy(request)
+        changed_prompts = changed_request["prompt_versions"]
+        assert isinstance(changed_prompts, list)
+        assert isinstance(changed_prompts[0], dict)
+        changed_prompts[0]["text"] = "Changed {{animal}}"
+        _sync_batch_snapshot(changed_request)
+        next_run = http.post("/api/runs", json=changed_request)
+
+    expected: dict[str, object] = {
+        "run_id": run_id,
+        "status": "cancelled",
+        "started_at": None,
+        "completed_at": "2026-08-31T12:30:00Z",
+        "current_job_ordinal": None,
+        "error": None,
+        "diagnostics": ["discarded_before_start"],
+        "jobs": [
+            {
+                "ordinal": ordinal,
+                "status": "pending",
+                "prompt_id": None,
+                "started_at": None,
+                "completed_at": None,
+                "error": None,
+                "diagnostics": [],
+                "result_count": 0,
+            }
+            for ordinal in range(1, 5)
+        ],
+    }
+    assert discarded.status_code == 200
+    assert discarded.json() == expected
+    assert repeated.status_code == 200
+    assert repeated.json() == expected
+    assert lookup.status_code == 200
+    assert lookup.json()["execution"] == expected
+    assert plan["jobs"][0]["resolved_prompt"] == "Portrait of dog"
+    assert execute.status_code == 409
+    assert execute.json()["error"]["code"] == "execution_not_eligible"
+    assert next_run.status_code == 201
+    assert next_run.json()["run_id"] != run_id
+    assert client.submission_count == 0
+    assert run_path.is_dir()
+    assert json.loads((run_path / "execution.json").read_text())["format_version"] == 2
+    assert {name: (run_path / name).read_bytes() for name in immutable_before} == immutable_before
+
+
+def test_discard_accepts_persisted_exact_initial_state(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as http:
-        created = http.post("/api/runs", json=request)
-        assert created.status_code == 201
+        run_id = _create_run(http, _batch_request((asset_id,)))
         run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
-        manifest_path = run_path / "manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        manifest["format_version"] = 3
-        manifest.pop("batch_snapshot")
-        manifest_path.write_text(
-            json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
-        )
+        run = RunFilesystemStore(settings.projects_root).load_run(run_path)
+        initial = ExecutionStateStore(run_path).initialize(run)
 
-        lookup = http.get(f"/api/runs/{created.json()['run_id']}")
+        response = http.post(f"/api/runs/{run_id}/discard")
 
-    assert lookup.status_code == 200
-    assert lookup.json()["batch_snapshot"] is None
-    assert lookup.json()["plan"]["job_count"] == 4
-    assert lookup.json()["plan"]["jobs"][0]["resolved_prompt"] == "Portrait of dog"
+    assert initial.status is RunExecutionStatus.CREATED
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+
+
+def test_discard_persists_no_intermediate_created_state_when_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    def fail_write(*_args: object, **_kwargs: object) -> NoReturn:
+        raise ExecutionStateError("simulated discard write failure")
+
+    monkeypatch.setattr(ExecutionStateStore, "_atomic_replace", fail_write)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient()),
+        raise_server_exceptions=False,
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+
+        response = http.post(f"/api/runs/{run_id}/discard")
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "invalid_run_data"
+    assert not (run_path / "execution.json").exists()
+
+
+def test_discard_is_durable_across_application_restart(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        first = http.post(f"/api/runs/{run_id}/discard")
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as restarted:
+        lookup = restarted.get(f"/api/runs/{run_id}")
+        repeated = restarted.post(f"/api/runs/{run_id}/discard")
+
+    assert first.status_code == 200
+    assert lookup.json()["execution"] == first.json()
+    assert repeated.json() == first.json()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "running",
+        "preparing",
+        "submitting",
+        "submitted",
+        "submission_unknown",
+        "blocked",
+        "submission_metadata",
+        "result",
+    ],
+)
+def test_discard_rejects_nonpristine_or_submission_bearing_state(tmp_path: Path, case: str) -> None:
+    settings = _settings(tmp_path / case)
+    asset_id = _import_asset(settings, tmp_path, f"asset-{case}")
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run = RunFilesystemStore(settings.projects_root).load_run(run_path)
+        store = ExecutionStateStore(run_path)
+        state = store.initialize(run)
+        job = state.jobs[0]
+
+        if case == "running":
+            state = replace(state, status=RunExecutionStatus.RUNNING, started_at="started")
+        elif case == "preparing":
+            state = replace(
+                state,
+                status=RunExecutionStatus.RUNNING,
+                started_at="started",
+                jobs=(replace(job, status=JobExecutionStatus.PREPARING), *state.jobs[1:]),
+            )
+        elif case == "submitting":
+            state = replace(
+                state,
+                status=RunExecutionStatus.RUNNING,
+                started_at="started",
+                jobs=(replace(job, status=JobExecutionStatus.SUBMITTING), *state.jobs[1:]),
+            )
+        elif case in {"submitted", "blocked"}:
+            state = replace(
+                state,
+                status=(
+                    RunExecutionStatus.BLOCKED if case == "blocked" else RunExecutionStatus.RUNNING
+                ),
+                started_at="started",
+                jobs=(
+                    replace(
+                        job,
+                        status=JobExecutionStatus.SUBMITTED,
+                        submission_disposition=SubmissionDisposition.ACCEPTED,
+                        prompt_id="prompt-1",
+                    ),
+                    *state.jobs[1:],
+                ),
+            )
+        elif case == "submission_unknown":
+            state = replace(
+                state,
+                status=RunExecutionStatus.BLOCKED,
+                started_at="started",
+                jobs=(
+                    replace(
+                        job,
+                        status=JobExecutionStatus.SUBMISSION_UNKNOWN,
+                        submission_disposition=SubmissionDisposition.UNKNOWN,
+                    ),
+                    *state.jobs[1:],
+                ),
+            )
+        elif case == "submission_metadata":
+            state = replace(
+                state,
+                jobs=(
+                    replace(
+                        job,
+                        client_id="submission-client",
+                        submission_disposition=SubmissionDisposition.ACCEPTED,
+                        submission_http_status=200,
+                        submission_response={"prompt_id": "prompt-1"},
+                        prompt_id="prompt-1",
+                    ),
+                    *state.jobs[1:],
+                ),
+            )
+        else:
+            result = store.persist_result(
+                job_id=job.job_id,
+                job_ordinal=job.ordinal,
+                artifact_ordinal=1,
+                downloaded=DownloadedArtifact(
+                    remote=RemoteOutputArtifact("41", "images", "result.png", "", "output"),
+                    content=PNG_A,
+                    content_type="image/png",
+                    sha256=hashlib.sha256(PNG_A).hexdigest(),
+                ),
+            )
+            state = replace(
+                state,
+                jobs=(replace(job, results=(result,)), *state.jobs[1:]),
+            )
+        store.state_path.unlink()
+        store.save(run, state)
+
+        response = http.post(f"/api/runs/{run_id}/discard")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "run_discard_not_eligible"
+    assert store.read_for_query(run) == state
+    if case == "result":
+        assert (run.path / state.jobs[0].results[0].local_path).read_bytes() == PNG_A
+
+
+def test_discard_missing_run_uses_existing_not_found_error(tmp_path: Path) -> None:
+    with TestClient(
+        create_app(_settings(tmp_path), client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/runs/missing/discard")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "run_not_found"
 
 
 def test_repeated_multi_prompt_run_creation_freezes_identical_plans_with_new_identities(
@@ -1923,6 +2406,7 @@ def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path)
         result_path.unlink()
         result_path.symlink_to(secret)
         symlinked_result = http.get(f"/api/runs/{run_id}/results/1/1")
+        discard = http.post(f"/api/runs/{run_id}/discard")
 
     assert execution.current_job_ordinal is None
     assert [job.status for job in execution.jobs] == ["succeeded"] * 4
@@ -1955,6 +2439,8 @@ def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path)
     assert b"must not be served" not in symlinked_result.content
     assert restart.status_code == 409
     assert restart.json()["error"]["code"] == "execution_not_eligible"
+    assert discard.status_code == 409
+    assert discard.json()["error"]["code"] == "run_discard_not_eligible"
     assert {name: (run_path / name).read_bytes() for name in immutable_before} == immutable_before
 
 
@@ -2046,12 +2532,15 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         assert started.wait(timeout=1)
 
         second = http.post(f"/api/runs/{run_id}/execute")
+        discard = http.post(f"/api/runs/{run_id}/discard")
         other_run_id = _create_run(http, _batch_request((asset_id,)))
         other_run = http.post(f"/api/runs/{other_run_id}/execute")
         execution = http.get(f"/api/runs/{run_id}/execution")
 
         assert second.status_code == 409
         assert second.json()["error"]["code"] == "execution_already_active"
+        assert discard.status_code == 409
+        assert discard.json()["error"]["code"] == "run_discard_not_eligible"
         assert other_run.status_code == 409
         assert other_run.json()["error"]["code"] == "execution_already_active"
         assert execution.json()["status"] == "running"
@@ -2060,6 +2549,55 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
     assert client.closed
     published = RunFilesystemStore(settings.projects_root).load_run(run_path)
     assert ExecutionStateStore(run_path).load(published).status is RunExecutionStatus.RUNNING
+
+
+def test_execution_start_and_discard_race_has_exactly_one_winner(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    async def blocking_executor(
+        *,
+        run: PublishedRun,
+        client: ExecutionClient,
+        config: ExecutionConfig,
+    ) -> RunExecutionState:
+        assert client is not None
+        assert config.history_timeout_seconds == 1
+        store = ExecutionStateStore(run.path)
+        state = store.initialize(run)
+        running = replace(state, status=RunExecutionStatus.RUNNING, started_at="started")
+        store.save(run, running)
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    with TestClient(
+        create_app(
+            settings,
+            client_factory=lambda _settings: FakeComfyUIClient(),
+            executor=blocking_executor,
+        )
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        barrier = threading.Barrier(2)
+
+        def request(path: str) -> Response:
+            barrier.wait(timeout=2)
+            return cast(Response, http.post(path))
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            start_future = executor.submit(request, f"/api/runs/{run_id}/execute")
+            discard_future = executor.submit(request, f"/api/runs/{run_id}/discard")
+            started = start_future.result(timeout=5)
+            discarded = discard_future.result(timeout=5)
+
+        if started.status_code == 202:
+            assert discarded.status_code == 409
+            assert discarded.json()["error"]["code"] == "run_discard_not_eligible"
+        else:
+            assert started.status_code == 409
+            assert started.json()["error"]["code"] == "execution_not_eligible"
+            assert discarded.status_code == 200
+            assert discarded.json()["status"] == "cancelled"
 
 
 def test_execution_rejects_unsafe_outputs_before_starting_task(tmp_path: Path) -> None:
@@ -2096,6 +2634,7 @@ def test_executor_failure_and_unknown_submission_are_durable_states(tmp_path: Pa
         assert http.post(f"/api/runs/{failed_run}/execute").status_code == 202
         failed = _wait_for_status(http, failed_run, "failed")
         failed_restart = http.post(f"/api/runs/{failed_run}/execute")
+        failed_discard = http.post(f"/api/runs/{failed_run}/discard")
 
     blocked_settings = _settings(tmp_path / "blocked")
     blocked_asset = _import_asset(blocked_settings, tmp_path, "blocked-asset")
@@ -2115,4 +2654,6 @@ def test_executor_failure_and_unknown_submission_are_durable_states(tmp_path: Pa
     assert blocked.jobs[0].status == "submission_unknown"
     assert blocked.jobs[0].prompt_id is None
     assert failed_restart.status_code == 409
+    assert failed_discard.status_code == 409
+    assert failed_discard.json()["error"]["code"] == "run_discard_not_eligible"
     assert blocked_restart.status_code == 409

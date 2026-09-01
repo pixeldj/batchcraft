@@ -125,17 +125,16 @@ export function ResultDetailsDialog({
 }
 
 function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResponse }) {
-  const snapshotPrompt = run.batch_snapshot?.prompt_versions.find(
+  const snapshotPrompt = run.batch_snapshot.prompt_versions.find(
     (prompt) => prompt.id === job.prompt_version_id,
   );
-  const legacyPrompt = run.prompt_versions.find((prompt) => prompt.id === job.prompt_version_id);
-  const selection = run.batch_snapshot?.workflow_selection;
+  const selection = run.batch_snapshot.workflow_selection;
 
   return (
     <section className="result-generation-details" aria-label="Generation provenance">
       <dl>
         <Detail label="Prompt" value={formatVersioned(
-          snapshotPrompt?.name ?? legacyPrompt?.name ?? job.prompt_version_name,
+          snapshotPrompt?.name ?? job.prompt_version_name,
           snapshotPrompt?.version_number ?? null,
         )} />
         <div className="result-details-wide">
@@ -164,15 +163,17 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
         />
         <Detail
           label="Workflow"
-          value={run.batch_snapshot
-            ? formatVersioned(selection?.workflow_name ?? "Frozen Workflow snapshot", selection?.workflow_version_number ?? null)
-            : "Unavailable for this legacy Run"}
+          value={formatVersioned(
+            selection.workflow_name ?? "Frozen Workflow snapshot",
+            selection.workflow_version_number,
+          )}
         />
         <Detail
           label="Profile"
-          value={run.batch_snapshot
-            ? formatVersioned(selection?.workflow_profile_name ?? "Frozen Profile snapshot", selection?.workflow_profile_version_number ?? null)
-            : "Unavailable for this legacy Run"}
+          value={formatVersioned(
+            selection.workflow_profile_name ?? "Frozen Profile snapshot",
+            selection.workflow_profile_version_number,
+          )}
         />
         <Detail label="Editable seed intent" value={seedIntent(run)} />
       </dl>
@@ -225,8 +226,7 @@ function formatVersioned(name: string, version: number | null): string {
 }
 
 function seedIntent(run: RunResponse): string {
-  const intent = run.batch_snapshot?.seed_intent;
-  if (!intent) return "Unavailable for this legacy Run";
+  const intent = run.batch_snapshot.seed_intent;
   if (intent.mode === "random") return `Random · ${intent.random_seed_count} requested`;
   if (intent.mode === "fixed") return `Fixed · ${intent.values[0]}`;
   return `Explicit · ${intent.values.join(", ")}`;

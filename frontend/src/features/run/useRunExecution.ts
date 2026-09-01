@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError, type BatchcraftApi } from "../../api/client";
+import { ApiError, type BatchcraftApi, type RunDiscardApi } from "../../api/client";
 import type {
   ExecutionResponse,
   ResultResponse,
@@ -9,10 +9,10 @@ import type {
 } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
 
-const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked"]);
+const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked", "cancelled"]);
 
 export function useRunExecution(
-  api: BatchcraftApi,
+  api: BatchcraftApi & RunDiscardApi,
   run: RunCreatedResponse | null,
   pollIntervalMs: number,
   initialExecution: ExecutionResponse | null,
@@ -23,11 +23,13 @@ export function useRunExecution(
   const [execution, setExecution] = useState<ExecutionResponse | null>(initialExecution);
   const [results, setResults] = useState<ResultResponse[]>(initialResults);
   const [starting, setStarting] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [polling, setPolling] = useState(initialExecution?.status === "running");
   const [refreshingResults, setRefreshingResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultsError, setResultsError] = useState<string | null>(initialResultsError);
-  const reconcilingStart = useRef(false);
+  const [createdUnavailable, setCreatedUnavailable] = useState(false);
+  const reconciliation = useRef<"start" | "discard" | null>(null);
   const createdReconciliationPolls = useRef(0);
 
   useEffect(() => {
@@ -54,16 +56,21 @@ export function useRunExecution(
         }
         setExecution(nextExecution);
 
-        if (reconcilingStart.current && nextExecution.status === "created") {
+        if (reconciliation.current && nextExecution.status === "created") {
           createdReconciliationPolls.current += 1;
           if (createdReconciliationPolls.current >= 3) {
-            setError("The Run remains created. The Start request was not observed; it is safe to start again.");
-            reconcilingStart.current = false;
+            const reconciliationKind = reconciliation.current;
+            setCreatedUnavailable(reconciliationKind === "discard");
+            setError(reconciliationKind === "start"
+              ? "The Run remains created. The Start request was not observed; it is safe to start again."
+              : "This Run's persisted execution state is not eligible to start or discard.");
+            reconciliation.current = null;
             setPolling(false);
             return;
           }
         } else {
-          reconcilingStart.current = false;
+          reconciliation.current = null;
+          setCreatedUnavailable(false);
           setError(null);
         }
 
@@ -105,11 +112,12 @@ export function useRunExecution(
   }, [api, pollIntervalMs, polling, run]);
 
   async function start() {
-    if (!run || starting || polling) {
+    if (!run || starting || polling || discarding || createdUnavailable || (execution?.status ?? "created") !== "created") {
       return;
     }
     setStarting(true);
-    reconcilingStart.current = false;
+    reconciliation.current = null;
+    setCreatedUnavailable(false);
     setError(null);
     try {
       await api.startRun(run.run_id);
@@ -118,13 +126,62 @@ export function useRunExecution(
       if (caught instanceof ApiError && caught.code === "network_error") {
         setError(`${errorMessage(caught)}. The Start response was ambiguous; checking durable state.`);
         createdReconciliationPolls.current = 0;
-        reconcilingStart.current = true;
+        reconciliation.current = "start";
         setPolling(true);
+      } else if (caught instanceof ApiError && caught.code === "execution_not_eligible") {
+        const message = errorMessage(caught);
+        try {
+          const nextExecution = await api.getExecution(run.run_id);
+          setExecution(nextExecution);
+          setCreatedUnavailable(nextExecution.status === "created");
+          setPolling(nextExecution.status === "running");
+          setError(nextExecution.status === "created" ? message : null);
+        } catch {
+          setError(message);
+        }
       } else {
         setError(errorMessage(caught));
       }
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function discard() {
+    if (!run || starting || polling || discarding || createdUnavailable || (execution?.status ?? "created") !== "created") {
+      return;
+    }
+    setDiscarding(true);
+    reconciliation.current = null;
+    setCreatedUnavailable(false);
+    setError(null);
+    try {
+      const nextExecution = await api.discardRun(run.run_id);
+      setExecution(nextExecution);
+      onStatusChange(nextExecution.status);
+      setPolling(false);
+    } catch (caught) {
+      const message = errorMessage(caught);
+      const discardRejected = caught instanceof ApiError && caught.code === "run_discard_not_eligible";
+      try {
+        const nextExecution = await api.getExecution(run.run_id);
+        setExecution(nextExecution);
+        onStatusChange(nextExecution.status);
+        if (discardRejected && nextExecution.status === "created") {
+          createdReconciliationPolls.current = 0;
+          reconciliation.current = "discard";
+          setPolling(true);
+          setError(`${message}. Checking durable state.`);
+        } else {
+          setCreatedUnavailable(false);
+          setPolling(nextExecution.status === "running");
+          setError(nextExecution.status === "created" ? message : null);
+        }
+      } catch {
+        setError(message);
+      }
+    } finally {
+      setDiscarding(false);
     }
   }
 
@@ -148,11 +205,14 @@ export function useRunExecution(
     execution,
     results,
     starting,
+    discarding,
     polling,
     refreshingResults,
     error,
     resultsError,
+    createdUnavailable,
     start,
+    discard,
     refreshResults,
   };
 }

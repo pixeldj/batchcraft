@@ -135,6 +135,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .repeater-card { padding: 0.9rem; background: rgba(255, 255, 255, 0.38); border: 1px solid var(--line); }
 .repeater-title { justify-content: space-between; margin-bottom: 0.75rem; }
 .repeater-actions { display: flex; gap: 0.8rem; align-items: center; }
+.variable-binding-fields { display: grid; grid-template-columns: minmax(10rem, 0.75fr) minmax(0, 2fr); gap: 0.9rem; align-items: start; }
+.variable-values { display: grid; gap: 0.55rem; }
+.checkbox-row { display: flex; gap: 0.5rem; align-items: center; color: var(--ink); font-size: 0.76rem; }
+.checkbox-row input { width: auto; min-height: 0; }
 .prompt-card .prompt-editor { min-height: 7rem; margin-top: 0.9rem; }
 pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; overflow-x: auto; background: var(--paper-raised); border-left: 3px solid var(--accent); white-space: pre-wrap; overflow-wrap: anywhere; }
 .inline-control { gap: 0.6rem; align-items: flex-end; }
@@ -159,6 +163,20 @@ pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; over
 .workflow-link-status.linked { border-color: var(--accent); }
 .workflow-link-status.integrity { border-color: var(--danger); background: var(--danger-bg); }
 .workflow-actions { margin-top: 0.9rem; flex-wrap: wrap; }
+.workflow-profile-dialog { width: min(68rem, calc(100vw - 2rem)); }
+.workflow-profile-mapper { display: grid; gap: 0.9rem; }
+.mapping-intro { margin: 0; max-width: 58rem; color: var(--muted); font-size: 0.76rem; line-height: 1.5; }
+.workflow-mapping-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+.workflow-mapping-card { margin: 0; padding: 0.9rem; background: rgba(255, 255, 255, 0.34); border: 1px solid var(--line); }
+.workflow-mapping-card legend { margin: 0; padding: 0 0.35rem; }
+.workflow-mapping-card.invalid { background: var(--danger-bg); border-color: var(--danger); }
+.workflow-mapping-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 0.65rem; }
+.mapping-current-value { margin: 0.7rem 0 0; color: var(--muted); font-size: 0.7rem; }
+.mapping-current-value code { color: var(--ink); overflow-wrap: anywhere; }
+.mapping-error { margin: 0.7rem 0 0; color: var(--danger); font-size: 0.72rem; line-height: 1.4; }
+.raw-profile-json { color: var(--muted); font-size: 0.72rem; }
+.raw-profile-json summary { cursor: pointer; }
+.raw-profile-json .json-editor { min-height: 12rem; margin-top: 0.55rem; background: #efede4; }
 
 .asset-picker { display: grid; gap: 0.9rem; }
 .asset-picker-summary strong { font-size: 0.82rem; }
@@ -209,6 +227,10 @@ dialog > .button-link:last-child { margin-top: 1rem; }
 dialog form { display: grid; gap: 0.9rem; }
 .consistency-error { margin: 0 0 1.25rem; padding: 0.9rem 1rem; color: #6e201b; background: var(--danger-bg); border: 2px solid var(--danger); box-shadow: 3px 3px 0 rgba(163, 58, 50, 0.22); font-weight: 700; line-height: 1.45; }
 .preview-run-note { margin: 1rem 0 0; padding: 0.65rem 0.8rem; color: var(--accent); background: rgba(36, 92, 69, 0.08); border-left: 4px solid var(--accent); font-size: 0.78rem; }
+.frozen-run-note { margin-top: 1rem; padding: 0.7rem 0.85rem; color: var(--ink); background: rgba(36, 92, 69, 0.08); border-left: 4px solid var(--accent); font-size: 0.82rem; }
+.frozen-run-note p { margin: 0; }
+.frozen-run-note p + p { margin-top: 0.3rem; color: var(--muted); }
+.run-action-buttons { display: flex; gap: 0.7rem; }
 
 .count-block { display: flex; gap: 0.45rem; align-items: baseline; }
 .count-block strong { color: var(--accent); font: 500 2.8rem Georgia, serif; }
@@ -269,7 +291,6 @@ progress::-webkit-progress-value { background: var(--accent); }
 .run-plan-overview dl div, .run-plan-bindings div { min-width: 0; }
 .run-plan-overview dt, .run-plan-bindings dt, .run-plan-job dt { color: var(--muted); font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; }
 .run-plan-overview dd, .run-plan-bindings dd, .run-plan-job dd { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
-.run-plan-compatibility { margin: 1rem 0 0; padding-top: 0.8rem; border-top: 1px solid var(--line); font-size: 0.76rem; }
 .run-plan-section { margin-top: 1.4rem; }
 .run-plan-section h3 { padding-bottom: 0.45rem; border-bottom: 1px solid var(--line); }
 .run-plan-prompts { display: grid; gap: 0.6rem; padding-left: 1.5rem; }
@@ -368,13 +389,17 @@ progress::-webkit-progress-value { background: var(--accent); }
   .comfy-status { max-width: 50%; }
   main { width: min(100% - 1.2rem, 1440px); }
   .three-columns, .two-columns, .run-metadata, .workflow-library-grid { grid-template-columns: 1fr; }
+  .workflow-mapping-list, .workflow-mapping-fields { grid-template-columns: 1fr; }
   .action-row { align-items: flex-end; flex-direction: column; }
   .action-row .button-primary { width: 100%; }
+  .run-action-buttons { width: 100%; }
+  .run-action-buttons > button { flex: 1; }
   textarea.json-editor { min-height: 15rem; }
   .asset-picker-toolbar { align-items: flex-start; flex-direction: column; }
   .asset-picker-actions { width: 100%; justify-content: flex-start; }
   .repeater-title { align-items: flex-start; gap: 0.75rem; }
   .repeater-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .variable-binding-fields { grid-template-columns: 1fr; }
   .seed-fieldset .section-summary-actions { transform: none; }
   .run-summary { grid-template-columns: 1fr; }
   .run-summary > button { grid-column: 1; grid-row: auto; width: 100%; margin-top: 0.6rem; }
@@ -407,6 +432,7 @@ progress::-webkit-progress-value { background: var(--accent); }
   .repeater-card, .run-metadata div, .run-summary, .run-plan-overview { background: rgba(255, 255, 255, 0.025); }
   th { background: #29302c; }
   .operation-error, .run-error { color: #ffb7ae; }
+  .raw-profile-json .json-editor { background: #1a211d; }
   .warning-box { color: #ffe09a; }
   .blocked-note { color: #d8b9f6; background: #39294a; }
   .artifact-placeholder { background: repeating-linear-gradient(-45deg, #2b332e, #2b332e 10px, #242b27 10px, #242b27 20px); }

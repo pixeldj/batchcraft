@@ -8,6 +8,7 @@ import { ConfigurationSection } from "./ConfigurationSection";
 import {
   MAX_RANDOM_SEED_COUNT,
   newVariableBinding,
+  normalizedBindingValues,
   type BatchFormState,
   type VariableBindingForm,
 } from "./form";
@@ -87,9 +88,7 @@ export function BatchEditor({
   const variablesComplete = form.variableBindings.length > 0 && form.variableBindings.every(
     (binding) => Boolean(
       binding.placeholder.trim()
-      && binding.variableListId.trim()
-      && binding.values.trim()
-      && (binding.mode === "fixed" ? binding.fixedValue.trim() : binding.selectedValues.trim()),
+      && normalizedBindingValues(binding.values).length > 0,
     ),
   );
   const seedsComplete = form.seedMode === "random"
@@ -215,6 +214,7 @@ export function BatchEditor({
                 <button
                   className="button-link danger"
                   type="button"
+                  aria-label={`Remove Binding ${index + 1}`}
                   onClick={() =>
                     update(
                       "variableBindings",
@@ -222,68 +222,20 @@ export function BatchEditor({
                     )
                   }
                 >
-                  Remove
+                  Remove binding
                 </button>
               </div>
-              <div className="field-grid three-columns">
+              <div className="variable-binding-fields">
                 <Field
                   id={`placeholder-${binding.key}`}
                   label="Placeholder"
                   value={binding.placeholder}
                   onChange={(event) => updateBinding(binding.key, { placeholder: event.target.value })}
                 />
-                <Field
-                  id={`list-id-${binding.key}`}
-                  label="Variable List ID"
-                  value={binding.variableListId}
-                  onChange={(event) =>
-                    updateBinding(binding.key, { variableListId: event.target.value })
-                  }
+                <BindingValuesEditor
+                  binding={binding}
+                  onChange={(values) => updateBinding(binding.key, { values })}
                 />
-                <label className="field" htmlFor={`mode-${binding.key}`}>
-                  <span className="field-label">Binding mode</span>
-                  <select
-                    id={`mode-${binding.key}`}
-                    value={binding.mode}
-                    onChange={(event) =>
-                      updateBinding(binding.key, { mode: event.target.value as "all" | "fixed" })
-                    }
-                  >
-                    <option value="all">All selected values</option>
-                    <option value="fixed">Fixed value</option>
-                  </select>
-                </label>
-              </div>
-              <div className="field-grid two-columns">
-                <TextAreaField
-                  id={`values-${binding.key}`}
-                  className="short-list"
-                  label="Variable List values"
-                  hint="One per line; commas inside a value are preserved"
-                  value={binding.values}
-                  onChange={(event) => updateBinding(binding.key, { values: event.target.value })}
-                />
-                {binding.mode === "all" ? (
-                  <TextAreaField
-                    id={`selected-${binding.key}`}
-                    className="short-list"
-                    label="Selected values"
-                    hint="Order controls deterministic expansion"
-                    value={binding.selectedValues}
-                    onChange={(event) =>
-                      updateBinding(binding.key, { selectedValues: event.target.value })
-                    }
-                  />
-                ) : (
-                  <Field
-                    id={`fixed-${binding.key}`}
-                    label="Fixed value"
-                    value={binding.fixedValue}
-                    onChange={(event) =>
-                      updateBinding(binding.key, { fixedValue: event.target.value })
-                    }
-                  />
-                )}
               </div>
             </div>
           ))}
@@ -389,13 +341,14 @@ function variableSummary(bindings: VariableBindingForm[]) {
   return (
     <div className="configuration-summary-list">
       {bindings.map((binding) => {
-        const values = binding.mode === "fixed"
-          ? binding.fixedValue.trim()
-          : splitLines(binding.selectedValues).join(", ");
+        const values = normalizedBindingValues(binding.values);
+        const complete = Boolean(binding.placeholder.trim()) && values.length > 0;
         return (
           <span key={binding.key}>
-            <strong>{binding.placeholder.trim() || "Incomplete binding"}</strong>
-            {values ? `: ${values}` : ""}
+            <strong>{complete ? binding.placeholder.trim() : "Incomplete binding"}</strong>
+            {values.length
+              ? `: ${values.length} ${values.length === 1 ? "value" : "values"} · ${values.map(displayBindingValue).join(", ")}`
+              : ": no values"}
           </span>
         );
       })}
@@ -403,13 +356,103 @@ function variableSummary(bindings: VariableBindingForm[]) {
   );
 }
 
+function BindingValuesEditor({
+  binding,
+  onChange,
+}: {
+  binding: VariableBindingForm;
+  onChange(values: string[]): void;
+}) {
+  const [draft, setDraft] = useState(() => binding.values
+    .filter((value) => value.trim().length > 0)
+    .join("\n"));
+  const [emptyPosition, setEmptyPosition] = useState(() => {
+    const index = binding.values.indexOf("");
+    return index < 0
+      ? 0
+      : binding.values.slice(0, index).filter((value) => value.trim().length > 0).length;
+  });
+
+  const includesEmpty = binding.values.includes("");
+
+  function changeValues(text: string) {
+    const previousValues = draftBindingValues(draft);
+    const visibleValues = draftBindingValues(text);
+    const nextEmptyPosition = remapGap(previousValues, visibleValues, emptyPosition);
+    const values = [...visibleValues];
+    if (includesEmpty) {
+      values.splice(nextEmptyPosition, 0, "");
+    }
+    setDraft(text);
+    setEmptyPosition(nextEmptyPosition);
+    onChange(values);
+  }
+
+  function changeIncludeEmpty(checked: boolean) {
+    const values = draftBindingValues(draft);
+    if (checked) {
+      values.splice(Math.min(emptyPosition, values.length), 0, "");
+    }
+    onChange(values);
+  }
+
+  return (
+    <div className="variable-values">
+      <TextAreaField
+        id={`values-${binding.key}`}
+        className="short-list"
+        aria-label="Values"
+        label="Values"
+        hint="One value per non-empty line"
+        value={draft}
+        onChange={(event) => changeValues(event.target.value)}
+      />
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={includesEmpty}
+          onChange={(event) => changeIncludeEmpty(event.target.checked)}
+        />
+        <span>Include empty value</span>
+      </label>
+    </div>
+  );
+}
+
+function draftBindingValues(draft: string): string[] {
+  return draft.split(/\r?\n/).filter((value) => value.trim().length > 0);
+}
+
+function remapGap(previous: string[], next: string[], gap: number): number {
+  let prefix = 0;
+  while (prefix < previous.length && prefix < next.length && previous[prefix] === next[prefix]) {
+    prefix += 1;
+  }
+  if (gap <= prefix) return gap;
+
+  let suffix = 0;
+  while (
+    suffix < previous.length - prefix
+    && suffix < next.length - prefix
+    && previous[previous.length - suffix - 1] === next[next.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+  const previousSuffixStart = previous.length - suffix;
+  if (gap >= previousSuffixStart) {
+    return Math.max(0, Math.min(next.length, gap + next.length - previous.length));
+  }
+  const changedLength = next.length - prefix - suffix;
+  return prefix + Math.min(gap - prefix, changedLength);
+}
+
+function displayBindingValue(value: string): string {
+  return value === "" ? "(empty)" : value;
+}
+
 function seedSummary(form: BatchFormState): string {
   if (form.seedMode === "random") return `Random × ${form.randomSeedCount.trim() || "?"}`;
   if (form.seedMode === "fixed") return `Fixed · ${form.seedValues.trim() || "not set"}`;
   const seeds = form.seedValues.split(/[\n,]/).map((seed) => seed.trim()).filter(Boolean);
   return `Explicit · ${seeds.length} ${seeds.length === 1 ? "seed" : "seeds"}`;
-}
-
-function splitLines(value: string): string[] {
-  return value.split("\n").map((item) => item.trim()).filter(Boolean);
 }

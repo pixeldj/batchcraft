@@ -1,13 +1,9 @@
-import type { BatchRequest, JsonObject } from "../../api/types";
+import type { BatchRequest, EditableBatchSnapshot, JsonObject } from "../../api/types";
 
 export interface VariableBindingForm {
   key: number;
   placeholder: string;
-  variableListId: string;
-  values: string;
-  mode: "all" | "fixed";
-  selectedValues: string;
-  fixedValue: string;
+  values: string[];
 }
 
 export interface PromptForm {
@@ -64,11 +60,7 @@ export function newVariableBinding(): VariableBindingForm {
   return {
     key: nextVariableBindingKey++,
     placeholder: "variable",
-    variableListId: "variable-list-1",
-    values: "value one\nvalue two",
-    mode: "all",
-    selectedValues: "value one\nvalue two",
-    fixedValue: "value one",
+    values: ["value one", "value two"],
   };
 }
 
@@ -89,10 +81,7 @@ export function newPrompt(promptNumber = 1): PromptForm {
 export function initialBatchForm(): BatchFormState {
   const binding = newVariableBinding();
   binding.placeholder = "subject";
-  binding.variableListId = "subjects";
-  binding.values = "cat\ndog";
-  binding.selectedValues = "cat\ndog";
-  binding.fixedValue = "cat";
+  binding.values = ["cat", "dog"];
 
   return {
     projectId: "",
@@ -152,6 +141,32 @@ export function buildBatchRequest(
   form: BatchFormState,
   context: BatchRequestContext = { sourceSavedBatch: null },
 ): BatchRequest {
+  const batchSnapshot = buildEditableBatchSnapshot(form, context);
+  const seedInput = form.seedMode === "random"
+    ? { mode: "explicit" as const, values: generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)) }
+    : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
+
+  return {
+    project: batchSnapshot.project,
+    batch: {
+      id: batchSnapshot.batch.id,
+      filesystem_key: batchSnapshot.batch.filesystem_key,
+      name: batchSnapshot.batch.name,
+    },
+    prompt_versions: batchSnapshot.prompt_versions.map(({ id, name, text }) => ({ id, name, text })),
+    variable_bindings: batchSnapshot.variable_bindings,
+    references: batchSnapshot.references,
+    seeds: seedInput,
+    workflow: batchSnapshot.workflow_selection.workflow,
+    workflow_profile: batchSnapshot.workflow_selection.workflow_profile,
+    batch_snapshot: batchSnapshot,
+  };
+}
+
+export function buildEditableBatchSnapshot(
+  form: BatchFormState,
+  context: BatchRequestContext = { sourceSavedBatch: null },
+): EditableBatchSnapshot {
   if (form.prompts.length === 0) {
     throw new FormBuildError("prompts", "Add at least one PromptVersion.");
   }
@@ -186,10 +201,6 @@ export function buildBatchRequest(
   }
   const references = form.referenceAssetIds;
 
-  const seedInput = form.seedMode === "random"
-    ? { mode: "explicit" as const, values: generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)) }
-    : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
-
   const project = {
     id: required(form.projectId, "project", "Project ID"),
     filesystem_key: required(form.projectFilesystemKey, "project", "Project filesystem key"),
@@ -207,13 +218,7 @@ export function buildBatchRequest(
   }));
   const variableBindings = form.variableBindings.map((binding) => ({
     placeholder: required(binding.placeholder, "variables", "Placeholder"),
-    variable_list: {
-      id: required(binding.variableListId, "variables", "Variable List ID"),
-      values: splitListValues(binding.values),
-    },
-    mode: binding.mode,
-    selected_values: binding.mode === "all" ? splitListValues(binding.selectedValues) : [],
-    fixed_value: binding.mode === "fixed" ? binding.fixedValue : null,
+    values: normalizedBindingValues(binding.values),
   }));
   const referenceRequests = references.map((assetId) => ({ asset_id: assetId }));
   const workflow = parseJsonObject(form.workflowJson, "workflow", "Workflow");
@@ -230,46 +235,40 @@ export function buildBatchRequest(
     }
     : {
       mode: form.seedMode,
-      values: seedInput.values,
+      values: parseSeedValues(form.seedValues),
       random_seed_count: null,
     };
 
   return {
+    snapshot_version: 2,
     project,
-    batch,
-    prompt_versions: promptVersions,
+    source_saved_batch: context.sourceSavedBatch,
+    batch: { ...batch, description: form.batchDescription.trim() || null },
+    prompt_versions: promptVersions.map((prompt, index) => ({
+      ...prompt,
+      prompt_id: form.prompts[index].promptId,
+      version_number: form.prompts[index].versionNumber,
+    })),
     variable_bindings: variableBindings,
     references: referenceRequests,
-    seeds: seedInput,
-    workflow,
-    workflow_profile: workflowProfile,
-    batch_snapshot: {
-      snapshot_version: 1,
-      project,
-      source_saved_batch: context.sourceSavedBatch,
-      batch: { ...batch, description: form.batchDescription.trim() || null },
-      prompt_versions: promptVersions.map((prompt, index) => ({
-        ...prompt,
-        prompt_id: form.prompts[index].promptId,
-        version_number: form.prompts[index].versionNumber,
-      })),
-      variable_bindings: variableBindings,
-      references: referenceRequests,
-      seed_intent: seedIntent,
-      workflow_selection: {
-        workflow_id: form.workflowId,
-        workflow_version_id: form.workflowVersionId,
-        workflow_name: form.workflowName.trim() || null,
-        workflow_version_number: form.workflowVersionNumber,
-        workflow_profile_id: form.workflowProfileId,
-        workflow_profile_version_id: form.workflowProfileVersionId,
-        workflow_profile_name: form.workflowProfileName.trim() || null,
-        workflow_profile_version_number: form.workflowProfileVersionNumber,
-        workflow,
-        workflow_profile: workflowProfile,
-      },
+    seed_intent: seedIntent,
+    workflow_selection: {
+      workflow_id: form.workflowId,
+      workflow_version_id: form.workflowVersionId,
+      workflow_name: form.workflowName.trim() || null,
+      workflow_version_number: form.workflowVersionNumber,
+      workflow_profile_id: form.workflowProfileId,
+      workflow_profile_version_id: form.workflowProfileVersionId,
+      workflow_profile_name: form.workflowProfileName.trim() || null,
+      workflow_profile_version_number: form.workflowProfileVersionNumber,
+      workflow,
+      workflow_profile: workflowProfile,
     },
   };
+}
+
+export function editableBatchSnapshotIdentity(snapshot: EditableBatchSnapshot): string {
+  return JSON.stringify(canonicalize(snapshot));
 }
 
 export function generateRandomSeeds(
@@ -317,11 +316,12 @@ function parseSeedValues(value: string): number[] {
   return seeds;
 }
 
-function splitListValues(value: string): string[] {
-  return value
-    .split(/\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+export function normalizedBindingValues(values: string[]): string[] {
+  return values.flatMap((item) => {
+    if (item === "") return [""];
+    const trimmed = item.trim();
+    return trimmed ? [trimmed] : [];
+  });
 }
 
 function splitSeeds(value: string): string[] {
@@ -351,4 +351,18 @@ function parseJsonObject(value: string, field: string, label: string): JsonObjec
     throw new FormBuildError(field, `${label} JSON must have an object at its root.`);
   }
   return parsed as JsonObject;
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalize(item)]),
+    );
+  }
+  return value;
 }

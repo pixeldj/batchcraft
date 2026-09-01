@@ -2,6 +2,7 @@
 
 * Status: Accepted
 * Date: 2026-08-28
+* Superseded in part by: ADR 0004 for pre-release persistence compatibility and Variable Binding source-revision semantics.
 
 ## Context
 

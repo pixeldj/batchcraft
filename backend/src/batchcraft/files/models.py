@@ -53,7 +53,7 @@ class PublishedRun:
     path: Path
     project: ProjectIdentity
     batch: BatchIdentity
-    batch_snapshot: dict[str, object] | None
+    batch_snapshot: dict[str, object]
     compiled_plan: CompiledRunPlan
     jobs: tuple[PersistedJob, ...]
     workflow: dict[str, object]

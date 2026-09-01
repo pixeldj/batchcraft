@@ -34,6 +34,18 @@ Before substantial work, agents must read:
 
 Agents should plan before implementing non-trivial features and should avoid broad opportunistic refactors while completing a focused task.
 
+## Pre-release Persistence Policy
+
+batchcraft has no released persistence compatibility contract yet. Unless a task explicitly requires
+one, support only the current SQLite schema, Run manifest and snapshot, execution state, API payload,
+and browser-session formats. Unsupported persisted data fails closed; an unsupported or malformed
+browser session starts from clean working state. The application must not silently delete or rewrite
+local databases or Run directories.
+
+Keep explicit format versions, the SQLite migration runner, and current-version rejection tests. When
+the baseline changes, update the version, operational documentation, and current-format tests together.
+Add a compatibility path only for a concrete released-data or external-consumer requirement.
+
 ## Repository Shape
 
 The production Python package now lives under `backend/`. The remaining source layout is intentionally not frozen before its implementation requires it:
@@ -131,17 +143,17 @@ This boundary intentionally excludes scheduling, retries, mutable execution-stat
 
 Completed.
 
-Production code under `backend/src/batchcraft/execution/` persists versioned mutable execution state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory.
+Production code under `backend/src/batchcraft/execution/` persists execution format v2 mutable state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory. Execution v1 is intentionally unsupported; there is no v1 loader.
 
 This layer excludes global Run selection, concurrent execution, priorities, retries, automatic recovery, SQLite, FastAPI, React, and result review UI. Normal tests use a deterministic ComfyUI fake.
 
 ### Phase 2: first vertical application slice
 
-Completed for the backend application boundary. Without React or SQLite, the current API checks ComfyUI status, accepts a complete ephemeral Batch snapshot, previews deterministic Jobs, creates a frozen Run, starts queue-depth-1 execution, exposes execution polling, and serves persisted Result metadata and files.
+Completed for the backend application boundary. Without React or SQLite, the current API checks ComfyUI status, accepts a complete ephemeral Batch snapshot, previews deterministic Jobs, creates a frozen Run, durably discards a pristine unstarted Run, starts queue-depth-1 execution, exposes execution polling, and serves persisted Result metadata and files.
 
 Do not build the full prompt library, advanced search, elaborate ratings, multi-server scheduling, or other roadmap features before this path works reliably.
 
-The slice accepts an ephemeral complete Batch request for preview and Run creation. It does not define another durable Batch format before SQLite. Run lookup narrowly scans complete published Run directories, and long-running execution uses retained in-process tasks while `execution.json` remains authoritative.
+The slice accepts an ephemeral complete Batch request for preview and Run creation. It does not define another durable Batch format before SQLite. Run lookup narrowly scans complete published Run directories, and long-running execution uses retained in-process tasks while `execution.json` remains authoritative. Start and discard tests exercise the shared registry lock, exact pristine-state eligibility, restart durability, terminal cancellation, and preservation of frozen Run files.
 
 ### Phase 2.1: first React workflow
 
@@ -157,8 +169,8 @@ Batch editing includes an ordered repeatable list of immutable PromptVersion sna
 Project's persistent Prompt library supplies new selections, version history, immutable version
 creation, and mutable logical Prompt names. Snapshot additions, removals, version changes, and ordering
 changes invalidate Preview; logical renames and exact library reconciliation do not. The browser
-session schema stores both library linkage and the exact snapshot without UI keys, and migrates older
-drafts to detached snapshots.
+session schema is v9 and stores both library linkage and the exact snapshot without UI keys. Other
+session versions are unsupported and start from clean working state.
 
 This phase does not add durable editable Batch persistence, Reference Collections, asset deletion,
 Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
@@ -184,17 +196,20 @@ canonical, hashed versions. Each ProfileVersion targets one exact WorkflowVersio
 Run-compatible profile snapshot. Preview and Run creation still receive complete effective snapshots;
 library IDs never replace frozen Run provenance.
 
-The frontend session schema is version 8. It replaces manual Batch identity fields with the Saved
-Batch selector, preserves exact Workflow/Profile snapshots alongside optional library linkage, and
-stores the `batch_snapshot` required by Preview and Run creation. The selector lists active SQLite
+The frontend session schema is version 9. It uses the Saved Batch selector, preserves exact
+Workflow/Profile snapshots alongside optional library linkage, stores canonical Variable Bindings,
+and stores the `batch_snapshot` required by Preview and Run creation. The selector lists active SQLite
 Saved Batches keyed to the verified Project; selection loads the Batch's stored prompt, variable,
 reference, seed, and workflow intent. Manual Batch identity fields are no longer editable. Deliberately selecting an
 incompatible WorkflowVersion clears the effective Profile snapshot and blocks Preview until a
-compatible ProfileVersion is selected. The logical Profile remains selected and visible. The editor
-can copy mappings from its latest active prior version to create a new immutable version for the
-selected WorkflowVersion; validation failures open the copied mappings for repair. Switching back
-restores an existing compatible version. Missing or legacy library records detach without rewriting
-their exact snapshots.
+compatible ProfileVersion is selected. The logical Profile remains selected and visible. The visual
+Profile mapper derives nodes and inputs from the selected immutable API-format WorkflowVersion, keeps
+the generated Profile JSON as its source of truth, and exposes raw JSON read-only. It can prefill the
+latest active prior mappings for review, retain valid targets, and mark missing targets before creating
+a new immutable version under the same logical Profile. Switching back restores an existing compatible
+version. Unavailable or integrity-mismatched library records detach without rewriting their exact
+snapshots. The optional `reference_image` mapping changes neither the SQLite schema nor the stored JSON
+shape, so this feature requires no database reset or migration.
 
 ## Python Conventions
 
@@ -233,9 +248,13 @@ uv run batchcraft-api
 
 The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATCHCRAFT_SERVER_PORT` override it. See `docs/API.md` for all application settings and endpoint behavior.
 
-SQL migrations live under `backend/src/batchcraft/db/migrations/`. Add only the next contiguous
-`NNNN_name.sql` file; applied migration bytes are immutable because startup verifies their SHA-256
-checksums. Test migration behavior against file-backed temporary databases rather than only `:memory:`.
+SQL migrations live under `backend/src/batchcraft/db/migrations/`. The current pre-release schema is
+one consolidated `0001_initial.sql` baseline. The migration runner, ordered discovery, checksums, and
+transactional application remain the forward-change mechanism. An existing development database with
+unsupported migration history fails startup and must be reset manually; the application never erases
+it. Once preserving a baseline is required, add only the next contiguous `NNNN_name.sql` file and do
+not change applied migration bytes. Test migration behavior against file-backed temporary databases
+rather than only `:memory:`.
 
 ## Frontend Conventions
 
@@ -277,8 +296,9 @@ their exact stored identity, name snapshot, and text; known cross-Project select
 
 Workflow and Workflow Profile selectors follow the same snapshot rule. Logical metadata changes do
 not invalidate Preview, while selecting another immutable version does. Linked selections must belong
-to the verified Project and target the exact selected WorkflowVersion. Detached legacy snapshots
-remain usable after backend workflow/Profile validation.
+to the verified Project and target the exact selected WorkflowVersion. Detached snapshots with
+unavailable or integrity-mismatched library linkage remain usable after backend workflow/Profile
+validation.
 
 From `frontend/`, install and run the development server:
 
@@ -362,7 +382,8 @@ High-value unit-test areas include:
 - deterministic value ordering;
 - Cartesian expansion;
 - complete dimension ordering with the rightmost dimension varying fastest;
-- fixed/all variable binding modes;
+- zero/one/multiple canonical variable binding semantics;
+- current binding round-trips and removed-field rejection;
 - Job count calculations;
 - deterministic Job ordinals;
 - seed policies;
@@ -382,17 +403,19 @@ Tests for ComfyUI submission must treat ambiguous outcomes separately from defin
 
 ## Durable Format Changes
 
-Changes to JSON/CSV Run artifacts are compatibility-sensitive.
+Changes to JSON/CSV Run artifacts are version-sensitive.
 
 When changing a durable format:
 
 1. update `docs/FILE_FORMAT.md`;
 2. update explicit format/schema versions when appropriate;
-3. preserve old Run readability whenever practical;
-4. add import/round-trip tests;
-5. document migration behavior if required.
+3. add current import/round-trip and unsupported-version tests;
+4. state whether a compatibility path is explicitly required;
+5. document any manual reset or migration behavior.
 
-Do not infer durable format versions solely from the absence of fields.
+During pre-release development, old Run readability is not the default requirement. Unsupported data
+must fail closed without automatic deletion or rewriting. Do not infer durable format versions solely
+from the absence of fields.
 
 ## Architecture Changes
 

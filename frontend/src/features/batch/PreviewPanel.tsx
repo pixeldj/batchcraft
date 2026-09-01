@@ -109,7 +109,7 @@ export function PreviewPanel({
       <div className="action-row">
         <p>
           {creationBlockedMessage ??
-            (currentRun && currentRunStatus && ["succeeded", "failed", "blocked"].includes(currentRunStatus)
+            (currentRun && currentRunStatus && ["succeeded", "failed", "blocked", "cancelled"].includes(currentRunStatus)
               ? "Create a new immutable Run from this inspected Preview. The previous Run is unchanged."
               : "Run creation submits the exact Batch specification used for this Preview.")}
         </p>

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiError, type BatchcraftApi } from "../../api/client";
+import type { BatchcraftApi } from "../../api/client";
 import type { CreateWorkflowResponse, LibraryWorkflowProfileVersion, LibraryWorkflowVersion, ProjectWorkflow, ProjectWorkflowProfile, WorkflowsResponse } from "../../api/types";
 import { initialBatchForm, type BatchFormState } from "./form";
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
@@ -168,14 +168,14 @@ describe("WorkflowLibraryEditor", () => {
   });
 
   it("copies the latest active mappings into a new version under the same logical Profile", async () => {
-    const v1 = workflowVersion();
-    const v2 = workflowVersion({ id: "workflow-v2", version_number: 2 });
-    const source = profileVersion({ profile: workflowProfileSnapshot({ prompt: "copied" }) });
+    const v1 = workflowVersion({ workflow: visualWorkflow() });
+    const v2 = workflowVersion({ id: "workflow-v2", version_number: 2, workflow: visualWorkflow() });
+    const source = profileVersion({ profile: visualProfileSnapshot() });
     const created = profileVersion({
       id: "profile-v2",
       workflow_version_id: v2.id,
       version_number: 2,
-      profile: workflowProfileSnapshot({ prompt: "copied" }),
+      profile: visualProfileSnapshot(),
     });
     const logicalProfile = workflowProfile("profile-1", "Mapping", null);
     const createProfile = vi.fn();
@@ -193,10 +193,14 @@ describe("WorkflowLibraryEditor", () => {
       return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
     }
 
-    fireEvent.click(await screen.findByRole("button", { name: "Create version for this Workflow version" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review mappings for this Workflow version" }));
+    const dialog = await screen.findByRole("dialog", { name: "New ProfileVersion" });
+    expect(within(dialog).getByLabelText("Prompt node")).toHaveValue("34");
+    expect(api.createWorkflowProfileVersion).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "New ProfileVersion" }));
     await waitFor(() => expect(api.createWorkflowProfileVersion).toHaveBeenCalledWith(
       logicalProfile.id,
-      { workflow_version_id: v2.id, mappings: { prompt: "copied" } },
+      { workflow_version_id: v2.id, mappings: visualProfileSnapshot().mappings, note: null },
     ));
 
     expect(createProfile).not.toHaveBeenCalled();
@@ -206,18 +210,16 @@ describe("WorkflowLibraryEditor", () => {
   });
 
   it("opens a prepopulated repair editor when copied mappings are incompatible", async () => {
-    const v2 = workflowVersion({ id: "workflow-v2", version_number: 2 });
-    const source = profileVersion({ profile: workflowProfileSnapshot({ seed: "old-input" }) });
+    const v2 = workflowVersion({ id: "workflow-v2", version_number: 2, workflow: visualWorkflow("35") });
+    const source = profileVersion({ profile: visualProfileSnapshot("34") });
     const repaired = profileVersion({
       id: "profile-v2",
       workflow_version_id: v2.id,
       version_number: 2,
-      profile: workflowProfileSnapshot({ seed: "new-input" }),
+      profile: visualProfileSnapshot("35"),
     });
     const logicalProfile = workflowProfile("profile-1", "Mapping", null);
-    const createVersion = vi.fn()
-      .mockRejectedValueOnce(new ApiError("missing input 'old-input'", "invalid_library_input", 422))
-      .mockResolvedValueOnce(repaired);
+    const createVersion = vi.fn(async () => repaired);
     const api = makeApi({
       listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", v2)] })),
       listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [v2] })),
@@ -231,19 +233,17 @@ describe("WorkflowLibraryEditor", () => {
       return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
     }
 
-    fireEvent.click(await screen.findByRole("button", { name: "Create version for this Workflow version" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review mappings for this Workflow version" }));
     const dialog = await screen.findByRole("dialog", { name: "New ProfileVersion" });
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("missing input 'old-input'");
-    const editor = within(dialog).getByLabelText("Workflow Profile JSON");
-    expect(editor).toHaveValue(JSON.stringify(source.profile, null, 2));
-    fireEvent.change(editor, {
-      target: { value: JSON.stringify(workflowProfileSnapshot({ seed: "new-input" })) },
-    });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Node 34 is missing from this WorkflowVersion.");
+    expect(within(dialog).getByLabelText("Seed node")).toHaveValue("7");
+    fireEvent.change(within(dialog).getByLabelText("Prompt node"), { target: { value: "35" } });
+    fireEvent.change(within(dialog).getByLabelText("Prompt input"), { target: { value: "text" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "New ProfileVersion" }));
 
     await waitFor(() => expect(createVersion).toHaveBeenLastCalledWith(
       logicalProfile.id,
-      { workflow_version_id: v2.id, mappings: { seed: "new-input" }, note: null },
+      { workflow_version_id: v2.id, mappings: visualProfileSnapshot("35").mappings, note: null },
     ));
     expect(current.workflowProfileVersionId).toBe(repaired.id);
   });
@@ -345,6 +345,22 @@ function profileVersion(overrides: Partial<LibraryWorkflowProfileVersion> = {}):
 
 function workflowProfileSnapshot(mappings: Record<string, unknown>) {
   return { id: "profile-1", name: "Mapping", mappings };
+}
+
+function visualWorkflow(promptNodeId = "34") {
+  return {
+    "7": { class_type: "KSampler", inputs: { model: ["2", 0], seed: 1 } },
+    [promptNodeId]: { class_type: "CLIPTextEncode", inputs: { clip: ["3", 0], text: "base prompt" } },
+    "41": { class_type: "SaveImage", inputs: { filename_prefix: "output", images: ["8", 0] } },
+  };
+}
+
+function visualProfileSnapshot(promptNodeId = "34") {
+  return workflowProfileSnapshot({
+    prompt: { node_id: promptNodeId, input_name: "text", value_type: "string" },
+    seed: { node_id: "7", input_name: "seed", value_type: "integer" },
+    output_prefix: { node_id: "41", input_name: "filename_prefix", value_type: "string" },
+  });
 }
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {

@@ -19,8 +19,8 @@ export function RunPlanDialog({ run, onClose }: Props) {
       </div>
 
       <section className="run-plan-overview" aria-labelledby="run-plan-overview-title">
-        <h3 id="run-plan-overview-title">{snapshot?.batch.name ?? run.batch_name}</h3>
-        {snapshot?.batch.description ? <p>{snapshot.batch.description}</p> : null}
+        <h3 id="run-plan-overview-title">{snapshot.batch.name}</h3>
+        {snapshot.batch.description ? <p>{snapshot.batch.description}</p> : null}
         <dl>
           <div><dt>Total Jobs</dt><dd>{run.plan.job_count}</dd></div>
           <div><dt>References</dt><dd>{referenceSummary(run)}</dd></div>
@@ -29,18 +29,13 @@ export function RunPlanDialog({ run, onClose }: Props) {
           <div><dt>Workflow</dt><dd>{workflowSummary(snapshot)}</dd></div>
           <div><dt>Profile</dt><dd>{profileSummary(snapshot)}</dd></div>
         </dl>
-        {!snapshot ? (
-          <p className="run-plan-compatibility">
-            Editable Batch intent is unavailable for this older Run. Its concrete frozen Jobs remain inspectable.
-          </p>
-        ) : null}
       </section>
 
       <section className="run-plan-section" aria-labelledby="run-plan-prompts-title">
         <h3 id="run-plan-prompts-title">PromptVersions</h3>
         <ol className="run-plan-prompts">
           {run.prompt_versions.map((prompt, index) => {
-            const intent = snapshot?.prompt_versions[index];
+            const intent = snapshot.prompt_versions[index];
             return (
               <li key={prompt.id}>
                 <strong>{prompt.name}</strong>{intent?.version_number ? ` · v${intent.version_number}` : ""}
@@ -56,7 +51,7 @@ export function RunPlanDialog({ run, onClose }: Props) {
 
       <section className="run-plan-section" aria-labelledby="run-plan-variables-title">
         <h3 id="run-plan-variables-title">Variable bindings</h3>
-        {snapshot?.variable_bindings.length ? (
+        {snapshot.variable_bindings.length ? (
           <dl className="run-plan-bindings">
             {snapshot.variable_bindings.map((binding) => (
               <div key={binding.placeholder}>
@@ -111,9 +106,8 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
   );
 }
 
-function seedIntentSummary(snapshot: EditableBatchSnapshot | null): string {
-  const intent = snapshot?.seed_intent;
-  if (!intent) return "Unavailable";
+function seedIntentSummary(snapshot: EditableBatchSnapshot): string {
+  const intent = snapshot.seed_intent;
   if (intent.mode === "random") return `Random · ${intent.random_seed_count} requested`;
   if (intent.mode === "fixed") return `Fixed · ${intent.values[0]}`;
   return `Explicit · ${intent.values.join(", ")}`;
@@ -133,19 +127,20 @@ function referenceSummary(run: RunResponse): string {
   return references.size ? [...references.values()].join(", ") : "Base workflow";
 }
 
-function workflowSummary(snapshot: EditableBatchSnapshot | null): string {
-  const selection = snapshot?.workflow_selection;
-  if (!selection?.workflow_name) return "Frozen Workflow snapshot · version unavailable";
+function workflowSummary(snapshot: EditableBatchSnapshot): string {
+  const selection = snapshot.workflow_selection;
+  if (!selection.workflow_name) return "Frozen Workflow snapshot · version unavailable";
   return `${selection.workflow_name}${selection.workflow_version_number ? ` · v${selection.workflow_version_number}` : ""}`;
 }
 
-function profileSummary(snapshot: EditableBatchSnapshot | null): string {
-  const selection = snapshot?.workflow_selection;
-  if (!selection?.workflow_profile_name) return "Frozen Profile snapshot · version unavailable";
+function profileSummary(snapshot: EditableBatchSnapshot): string {
+  const selection = snapshot.workflow_selection;
+  if (!selection.workflow_profile_name) return "Frozen Profile snapshot · version unavailable";
   return `${selection.workflow_profile_name}${selection.workflow_profile_version_number ? ` · v${selection.workflow_profile_version_number}` : ""}`;
 }
 
 function bindingValues(binding: EditableBatchSnapshot["variable_bindings"][number]): string {
-  if (binding.mode === "fixed") return `Fixed · ${binding.fixed_value ?? "Unavailable"}`;
-  return `All values · ${binding.selected_values.join(", ")}`;
+  const count = binding.values.length;
+  const values = binding.values.map((value) => value === "" ? "(empty)" : value);
+  return `${count} ${count === 1 ? "value" : "values"} · ${values.join(", ")}`;
 }

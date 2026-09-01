@@ -54,10 +54,11 @@ Node input:     text
 Type:           string
 ```
 
-The Workflow Profile becomes the stable mapping used by Jobs. The current profile exposes one mapped
-prompt input. Multi-prompt batching selects among ordered PromptVersion templates, but each compiled
-Job still injects exactly one resolved prompt string into this mapping. Support for multiple workflow
-prompt or text slots is deferred.
+The Workflow Profile becomes the stable mapping used by Jobs. The current contract requires mapped
+prompt, seed, and output-prefix inputs and permits one optional reference-image input. Multi-prompt
+batching selects among ordered PromptVersion templates, but each compiled Job still injects exactly
+one resolved prompt string into the prompt mapping. Support for multiple workflow prompt or text slots
+is deferred.
 
 ## Workflow Snapshotting
 
@@ -72,8 +73,8 @@ the Project's content-addressed asset store. A Job may have no selected Referenc
 
 Before execution, the ComfyUI integration uploads any required input asset to the remote ComfyUI
 instance and then rewrites the workflow input to the uploaded ComfyUI-visible filename/path expected
-by the node. When a Job has no Reference Asset, execution performs no upload and leaves the mapped
-input's base workflow value unchanged.
+by the node. When a Job has no Reference Asset, execution performs no upload and leaves the base
+workflow unchanged whether or not the optional `reference_image` mapping exists.
 
 The Job manifest retains the batchcraft asset identity and hash rather than treating the temporary ComfyUI filename as authoritative provenance. A Run does not duplicate each input asset by default, and the application cannot physically remove Project asset content referenced by a historical Run.
 
@@ -114,7 +115,8 @@ The scheduler must reconcile an ambiguous outcome through available prompt IDs, 
 
 The first production integration boundary lives under `backend/src/batchcraft/comfyui/`. It is deliberately narrower than execution orchestration and provides:
 
-- pure Workflow Profile mapping for prompt, reference image, seed, and output prefix values;
+- pure Workflow Profile mapping for required prompt, seed, and output prefix values plus an optional
+  reference image value;
 - async system information and input upload operations;
 - one-shot prompt submission with typed accepted, rejected, and unknown outcomes;
 - prompt-correlated WebSocket event observation;
@@ -122,9 +124,10 @@ The first production integration boundary lives under `backend/src/batchcraft/co
 - artifact download with preserved remote filename, subfolder, and type metadata.
 
 Workflow preparation deep-copies the imported API workflow and validates the snapshotted node ID,
-input name, and value type for every required friendly mapping. It rejects unresolved placeholders
-before transport. The reference-image mapping remains required and validated even when its per-Job
-value is absent; only assignment to that mapped input is skipped.
+input name, and value type for every friendly mapping. Mappings must target scalar workflow inputs,
+not ComfyUI connection arrays. It rejects unresolved placeholders before transport. A
+`reference_image` mapping is optional when a Job has no Reference Asset; in that case the base
+workflow remains unchanged. A Job with a selected Reference Asset requires the mapping.
 
 The adapter does not own scheduling, retries, mutable Job state, Run filesystem updates, or result naming. The execution layer opens the WebSocket before submission, stores the accepted prompt ID in mutable execution state, observes WebSocket events concurrently as advisory signals, and begins authoritative history reconciliation immediately.
 

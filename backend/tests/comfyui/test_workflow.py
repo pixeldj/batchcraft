@@ -7,6 +7,7 @@ from batchcraft.comfyui import (
     WorkflowPreparationError,
     WorkflowPreparationValues,
     prepare_workflow,
+    validate_workflow_profile,
 )
 
 
@@ -88,11 +89,13 @@ def test_prepare_workflow_maps_values_without_mutating_snapshots() -> None:
 
 def test_prepare_workflow_without_reference_preserves_base_image_value() -> None:
     workflow = _workflow()
+    profile = _profile()
+    cast(dict[str, object], profile["mappings"]).pop("reference_image")
     values = _values()
 
     prepared = prepare_workflow(
         workflow,
-        _profile(),
+        profile,
         WorkflowPreparationValues(
             prompt=values.prompt,
             reference_image=None,
@@ -106,7 +109,7 @@ def test_prepare_workflow_without_reference_preserves_base_image_value() -> None
     assert workflow["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
 
 
-def test_prepare_workflow_without_reference_still_validates_reference_mapping() -> None:
+def test_prepare_workflow_without_reference_still_validates_present_reference_mapping() -> None:
     profile = _profile()
     profile["mappings"]["reference_image"]["input_name"] = "missing"  # type: ignore[index]
     values = _values()
@@ -191,7 +194,16 @@ def test_prepare_workflow_rejects_non_api_workflow_node() -> None:
         prepare_workflow(workflow, _profile(), _values())
 
 
-def test_prepare_workflow_requires_exactly_the_four_supported_mappings() -> None:
+@pytest.mark.parametrize("missing", ("prompt", "seed", "output_prefix"))
+def test_validate_workflow_profile_requires_core_mappings(missing: str) -> None:
+    profile = _profile()
+    cast(dict[str, object], profile["mappings"]).pop(missing)
+
+    with pytest.raises(WorkflowPreparationError, match="required mappings"):
+        validate_workflow_profile(_workflow(), profile)
+
+
+def test_validate_workflow_profile_rejects_unknown_mapping_names() -> None:
     profile = _profile()
     profile["mappings"]["extra"] = {  # type: ignore[index]
         "node_id": "7",
@@ -199,5 +211,27 @@ def test_prepare_workflow_requires_exactly_the_four_supported_mappings() -> None
         "value_type": "integer",
     }
 
-    with pytest.raises(WorkflowPreparationError, match="must contain exactly"):
+    with pytest.raises(WorkflowPreparationError, match="unsupported mapping names.*'extra'"):
+        validate_workflow_profile(_workflow(), profile)
+
+
+def test_prepare_workflow_requires_reference_mapping_for_selected_reference_assets() -> None:
+    profile = _profile()
+    cast(dict[str, object], profile["mappings"]).pop("reference_image")
+
+    with pytest.raises(
+        WorkflowPreparationError,
+        match="selected Reference Assets.*reference_image mapping",
+    ):
         prepare_workflow(_workflow(), profile, _values())
+
+
+def test_validate_workflow_profile_rejects_connection_valued_mapping_target() -> None:
+    profile = _profile()
+    profile["mappings"]["prompt"]["input_name"] = "clip"  # type: ignore[index]
+
+    with pytest.raises(
+        WorkflowPreparationError,
+        match="prompt.*connected input 'clip'.*literal input values",
+    ):
+        validate_workflow_profile(_workflow(), profile)
