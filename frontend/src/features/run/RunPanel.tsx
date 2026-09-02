@@ -29,6 +29,7 @@ export function RunPanel({
   onDiscard,
 }: Props) {
   const [planOpen, setPlanOpen] = useState(false);
+  const [planRestoreTarget, setPlanRestoreTarget] = useState<HTMLElement | null>(null);
 
   if (!run) {
     return (
@@ -81,7 +82,14 @@ export function RunPanel({
           </p>
         ) : null}
         {frozenRun ? (
-          <button className="button-secondary compact" type="button" onClick={() => setPlanOpen(true)}>
+          <button
+            className="button-secondary compact"
+            type="button"
+            onClick={(event) => {
+              setPlanRestoreTarget(event.currentTarget);
+              setPlanOpen(true);
+            }}
+          >
             View Run Plan
           </button>
         ) : null}
@@ -156,7 +164,11 @@ export function RunPanel({
       ) : null}
       {polling ? <p className="polling-note" aria-live="polite">Watching execution state...</p> : null}
       {frozenRun && planOpen ? (
-        <RunPlanDialog run={frozenRun} onClose={() => setPlanOpen(false)} />
+        <RunPlanDialog
+          run={frozenRun}
+          restoreTarget={planRestoreTarget}
+          onClose={() => setPlanOpen(false)}
+        />
       ) : null}
     </section>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import type { ResultResponse } from "../../api/types";
+import { OverlayPortal } from "../../components/OverlayPortal";
 
 export interface LightboxItem {
   key: string;
@@ -59,10 +60,11 @@ export function ResultLightbox({
   }
 
   return (
-    <div className="lightbox-backdrop" onClick={onClose}>
+    <OverlayPortal level="lightbox" onBackdropClick={onClose}>
       <dialog
         className="result-lightbox"
         open
+        aria-modal="true"
         aria-label="Result image preview"
         onCancel={onClose}
         onKeyDown={handleKeyDown}
@@ -93,13 +95,25 @@ export function ResultLightbox({
           >
             ⓘ Details
           </button>
+          <a
+            className="button-secondary compact lightbox-original-link"
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open full image in new tab"
+            title="Open full image in new tab"
+          >
+            Open original
+          </a>
           <button className="button-link" type="button" onClick={onClose} ref={closeRef}>
             Close
           </button>
         </div>
-        <img className="result-lightbox-image" src={item.url} alt={item.alt} />
+        <div className="lightbox-image-stage">
+          <img className="result-lightbox-image" src={item.url} alt={item.alt} />
+        </div>
         <p className="lightbox-caption">{item.label}</p>
       </dialog>
-    </div>
+    </OverlayPortal>
   );
 }

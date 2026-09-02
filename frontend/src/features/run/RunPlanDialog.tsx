@@ -1,24 +1,52 @@
+import { useEffect, useRef, type KeyboardEvent } from "react";
+
 import type { EditableBatchSnapshot, RunPlanJobResponse, RunResponse } from "../../api/types";
+import { OverlayPortal } from "../../components/OverlayPortal";
 import { parameterRangeCount, profileParameters } from "../batch/form";
 
 interface Props {
   run: RunResponse;
+  restoreTarget: HTMLElement | null;
   onClose(): void;
 }
 
-export function RunPlanDialog({ run, onClose }: Props) {
+export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
   const snapshot = run.batch_snapshot;
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const restoreTargetRef = useRef<HTMLElement | null>(restoreTarget);
+
+  useEffect(() => {
+    closeRef.current?.focus();
+    const restoreTarget = restoreTargetRef.current;
+    return () => restoreTarget?.focus();
+  }, []);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    }
+  }
 
   return (
-    <dialog className="run-plan-dialog" open aria-labelledby="run-plan-title" onCancel={onClose}>
+    <OverlayPortal level="run-plan">
+      <dialog
+        className="run-plan-dialog"
+        open
+        aria-modal="true"
+        aria-labelledby="run-plan-title"
+        onCancel={onClose}
+        onKeyDown={handleKeyDown}
+      >
       <div className="run-plan-heading">
         <div>
           <p className="run-plan-kicker">Frozen experiment specification</p>
           <h2 id="run-plan-title">Run {run.run_number} Plan</h2>
         </div>
-        <button className="button-link" type="button" onClick={onClose}>Close</button>
+        <button className="button-link" type="button" onClick={onClose} ref={closeRef}>Close</button>
       </div>
 
+      <div className="run-plan-content">
       <section className="run-plan-overview" aria-labelledby="run-plan-overview-title">
         <h3 id="run-plan-overview-title">{snapshot.batch.name}</h3>
         {snapshot.batch.description ? <p>{snapshot.batch.description}</p> : null}
@@ -129,7 +157,9 @@ export function RunPlanDialog({ run, onClose }: Props) {
           {run.plan.jobs.map((job) => <RunPlanJob key={job.ordinal} job={job} />)}
         </div>
       </section>
-    </dialog>
+      </div>
+      </dialog>
+    </OverlayPortal>
   );
 }
 

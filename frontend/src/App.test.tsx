@@ -1055,9 +1055,13 @@ describe("Run creation", () => {
     expect(screen.getByText(/2 prompts · 2 variable combinations · 1 image slot · 2 alternatives · 2 seeds/))
       .toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Edited afterward" } });
-    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    const runPlanTrigger = screen.getByRole("button", { name: "View Run Plan" });
+    fireEvent.click(runPlanTrigger);
 
     const dialog = screen.getByRole("dialog", { name: "Run 27 Plan" });
+    const overlay = dialog.closest("[data-overlay-level='run-plan']");
+    expect(overlay?.parentElement).toBe(document.body);
+    expect(dialog.querySelector(".run-plan-content")).not.toBeNull();
     expect(within(dialog).getByRole("heading", { name: "First experiment" })).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Edited afterward");
     expect([...dialog.querySelectorAll(".run-plan-prompts > li > strong")].map((node) => node.textContent))
@@ -1078,6 +1082,10 @@ describe("Run creation", () => {
     expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("Editorial cat")).toBeInTheDocument();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Run 27 Plan" })).not.toBeInTheDocument();
+    expect(runPlanTrigger).toHaveFocus();
   });
 
   it("shows exact snapshot divergence and clears it after an exact revert", async () => {
@@ -1724,11 +1732,24 @@ describe("Result lightbox", () => {
     await createRunAndStart();
 
     const lightbox = await openFirstImage();
+    const lightboxOverlay = lightbox.closest("[data-overlay-level='lightbox']");
+    expect(lightboxOverlay?.parentElement).toBe(document.body);
     expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
     expect(within(lightbox).getByText("Job 001")).toBeInTheDocument();
+    const fullImage = within(lightbox).getByRole("link", { name: "Open full image in new tab" });
+    expect(fullImage).toHaveAttribute("href", "http://api.test/api/result/1/1");
+    expect(fullImage).toHaveAttribute("target", "_blank");
+    expect(fullImage).toHaveAttribute("rel", "noopener noreferrer");
+    const previewImage = within(lightbox).getByAltText("Result 1 from Job 1: first.png");
+    expect(previewImage.parentElement).toHaveClass("lightbox-image-stage");
+    expect(previewImage).toHaveClass("result-lightbox-image");
 
     fireEvent.click(within(lightbox).getByRole("button", { name: "ⓘ Details" }));
     const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    const detailsOverlay = details.closest("[data-overlay-level='details']");
+    expect(detailsOverlay?.parentElement).toBe(document.body);
+    expect(lightboxOverlay).toHaveClass("overlay-layer-lightbox");
+    expect(detailsOverlay).toHaveClass("overlay-layer-details");
     expect(within(details).getByText("A studio portrait of cat.", { exact: false })).toBeInTheDocument();
     expect(within(details).getByText("Enabled")).toBeInTheDocument();
     expect(within(details).getByText("false")).toBeInTheDocument();

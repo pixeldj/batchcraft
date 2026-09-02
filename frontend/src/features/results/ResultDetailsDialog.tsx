@@ -6,6 +6,7 @@ import type {
   RunPlanJobResponse,
   RunResponse,
 } from "../../api/types";
+import { OverlayPortal } from "../../components/OverlayPortal";
 import { errorMessage } from "../../utils/errors";
 
 interface Props {
@@ -73,10 +74,11 @@ export function ResultDetailsDialog({
   }
 
   return (
-    <div className="result-details-backdrop" onClick={onClose}>
+    <OverlayPortal level="details" onBackdropClick={onClose}>
       <dialog
         className="result-details-dialog"
         open
+        aria-modal="true"
         aria-labelledby="result-details-title"
         onCancel={onClose}
         onKeyDown={handleKeyDown}
@@ -120,7 +122,7 @@ export function ResultDetailsDialog({
         ) : null}
         {run ? <TechnicalDetails run={run} result={result} execution={execution} /> : null}
       </dialog>
-    </div>
+    </OverlayPortal>
   );
 }
 
