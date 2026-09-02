@@ -131,6 +131,7 @@ export interface RunDiscardApi {
 
 export interface RunCancellationApi {
   cancelRun(runId: string): Promise<RunCancellationRequestedResponse>;
+  detachRun(runId: string): Promise<RunCancellationRequestedResponse>;
 }
 
 export class BatchcraftApiClient implements BatchcraftApi {
@@ -370,6 +371,13 @@ export class BatchcraftApiClient implements BatchcraftApi {
     return this.request(
       `/api/runs/${encodeURIComponent(runId)}/cancel`,
       this.jsonRequest({ mode: "after_current_job" }, "POST"),
+    );
+  }
+
+  detachRun(runId: string): Promise<RunCancellationRequestedResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/cancel`,
+      this.jsonRequest({ mode: "detach" }, "POST"),
     );
   }
 

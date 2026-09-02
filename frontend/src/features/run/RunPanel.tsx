@@ -10,6 +10,8 @@ interface Props {
   discarding: boolean;
   requestingStop: boolean;
   reconcilingStop: boolean;
+  requestingDetach: boolean;
+  reconcilingDetach: boolean;
   polling: boolean;
   error: string | null;
   createdUnavailable: boolean;
@@ -17,6 +19,7 @@ interface Props {
   onStart(): void;
   onDiscard(): void;
   onStopAfterCurrentJob(): void;
+  onDetachFromCurrentJob(): void;
 }
 
 export function RunPanel({
@@ -26,6 +29,8 @@ export function RunPanel({
   discarding,
   requestingStop,
   reconcilingStop,
+  requestingDetach,
+  reconcilingDetach,
   polling,
   error,
   createdUnavailable,
@@ -33,10 +38,12 @@ export function RunPanel({
   onStart,
   onDiscard,
   onStopAfterCurrentJob,
+  onDetachFromCurrentJob,
 }: Props) {
   const [planOpen, setPlanOpen] = useState(false);
   const [planRestoreTarget, setPlanRestoreTarget] = useState<HTMLElement | null>(null);
   const [confirmingStop, setConfirmingStop] = useState(false);
+  const [confirmingDetach, setConfirmingDetach] = useState(false);
 
   if (!run) {
     return (
@@ -60,8 +67,19 @@ export function RunPanel({
     execution?.cancellation?.state === "stop_requested" ||
     execution?.cancellation?.state === "stopping_after_current_job"
   );
+  const detaching = status === "running" && execution?.cancellation?.mode === "detach";
+  const detached = status === "blocked" && execution?.cancellation?.state === "detached";
+  const currentJob = execution?.jobs.find((job) => job.ordinal === current);
+  const detachEligible = status === "running" && currentJob !== undefined && [
+    "preparing",
+    "submitting",
+    "submission_unknown",
+    "submitted",
+  ].includes(currentJob.status);
   const statusText =
-    stopping
+    detaching
+      ? "Stopping local wait"
+      : stopping
       ? current
         ? `Stopping after current Job · Job ${current} of ${run.job_count}`
         : "Stopping after current Job"
@@ -69,7 +87,9 @@ export function RunPanel({
       ? `Running · Job ${current} of ${run.job_count}`
       : status === "created"
         ? createdUnavailable ? "Created · Not executable" : "Created · Ready to start"
-        : status.charAt(0).toUpperCase() + status.slice(1);
+        : detached
+          ? "Blocked: Remote outcome unknown"
+          : status.charAt(0).toUpperCase() + status.slice(1);
 
   return (
     <section className={`section-card run-card status-${status}`} aria-labelledby="run-heading">
@@ -124,8 +144,9 @@ export function RunPanel({
           {execution.error ? <p className="run-error" role="alert">{execution.error}</p> : null}
           {status === "blocked" ? (
             <p className="blocked-note" role="alert">
-              Automatic execution stopped. This Run requires explicit reconciliation; no retry is
-              available in this version.
+              {detached
+                ? "Detached while the remote Job outcome was unconfirmed. The remote ComfyUI Job may still be running. No later Job will start."
+                : "Automatic execution stopped. This Run requires explicit reconciliation; no retry is available in this version."}
             </p>
           ) : null}
           {stopping ? (
@@ -133,6 +154,11 @@ export function RunPanel({
               {execution.cancellation?.state === "stop_requested"
                 ? "Stop requested. No further Job will start."
                 : "The current Job will finish normally and keep its Results. No later Job will start."}
+            </p>
+          ) : null}
+          {detaching ? (
+            <p className="stopping-note" role="status" aria-live="polite">
+              Stopping batchcraft's local wait. The remote ComfyUI Job may continue running.
             </p>
           ) : null}
           <Diagnostics diagnostics={execution.diagnostics} label="Run diagnostics" />
@@ -196,7 +222,7 @@ export function RunPanel({
                 <button
                   className="button-secondary"
                   type="button"
-                  disabled={requestingStop || reconcilingStop}
+                  disabled={requestingStop || reconcilingStop || requestingDetach || reconcilingDetach}
                   onClick={() => setConfirmingStop(false)}
                 >
                   Keep Running
@@ -204,7 +230,7 @@ export function RunPanel({
                 <button
                   className="button-primary"
                   type="button"
-                  disabled={requestingStop || reconcilingStop}
+                  disabled={requestingStop || reconcilingStop || requestingDetach || reconcilingDetach}
                   onClick={() => {
                     setConfirmingStop(false);
                     onStopAfterCurrentJob();
@@ -220,7 +246,7 @@ export function RunPanel({
               <button
                 className="button-secondary"
                 type="button"
-                disabled={requestingStop || reconcilingStop}
+                disabled={requestingStop || reconcilingStop || requestingDetach || reconcilingDetach}
                 onClick={() => setConfirmingStop(true)}
               >
                 {requestingStop
@@ -228,6 +254,59 @@ export function RunPanel({
                   : reconcilingStop
                     ? "Checking stop request..."
                     : "Stop after current Job"}
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+      {detachEligible && execution?.cancellation?.mode !== "detach" ? (
+        <div className="action-row run-detach-action">
+          {confirmingDetach ? (
+            <div className="stop-confirmation" role="group" aria-label="Confirm Stop waiting">
+              <p>
+                <strong>Stop waiting for this Job?</strong><br />
+                batchcraft will submit no later Jobs. The remote ComfyUI Job may continue running and
+                its final outcome may remain unknown.
+              </p>
+              <div className="run-action-buttons">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  disabled={requestingDetach || reconcilingDetach}
+                  onClick={() => setConfirmingDetach(false)}
+                >
+                  Keep Waiting
+                </button>
+                <button
+                  className="button-primary"
+                  type="button"
+                  disabled={requestingDetach || reconcilingDetach}
+                  onClick={() => {
+                    setConfirmingDetach(false);
+                    onDetachFromCurrentJob();
+                  }}
+                >
+                  Stop waiting
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p>
+                Use this if ComfyUI is stuck or unavailable. The current remote Job may continue
+                running and its outcome may remain unknown.
+              </p>
+              <button
+                className="button-secondary"
+                type="button"
+                disabled={requestingStop || reconcilingStop || requestingDetach || reconcilingDetach}
+                onClick={() => setConfirmingDetach(true)}
+              >
+                {requestingDetach
+                  ? "Stopping local wait..."
+                  : reconcilingDetach
+                    ? "Checking Stop waiting request..."
+                    : "Stop waiting"}
               </button>
             </>
           )}

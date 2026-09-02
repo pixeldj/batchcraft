@@ -171,7 +171,7 @@ The first production executor fixes queue depth at exactly `1` and executes one 
 
 FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. Start admission and discard-before-start use the same registry lock: discard cannot race execution start and independently requires absent or exactly pristine initial state with no active task for that Run. Discard writes terminal `cancelled` execution state without deleting the Run or changing frozen provenance.
 
-Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. The executor cancels only unsubmitted Jobs, allows admitted work to reach an honest succeeded, failed, or blocked outcome, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while execution format v3 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. Execution formats v1 and v2 are intentionally unsupported.
+Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` or `detach` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. After persisting `detach`, the registry targets only the owned local `asyncio.Task` with cancellation to wake an in-flight await. The executor recognizes that wake-up only when the same control reports durable detach intent, writes an honest blocked state, and leaves ordinary task cancellation to propagate. It preserves known submission evidence and Results, leaves later Jobs pending, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while execution format v3 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. Execution formats v1 and v2 are intentionally unsupported.
 
 Benefits:
 
@@ -307,7 +307,7 @@ SQLite currently stores:
 - logical Workflows and immutable WorkflowVersions;
 - logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
 - mutable Saved Batches with ordered prompt, variable, named image, and typed parameter-alternative bindings;
-- durable Run cancellation requests keyed by Run ID and mode, currently only `after_current_job`.
+- durable Run cancellation requests keyed by Run ID and mode: `after_current_job` and `detach`.
 
 Later migrations may add:
 

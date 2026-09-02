@@ -31,7 +31,12 @@ from .models import (
     RunExecutionState,
     RunExecutionStatus,
 )
-from .state import STOPPED_AFTER_CURRENT_JOB, ExecutionStateStore, safe_extension
+from .state import (
+    STOPPED_AFTER_CURRENT_JOB,
+    USER_DETACHED_FROM_CURRENT_JOB,
+    ExecutionStateStore,
+    safe_extension,
+)
 
 
 class EventSource(Protocol):
@@ -62,11 +67,16 @@ class ExecutionClient(Protocol):
 class RunCancellationControl(Protocol):
     def cancellation_requested(self) -> bool: ...
 
+    def detach_requested(self) -> bool: ...
+
     def submission_admission(self) -> AbstractAsyncContextManager[bool]: ...
 
 
 class _NoOpRunCancellationControl:
     def cancellation_requested(self) -> bool:
+        return False
+
+    def detach_requested(self) -> bool:
         return False
 
     @asynccontextmanager
@@ -126,7 +136,7 @@ async def execute_run(
         persisted_jobs = tuple(sorted(run.jobs, key=lambda job: job.compiled_job.ordinal))
         for persisted_job in persisted_jobs:
             if cancellation.cancellation_requested():
-                return _cancel_run(run, store, state, current_time)
+                return _stop_run(run, store, state, current_time, cancellation)
             ordinal = persisted_job.compiled_job.ordinal
             state = replace(state, current_job_ordinal=ordinal)
             store.save(run, state)
@@ -180,6 +190,11 @@ async def execute_run(
         )
         store.save(run, state)
         return state
+    except asyncio.CancelledError:
+        if not cancellation.detach_requested():
+            raise
+        latest = store.read_for_query(run)
+        return _detach_run(run, store, latest)
     finally:
         if _immutable_file_bytes(run.path) != immutable_files:
             raise RunExecutionError("Run execution changed immutable provenance files")
@@ -260,7 +275,7 @@ async def _execute_job(
         )
     except Exception as error:
         if cancellation_control.cancellation_requested():
-            return _cancel_run(run, store, state, clock)
+            return _stop_run(run, store, state, clock, cancellation_control)
         return _fail_job(run, store, state, ordinal, error, clock)
 
     reconciling = False
@@ -268,7 +283,7 @@ async def _execute_job(
         async with client.open_event_stream(client_id) as event_source:
             async with cancellation_control.submission_admission() as admitted:
                 if not admitted:
-                    return _cancel_run(run, store, state, clock)
+                    return _stop_run(run, store, state, clock, cancellation_control)
                 submitting = replace(
                     state.jobs[ordinal - 1],
                     status=JobExecutionStatus.SUBMITTING,
@@ -334,7 +349,7 @@ async def _execute_job(
         current = state.jobs[ordinal - 1]
         if current.status is JobExecutionStatus.PREPARING:
             if cancellation_control.cancellation_requested():
-                return _cancel_run(run, store, state, clock)
+                return _stop_run(run, store, state, clock, cancellation_control)
             return _fail_job(run, store, state, ordinal, error, clock)
         if current.status is JobExecutionStatus.SUBMITTING:
             unknown = replace(
@@ -572,6 +587,72 @@ def _cancel_run(
     )
     store.save(run, cancelled)
     return cancelled
+
+
+def _stop_run(
+    run: PublishedRun,
+    store: ExecutionStateStore,
+    state: RunExecutionState,
+    clock: Callable[[], datetime],
+    control: RunCancellationControl,
+) -> RunExecutionState:
+    if control.detach_requested():
+        return _detach_run(run, store, state)
+    return _cancel_run(run, store, state, clock)
+
+
+def _detach_run(
+    run: PublishedRun,
+    store: ExecutionStateStore,
+    state: RunExecutionState,
+) -> RunExecutionState:
+    if state.status in {
+        RunExecutionStatus.SUCCEEDED,
+        RunExecutionStatus.FAILED,
+        RunExecutionStatus.CANCELLED,
+    }:
+        return state
+    if state.status is RunExecutionStatus.BLOCKED and state.diagnostics == (
+        USER_DETACHED_FROM_CURRENT_JOB,
+    ):
+        return state
+    if state.status is not RunExecutionStatus.RUNNING or state.current_job_ordinal is None:
+        raise RunExecutionError("local detach requires an active current Job")
+
+    current = state.jobs[state.current_job_ordinal - 1]
+    jobs = list(state.jobs)
+    if current.status is JobExecutionStatus.SUBMITTING:
+        diagnostic = USER_DETACHED_FROM_CURRENT_JOB
+        jobs[current.ordinal - 1] = replace(
+            current,
+            status=JobExecutionStatus.SUBMISSION_UNKNOWN,
+            submission_disposition=SubmissionDisposition.UNKNOWN,
+            error=diagnostic,
+            diagnostics=(
+                current.diagnostics
+                if diagnostic in current.diagnostics
+                else (*current.diagnostics, diagnostic)
+            ),
+        )
+    elif current.status not in {
+        JobExecutionStatus.PREPARING,
+        JobExecutionStatus.SUBMISSION_UNKNOWN,
+        JobExecutionStatus.SUBMITTED,
+    }:
+        raise RunExecutionError(
+            f"local detach cannot preserve current Job state {current.status.value!r}"
+        )
+
+    detached = replace(
+        state,
+        status=RunExecutionStatus.BLOCKED,
+        completed_at=None,
+        error=USER_DETACHED_FROM_CURRENT_JOB,
+        diagnostics=(USER_DETACHED_FROM_CURRENT_JOB,),
+        jobs=tuple(jobs),
+    )
+    store.save(run, detached)
+    return detached
 
 
 def _fail_job(

@@ -31,6 +31,8 @@ export function useRunExecution(
   const [discarding, setDiscarding] = useState(false);
   const [requestingStop, setRequestingStop] = useState(false);
   const [reconcilingStop, setReconcilingStop] = useState(false);
+  const [requestingDetach, setRequestingDetach] = useState(false);
+  const [reconcilingDetach, setReconcilingDetach] = useState(false);
   const [polling, setPolling] = useState(initialExecution?.status === "running");
   const [refreshingResults, setRefreshingResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +42,8 @@ export function useRunExecution(
   const createdReconciliationPolls = useRef(0);
   const stopReconciliation = useRef(false);
   const stopRetryAvailable = useRef(false);
+  const detachReconciliation = useRef(false);
+  const detachRetryAvailable = useRef(false);
 
   useEffect(() => {
     onStatusChange(execution?.status ?? (run ? "created" : null));
@@ -64,7 +68,11 @@ export function useRunExecution(
           return;
         }
         setExecution((current) => (
-          current?.cancellation &&
+          current?.cancellation?.mode === "detach" &&
+          nextExecution.status === "running" &&
+          nextExecution.cancellation?.mode !== "detach"
+            ? { ...nextExecution, cancellation: current.cancellation }
+            : current?.cancellation &&
           nextExecution.status === "running" &&
           !nextExecution.cancellation
             ? { ...nextExecution, cancellation: current.cancellation }
@@ -84,6 +92,25 @@ export function useRunExecution(
         if (nextExecution.cancellation || TERMINAL_STATUSES.has(nextExecution.status)) {
           stopRetryAvailable.current = false;
         }
+        if (detachReconciliation.current) {
+          detachReconciliation.current = false;
+          setReconcilingDetach(false);
+          detachRetryAvailable.current = (
+            nextExecution.status === "running" &&
+            nextExecution.cancellation?.mode !== "detach"
+          );
+          setError(
+            detachRetryAvailable.current
+              ? "The Stop waiting request was not observed; it is safe to request again."
+              : null,
+          );
+        }
+        if (
+          nextExecution.cancellation?.mode === "detach" ||
+          TERMINAL_STATUSES.has(nextExecution.status)
+        ) {
+          detachRetryAvailable.current = false;
+        }
 
         if (reconciliation.current && nextExecution.status === "created") {
           createdReconciliationPolls.current += 1;
@@ -100,7 +127,7 @@ export function useRunExecution(
         } else {
           reconciliation.current = null;
           setCreatedUnavailable(false);
-          if (!stopRetryAvailable.current) {
+          if (!stopRetryAvailable.current && !detachRetryAvailable.current) {
             setError(null);
           }
         }
@@ -221,6 +248,8 @@ export function useRunExecution(
       !run ||
       requestingStop ||
       reconcilingStop ||
+      requestingDetach ||
+      reconcilingDetach ||
       execution?.status !== "running" ||
       execution.cancellation
     ) {
@@ -255,6 +284,47 @@ export function useRunExecution(
     }
   }
 
+  async function detachFromCurrentJob() {
+    if (
+      !run ||
+      requestingStop ||
+      reconcilingStop ||
+      requestingDetach ||
+      reconcilingDetach ||
+      execution?.status !== "running" ||
+      execution.cancellation?.mode === "detach"
+    ) {
+      return;
+    }
+    setRequestingDetach(true);
+    detachRetryAvailable.current = false;
+    setError(null);
+    try {
+      const response = await api.detachRun(run.run_id);
+      setExecution((current) => current ? {
+        ...current,
+        cancellation: {
+          mode: response.mode,
+          requested_at: response.requested_at,
+          state: response.state,
+        },
+      } : current);
+      setPolling(true);
+    } catch (caught) {
+      const message = errorMessage(caught);
+      if (caught instanceof ApiError && caught.code === "network_error") {
+        detachReconciliation.current = true;
+        setReconcilingDetach(true);
+        setError(`${message}. The Stop waiting response was ambiguous; checking durable state.`);
+        setPolling(true);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setRequestingDetach(false);
+    }
+  }
+
   async function refreshResults() {
     if (!run || refreshingResults) {
       return;
@@ -278,6 +348,8 @@ export function useRunExecution(
     discarding,
     requestingStop,
     reconcilingStop,
+    requestingDetach,
+    reconcilingDetach,
     polling,
     refreshingResults,
     error,
@@ -286,6 +358,7 @@ export function useRunExecution(
     start,
     discard,
     stopAfterCurrentJob,
+    detachFromCurrentJob,
     refreshResults,
   };
 }

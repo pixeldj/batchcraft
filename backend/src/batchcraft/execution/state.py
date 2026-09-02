@@ -28,6 +28,9 @@ EXECUTION_FORMAT_VERSION = 3
 EXECUTION_FILENAME = "execution.json"
 DISCARDED_BEFORE_START = "discarded_before_start"
 STOPPED_AFTER_CURRENT_JOB = "stopped_after_current_job"
+USER_DETACHED_FROM_CURRENT_JOB = (
+    "User detached from current Job while remote completion was unconfirmed."
+)
 _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}")
 _RUN_TRANSITIONS = {
     RunExecutionStatus.CREATED: {
@@ -422,11 +425,14 @@ def _validate_state(state: RunExecutionState) -> None:
         job.status is JobExecutionStatus.FAILED for job in state.jobs
     ):
         raise ExecutionStateError("failed Run state requires a failed Job")
-    if state.status is RunExecutionStatus.BLOCKED and not any(
-        job.status in {JobExecutionStatus.SUBMISSION_UNKNOWN, JobExecutionStatus.SUBMITTED}
-        for job in state.jobs
-    ):
-        raise ExecutionStateError("blocked Run state requires an unresolved Job")
+    if state.status is RunExecutionStatus.BLOCKED:
+        if state.diagnostics == (USER_DETACHED_FROM_CURRENT_JOB,):
+            _validate_detached_blocked_state(state)
+        elif not any(
+            job.status in {JobExecutionStatus.SUBMISSION_UNKNOWN, JobExecutionStatus.SUBMITTED}
+            for job in state.jobs
+        ):
+            raise ExecutionStateError("blocked Run state requires an unresolved Job")
     if state.status is RunExecutionStatus.CANCELLED:
         discarded_before_start = (
             state.started_at is None
@@ -465,6 +471,30 @@ def _is_pristine_pending_job(job: JobExecutionState) -> bool:
         history_status=None,
         results=(),
     )
+
+
+def _validate_detached_blocked_state(state: RunExecutionState) -> None:
+    if (
+        state.started_at is None
+        or state.completed_at is not None
+        or state.current_job_ordinal is None
+        or state.error != USER_DETACHED_FROM_CURRENT_JOB
+    ):
+        raise ExecutionStateError("detached blocked Run has invalid metadata")
+    current_index = state.current_job_ordinal - 1
+    if current_index < 0 or current_index >= len(state.jobs):
+        raise ExecutionStateError("detached blocked Run has invalid current Job ordinal")
+    current = state.jobs[current_index]
+    if current.status not in {
+        JobExecutionStatus.PREPARING,
+        JobExecutionStatus.SUBMISSION_UNKNOWN,
+        JobExecutionStatus.SUBMITTED,
+    }:
+        raise ExecutionStateError("detached blocked Run requires an unresolved current Job")
+    if not all(job.status is JobExecutionStatus.SUCCEEDED for job in state.jobs[:current_index]):
+        raise ExecutionStateError("detached blocked Run requires a succeeded Job prefix")
+    if not all(_is_pristine_pending_job(job) for job in state.jobs[current_index + 1 :]):
+        raise ExecutionStateError("detached blocked Run requires a pending Job suffix")
 
 
 def _has_succeeded_prefix_cancelled_suffix(

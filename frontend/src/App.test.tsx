@@ -1620,6 +1620,111 @@ describe("Stop after current Job", () => {
   });
 });
 
+describe("Stop waiting", () => {
+  it("confirms uncertainty, preserves Results, and unlocks only after durable detach", async () => {
+    const detachRequest = deferred<Awaited<ReturnType<RunCancellationApi["detachRun"]>>>();
+    const terminalPoll = deferred<ExecutionResponse>();
+    const artifact = result(1, 1, "image/png", "already-downloaded.png", 2048);
+    const api = makeApi({
+      detachRun: vi.fn(() => detachRequest.promise),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockImplementationOnce(() => terminalPoll.promise),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: [artifact] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    const confirmation = screen.getByRole("group", { name: "Confirm Stop waiting" });
+    expect(within(confirmation).getByText("Stop waiting for this Job?")).toBeInTheDocument();
+    expect(within(confirmation).getByText(/remote ComfyUI Job may continue running/))
+      .toBeInTheDocument();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Keep Waiting" }));
+    expect(api.detachRun).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    expect(screen.getByRole("button", { name: "Stopping local wait..." })).toBeDisabled();
+    expect(api.detachRun).toHaveBeenCalledOnce();
+    expect(api.detachRun).toHaveBeenCalledWith("run-123");
+
+    detachRequest.resolve({
+      run_id: "run-123",
+      mode: "detach",
+      requested_at: "2026-09-01T12:00:00Z",
+      created: true,
+      state: "detach_requested",
+    });
+    expect(await screen.findByText("Stopping local wait")).toBeInTheDocument();
+    expect(screen.getByText(/remote ComfyUI Job may continue running/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeDisabled();
+
+    terminalPoll.resolve(detachedExecution());
+    expect(await screen.findByText("Blocked: Remote outcome unknown")).toBeInTheDocument();
+    expect(screen.getByText(/No later Job will start/)).toBeInTheDocument();
+    const runSection = currentRunSection();
+    expect(within(runSection).getByText("submitted")).toBeInTheDocument();
+    expect(within(runSection).getByText("pending")).toBeInTheDocument();
+    expect(await within(currentResultsSection()).findByAltText(
+      "Result 1 from Job 1: already-downloaded.png",
+    )).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
+    await pause(20);
+    expect(api.getExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles an ambiguous detach response before allowing another request", async () => {
+    const reconciliationPoll = deferred<ExecutionResponse>();
+    const laterPoll = deferred<ExecutionResponse>();
+    const api = makeApi({
+      detachRun: vi.fn(async () => {
+        throw new ApiError("Cannot reach the batchcraft API", "network_error", null);
+      }),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockImplementationOnce(() => reconciliationPoll.promise)
+        .mockImplementation(() => laterPoll.promise),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await screen.findByText("Running · Job 1 of 2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    expect(await screen.findByRole("button", { name: "Checking Stop waiting request..." }))
+      .toBeDisabled();
+
+    reconciliationPoll.resolve(execution("running"));
+    expect(await screen.findByText(
+      "The Stop waiting request was not observed; it is safe to request again.",
+    )).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop waiting" })).toBeEnabled();
+  });
+
+  it.each([
+    ["failed", "Failed"],
+    ["succeeded", "Succeeded"],
+  ] as const)("keeps a proven %s outcome authoritative", async (status, label) => {
+    const nextExecution = execution(status);
+    nextExecution.cancellation = {
+      mode: "detach",
+      requested_at: "2026-09-01T12:00:00Z",
+      state: "finished",
+    };
+    const api = makeApi({ getExecution: vi.fn(async () => nextExecution) });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.queryByText("Blocked: Remote outcome unknown")).not.toBeInTheDocument();
+  });
+});
+
 describe("Repeated Runs", () => {
   it("creates a second Run from the same valid Preview after success", async () => {
     const createRun = vi
@@ -1800,6 +1905,25 @@ describe("Current Run restoration", () => {
     expect(screen.queryByRole("button", { name: "Stop after current Job" })).not.toBeInTheDocument();
     expect(api.cancelRun).not.toHaveBeenCalled();
     await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
+  });
+
+  it("restores a detached Run as terminal with Results and never resumes polling", async () => {
+    seedWorkingSession("run-detached");
+    const artifact = result(1, 1, "image/png", "restored-detached.png", 1024);
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("blocked", "run-detached", 18)),
+      getExecution: vi.fn(async () => detachedExecution("run-detached")),
+      getResults: vi.fn(async () => ({ run_id: "run-detached", results: [artifact] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+
+    expect(await screen.findByText("Blocked: Remote outcome unknown")).toBeInTheDocument();
+    expect(await screen.findByAltText("Result 1 from Job 1: restored-detached.png"))
+      .toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
+    expect(api.startRun).not.toHaveBeenCalled();
+    await pause(20);
+    expect(api.getExecution).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -2738,6 +2862,13 @@ function makeApi(
       created: true,
       state: "stopping_after_current_job" as const,
     })),
+    detachRun: vi.fn(async (runId: string) => ({
+      run_id: runId,
+      mode: "detach" as const,
+      requested_at: "2026-09-01T12:00:00Z",
+      created: true,
+      state: "detach_requested" as const,
+    })),
     getExecution: vi.fn(async () => execution("succeeded")),
     getResults: vi.fn(async () => ({ run_id: "run-123", results: [] })),
     resultUrl: (url: string) => `http://api.test${url}`,
@@ -2947,6 +3078,45 @@ function stoppedExecution(runId = "run-123"): ExecutionResponse {
         prompt_id: null,
         started_at: null,
         completed_at: "2026-09-01T12:00:00Z",
+        error: null,
+        diagnostics: [],
+        result_count: 0,
+      },
+    ],
+  };
+}
+
+function detachedExecution(runId = "run-123"): ExecutionResponse {
+  return {
+    run_id: runId,
+    status: "blocked",
+    started_at: "2026-09-01T11:59:00Z",
+    completed_at: null,
+    current_job_ordinal: 1,
+    error: "User detached from current Job while remote completion was unconfirmed.",
+    diagnostics: ["User detached from current Job while remote completion was unconfirmed."],
+    cancellation: {
+      mode: "detach",
+      requested_at: "2026-09-01T12:00:00Z",
+      state: "detached",
+    },
+    jobs: [
+      {
+        ordinal: 1,
+        status: "submitted",
+        prompt_id: "prompt-1",
+        started_at: "2026-09-01T11:59:00Z",
+        completed_at: null,
+        error: null,
+        diagnostics: [],
+        result_count: 1,
+      },
+      {
+        ordinal: 2,
+        status: "pending",
+        prompt_id: null,
+        started_at: null,
+        completed_at: null,
         error: null,
         diagnostics: [],
         result_count: 0,

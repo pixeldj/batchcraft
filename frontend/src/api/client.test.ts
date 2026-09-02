@@ -133,6 +133,27 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("requests local detach without implying remote cancellation", async () => {
+    const response = {
+      run_id: "run/one",
+      mode: "detach",
+      requested_at: "2026-09-01T12:00:00Z",
+      created: true,
+      state: "detach_requested",
+    };
+    const fetchMock = successfulFetch(response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new BatchcraftApiClient("http://api.test").detachRun("run/one");
+
+    expect(result).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/runs/run%2Fone/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "detach" }),
+    });
+  });
+
   it("lists active Projects without an archived query by default", async () => {
     const fetchMock = successfulFetch({ projects: [] });
     vi.stubGlobal("fetch", fetchMock);

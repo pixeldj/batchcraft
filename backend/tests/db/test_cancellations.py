@@ -63,6 +63,25 @@ def test_repeated_request_preserves_original_timestamp(tmp_path: Path) -> None:
     assert repeated.requested_at == REQUESTED_AT
 
 
+def test_after_current_and_detach_intents_coexist_and_survive_reopen(tmp_path: Path) -> None:
+    database_path = _database(tmp_path)
+    store = RunCancellationRequestStore(database_path, clock=lambda: REQUESTED_AT)
+
+    after_current, after_current_created = store.request(
+        "run-1", RunCancellationMode.AFTER_CURRENT_JOB
+    )
+    detach, detach_created = store.request("run-1", RunCancellationMode.DETACH)
+    repeated, repeated_created = store.request("run-1", RunCancellationMode.DETACH)
+
+    reopened = RunCancellationRequestStore(database_path)
+    assert after_current_created is True
+    assert detach_created is True
+    assert repeated_created is False
+    assert repeated == detach
+    assert reopened.get("run-1", RunCancellationMode.AFTER_CURRENT_JOB) == after_current
+    assert reopened.get("run-1", RunCancellationMode.DETACH) == detach
+
+
 @pytest.mark.parametrize("run_id", ("", "  "))
 def test_request_and_get_reject_blank_run_id(tmp_path: Path, run_id: str) -> None:
     store = RunCancellationRequestStore(_database(tmp_path))

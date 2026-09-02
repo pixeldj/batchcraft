@@ -873,11 +873,11 @@ def create_app(
     )
     async def request_run_cancellation(
         run_id: str,
-        _request: RunCancellationRequest,
+        request: RunCancellationRequest,
         service: ServiceDependency,
     ) -> RunCancellationRequestedResponse:
         return RunCancellationRequestedResponse.from_result(
-            await service.request_run_cancellation(run_id)
+            await service.request_run_cancellation(run_id, request.to_mode())
         )
 
     @app.post("/api/runs/{run_id}/discard", response_model=ExecutionResponse)

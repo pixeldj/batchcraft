@@ -149,6 +149,12 @@ queue-clear, or equivalent remote cancellation operation. An admitted Job contin
 WebSocket observation, history reconciliation, and Result download; only later unsubmitted Jobs are
 marked locally cancelled. Ownership-safe remote interruption remains deferred to BC-003C.
 
+`Stop waiting` detach also remains outside the adapter. It cancels only batchcraft's owned local await
+after durable intent exists, preserves every known prompt ID and submission fact, and writes a blocked
+local outcome. It does not call a ComfyUI interrupt, clear a queue, claim remote cancellation, retry the
+submission, or prevent the remote Job from continuing. Ownership-safe remote interruption remains
+deferred to BC-003C.
+
 ## Execution Monitoring
 
 Use ComfyUI's real-time execution events where practical, with history/status queries available for reconciliation.

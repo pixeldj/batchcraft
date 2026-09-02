@@ -9,7 +9,7 @@ _Last consolidated: 2026-09-01._
 ## Current focus
 
 1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, In Progress)
-2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, Planned)
+2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, In Progress)
 3. [BC-003C: Interrupt owned ComfyUI Job](#bc-003c-interrupt-owned-comfyui-job) (P2, Planned)
 4. [BC-002: Durable queued Runs](#bc-002-durable-queued-runs) (P2, Planned)
 
@@ -162,19 +162,27 @@ Non-goals:
 | --- | --- |
 | ID | BC-003B |
 | Priority | P1 |
-| Status | Planned |
+| Status | In Progress |
 | Area | Execution / Cancellation |
 | Summary | Let the user regain control when ComfyUI observation or history reconciliation appears hung. |
 | Dependencies / Notes | Coordinate with BC-003A's durable cancellation state. Preserve ADR 0001 and ADR 0003 rules for ambiguous remote outcomes and unsafe resubmission. This is a local-control escape hatch, not proof of remote cancellation. |
 
+Implementation progress: durable `detach` intent, executor-owned local task wake-up and blocked
+finalization, API/read-model support, and the confirmed frontend `Stop waiting` action are implemented.
+Known submission evidence and already durable Results are preserved, later Jobs remain pending, refresh
+restores the blocked outcome, and no ComfyUI interrupt or queue-clear operation is used. Automated
+coverage is complete. BC-003B remains `In Progress` until live ComfyUI verification confirms prompt
+preservation, prompt local unlock, no later submission, and closed-tab recovery while the old remote Job
+may still be running.
+
 Expected behavior:
 
-- expose a deliberate `Force stop waiting` action only when local observation/reconciliation is active or degraded;
+- expose a deliberate `Stop waiting` action only while a current Job has unresolved local or remote work;
 - stop batchcraft's local wait loop and automatic Run progression promptly;
 - submit no further Jobs;
 - preserve known prompt IDs, client IDs, submission dispositions, and diagnostics;
 - do not claim the remote Job was cancelled unless that is confirmed;
-- transition to an honest `blocked` or `cancellation_unconfirmed` state when the remote outcome is unknown;
+- transition to an honest terminal local `blocked` state with an explicit remote-uncertainty diagnostic;
 - release the frontend from an indefinitely active state while still preventing unsafe resubmission;
 - allow later explicit reconciliation to resolve the remote outcome;
 - remain idempotent if invoked repeatedly.
@@ -723,6 +731,87 @@ Desired behavior:
 - individual Image Input slots do not need their own collapse controls.
 
 This should be bundled with comparable small presentation fixes rather than treated as a large architecture milestone.
+
+### BC-017: Named Runs and human-readable Run folders
+
+| Field | Value |
+| --- | --- |
+| ID | BC-017 |
+| Priority | P2 |
+| Status | Planned |
+| Area | Runs / Provenance / Filesystem |
+| Summary | Allow Runs to have a human-readable name and optional description, and use an immutable run-number-prefixed filesystem slug for the Run directory. |
+| Dependencies / Notes | Fits the existing immutable Run provenance model and will improve BC-007 Project-wide Run browsing. Because batchcraft is pre-release, prefer a clean Run-directory convention change rather than preserving obsolete development layouts. |
+
+Expected behavior:
+
+- allow an optional Run name when creating a Run;
+- allow an optional Run description / notes field;
+- keep the immutable internal `run_id` as the true identity;
+- keep the monotonic `run_number` for chronological ordering;
+- generate an immutable filesystem key using `<zero-padded-run-number>-<slugified-run-name>`;
+
+Examples:
+
+- `001-baseline`
+- `002-new-prompt`
+- `003-cfg-sweep`
+- `017-portrait-resolution-test`
+
+If no Run name is supplied, generate a simple deterministic fallback such as `017-run`.
+
+Additional requirements:
+
+- freeze the Run name, description, and filesystem key into immutable Run provenance;
+- do not rename a historical Run directory later if mutable annotations or display labels are added;
+- do not derive the Run name automatically from every generation setting;
+- keep detailed generation settings in existing provenance rather than encoding them into filenames;
+- use the human-readable Run name throughout normal UI where useful, while keeping the Run number visible but secondary;
+- update Run Plan, Result Details, Batch Results, and future Project-wide Run history to display the Run name;
+- preserve exact Run/Job/Result provenance regardless of the display name.
+
+Recommended filesystem layout:
+
+    <projects-root>/
+    └── <project-key>/
+        └── batches/
+            └── <batch-key>/
+                ├── 001-baseline/
+                ├── 002-new-prompt/
+                └── 003-cfg-sweep/
+
+User-facing hierarchy should read naturally as:
+
+    Project
+    └── Saved Batch
+        └── Named Run
+
+Example:
+
+- Project: Character Experiments
+- Batch: Outfit Transfer
+- Run: CFG 4-7 comparison
+
+The Run name is descriptive provenance for why this Run exists.
+
+It must not affect:
+
+- Batch compilation;
+- Job ordering;
+- seed materialization;
+- workflow preparation;
+- ComfyUI submission;
+- Result identity.
+
+Future BC-007 indexing should support:
+
+- searching Runs by name;
+- searching Run notes/description;
+- displaying names in historical galleries;
+- filtering Results by Run;
+- showing the Run name alongside Run number/status.
+
+Do not use mutable display names as filesystem identity.
 
 ## Maintenance rules
 

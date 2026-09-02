@@ -3,7 +3,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 
-from batchcraft.db import RunCancellationRequestRecord
+from batchcraft.db import RunCancellationMode, RunCancellationRequestRecord
 from batchcraft.execution import RunExecutionState
 
 from .cancellation import ActiveRunCancellationControl
@@ -59,14 +59,17 @@ class RunTaskRegistry:
         return active is not None and not active.task.done()
 
     async def request_cancellation(
-        self, run_id: str
+        self, run_id: str, mode: RunCancellationMode
     ) -> tuple[RunCancellationRequestRecord, bool] | None:
         async with self._lock:
             self._remove_completed()
             active = self._active_runs.get(run_id)
             if active is None:
                 return None
-            return await active.cancellation_control.request()
+            requested = await active.cancellation_control.request(mode)
+            if mode is RunCancellationMode.DETACH:
+                active.task.cancel()
+            return requested
 
     async def shutdown(self) -> None:
         tasks = tuple(active.task for active in self._active_runs.values())
@@ -81,7 +84,7 @@ class RunTaskRegistry:
         try:
             task.result()
         except asyncio.CancelledError:
-            logger.info("Run execution task was cancelled during application shutdown: %s", run_id)
+            logger.info("Run execution task was cancelled: %s", run_id)
         except Exception:
             logger.exception("Run execution task failed: %s", run_id)
         asyncio.create_task(self._release(run_id, task))

@@ -82,6 +82,8 @@ export function RunWorkspace({
         discarding={execution.discarding}
         requestingStop={execution.requestingStop}
         reconcilingStop={execution.reconcilingStop}
+        requestingDetach={execution.requestingDetach}
+        reconcilingDetach={execution.reconcilingDetach}
         polling={execution.polling}
         error={execution.error}
         createdUnavailable={execution.createdUnavailable}
@@ -89,6 +91,7 @@ export function RunWorkspace({
         onStart={execution.start}
         onDiscard={execution.discard}
         onStopAfterCurrentJob={execution.stopAfterCurrentJob}
+        onDetachFromCurrentJob={execution.detachFromCurrentJob}
       />
       <ResultsPanel
         api={api}

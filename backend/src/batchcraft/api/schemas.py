@@ -25,6 +25,7 @@ from batchcraft.db import (
     PromptListRecord,
     PromptRecord,
     PromptVersionRecord,
+    RunCancellationMode,
     SavedBatchDefinition,
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
@@ -1073,15 +1074,20 @@ class JobExecutionResponse(ApiModel):
 
 
 class RunCancellationRequest(ApiModel):
-    mode: Literal["after_current_job"]
+    mode: Literal["after_current_job", "detach"]
+
+    def to_mode(self) -> RunCancellationMode:
+        return RunCancellationMode(self.mode)
 
 
 class RunCancellationResponse(ApiModel):
-    mode: Literal["after_current_job"]
+    mode: Literal["after_current_job", "detach"]
     requested_at: datetime | None
     state: Literal[
         "stop_requested",
         "stopping_after_current_job",
+        "detach_requested",
+        "detached",
         "cancelled",
         "finished",
     ]
@@ -1089,7 +1095,7 @@ class RunCancellationResponse(ApiModel):
     @classmethod
     def from_cancellation(cls, cancellation: RunCancellation) -> Self:
         return cls(
-            mode="after_current_job",
+            mode=cancellation.mode.value,
             requested_at=cancellation.requested_at,
             state=cancellation.state.value,
         )
@@ -1103,7 +1109,7 @@ class RunCancellationRequestedResponse(RunCancellationResponse):
     def from_result(cls, result: RunCancellationRequestResult) -> Self:
         return cls(
             run_id=result.run_id,
-            mode="after_current_job",
+            mode=result.mode.value,
             requested_at=result.requested_at,
             created=result.created,
             state=result.state.value,

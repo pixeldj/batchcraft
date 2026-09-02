@@ -122,6 +122,7 @@ class SavedBatchSeedMode(StrEnum):
 
 class RunCancellationMode(StrEnum):
     AFTER_CURRENT_JOB = "after_current_job"
+    DETACH = "detach"
 
 
 @dataclass(frozen=True, slots=True)

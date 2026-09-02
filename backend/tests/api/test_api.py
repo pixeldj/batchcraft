@@ -50,6 +50,7 @@ from batchcraft.db import (
 from batchcraft.domain import PromptVersion
 from batchcraft.execution import (
     STOPPED_AFTER_CURRENT_JOB,
+    USER_DETACHED_FROM_CURRENT_JOB,
     ExecutionClient,
     ExecutionConfig,
     ExecutionStateError,
@@ -3372,3 +3373,125 @@ def test_run_cancellation_store_failure_is_sanitized(
         }
     }
     assert "private database detail" not in response.text
+
+
+def test_detach_is_durable_idempotent_blocks_and_does_not_resume_after_restart(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    history_started = threading.Event()
+    history_cancelled = threading.Event()
+
+    class HangingHistoryClient(FakeComfyUIClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.global_queue_operations: list[str] = []
+
+        async def get_history(self, prompt_id: str) -> ExecutionOutcome | None:
+            assert prompt_id == "prompt-1"
+            history_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                history_cancelled.set()
+                raise
+            raise AssertionError("unreachable")
+
+        async def interrupt(self) -> None:
+            self.global_queue_operations.append("interrupt")
+
+        async def clear_queue(self) -> None:
+            self.global_queue_operations.append("clear_queue")
+
+    client = HangingHistoryClient()
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        assert history_started.wait(timeout=1)
+
+        after_current = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+        started_at = time.monotonic()
+        detached = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "detach"})
+        elapsed = time.monotonic() - started_at
+
+        assert after_current.status_code == 202
+        assert detached.status_code == 202
+        assert elapsed < 0.5
+        assert detached.json()["mode"] == "detach"
+        assert detached.json()["created"] is True
+        assert detached.json()["state"] in {"detach_requested", "detached"}
+        terminal = _wait_for_status(http, run_id, "blocked")
+        repeated = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "detach"})
+
+        assert history_cancelled.wait(timeout=1)
+        assert terminal.error == USER_DETACHED_FROM_CURRENT_JOB
+        assert terminal.diagnostics == [USER_DETACHED_FROM_CURRENT_JOB]
+        assert terminal.jobs[0].status == "submitted"
+        assert terminal.jobs[0].prompt_id == "prompt-1"
+        assert terminal.jobs[1].status == "pending"
+        assert terminal.cancellation is not None
+        assert terminal.cancellation.mode == "detach"
+        assert terminal.cancellation.state == "detached"
+        assert repeated.status_code == 202
+        assert repeated.json()["created"] is False
+        assert repeated.json()["state"] == "detached"
+        assert client.submission_count == 1
+        assert client.global_queue_operations == []
+
+    store = RunCancellationRequestStore(settings.database_path)
+    assert store.get(run_id, RunCancellationMode.AFTER_CURRENT_JOB) is not None
+    assert store.get(run_id, RunCancellationMode.DETACH) is not None
+
+    restarted_client = FakeComfyUIClient()
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: restarted_client)
+    ) as restarted:
+        recovered = restarted.get(f"/api/runs/{run_id}/execution")
+        next_run_id = _create_run(restarted, _batch_request((asset_id,)))
+        assert restarted.post(f"/api/runs/{next_run_id}/execute").status_code == 202
+        next_terminal = _wait_for_status(restarted, next_run_id, "succeeded")
+
+    assert recovered.json()["status"] == "blocked"
+    assert recovered.json()["cancellation"]["state"] == "detached"
+    assert next_terminal.status == "succeeded"
+    assert restarted_client.submission_count == len(next_terminal.jobs)
+
+
+@pytest.mark.parametrize("terminal_status", ("succeeded", "failed", "blocked", "cancelled"))
+def test_detach_does_not_rewrite_terminal_runs(
+    tmp_path: Path,
+    terminal_status: str,
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    client = (
+        FakeComfyUIClient(upload_error=RuntimeError("upload failed"))
+        if terminal_status == "failed"
+        else FakeComfyUIClient(submission_disposition=SubmissionDisposition.UNKNOWN)
+        if terminal_status == "blocked"
+        else FakeComfyUIClient()
+    )
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        if terminal_status == "cancelled":
+            assert http.post(f"/api/runs/{run_id}/discard").status_code == 200
+        else:
+            assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+            _wait_for_status(http, run_id, terminal_status)
+        before = http.get(f"/api/runs/{run_id}/execution").json()
+        response = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "detach"})
+        after = http.get(f"/api/runs/{run_id}/execution").json()
+
+    assert response.status_code == 202
+    assert response.json()["created"] is False
+    assert response.json()["requested_at"] is None
+    assert response.json()["state"] == (
+        "cancelled" if terminal_status == "cancelled" else "finished"
+    )
+    assert after == before
+    assert (
+        RunCancellationRequestStore(settings.database_path).get(run_id, RunCancellationMode.DETACH)
+        is None
+    )

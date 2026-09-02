@@ -35,6 +35,7 @@ from batchcraft.domain import (
     compile_batch,
 )
 from batchcraft.execution import (
+    USER_DETACHED_FROM_CURRENT_JOB,
     ExecutionConfig,
     ExecutionStateError,
     ExecutionStateStore,
@@ -259,9 +260,11 @@ class DeterministicCancellationControl:
         self,
         *,
         requested: bool = False,
+        detached: bool = False,
         request_after_admission: bool = False,
     ) -> None:
         self.requested = requested
+        self.detached = detached
         self.request_after_admission = request_after_admission
         self.admission_log: list[str] = []
         self.checkpoint_reads = 0
@@ -269,9 +272,15 @@ class DeterministicCancellationControl:
     def request(self) -> None:
         self.requested = True
 
+    def detach(self) -> None:
+        self.detached = True
+
     def cancellation_requested(self) -> bool:
         self.checkpoint_reads += 1
-        return self.requested
+        return self.requested or self.detached
+
+    def detach_requested(self) -> bool:
+        return self.detached
 
     @asynccontextmanager
     async def submission_admission(self) -> AsyncIterator[bool]:
@@ -1174,6 +1183,275 @@ def test_websocket_open_failure_cancels_preparing_job_when_stop_was_requested(
     assert state.jobs[0].error is None
     assert client.submitted_workflows == []
     assert client.global_queue_operations == []
+
+
+def test_detach_before_submission_blocks_with_preparing_job_and_no_remote_work(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    control = DeterministicCancellationControl()
+
+    async def scenario() -> RunExecutionState:
+        entered = asyncio.Event()
+
+        class BlockingContext(AbstractAsyncContextManager[FakeEventSource]):
+            async def __aenter__(self) -> FakeEventSource:
+                entered.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+        class BlockingOpenClient(FakeExecutionClient):
+            def open_event_stream(
+                self, client_id: str
+            ) -> AbstractAsyncContextManager[FakeEventSource]:
+                self.call_log.append(f"open:{client_id}")
+                return BlockingContext()
+
+        client = BlockingOpenClient(submissions=[], histories={})
+        task = asyncio.create_task(
+            execute_run(
+                run=run,
+                client=client,
+                clock=lambda: FIXED_TIME,
+                id_factory=lambda: "client-1",
+                cancellation_control=control,
+            )
+        )
+        await entered.wait()
+        control.detach()
+        task.cancel()
+        state = await task
+        assert client.submitted_workflows == []
+        assert client.global_queue_operations == []
+        return state
+
+    state = asyncio.run(scenario())
+
+    assert state.status is RunExecutionStatus.BLOCKED
+    assert state.error == USER_DETACHED_FROM_CURRENT_JOB
+    assert state.diagnostics == (USER_DETACHED_FROM_CURRENT_JOB,)
+    assert state.jobs[0].status is JobExecutionStatus.PREPARING
+    assert state.jobs[0].client_id == "client-1"
+    assert state.jobs[1].status is JobExecutionStatus.PENDING
+    assert ExecutionStateStore(run.path).load(run) == state
+
+
+def test_detach_during_submission_records_unknown_without_retry(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    control = DeterministicCancellationControl()
+
+    async def scenario() -> tuple[RunExecutionState, FakeExecutionClient]:
+        submitting = asyncio.Event()
+
+        class BlockingSubmissionClient(FakeExecutionClient):
+            async def submit_prompt(
+                self, workflow: Mapping[str, object], *, client_id: str
+            ) -> PromptSubmission:
+                self.submitted_workflows.append(copy.deepcopy(dict(workflow)))
+                self.call_log.append("submit:waiting")
+                submitting.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        client = BlockingSubmissionClient(submissions=[], histories={})
+        task = asyncio.create_task(
+            execute_run(
+                run=run,
+                client=client,
+                clock=lambda: FIXED_TIME,
+                id_factory=lambda: "client-1",
+                cancellation_control=control,
+            )
+        )
+        await submitting.wait()
+        control.detach()
+        task.cancel()
+        return await task, client
+
+    state, client = asyncio.run(scenario())
+
+    assert state.status is RunExecutionStatus.BLOCKED
+    assert state.jobs[0].status is JobExecutionStatus.SUBMISSION_UNKNOWN
+    assert state.jobs[0].submission_disposition is SubmissionDisposition.UNKNOWN
+    assert state.jobs[0].prompt_id is None
+    assert state.jobs[1].status is JobExecutionStatus.PENDING
+    assert len(client.submitted_workflows) == 1
+    assert client.global_queue_operations == []
+
+
+def test_detach_during_history_preserves_prompt_id_and_pending_suffix(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    control = DeterministicCancellationControl()
+
+    async def scenario() -> tuple[RunExecutionState, FakeExecutionClient]:
+        reconciling = asyncio.Event()
+
+        class BlockingHistoryClient(FakeExecutionClient):
+            async def get_history(self, prompt_id: str) -> ExecutionOutcome | None:
+                self.call_log.append(f"history:{prompt_id}")
+                reconciling.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        client = BlockingHistoryClient(
+            submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+            histories={"prompt-1": [None]},
+        )
+        task = asyncio.create_task(
+            execute_run(
+                run=run,
+                client=client,
+                clock=lambda: FIXED_TIME,
+                id_factory=lambda: "client-1",
+                cancellation_control=control,
+            )
+        )
+        await reconciling.wait()
+        control.detach()
+        task.cancel()
+        return await task, client
+
+    state, client = asyncio.run(scenario())
+
+    assert state.status is RunExecutionStatus.BLOCKED
+    assert state.jobs[0].status is JobExecutionStatus.SUBMITTED
+    assert state.jobs[0].prompt_id == "prompt-1"
+    assert state.jobs[0].submission_disposition is SubmissionDisposition.ACCEPTED
+    assert state.jobs[1].status is JobExecutionStatus.PENDING
+    assert client.global_queue_operations == []
+
+
+def test_detach_during_result_download_preserves_already_durable_results(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    first = RemoteOutputArtifact("41", "images", "one.png", "", "output")
+    second = RemoteOutputArtifact("52", "images", "two.png", "", "output")
+    control = DeterministicCancellationControl()
+
+    async def scenario() -> RunExecutionState:
+        second_download = asyncio.Event()
+
+        class BlockingDownloadClient(FakeExecutionClient):
+            async def download_artifact(self, artifact: RemoteOutputArtifact) -> DownloadedArtifact:
+                if artifact is second:
+                    second_download.set()
+                    await asyncio.Event().wait()
+                    raise AssertionError("unreachable")
+                return await super().download_artifact(artifact)
+
+        client = BlockingDownloadClient(
+            submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+            histories={
+                "prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED, first, second)]
+            },
+            downloads={first: (b"first", "image/png")},
+        )
+        task = asyncio.create_task(
+            execute_run(
+                run=run,
+                client=client,
+                clock=lambda: FIXED_TIME,
+                id_factory=lambda: "client-1",
+                cancellation_control=control,
+            )
+        )
+        await second_download.wait()
+        control.detach()
+        task.cancel()
+        state = await task
+        assert client.global_queue_operations == []
+        return state
+
+    state = asyncio.run(scenario())
+
+    assert state.status is RunExecutionStatus.BLOCKED
+    assert state.jobs[0].status is JobExecutionStatus.SUBMITTED
+    assert state.jobs[0].history_status == {"completed": True, "status_str": "succeeded"}
+    assert [result.local_path for result in state.jobs[0].results] == ["outputs/000001-01.png"]
+    assert (run.path / "outputs/000001-01.png").read_bytes() == b"first"
+    assert state.jobs[1].status is JobExecutionStatus.PENDING
+
+
+@pytest.mark.parametrize(
+    ("outcome_status", "expected_run", "expected_jobs"),
+    [
+        (
+            ExecutionStatus.SUCCEEDED,
+            RunExecutionStatus.CANCELLED,
+            [JobExecutionStatus.SUCCEEDED, JobExecutionStatus.CANCELLED],
+        ),
+        (
+            ExecutionStatus.FAILED,
+            RunExecutionStatus.FAILED,
+            [JobExecutionStatus.FAILED, JobExecutionStatus.PENDING],
+        ),
+    ],
+)
+def test_proven_remote_outcome_beats_detach(
+    tmp_path: Path,
+    outcome_status: ExecutionStatus,
+    expected_run: RunExecutionStatus,
+    expected_jobs: list[JobExecutionStatus],
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    control = DeterministicCancellationControl()
+
+    class DetachOnHistoryClient(FakeExecutionClient):
+        async def get_history(self, prompt_id: str) -> ExecutionOutcome | None:
+            control.detach()
+            return await super().get_history(prompt_id)
+
+    client = DetachOnHistoryClient(
+        submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+        histories={"prompt-1": [_outcome("prompt-1", outcome_status)]},
+    )
+
+    state = _run(run, client, cancellation_control=control)
+
+    assert state.status is expected_run
+    assert [job.status for job in state.jobs] == expected_jobs
+
+
+def test_task_cancellation_without_detach_does_not_fabricate_terminal_state(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, with_images=False)
+    control = DeterministicCancellationControl()
+
+    async def scenario() -> None:
+        reconciling = asyncio.Event()
+
+        class BlockingHistoryClient(FakeExecutionClient):
+            async def get_history(self, prompt_id: str) -> ExecutionOutcome | None:
+                reconciling.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        client = BlockingHistoryClient(
+            submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+            histories={"prompt-1": [None]},
+        )
+        task = asyncio.create_task(
+            execute_run(
+                run=run,
+                client=client,
+                clock=lambda: FIXED_TIME,
+                id_factory=lambda: "client-1",
+                cancellation_control=control,
+            )
+        )
+        await reconciling.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    persisted = ExecutionStateStore(run.path).load(run)
+    assert persisted.status is RunExecutionStatus.RUNNING
+    assert persisted.jobs[0].status is JobExecutionStatus.SUBMITTED
 
 
 def test_job_succeeds_only_after_every_result_is_stored(tmp_path: Path) -> None:

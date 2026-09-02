@@ -553,11 +553,13 @@ export interface JobExecutionResponse {
 export type RunCancellationState =
   | "stop_requested"
   | "stopping_after_current_job"
+  | "detach_requested"
+  | "detached"
   | "cancelled"
   | "finished";
 
 export interface RunCancellationResponse {
-  mode: "after_current_job";
+  mode: "after_current_job" | "detach";
   requested_at: string | null;
   state: RunCancellationState;
 }
