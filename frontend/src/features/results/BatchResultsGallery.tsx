@@ -1,13 +1,14 @@
 import { useState } from "react";
 
 import type { BatchcraftApi } from "../../api/client";
-import type { ResultResponse, RunResponse } from "../../api/types";
+import type { ExecutionResponse, ResultResponse, RunResponse } from "../../api/types";
 import { ResultGallery } from "./ResultGallery";
 
 export interface BatchGalleryRun {
   runId: string;
   runNumber: number | null;
   results: ResultResponse[];
+  execution: ExecutionResponse | null;
   loading: boolean;
   error: string | null;
 }
@@ -118,6 +119,7 @@ export function BatchResultsGallery({
                     <ResultGallery
                       api={api}
                       runId={runId}
+                      execution={run?.execution ?? null}
                       results={orderedResults}
                       runLabel={runLabel}
                       getCachedRun={getCachedRun}

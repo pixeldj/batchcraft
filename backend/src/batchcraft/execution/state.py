@@ -24,9 +24,10 @@ from .models import (
     RunExecutionStatus,
 )
 
-EXECUTION_FORMAT_VERSION = 2
+EXECUTION_FORMAT_VERSION = 3
 EXECUTION_FILENAME = "execution.json"
 DISCARDED_BEFORE_START = "discarded_before_start"
+STOPPED_AFTER_CURRENT_JOB = "stopped_after_current_job"
 _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}")
 _RUN_TRANSITIONS = {
     RunExecutionStatus.CREATED: {
@@ -37,6 +38,7 @@ _RUN_TRANSITIONS = {
         RunExecutionStatus.SUCCEEDED,
         RunExecutionStatus.FAILED,
         RunExecutionStatus.BLOCKED,
+        RunExecutionStatus.CANCELLED,
     },
     RunExecutionStatus.SUCCEEDED: set(),
     RunExecutionStatus.FAILED: set(),
@@ -48,10 +50,14 @@ _RUN_TRANSITIONS = {
     },
 }
 _JOB_TRANSITIONS = {
-    JobExecutionStatus.PENDING: {JobExecutionStatus.PREPARING},
+    JobExecutionStatus.PENDING: {
+        JobExecutionStatus.PREPARING,
+        JobExecutionStatus.CANCELLED,
+    },
     JobExecutionStatus.PREPARING: {
         JobExecutionStatus.SUBMITTING,
         JobExecutionStatus.FAILED,
+        JobExecutionStatus.CANCELLED,
     },
     JobExecutionStatus.SUBMITTING: {
         JobExecutionStatus.SUBMITTED,
@@ -68,6 +74,7 @@ _JOB_TRANSITIONS = {
     },
     JobExecutionStatus.SUCCEEDED: set(),
     JobExecutionStatus.FAILED: set(),
+    JobExecutionStatus.CANCELLED: set(),
 }
 
 
@@ -316,6 +323,7 @@ def _validate_transition(previous: RunExecutionState, current: RunExecutionState
             in {
                 JobExecutionStatus.SUCCEEDED,
                 JobExecutionStatus.FAILED,
+                JobExecutionStatus.CANCELLED,
             }
             and new_job != old_job
         ):
@@ -370,6 +378,19 @@ def _validate_state(state: RunExecutionState) -> None:
             or job.prompt_id is not None
         ):
             raise ExecutionStateError(f"Job {job.ordinal} has invalid unknown-submission state")
+        if job.status is JobExecutionStatus.CANCELLED and (
+            job.completed_at is None
+            or (job.client_id is None) != (job.started_at is None)
+            or job.submission_disposition is not None
+            or job.submission_http_status is not None
+            or job.submission_response is not None
+            or job.prompt_id is not None
+            or job.error is not None
+            or job.diagnostics
+            or job.history_status is not None
+            or job.results
+        ):
+            raise ExecutionStateError(f"Job {job.ordinal} has invalid cancelled state")
         if tuple(result.artifact_ordinal for result in job.results) != tuple(
             range(1, len(job.results) + 1)
         ):
@@ -406,15 +427,25 @@ def _validate_state(state: RunExecutionState) -> None:
         for job in state.jobs
     ):
         raise ExecutionStateError("blocked Run state requires an unresolved Job")
-    if state.status is RunExecutionStatus.CANCELLED and (
-        state.started_at is not None
-        or state.completed_at is None
-        or state.current_job_ordinal is not None
-        or state.error is not None
-        or state.diagnostics != (DISCARDED_BEFORE_START,)
-        or any(not _is_pristine_pending_job(job) for job in state.jobs)
-    ):
-        raise ExecutionStateError("cancelled Run state requires a pristine unstarted execution")
+    if state.status is RunExecutionStatus.CANCELLED:
+        discarded_before_start = (
+            state.started_at is None
+            and state.completed_at is not None
+            and state.current_job_ordinal is None
+            and state.error is None
+            and state.diagnostics == (DISCARDED_BEFORE_START,)
+            and all(_is_pristine_pending_job(job) for job in state.jobs)
+        )
+        stopped_after_current = (
+            state.started_at is not None
+            and state.completed_at is not None
+            and state.current_job_ordinal is None
+            and state.error is None
+            and state.diagnostics == (STOPPED_AFTER_CURRENT_JOB,)
+            and _has_succeeded_prefix_cancelled_suffix(state.jobs, state.completed_at)
+        )
+        if not discarded_before_start and not stopped_after_current:
+            raise ExecutionStateError("cancelled Run state has an invalid cancellation shape")
 
 
 def _is_pristine_pending_job(job: JobExecutionState) -> bool:
@@ -433,6 +464,27 @@ def _is_pristine_pending_job(job: JobExecutionState) -> bool:
         diagnostics=(),
         history_status=None,
         results=(),
+    )
+
+
+def _has_succeeded_prefix_cancelled_suffix(
+    jobs: tuple[JobExecutionState, ...],
+    completed_at: str,
+) -> bool:
+    first_cancelled = next(
+        (index for index, job in enumerate(jobs) if job.status is JobExecutionStatus.CANCELLED),
+        None,
+    )
+    if first_cancelled is None:
+        return False
+    cancelled_jobs = jobs[first_cancelled:]
+    return all(
+        job.status is JobExecutionStatus.SUCCEEDED for job in jobs[:first_cancelled]
+    ) and all(
+        job.status is JobExecutionStatus.CANCELLED
+        and job.completed_at == completed_at
+        and (index == 0 or job.client_id is None)
+        for index, job in enumerate(cancelled_jobs)
     )
 
 

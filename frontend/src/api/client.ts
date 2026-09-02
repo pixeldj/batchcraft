@@ -30,6 +30,7 @@ import type {
   PromptVersionsResponse,
   ResultsResponse,
   RunCreatedResponse,
+  RunCancellationRequestedResponse,
   RunResponse,
   SavedBatchAdoptRequest,
   SavedBatchCreateRequest,
@@ -126,6 +127,10 @@ export interface BatchcraftApi {
 
 export interface RunDiscardApi {
   discardRun(runId: string): Promise<ExecutionResponse>;
+}
+
+export interface RunCancellationApi {
+  cancelRun(runId: string): Promise<RunCancellationRequestedResponse>;
 }
 
 export class BatchcraftApiClient implements BatchcraftApi {
@@ -359,6 +364,13 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   discardRun(runId: string): Promise<ExecutionResponse> {
     return this.request(`/api/runs/${encodeURIComponent(runId)}/discard`, { method: "POST" });
+  }
+
+  cancelRun(runId: string): Promise<RunCancellationRequestedResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/cancel`,
+      this.jsonRequest({ mode: "after_current_job" }, "POST"),
+    );
   }
 
   getExecution(runId: string, signal?: AbortSignal): Promise<ExecutionResponse> {

@@ -293,6 +293,7 @@ td { padding: 0.7rem; border-top: 1px solid var(--line); vertical-align: top; }
 .status-pill.succeeded { color: #35610f; background: #e4f4ce; }
 .status-pill.failed { color: var(--danger); background: var(--danger-bg); }
 .status-pill.blocked { color: var(--blocked); background: #eee4fa; }
+.status-pill.cancelled { color: #6b4f00; background: var(--warning-bg); }
 .run-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 1rem; align-items: center; margin-bottom: 1rem; padding: 0.8rem; background: rgba(255, 255, 255, 0.4); border-top: 2px solid var(--line-strong); }
 .run-summary > strong, .run-summary > p { grid-column: 1; }
 .run-summary > p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
@@ -309,6 +310,10 @@ progress::-webkit-progress-bar { background: #d6d6cc; }
 progress::-webkit-progress-value { background: var(--accent); }
 .timestamp-row { gap: 1rem; margin: 0.45rem 0 1rem; color: var(--muted); font-size: 0.72rem; }
 .blocked-note { border-color: var(--blocked); color: #4e2e6d; background: #eee4fa; }
+.stopping-note { padding: 0.75rem; color: #5d4500; background: var(--warning-bg); border-left: 4px solid var(--warning); line-height: 1.45; }
+.run-stop-action { align-items: center; }
+.stop-confirmation { display: flex; flex: 1; justify-content: space-between; gap: 1rem; align-items: center; }
+.stop-confirmation p { color: var(--ink); }
 .job-list { display: grid; gap: 0.45rem; margin-top: 1rem; }
 .job-row { display: grid; grid-template-columns: 4rem 1fr auto; gap: 0.75rem; align-items: center; padding: 0.65rem; background: var(--paper-raised); border: 1px solid var(--line); }
 .job-row > div:nth-child(2) { display: flex; flex-direction: column; gap: 0.2rem; align-items: flex-start; }
@@ -470,6 +475,7 @@ progress::-webkit-progress-value { background: var(--accent); }
   .action-row .button-primary { width: 100%; }
   .run-action-buttons { width: 100%; }
   .run-action-buttons > button { flex: 1; }
+  .stop-confirmation { width: 100%; align-items: stretch; flex-direction: column; }
   textarea.json-editor { min-height: 15rem; }
   .asset-picker-toolbar { align-items: flex-start; flex-direction: column; }
   .asset-picker-actions { width: 100%; justify-content: flex-start; }

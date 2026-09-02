@@ -1,3 +1,4 @@
+from .cancellation import ActiveRunCancellationControl
 from .errors import (
     ApplicationError,
     AssetDataError,
@@ -11,6 +12,8 @@ from .errors import (
     ProjectDiscoveryError,
     ProjectPublicationError,
     ResultNotFoundError,
+    RunCancellationNotEligibleError,
+    RunCancellationStoreError,
     RunCreationError,
     RunDataError,
     RunDiscardNotEligibleError,
@@ -28,6 +31,9 @@ from .service import (
     AssetImportInput,
     BatchcraftService,
     ComfyUIStatus,
+    RunCancellation,
+    RunCancellationRequestResult,
+    RunCancellationState,
     RunCreationInput,
     RunExecutor,
 )
@@ -35,6 +41,7 @@ from .tasks import RunTaskRegistry
 
 __all__ = [
     "ApplicationComfyUIClient",
+    "ActiveRunCancellationControl",
     "ApplicationError",
     "AssetDataError",
     "AssetImportInput",
@@ -51,10 +58,15 @@ __all__ = [
     "ProjectDiscoveryError",
     "ProjectPublicationError",
     "ResultNotFoundError",
+    "RunCancellation",
+    "RunCancellationNotEligibleError",
+    "RunCancellationRequestResult",
+    "RunCancellationState",
+    "RunCancellationStoreError",
     "RunCreationError",
-    "RunDiscardNotEligibleError",
     "RunCreationInput",
     "RunDataError",
+    "RunDiscardNotEligibleError",
     "RunExecutor",
     "RunNotFoundError",
     "RunPublicationError",

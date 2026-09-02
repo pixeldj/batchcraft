@@ -144,9 +144,9 @@ This boundary intentionally excludes scheduling, retries, mutable execution-stat
 
 Completed.
 
-Production code under `backend/src/batchcraft/execution/` persists execution format v2 mutable state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory. Execution v1 is intentionally unsupported; there is no v1 loader.
+Production code under `backend/src/batchcraft/execution/` persists execution format v3 mutable state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory. Execution formats v1 and v2 are intentionally unsupported; there are no compatibility loaders.
 
-This layer excludes global Run selection, concurrent execution, priorities, retries, automatic recovery, SQLite, FastAPI, React, and result review UI. Normal tests use a deterministic ComfyUI fake.
+This layer accepts a narrow cancellation-control boundary for submission admission and stop checkpoints, but excludes cancellation-intent persistence itself. It also excludes global Run selection, concurrent execution, priorities, retries, automatic recovery, SQLite, FastAPI, React, and result review UI. Normal tests use a deterministic ComfyUI fake.
 
 ### Phase 2: first vertical application slice
 
@@ -311,6 +311,23 @@ Running Runs enter the normal polling hook without another execution start. Miss
 Run pointers are pruned independently. This phase adds no backend endpoint, SQLite migration, Run index,
 Project-wide history, or executor restart recovery.
 
+### Phase 2.10: Stop after current Job
+
+The backend/core portion of BC-003A is implemented. SQLite stores idempotent `after_current_job`
+intent, the application layer serializes durable request acknowledgement against Job submission
+admission, and execution format v3 records the resulting Run and Job outcomes. The executor stops
+before another submission when possible, otherwise lets the already admitted Job reach an honest
+terminal or blocked state and ingests successful Results before cancelling the remaining unsubmitted
+Jobs. It never interrupts ComfyUI or clears its queue.
+
+FastAPI exposes `POST /api/runs/{run_id}/cancel` and merges SQLite request metadata with filesystem
+execution outcome in Run and execution read models. The execution package remains independent of
+SQLite. The frontend confirms the action, reconciles ambiguous responses through execution polling,
+shows durable request and stopping states, restores them after a cold load, preserves Result review, and
+unlocks editing only after a terminal outcome. BC-003A stays `In Progress` until its required live ComfyUI
+verification succeeds. This pass does not add executor restart recovery, retries, a durable scheduler, or
+remote interruption.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -352,13 +369,19 @@ SQL migrations live under `backend/src/batchcraft/db/migrations/`. The current p
 one consolidated `0001_initial.sql` baseline. Generic Workflow Parameters Pass 3A replaced the prior
 consolidated 0001 bytes and schema with normalized parameter binding storage; Pass 3B-1 replaced those
 bytes again to permit multiple positive parameter value positions; Pass 3B-2 replaced them again with
-Values/Range mode and decimal Range columns. Any database created from an earlier baseline has
+Values/Range mode and decimal Range columns; the BC-003A backend pass replaced them again with the
+`run_cancellation_request` table. Any database created from an earlier baseline has
 unsupported migration history and must be recreated manually. The application fails
 startup and never erases it. The migration runner, ordered discovery,
 checksums, and transactional application remain the forward-change mechanism. Once preserving a
 baseline is required, add only the next contiguous `NNNN_name.sql` file and do
 not change applied migration bytes. Test migration behavior against file-backed temporary databases
 rather than only `:memory:`.
+
+Cancellation changes require tests for durable and idempotent intent, both request/admission race
+orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and
+blocked precedence, succeeded-prefix/cancelled-suffix validation, absence of ComfyUI interrupt or queue
+operations, read-model reconstruction, and execution v2 rejection plus v3 round-trip behavior.
 
 ## Frontend Conventions
 

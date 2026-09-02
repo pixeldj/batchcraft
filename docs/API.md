@@ -6,8 +6,9 @@ The first application boundary exposes the production compiler, Run filesystem s
 
 The API is a local single-user development boundary. The first React frontend consumes it, and the
 browser never communicates directly with ComfyUI. SQLite owns current Project metadata, Prompt,
-Workflow, and Workflow Profile libraries, and Saved Batches. Authentication, a global scheduler,
-restart recovery, and in-flight cancellation remain deferred.
+Workflow, and Workflow Profile libraries, Saved Batches, and durable Run cancellation intent.
+Authentication, a global scheduler, executor restart recovery, force-stopping local waiting, and remote
+ComfyUI interruption remain deferred. Stop-after-current cancellation is available at the backend boundary.
 
 ## Local Startup
 
@@ -101,6 +102,7 @@ POST /api/runs
 GET  /api/runs/{run_id}
 POST /api/runs/{run_id}/execute
 POST /api/runs/{run_id}/discard
+POST /api/runs/{run_id}/cancel
 GET  /api/runs/{run_id}/execution
 GET  /api/runs/{run_id}/results
 GET  /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}
@@ -110,6 +112,10 @@ The API applies the current baseline SQL migration and any future contiguous mig
 accepting requests. Startup fails on migration errors, unsupported migration history, gaps, or changed
 checksums. It never deletes or rewrites an unsupported database automatically. Request handlers run
 each synchronous SQLite store operation through a worker thread rather than blocking the event loop.
+The current consolidated `0001_initial.sql` baseline includes `run_cancellation_request`. A database
+created from the preceding Pass 3B-2 baseline has a different applied checksum and fails startup. After
+inspection, recreate that development database manually; batchcraft does not delete, rewrite, or
+automatically migrate it.
 
 ## Projects And Prompts
 
@@ -286,7 +292,7 @@ Candidates are constrained to the configured root. The filesystem layer reads on
 
 ## Execution Tasks
 
-`POST /api/runs/{run_id}/execute` returns `202 Accepted` after retaining an in-process `asyncio.Task`. The task invokes the existing queue-depth-1 executor and all authoritative execution state remains in `execution.json`.
+`POST /api/runs/{run_id}/execute` returns `202 Accepted` after retaining an in-process `asyncio.Task`. The task invokes the existing queue-depth-1 executor. SQLite is authoritative only for durable cancellation request intent; all authoritative execution outcomes remain in execution format v3 `execution.json`.
 
 `POST /api/runs/{run_id}/discard` durably marks a Run that has never started as `cancelled` and returns the existing execution response shape with `200 OK`. The Run directory and frozen provenance remain available through Run lookup and Run Plan inspection. Discard records `completed_at`, leaves `started_at`, `current_job_ordinal`, and `error` null, preserves every Job as pristine `pending`, and records the stable Run diagnostic `discarded_before_start`. Repeated discard is idempotent.
 
@@ -298,6 +304,36 @@ The task registry:
 - cancels and observes active tasks during API shutdown.
 
 Start admission and discard are serialized by the same task-registry lock, so a Run cannot start and be discarded concurrently. Discard independently verifies that no task for the Run is active and that execution state is either absent or exactly the initial state derived from the frozen Run. It rejects any progression or submission evidence, including modified pending state, with `409 run_discard_not_eligible`.
+
+`POST /api/runs/{run_id}/cancel` accepts exactly:
+
+```json
+{"mode":"after_current_job"}
+```
+
+The endpoint returns `202 Accepted` with `run_id`, `mode`, nullable `requested_at`, `created`, and
+`state`. A new request is eligible only while the Run has an active task in this API process. The
+request is inserted durably before the in-process cancellation flag is exposed. Repeated requests are
+idempotent, preserve the original timestamp, and return `created: false`. Missing Runs return
+`404 run_not_found`; inactive or terminal `succeeded`, `failed`, or `blocked` Runs without an existing
+intent return `409 run_cancellation_not_eligible`; persistence failures return
+`500 run_cancellation_store_failed`. A Run already cancelled by discard returns a cancelled projection
+without creating SQLite intent.
+
+Cancellation request persistence and the short Job submission-admission transition share one
+per-active-Run lock. If the request wins before admission, the prepared Job and all remaining
+unsubmitted Jobs become `cancelled`. If admission already won, the current Job continues through
+normal submission, history reconciliation, and Result ingestion, and no subsequent Job is submitted.
+Current-Job failure still produces Run `failed`; unresolved accepted or ambiguous submission produces
+Run `blocked`. If an admitted final Job succeeds, no cancelled suffix remains and the Run finishes
+`succeeded`. The operation never interrupts ComfyUI, clears its queue, retries, or resubmits work.
+
+`GET /api/runs/{run_id}/execution` returns an optional `cancellation` object, and
+`GET /api/runs/{run_id}` returns the same object under `execution.cancellation`. It contains `mode`,
+nullable `requested_at`, and one projection state: `stop_requested` before admission,
+`stopping_after_current_job` after admission, `cancelled` when execution v3 records a cancellation
+outcome, or `finished` when the request exists but execution honestly reached `succeeded`, `failed`, or
+`blocked`. A discarded Run projects `cancelled` with `requested_at: null`.
 
 An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the discarded Run.
 
@@ -325,6 +361,7 @@ API errors use:
 Defined cases include invalid requests and Batches, Project/Prompt validation and conflicts,
 Project adoption/publication failures, invalid Workflow Profile mappings, unsafe Project keys,
 invalid image uploads, missing or invalid Project assets, missing Runs or Results, active or
-ineligible execution, ineligible Run discard, Saved Batch revision conflicts, Saved Batch integrity violations, missing or
+ineligible execution, ineligible Run discard, ineligible Run cancellation, unavailable cancellation
+intent storage, Saved Batch revision conflicts, Saved Batch integrity violations, missing or
 invalid Saved Batches, asset or Run publication failure, invalid durable Run data, and unexpected
 internal errors. Python stack traces are logged server-side rather than returned to clients.

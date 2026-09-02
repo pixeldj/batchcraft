@@ -8,12 +8,15 @@ interface Props {
   execution: ExecutionResponse | null;
   starting: boolean;
   discarding: boolean;
+  requestingStop: boolean;
+  reconcilingStop: boolean;
   polling: boolean;
   error: string | null;
   createdUnavailable: boolean;
   batchDiverged: boolean;
   onStart(): void;
   onDiscard(): void;
+  onStopAfterCurrentJob(): void;
 }
 
 export function RunPanel({
@@ -21,15 +24,19 @@ export function RunPanel({
   execution,
   starting,
   discarding,
+  requestingStop,
+  reconcilingStop,
   polling,
   error,
   createdUnavailable,
   batchDiverged,
   onStart,
   onDiscard,
+  onStopAfterCurrentJob,
 }: Props) {
   const [planOpen, setPlanOpen] = useState(false);
   const [planRestoreTarget, setPlanRestoreTarget] = useState<HTMLElement | null>(null);
+  const [confirmingStop, setConfirmingStop] = useState(false);
 
   if (!run) {
     return (
@@ -49,8 +56,16 @@ export function RunPanel({
   const frozenRun = "plan" in run ? run : null;
   const dimensions = frozenRun ? summarizeDimensions(frozenRun) : null;
   const workflow = frozenRun?.batch_snapshot.workflow_selection;
+  const stopping = status === "running" && (
+    execution?.cancellation?.state === "stop_requested" ||
+    execution?.cancellation?.state === "stopping_after_current_job"
+  );
   const statusText =
-    status === "running" && current
+    stopping
+      ? current
+        ? `Stopping after current Job · Job ${current} of ${run.job_count}`
+        : "Stopping after current Job"
+      : status === "running" && current
       ? `Running · Job ${current} of ${run.job_count}`
       : status === "created"
         ? createdUnavailable ? "Created · Not executable" : "Created · Ready to start"
@@ -113,6 +128,13 @@ export function RunPanel({
               available in this version.
             </p>
           ) : null}
+          {stopping ? (
+            <p className="stopping-note" role="status" aria-live="polite">
+              {execution.cancellation?.state === "stop_requested"
+                ? "Stop requested. No further Job will start."
+                : "The current Job will finish normally and keep its Results. No later Job will start."}
+            </p>
+          ) : null}
           <Diagnostics diagnostics={execution.diagnostics} label="Run diagnostics" />
 
           <div className="job-list">
@@ -161,6 +183,55 @@ export function RunPanel({
             </div>
           ) : null}
         </>
+      ) : null}
+      {status === "running" && !execution?.cancellation ? (
+        <div className="action-row run-stop-action">
+          {confirmingStop ? (
+            <div className="stop-confirmation" role="group" aria-label="Confirm stop after current Job">
+              <p>
+                <strong>Stop this Run after the current Job finishes?</strong><br />
+                Remaining Jobs will not start.
+              </p>
+              <div className="run-action-buttons">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  disabled={requestingStop || reconcilingStop}
+                  onClick={() => setConfirmingStop(false)}
+                >
+                  Keep Running
+                </button>
+                <button
+                  className="button-primary"
+                  type="button"
+                  disabled={requestingStop || reconcilingStop}
+                  onClick={() => {
+                    setConfirmingStop(false);
+                    onStopAfterCurrentJob();
+                  }}
+                >
+                  Stop Run
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p>The current Job will finish normally. Remaining Jobs will not start.</p>
+              <button
+                className="button-secondary"
+                type="button"
+                disabled={requestingStop || reconcilingStop}
+                onClick={() => setConfirmingStop(true)}
+              >
+                {requestingStop
+                  ? "Requesting stop..."
+                  : reconcilingStop
+                    ? "Checking stop request..."
+                    : "Stop after current Job"}
+              </button>
+            </>
+          )}
+        </div>
       ) : null}
       {polling ? <p className="polling-note" aria-live="polite">Watching execution state...</p> : null}
       {frozenRun && planOpen ? (

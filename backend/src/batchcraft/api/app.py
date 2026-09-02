@@ -29,6 +29,8 @@ from batchcraft.application import (
     ProjectDiscoveryError,
     ProjectPublicationError,
     ResultNotFoundError,
+    RunCancellationNotEligibleError,
+    RunCancellationStoreError,
     RunCreationError,
     RunDataError,
     RunDiscardNotEligibleError,
@@ -55,6 +57,7 @@ from batchcraft.db import (
     PromptValidationError,
     PromptVersionConflictError,
     PromptVersionNotFoundError,
+    RunCancellationRequestStore,
     SavedBatchConflictError,
     SavedBatchIntegrityError,
     SavedBatchNotFoundError,
@@ -115,6 +118,8 @@ from .schemas import (
     PromptVersionsResponse,
     ResultResponse,
     ResultsResponse,
+    RunCancellationRequest,
+    RunCancellationRequestedResponse,
     RunCreatedResponse,
     RunResponse,
     SavedBatchAdoptRequest,
@@ -178,10 +183,12 @@ def create_app(
             apply_migrations(connection)
         client = make_client(configured)
         registry = RunTaskRegistry()
+        cancellation_store = RunCancellationRequestStore(configured.database_path, clock=clock)
         app.state.service = BatchcraftService(
             projects_root=configured.projects_root,
             comfyui_client=client,
             task_registry=registry,
+            cancellation_store=cancellation_store,
             execution_config=configured.execution_config,
             executor=executor,
             clock=clock,
@@ -833,7 +840,9 @@ def create_app(
         service: ServiceDependency,
     ) -> RunResponse:
         run = service.get_run(run_id)
-        return RunResponse.from_run_and_state(run, service.get_execution_state(run))
+        state = service.get_execution_state(run)
+        cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
+        return RunResponse.from_run_and_state(run, state, cancellation)
 
     @app.post(
         "/api/runs/{run_id}/execute",
@@ -853,14 +862,32 @@ def create_app(
         service: ServiceDependency,
     ) -> ExecutionResponse:
         run = service.get_run(run_id)
-        return ExecutionResponse.from_state(service.get_execution_state(run))
+        state = service.get_execution_state(run)
+        cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
+        return ExecutionResponse.from_state(state, cancellation)
+
+    @app.post(
+        "/api/runs/{run_id}/cancel",
+        response_model=RunCancellationRequestedResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def request_run_cancellation(
+        run_id: str,
+        _request: RunCancellationRequest,
+        service: ServiceDependency,
+    ) -> RunCancellationRequestedResponse:
+        return RunCancellationRequestedResponse.from_result(
+            await service.request_run_cancellation(run_id)
+        )
 
     @app.post("/api/runs/{run_id}/discard", response_model=ExecutionResponse)
     async def discard_run(
         run_id: str,
         service: ServiceDependency,
     ) -> ExecutionResponse:
-        return ExecutionResponse.from_state(await service.discard_run(run_id))
+        state = await service.discard_run(run_id)
+        cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
+        return ExecutionResponse.from_state(state, cancellation)
 
     @app.get("/api/runs/{run_id}/results", response_model=ResultsResponse)
     async def list_results(
@@ -1152,6 +1179,27 @@ def _register_error_handlers(app: FastAPI) -> None:
             status.HTTP_409_CONFLICT,
             "run_discard_not_eligible",
             str(error),
+        )
+
+    @app.exception_handler(RunCancellationNotEligibleError)
+    async def ineligible_run_cancellation(
+        _request: Request, _error: RunCancellationNotEligibleError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "run_cancellation_not_eligible",
+            "Run is not eligible for cancellation",
+        )
+
+    @app.exception_handler(RunCancellationStoreError)
+    async def run_cancellation_store_failed(
+        _request: Request, error: RunCancellationStoreError
+    ) -> JSONResponse:
+        logger.error("Run cancellation persistence failed: %s", error)
+        return _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "run_cancellation_store_failed",
+            "Run cancellation data is unavailable",
         )
 
     @app.exception_handler(RunCreationError)

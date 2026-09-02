@@ -42,13 +42,20 @@ from batchcraft.comfyui import (
     SubmissionDisposition,
     UploadedInput,
 )
+from batchcraft.db import (
+    RunCancellationMode,
+    RunCancellationRequestStore,
+    RunCancellationStoreError,
+)
 from batchcraft.domain import PromptVersion
 from batchcraft.execution import (
+    STOPPED_AFTER_CURRENT_JOB,
     ExecutionClient,
     ExecutionConfig,
     ExecutionStateError,
     ExecutionStateStore,
     JobExecutionStatus,
+    RunCancellationControl,
     RunExecutionState,
     RunExecutionStatus,
 )
@@ -2259,6 +2266,11 @@ def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
             }
             for ordinal in range(1, 5)
         ],
+        "cancellation": {
+            "mode": "after_current_job",
+            "requested_at": None,
+            "state": "cancelled",
+        },
     }
     assert discarded.status_code == 200
     assert discarded.json() == expected
@@ -2273,7 +2285,7 @@ def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
     assert next_run.json()["run_id"] != run_id
     assert client.submission_count == 0
     assert run_path.is_dir()
-    assert json.loads((run_path / "execution.json").read_text())["format_version"] == 2
+    assert json.loads((run_path / "execution.json").read_text())["format_version"] == 3
     assert {name: (run_path / name).read_bytes() for name in immutable_before} == immutable_before
 
 
@@ -2818,9 +2830,11 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         run: PublishedRun,
         client: ExecutionClient,
         config: ExecutionConfig,
+        cancellation_control: RunCancellationControl,
     ) -> RunExecutionState:
         assert client is not None
         assert config.history_timeout_seconds == 1
+        assert not cancellation_control.cancellation_requested()
         store = ExecutionStateStore(run.path)
         state = store.initialize(run)
         running = replace(state, status=RunExecutionStatus.RUNNING, started_at="started")
@@ -2875,9 +2889,11 @@ def test_execution_start_and_discard_race_has_exactly_one_winner(tmp_path: Path)
         run: PublishedRun,
         client: ExecutionClient,
         config: ExecutionConfig,
+        cancellation_control: RunCancellationControl,
     ) -> RunExecutionState:
         assert client is not None
         assert config.history_timeout_seconds == 1
+        assert not cancellation_control.cancellation_requested()
         store = ExecutionStateStore(run.path)
         state = store.initialize(run)
         running = replace(state, status=RunExecutionStatus.RUNNING, started_at="started")
@@ -2972,3 +2988,387 @@ def test_executor_failure_and_unknown_submission_are_durable_states(tmp_path: Pa
     assert failed_discard.status_code == 409
     assert failed_discard.json()["error"]["code"] == "run_discard_not_eligible"
     assert blocked_restart.status_code == 409
+
+
+def test_run_cancellation_rejects_unknown_invalid_and_inactive_runs(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        unknown = http.post("/api/runs/missing/cancel", json={"mode": "after_current_job"})
+        inactive = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+        unsupported = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "immediate"})
+        extra = http.post(
+            f"/api/runs/{run_id}/cancel",
+            json={"mode": "after_current_job", "extra": True},
+        )
+
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "run_not_found"
+    assert inactive.status_code == 409
+    assert inactive.json()["error"]["code"] == "run_cancellation_not_eligible"
+    assert unsupported.status_code == 422
+    assert extra.status_code == 422
+    assert (
+        RunCancellationRequestStore(settings.database_path).get(
+            run_id, RunCancellationMode.AFTER_CURRENT_JOB
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "client",
+    (
+        FakeComfyUIClient(),
+        FakeComfyUIClient(upload_error=RuntimeError("upload failed")),
+        FakeComfyUIClient(submission_disposition=SubmissionDisposition.UNKNOWN),
+    ),
+)
+def test_new_run_cancellation_request_rejects_terminal_execution_states(
+    tmp_path: Path, client: FakeComfyUIClient
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        terminal = _wait_for_status(
+            http,
+            run_id,
+            "blocked"
+            if client.submission_disposition is SubmissionDisposition.UNKNOWN
+            else "failed"
+            if client.upload_error is not None
+            else "succeeded",
+        )
+        response = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+
+    assert terminal.status in {"succeeded", "failed", "blocked"}
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "run_cancellation_not_eligible"
+    assert (
+        RunCancellationRequestStore(settings.database_path).get(
+            run_id, RunCancellationMode.AFTER_CURRENT_JOB
+        )
+        is None
+    )
+    store = RunCancellationRequestStore(settings.database_path)
+    record, created = store.request(run_id, RunCancellationMode.AFTER_CURRENT_JOB)
+    assert created
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as restarted:
+        repeated = restarted.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+        read_model = restarted.get(f"/api/runs/{run_id}/execution")
+    assert repeated.status_code == 202
+    assert repeated.json()["created"] is False
+    assert repeated.json()["requested_at"] == record.requested_at.isoformat().replace("+00:00", "Z")
+    assert repeated.json()["state"] == "finished"
+    assert read_model.json()["cancellation"]["state"] == "finished"
+
+
+def test_active_cancellation_is_prompt_durable_idempotent_and_releases_registry(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    crossed_admission = threading.Event()
+    request_seen = threading.Event()
+    finish_current = threading.Event()
+    second_started = threading.Event()
+    calls = 0
+
+    async def controlled_executor(
+        *,
+        run: PublishedRun,
+        client: ExecutionClient,
+        config: ExecutionConfig,
+        cancellation_control: RunCancellationControl,
+    ) -> RunExecutionState:
+        nonlocal calls
+        calls += 1
+        assert client is not None
+        assert config.history_timeout_seconds == 1
+        store = ExecutionStateStore(run.path)
+        state = store.initialize(run)
+        state = replace(
+            state,
+            status=RunExecutionStatus.RUNNING,
+            started_at="2026-09-01T10:00:00Z",
+            current_job_ordinal=1,
+        )
+        store.save(run, state)
+        preparing = replace(
+            state.jobs[0],
+            status=JobExecutionStatus.PREPARING,
+            client_id="client-1",
+            started_at="2026-09-01T10:00:01Z",
+        )
+        state = replace(state, jobs=(preparing, *state.jobs[1:]))
+        store.save(run, state)
+        async with cancellation_control.submission_admission() as admitted:
+            assert admitted
+            submitting = replace(preparing, status=JobExecutionStatus.SUBMITTING)
+            state = replace(state, jobs=(submitting, *state.jobs[1:]))
+            store.save(run, state)
+
+        if calls > 1:
+            second_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        crossed_admission.set()
+        while not cancellation_control.cancellation_requested():
+            await asyncio.sleep(0.001)
+        request_seen.set()
+        await asyncio.to_thread(finish_current.wait)
+
+        submitted = replace(
+            submitting,
+            status=JobExecutionStatus.SUBMITTED,
+            submission_disposition=SubmissionDisposition.ACCEPTED,
+            submission_http_status=200,
+            submission_response={"prompt_id": "prompt-1"},
+            prompt_id="prompt-1",
+        )
+        state = replace(state, jobs=(submitted, *state.jobs[1:]))
+        store.save(run, state)
+        succeeded = replace(
+            submitted,
+            status=JobExecutionStatus.SUCCEEDED,
+            completed_at="2026-09-01T10:00:02Z",
+        )
+        cancelled_jobs = tuple(
+            replace(
+                job,
+                status=JobExecutionStatus.CANCELLED,
+                completed_at="2026-09-01T10:00:02Z",
+            )
+            for job in state.jobs[1:]
+        )
+        state = replace(state, jobs=(succeeded, *cancelled_jobs))
+        store.save(run, state)
+        state = replace(
+            state,
+            status=RunExecutionStatus.CANCELLED,
+            completed_at="2026-09-01T10:00:02Z",
+            current_job_ordinal=None,
+            diagnostics=(STOPPED_AFTER_CURRENT_JOB,),
+        )
+        store.save(run, state)
+        return state
+
+    with TestClient(
+        create_app(
+            settings,
+            client_factory=lambda _settings: FakeComfyUIClient(),
+            executor=controlled_executor,
+            clock=lambda: datetime(2026, 9, 1, 10, 0, 1, tzinfo=UTC),
+        )
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        assert crossed_admission.wait(timeout=1)
+
+        started_at = time.monotonic()
+        first = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+        elapsed = time.monotonic() - started_at
+        assert request_seen.wait(timeout=1)
+        repeated = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+        execution = http.get(f"/api/runs/{run_id}/execution")
+        run_lookup = http.get(f"/api/runs/{run_id}")
+
+        assert first.status_code == 202
+        assert elapsed < 0.5
+        assert first.json() == {
+            "run_id": run_id,
+            "mode": "after_current_job",
+            "requested_at": "2026-09-01T10:00:01Z",
+            "created": True,
+            "state": "stopping_after_current_job",
+        }
+        assert repeated.json() == {**first.json(), "created": False}
+        assert execution.json()["cancellation"] == {
+            "mode": "after_current_job",
+            "requested_at": "2026-09-01T10:00:01Z",
+            "state": "stopping_after_current_job",
+        }
+        assert run_lookup.json()["execution"]["cancellation"] == execution.json()["cancellation"]
+        persisted = RunCancellationRequestStore(settings.database_path).get(
+            run_id, RunCancellationMode.AFTER_CURRENT_JOB
+        )
+        assert persisted is not None
+        assert persisted.requested_at == datetime(2026, 9, 1, 10, 0, 1, tzinfo=UTC)
+
+        finish_current.set()
+        terminal = _wait_for_status(http, run_id, "cancelled")
+        terminal_request = http.post(
+            f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"}
+        )
+        other_run_id = _create_run(http, _batch_request((asset_id,)))
+        other_started = http.post(f"/api/runs/{other_run_id}/execute")
+        assert second_started.wait(timeout=1)
+
+        assert terminal.cancellation is not None
+        assert terminal.cancellation.state == "cancelled"
+        assert terminal_request.status_code == 202
+        assert terminal_request.json()["created"] is False
+        assert terminal_request.json()["state"] == "cancelled"
+        assert other_started.status_code == 202
+
+
+def test_cancelled_run_without_intent_is_idempotent_without_creating_one(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        assert http.post(f"/api/runs/{run_id}/discard").status_code == 200
+        response = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "run_id": run_id,
+        "mode": "after_current_job",
+        "requested_at": None,
+        "created": False,
+        "state": "cancelled",
+    }
+    assert (
+        RunCancellationRequestStore(settings.database_path).get(
+            run_id, RunCancellationMode.AFTER_CURRENT_JOB
+        )
+        is None
+    )
+
+
+def test_cancellation_before_submission_admission_reports_stop_requested(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    ready_for_admission = threading.Event()
+    allow_admission = threading.Event()
+
+    async def admission_losing_executor(
+        *,
+        run: PublishedRun,
+        client: ExecutionClient,
+        config: ExecutionConfig,
+        cancellation_control: RunCancellationControl,
+    ) -> RunExecutionState:
+        assert client is not None
+        assert config is not None
+        store = ExecutionStateStore(run.path)
+        state = store.initialize(run)
+        preparing = replace(
+            state.jobs[0],
+            status=JobExecutionStatus.PREPARING,
+            client_id="client-1",
+            started_at="2026-09-01T11:00:01Z",
+        )
+        state = replace(
+            state,
+            status=RunExecutionStatus.RUNNING,
+            started_at="2026-09-01T11:00:00Z",
+            current_job_ordinal=1,
+            jobs=(preparing, *state.jobs[1:]),
+        )
+        store.save(run, state)
+        ready_for_admission.set()
+        await asyncio.to_thread(allow_admission.wait)
+        async with cancellation_control.submission_admission() as admitted:
+            assert not admitted
+
+        cancelled_jobs = tuple(
+            replace(
+                job,
+                status=JobExecutionStatus.CANCELLED,
+                completed_at="2026-09-01T11:00:02Z",
+            )
+            for job in state.jobs
+        )
+        state = replace(state, jobs=cancelled_jobs)
+        store.save(run, state)
+        state = replace(
+            state,
+            status=RunExecutionStatus.CANCELLED,
+            completed_at="2026-09-01T11:00:02Z",
+            current_job_ordinal=None,
+            diagnostics=(STOPPED_AFTER_CURRENT_JOB,),
+        )
+        store.save(run, state)
+        return state
+
+    with TestClient(
+        create_app(
+            settings,
+            client_factory=lambda _settings: FakeComfyUIClient(),
+            executor=admission_losing_executor,
+        )
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        assert ready_for_admission.wait(timeout=1)
+        requested = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+        assert requested.status_code == 202
+        assert requested.json()["state"] == "stop_requested"
+        assert http.get(f"/api/runs/{run_id}/execution").json()["cancellation"]["state"] == (
+            "stop_requested"
+        )
+
+        allow_admission.set()
+        terminal = _wait_for_status(http, run_id, "cancelled")
+        assert terminal.cancellation is not None
+        assert terminal.cancellation.state == "cancelled"
+
+
+def test_run_cancellation_store_failure_is_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    def fail_request(*_args: object, **_kwargs: object) -> NoReturn:
+        raise RunCancellationStoreError("private database detail")
+
+    async def blocking_executor(
+        *,
+        run: PublishedRun,
+        client: ExecutionClient,
+        config: ExecutionConfig,
+        cancellation_control: RunCancellationControl,
+    ) -> RunExecutionState:
+        assert run is not None
+        assert client is not None
+        assert config is not None
+        assert not cancellation_control.cancellation_requested()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    with TestClient(
+        create_app(
+            settings,
+            client_factory=lambda _settings: FakeComfyUIClient(),
+            executor=blocking_executor,
+        ),
+        raise_server_exceptions=False,
+    ) as http:
+        run_id = _create_run(http, _batch_request((asset_id,)))
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        monkeypatch.setattr(RunCancellationRequestStore, "request", fail_request)
+        response = http.post(f"/api/runs/{run_id}/cancel", json={"mode": "after_current_job"})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "run_cancellation_store_failed",
+            "message": "Run cancellation data is unavailable",
+        }
+    }
+    assert "private database detail" not in response.text

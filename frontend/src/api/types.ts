@@ -529,15 +529,42 @@ export interface RunPlanResponse {
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed" | "blocked" | "cancelled";
 
+export type JobStatus =
+  | "pending"
+  | "preparing"
+  | "submitting"
+  | "submission_unknown"
+  | "submitted"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
 export interface JobExecutionResponse {
   ordinal: number;
-  status: string;
+  status: JobStatus;
   prompt_id: string | null;
   started_at: string | null;
   completed_at: string | null;
   error: string | null;
   diagnostics: string[];
   result_count: number;
+}
+
+export type RunCancellationState =
+  | "stop_requested"
+  | "stopping_after_current_job"
+  | "cancelled"
+  | "finished";
+
+export interface RunCancellationResponse {
+  mode: "after_current_job";
+  requested_at: string | null;
+  state: RunCancellationState;
+}
+
+export interface RunCancellationRequestedResponse extends RunCancellationResponse {
+  run_id: string;
+  created: boolean;
 }
 
 export interface ExecutionResponse {
@@ -549,6 +576,7 @@ export interface ExecutionResponse {
   error: string | null;
   diagnostics: string[];
   jobs: JobExecutionResponse[];
+  cancellation?: RunCancellationResponse | null;
 }
 
 export interface ExecutionStartedResponse {

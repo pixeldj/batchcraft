@@ -84,3 +84,11 @@ class ExecutionNotEligibleError(ApplicationError):
 
 class RunDiscardNotEligibleError(ApplicationError):
     pass
+
+
+class RunCancellationNotEligibleError(ApplicationError):
+    pass
+
+
+class RunCancellationStoreError(ApplicationError):
+    pass

@@ -3,7 +3,7 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +39,7 @@ from batchcraft.execution import (
     ExecutionStateError,
     ExecutionStateStore,
     JobExecutionStatus,
+    RunCancellationControl,
     RunExecutionState,
     RunExecutionStatus,
     execute_run,
@@ -162,6 +163,7 @@ class FakeExecutionClient:
         self.max_active_prompts = 0
         self._stream_number = 0
         self._terminal_prompts: set[str] = set()
+        self.global_queue_operations: list[str] = []
 
     async def upload_input(
         self,
@@ -244,6 +246,42 @@ class FakeExecutionClient:
             content_type=content_type,
             sha256=hashlib.sha256(content).hexdigest(),
         )
+
+    async def interrupt(self) -> None:
+        self.global_queue_operations.append("interrupt")
+
+    async def clear_queue(self) -> None:
+        self.global_queue_operations.append("clear_queue")
+
+
+class DeterministicCancellationControl:
+    def __init__(
+        self,
+        *,
+        requested: bool = False,
+        request_after_admission: bool = False,
+    ) -> None:
+        self.requested = requested
+        self.request_after_admission = request_after_admission
+        self.admission_log: list[str] = []
+        self.checkpoint_reads = 0
+
+    def request(self) -> None:
+        self.requested = True
+
+    def cancellation_requested(self) -> bool:
+        self.checkpoint_reads += 1
+        return self.requested
+
+    @asynccontextmanager
+    async def submission_admission(self) -> AsyncIterator[bool]:
+        self.admission_log.append("entered")
+        admitted = not self.requested
+        self.admission_log.append("admitted" if admitted else "denied")
+        yield admitted
+        if admitted and self.request_after_admission:
+            self.request()
+            self.admission_log.append("requested_after_admission")
 
 
 def _published_run(
@@ -417,6 +455,7 @@ def _run(
     config: ExecutionConfig | None = None,
     monotonic: Callable[[], float] | None = None,
     state_store: ExecutionStateStore | None = None,
+    cancellation_control: RunCancellationControl | None = None,
 ) -> RunExecutionState:
     client_ids = SequentialValues(*(f"client-{i}" for i in range(1, 20)))
     if monotonic is None:
@@ -429,6 +468,7 @@ def _run(
                 workflow_preparer=preparer,
                 clock=lambda: FIXED_TIME,
                 id_factory=client_ids,
+                cancellation_control=cancellation_control,
             )
         )
     return asyncio.run(
@@ -441,6 +481,7 @@ def _run(
             clock=lambda: FIXED_TIME,
             id_factory=client_ids,
             monotonic=monotonic,
+            cancellation_control=cancellation_control,
         )
     )
 
@@ -885,6 +926,256 @@ def test_websocket_open_failure_does_not_submit_prompt(tmp_path: Path) -> None:
     assert client.submitted_workflows == []
 
 
+def test_cancellation_before_first_job_cancels_every_job_without_remote_work(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=3, with_images=False)
+    client = FakeExecutionClient(submissions=[], histories={})
+    control = DeterministicCancellationControl(requested=True)
+
+    state = _run(run, client, cancellation_control=control)
+
+    assert state.status is RunExecutionStatus.CANCELLED
+    assert state.started_at == "2026-08-27T20:00:00Z"
+    assert state.completed_at == "2026-08-27T20:00:00Z"
+    assert state.current_job_ordinal is None
+    assert state.error is None
+    assert state.diagnostics == ("stopped_after_current_job",)
+    assert [job.status for job in state.jobs] == [JobExecutionStatus.CANCELLED] * 3
+    assert all(job.completed_at == "2026-08-27T20:00:00Z" for job in state.jobs)
+    assert all(job.client_id is None and job.started_at is None for job in state.jobs)
+    assert all(
+        job.prompt_id is None and job.results == () and job.error is None for job in state.jobs
+    )
+    assert client.call_log == []
+    assert client.global_queue_operations == []
+    assert ExecutionStateStore(run.path).load(run) == state
+
+
+def test_cancellation_during_preparation_wins_admission_before_submission(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    client = FakeExecutionClient(submissions=[], histories={})
+    control = DeterministicCancellationControl()
+
+    def requesting_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        prepared = prepare_workflow(workflow, profile, values)
+        control.request()
+        return prepared
+
+    state = _run(
+        run,
+        client,
+        preparer=requesting_preparer,
+        cancellation_control=control,
+    )
+
+    assert state.status is RunExecutionStatus.CANCELLED
+    assert [job.status for job in state.jobs] == [
+        JobExecutionStatus.CANCELLED,
+        JobExecutionStatus.CANCELLED,
+    ]
+    assert state.jobs[0].client_id == "client-1"
+    assert state.jobs[0].started_at == "2026-08-27T20:00:00Z"
+    assert state.jobs[1].client_id is None
+    assert state.jobs[1].started_at is None
+    assert control.admission_log == ["entered", "denied"]
+    assert client.call_log == ["open:client-1"]
+    assert client.submitted_workflows == []
+
+
+def test_cancellation_during_failed_preparation_cancels_unsubmitted_jobs(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    client = FakeExecutionClient(submissions=[], histories={})
+    control = DeterministicCancellationControl()
+
+    def failing_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        assert workflow and profile and values
+        control.request()
+        raise RuntimeError("preparation failed after cancellation")
+
+    state = _run(
+        run,
+        client,
+        preparer=failing_preparer,
+        cancellation_control=control,
+    )
+
+    assert state.status is RunExecutionStatus.CANCELLED
+    assert [job.status for job in state.jobs] == [
+        JobExecutionStatus.CANCELLED,
+        JobExecutionStatus.CANCELLED,
+    ]
+    assert all(job.error is None for job in state.jobs)
+    assert client.submitted_workflows == []
+    assert client.global_queue_operations == []
+
+
+def test_submission_admission_wins_then_current_result_is_ingested_before_stop(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=3, with_images=False)
+    artifact = RemoteOutputArtifact("41", "images", "result.png", "", "output")
+    client = FakeExecutionClient(
+        submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+        histories={"prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED, artifact)]},
+        downloads={artifact: (b"accepted result", "image/png")},
+    )
+    control = DeterministicCancellationControl(request_after_admission=True)
+
+    state = _run(run, client, cancellation_control=control)
+
+    assert state.status is RunExecutionStatus.CANCELLED
+    assert [job.status for job in state.jobs] == [
+        JobExecutionStatus.SUCCEEDED,
+        JobExecutionStatus.CANCELLED,
+        JobExecutionStatus.CANCELLED,
+    ]
+    assert state.jobs[0].prompt_id == "prompt-1"
+    assert [result.local_path for result in state.jobs[0].results] == ["outputs/000001-01.png"]
+    assert (run.path / "outputs/000001-01.png").read_bytes() == b"accepted result"
+    assert all(job.prompt_id is None and job.results == () for job in state.jobs[1:])
+    assert control.admission_log == [
+        "entered",
+        "admitted",
+        "requested_after_admission",
+    ]
+    assert control.checkpoint_reads == 2
+    assert len(client.submitted_workflows) == 1
+    assert client.global_queue_operations == []
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected_run", "expected_job"),
+    [
+        (
+            SubmissionSpec(
+                SubmissionDisposition.REJECTED,
+                status=400,
+                diagnostic="workflow rejected",
+            ),
+            RunExecutionStatus.FAILED,
+            JobExecutionStatus.FAILED,
+        ),
+        (
+            SubmissionSpec(
+                SubmissionDisposition.UNKNOWN,
+                status=503,
+                diagnostic="response lost",
+            ),
+            RunExecutionStatus.BLOCKED,
+            JobExecutionStatus.SUBMISSION_UNKNOWN,
+        ),
+    ],
+)
+def test_failure_or_blocked_submission_takes_precedence_after_admission(
+    tmp_path: Path,
+    spec: SubmissionSpec,
+    expected_run: RunExecutionStatus,
+    expected_job: JobExecutionStatus,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    client = FakeExecutionClient(submissions=[spec], histories={})
+    control = DeterministicCancellationControl(request_after_admission=True)
+
+    state = _run(run, client, cancellation_control=control)
+
+    assert control.requested
+    assert state.status is expected_run
+    assert state.jobs[0].status is expected_job
+    assert state.jobs[1].status is JobExecutionStatus.PENDING
+    assert len(client.submitted_workflows) == 1
+
+
+def test_history_timeout_stays_blocked_when_cancellation_is_requested(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    client = FakeExecutionClient(
+        submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+        histories={"prompt-1": [None]},
+    )
+    control = DeterministicCancellationControl(request_after_admission=True)
+    monotonic_values = iter((0.0, 0.0, 10.0))
+
+    state = _run(
+        run,
+        client,
+        config=ExecutionConfig(history_timeout_seconds=5, history_poll_interval_seconds=1),
+        monotonic=lambda: next(monotonic_values),
+        cancellation_control=control,
+    )
+
+    assert control.requested
+    assert state.status is RunExecutionStatus.BLOCKED
+    assert state.jobs[0].status is JobExecutionStatus.SUBMITTED
+    assert state.jobs[0].prompt_id == "prompt-1"
+    assert state.jobs[1].status is JobExecutionStatus.PENDING
+    assert control.checkpoint_reads == 1
+    assert client.call_log.count("history:prompt-1") == 1
+
+
+def test_cancellation_requested_after_final_job_admission_is_too_late(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, with_images=False)
+    client = FakeExecutionClient(
+        submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+        histories={"prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED)]},
+    )
+    control = DeterministicCancellationControl(request_after_admission=True)
+
+    state = _run(run, client, cancellation_control=control)
+
+    assert control.requested
+    assert state.status is RunExecutionStatus.SUCCEEDED
+    assert state.jobs[0].status is JobExecutionStatus.SUCCEEDED
+
+
+def test_websocket_open_failure_cancels_preparing_job_when_stop_was_requested(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=2, with_images=False)
+    control = DeterministicCancellationControl()
+
+    class RequestThenFailContext(AbstractAsyncContextManager[FakeEventSource]):
+        async def __aenter__(self) -> FakeEventSource:
+            control.request()
+            raise RuntimeError("event stream did not open")
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class RequestOnOpenFailureClient(FakeExecutionClient):
+        def open_event_stream(self, client_id: str) -> AbstractAsyncContextManager[FakeEventSource]:
+            self.call_log.append(f"open:{client_id}")
+            return RequestThenFailContext()
+
+    client = RequestOnOpenFailureClient(submissions=[], histories={})
+
+    state = _run(run, client, cancellation_control=control)
+
+    assert state.status is RunExecutionStatus.CANCELLED
+    assert [job.status for job in state.jobs] == [
+        JobExecutionStatus.CANCELLED,
+        JobExecutionStatus.CANCELLED,
+    ]
+    assert state.jobs[0].error is None
+    assert client.submitted_workflows == []
+    assert client.global_queue_operations == []
+
+
 def test_job_succeeds_only_after_every_result_is_stored(tmp_path: Path) -> None:
     run, _ = _published_run(tmp_path, job_count=1)
     first = RemoteOutputArtifact("41", "images", "one.png", "", "output")
@@ -962,7 +1253,7 @@ def test_execution_state_round_trips_and_atomic_failure_preserves_previous_file(
     assert not tuple(run.path.glob(".execution.json.*.tmp"))
 
 
-def test_execution_v2_rejects_v1_and_cancelled_is_terminal(tmp_path: Path) -> None:
+def test_execution_v3_rejects_older_versions_and_discarded_is_terminal(tmp_path: Path) -> None:
     run, _ = _published_run(tmp_path, job_count=1)
     store = ExecutionStateStore(run.path)
     initial = store.initialize(run)
@@ -979,8 +1270,8 @@ def test_execution_v2_rejects_v1_and_cancelled_is_terminal(tmp_path: Path) -> No
         store.save(run, replace(cancelled, completed_at="later"))
 
     data = json.loads(store.state_path.read_text())
-    assert data["format_version"] == 2
-    for invalid_version in (1, True, 2.0):
+    assert data["format_version"] == 3
+    for invalid_version in (1, 2, True, 3.0):
         data["format_version"] = invalid_version
         store.state_path.write_text(json.dumps(data))
         with pytest.raises(
@@ -988,6 +1279,128 @@ def test_execution_v2_rejects_v1_and_cancelled_is_terminal(tmp_path: Path) -> No
             match="format_version must be a positive integer|unsupported execution state format",
         ):
             store.load(run)
+
+
+def test_started_cancellation_round_trips_and_jobs_are_terminal(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=2)
+    store = ExecutionStateStore(run.path)
+    initial = store.initialize(run)
+    running = replace(
+        initial,
+        status=RunExecutionStatus.RUNNING,
+        started_at="2026-08-27T20:00:00Z",
+        current_job_ordinal=1,
+    )
+    store.save(run, running)
+    preparing_job = replace(
+        running.jobs[0],
+        status=JobExecutionStatus.PREPARING,
+        client_id="client-1",
+        started_at="2026-08-27T20:00:00Z",
+    )
+    preparing = replace(running, jobs=(preparing_job, running.jobs[1]))
+    store.save(run, preparing)
+    cancelled = replace(
+        preparing,
+        status=RunExecutionStatus.CANCELLED,
+        completed_at="2026-08-27T20:01:00Z",
+        current_job_ordinal=None,
+        diagnostics=("stopped_after_current_job",),
+        jobs=(
+            replace(
+                preparing.jobs[0],
+                status=JobExecutionStatus.CANCELLED,
+                completed_at="2026-08-27T20:01:00Z",
+            ),
+            replace(
+                preparing.jobs[1],
+                status=JobExecutionStatus.CANCELLED,
+                completed_at="2026-08-27T20:01:00Z",
+            ),
+        ),
+    )
+
+    store.save(run, cancelled)
+
+    assert store.load(run) == cancelled
+    assert cancelled.jobs[0].client_id == "client-1"
+    assert cancelled.jobs[0].started_at == "2026-08-27T20:00:00Z"
+    assert cancelled.jobs[1].client_id is None
+    with pytest.raises(ExecutionStateError, match="terminal Run execution state"):
+        store.save(
+            run,
+            replace(
+                cancelled,
+                completed_at="2026-08-27T20:02:00Z",
+                jobs=(
+                    replace(cancelled.jobs[0], completed_at="2026-08-27T20:02:00Z"),
+                    replace(cancelled.jobs[1], completed_at="2026-08-27T20:02:00Z"),
+                ),
+            ),
+        )
+
+
+def test_cancelled_job_rejects_submission_and_result_evidence(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=1)
+    store = ExecutionStateStore(run.path)
+    initial = store.initialize(run)
+    running = replace(
+        initial,
+        status=RunExecutionStatus.RUNNING,
+        started_at="started",
+    )
+    store.save(run, running)
+    invalid_job = replace(
+        running.jobs[0],
+        status=JobExecutionStatus.CANCELLED,
+        completed_at="completed",
+        prompt_id="prompt-1",
+    )
+    invalid = replace(
+        running,
+        status=RunExecutionStatus.CANCELLED,
+        completed_at="completed",
+        diagnostics=("stopped_after_current_job",),
+        jobs=(invalid_job,),
+    )
+
+    with pytest.raises(ExecutionStateError, match="invalid cancelled state"):
+        store.save(run, invalid)
+
+
+@pytest.mark.parametrize(
+    "invalid_evidence",
+    ("diagnostics", "partial_preparation", "completion_timestamp"),
+)
+def test_cancelled_job_rejects_impossible_local_evidence(
+    tmp_path: Path, invalid_evidence: str
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=1)
+    store = ExecutionStateStore(run.path)
+    initial = store.initialize(run)
+    running = replace(initial, status=RunExecutionStatus.RUNNING, started_at="started")
+    store.save(run, running)
+    cancelled_job = replace(
+        running.jobs[0],
+        status=JobExecutionStatus.CANCELLED,
+        completed_at="completed",
+    )
+    if invalid_evidence == "diagnostics":
+        cancelled_job = replace(cancelled_job, diagnostics=("forged",))
+    elif invalid_evidence == "partial_preparation":
+        cancelled_job = replace(cancelled_job, client_id="client-1")
+    else:
+        cancelled_job = replace(cancelled_job, completed_at="different")
+    invalid = replace(
+        running,
+        status=RunExecutionStatus.CANCELLED,
+        completed_at="completed",
+        diagnostics=("stopped_after_current_job",),
+        jobs=(cancelled_job,),
+    )
+
+    with pytest.raises(ExecutionStateError, match="cancelled"):
+        store.save(run, invalid)
 
 
 def test_blocked_and_unknown_states_allow_explicit_reconciliation(tmp_path: Path) -> None:

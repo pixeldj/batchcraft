@@ -548,7 +548,7 @@ Restart recovery must inspect filesystem execution state and reconcile remote su
 
 ## Cancellation
 
-Future cancellation will initially support:
+BC-003A implements the first cancellation mode:
 
 ```text
 Stop after current Job
@@ -570,6 +570,13 @@ A cancellation request is not a failure.
 Stopping after the current Job means batchcraft submits no subsequent Job.
 
 It must not blindly clear the general ComfyUI queue because unrelated work may exist there.
+
+The minimum implementation stores only `(run_id, mode, requested_at)` in SQLite. One in-process
+cancellation control serializes durable intent insertion against the short Job submission-admission
+transition. If intent wins, unsubmitted Jobs become locally `cancelled`; if admission wins, the current
+Job continues through normal reconciliation and Result ingestion before later Jobs are cancelled.
+Execution format v3 records that outcome. No ComfyUI interrupt or queue-clear operation is used, and a
+local cancelled Job never claims that remote work was interrupted.
 
 ## Database technology
 
@@ -678,6 +685,9 @@ The database schema will be introduced incrementally.
 * claims and leases;
 * cancellation intent;
 * restart reconciliation.
+
+BC-003A pulls only the minimum cancellation-intent row into the current pre-release baseline. Durable
+scheduler claims, leases, queue ownership, and restart reconciliation remain Phase 5 work.
 
 ### Phase 6
 

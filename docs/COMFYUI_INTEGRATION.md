@@ -144,6 +144,11 @@ selected asset per slot. Zipped, row-linked, and Reference Collection link behav
 
 The adapter does not own scheduling, retries, mutable Job state, Run filesystem updates, or result naming. The execution layer opens the WebSocket before submission, stores the accepted prompt ID in mutable execution state, observes WebSocket events concurrently as advisory signals, and begins authoritative history reconciliation immediately.
 
+Stop-after-current cancellation remains outside the adapter. It never calls a ComfyUI interrupt,
+queue-clear, or equivalent remote cancellation operation. An admitted Job continues through ordinary
+WebSocket observation, history reconciliation, and Result download; only later unsubmitted Jobs are
+marked locally cancelled. Ownership-safe remote interruption remains deferred to BC-003C.
+
 ## Execution Monitoring
 
 Use ComfyUI's real-time execution events where practical, with history/status queries available for reconciliation.

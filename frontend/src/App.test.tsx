@@ -2,7 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import { ApiError, type BatchcraftApi, type RunDiscardApi } from "./api/client";
+import {
+  ApiError,
+  type BatchcraftApi,
+  type RunCancellationApi,
+  type RunDiscardApi,
+} from "./api/client";
 import type {
   AssetResponse,
   ExecutionResponse,
@@ -1480,6 +1485,141 @@ describe("Run execution polling", () => {
   });
 });
 
+describe("Stop after current Job", () => {
+  it("confirms once, preserves completed Results, and unlocks after durable cancellation", async () => {
+    const cancellationRequest = deferred<Awaited<ReturnType<RunCancellationApi["cancelRun"]>>>();
+    const terminalPoll = deferred<ExecutionResponse>();
+    const artifact = result(1, 1, "image/png", "kept.png", 2048);
+    const api = makeApi({
+      cancelRun: vi.fn(() => cancellationRequest.promise),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockImplementationOnce(() => terminalPoll.promise),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: [artifact] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
+    const stopAction = screen.getByRole("button", { name: "Stop after current Job" });
+    fireEvent.click(stopAction);
+    const confirmation = screen.getByRole("group", { name: "Confirm stop after current Job" });
+    expect(within(confirmation).getByText("Stop this Run after the current Job finishes?"))
+      .toBeInTheDocument();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Keep Running" }));
+    expect(api.cancelRun).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop after current Job" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run" }));
+    expect(screen.getByRole("button", { name: "Requesting stop..." })).toBeDisabled();
+    expect(api.cancelRun).toHaveBeenCalledOnce();
+    expect(api.cancelRun).toHaveBeenCalledWith("run-123");
+
+    cancellationRequest.resolve({
+      run_id: "run-123",
+      mode: "after_current_job",
+      requested_at: "2026-09-01T12:00:00Z",
+      created: true,
+      state: "stopping_after_current_job",
+    });
+    expect(await screen.findByText("Stopping after current Job · Job 1 of 2")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop after current Job" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeDisabled();
+
+    terminalPoll.resolve(stoppedExecution());
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    const runSection = currentRunSection();
+    expect(within(runSection).getByText("succeeded")).toBeInTheDocument();
+    expect(within(runSection).getByText("cancelled")).toBeInTheDocument();
+    expect(await within(currentResultsSection()).findByAltText("Result 1 from Job 1: kept.png"))
+      .toBeInTheDocument();
+    expect(await within(batchResultsSection()).findByAltText("Result 1 from Job 1: Run 7 / kept.png"))
+      .toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
+
+    fireEvent.click(within(batchResultsSection()).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    const technical = within(details).getByText("Technical details").closest("details");
+    expect(within(technical as HTMLElement).getByText("prompt-1")).toBeInTheDocument();
+  });
+
+  it("reconciles an ambiguous response before allowing another Stop request", async () => {
+    const reconciliationPoll = deferred<ExecutionResponse>();
+    const laterPoll = deferred<ExecutionResponse>();
+    const api = makeApi({
+      cancelRun: vi.fn(async () => {
+        throw new ApiError("Cannot reach the batchcraft API", "network_error", null);
+      }),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockImplementationOnce(() => reconciliationPoll.promise)
+        .mockImplementation(() => laterPoll.promise),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await screen.findByText("Running · Job 1 of 2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop after current Job" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run" }));
+
+    expect(await screen.findByRole("button", { name: "Checking stop request..." })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Stop after current Job" })).not.toBeInTheDocument();
+    reconciliationPoll.resolve(execution("running"));
+    expect(await screen.findByText("The Stop request was not observed; it is safe to request again."))
+      .toBeInTheDocument();
+    expect(api.getExecution).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Stop after current Job" })).toBeEnabled();
+  });
+
+  it("does not lose an acknowledged Stop request to an older running poll", async () => {
+    const stalePoll = deferred<ExecutionResponse>();
+    const laterPoll = deferred<ExecutionResponse>();
+    const api = makeApi({
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockImplementationOnce(() => stalePoll.promise)
+        .mockImplementation(() => laterPoll.promise),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await screen.findByText("Running · Job 1 of 2");
+    await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop after current Job" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run" }));
+    expect(await screen.findByText("Stopping after current Job · Job 1 of 2")).toBeInTheDocument();
+
+    stalePoll.resolve(execution("running"));
+    await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(3));
+    expect(screen.getByText("Stopping after current Job · Job 1 of 2")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop after current Job" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["failed", "Failed"],
+    ["blocked", "Blocked"],
+    ["succeeded", "Succeeded"],
+  ] as const)("keeps a post-request %s outcome authoritative", async (status, label) => {
+    const nextExecution = execution(status);
+    nextExecution.cancellation = {
+      mode: "after_current_job",
+      requested_at: "2026-09-01T12:00:00Z",
+      state: "finished",
+    };
+    const api = makeApi({ getExecution: vi.fn(async () => nextExecution) });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.queryByText("Cancelled")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop after current Job" })).not.toBeInTheDocument();
+  });
+});
+
 describe("Repeated Runs", () => {
   it("creates a second Run from the same valid Preview after success", async () => {
     const createRun = vi
@@ -1633,6 +1773,33 @@ describe("Current Run restoration", () => {
     expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     expect(await screen.findByRole("button", { name: "Create Another Run" })).toBeEnabled();
+  });
+
+  it("restores a durable pending Stop request and resumes polling without requesting again", async () => {
+    seedWorkingSession("run-stopping");
+    const pendingPoll = deferred<ExecutionResponse>();
+    const stopping = execution("running", "run-stopping");
+    stopping.cancellation = {
+      mode: "after_current_job",
+      requested_at: "2026-09-01T12:00:00Z",
+      state: "stopping_after_current_job",
+    };
+    const api = makeApi({
+      getRun: vi.fn(async () => runLookupResponse("running", "run-stopping", 17)),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(stopping)
+        .mockImplementationOnce(() => pendingPoll.promise),
+      getResults: vi.fn(async () => ({ run_id: "run-stopping", results: [] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+
+    expect(await screen.findByText("Stopping after current Job · Job 1 of 2")).toBeInTheDocument();
+    expect(screen.getByText("The current Job will finish normally and keep its Results. No later Job will start."))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop after current Job" })).not.toBeInTheDocument();
+    expect(api.cancelRun).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
   });
 
   it.each([
@@ -2489,8 +2656,8 @@ describe("Batch working-session Results gallery", () => {
 });
 
 function makeApi(
-  overrides: Partial<BatchcraftApi & RunDiscardApi> = {},
-): BatchcraftApi & RunDiscardApi {
+  overrides: Partial<BatchcraftApi & RunDiscardApi & RunCancellationApi> = {},
+): BatchcraftApi & RunDiscardApi & RunCancellationApi {
   const prompt = {
     id: "prompt-1",
     project_id: "project-1",
@@ -2564,6 +2731,13 @@ function makeApi(
     getRun: vi.fn(async () => runLookupResponse()),
     startRun: vi.fn(async (runId: string) => ({ run_id: runId, status: "accepted" })),
     discardRun: vi.fn(async (runId: string) => execution("cancelled", runId)),
+    cancelRun: vi.fn(async (runId: string) => ({
+      run_id: runId,
+      mode: "after_current_job" as const,
+      requested_at: "2026-09-01T12:00:00Z",
+      created: true,
+      state: "stopping_after_current_job" as const,
+    })),
     getExecution: vi.fn(async () => execution("succeeded")),
     getResults: vi.fn(async () => ({ run_id: "run-123", results: [] })),
     resultUrl: (url: string) => `http://api.test${url}`,
@@ -2720,7 +2894,7 @@ function execution(status: ExecutionResponse["status"], runId = "run-123"): Exec
     jobs: [
       {
         ordinal: 1,
-        status: status === "running" ? "submitted" : status,
+        status: status === "running" || status === "blocked" ? "submitted" : status,
         prompt_id: "prompt-1",
         started_at: "2026-08-27T12:00:00Z",
         completed_at: terminal ? "2026-08-27T12:01:00Z" : null,
@@ -2737,6 +2911,45 @@ function execution(status: ExecutionResponse["status"], runId = "run-123"): Exec
         error: null,
         diagnostics: [],
         result_count: status === "succeeded" ? 1 : 0,
+      },
+    ],
+  };
+}
+
+function stoppedExecution(runId = "run-123"): ExecutionResponse {
+  return {
+    run_id: runId,
+    status: "cancelled",
+    started_at: "2026-09-01T11:59:00Z",
+    completed_at: "2026-09-01T12:01:00Z",
+    current_job_ordinal: null,
+    error: null,
+    diagnostics: ["stopped_after_current_job"],
+    cancellation: {
+      mode: "after_current_job",
+      requested_at: "2026-09-01T12:00:00Z",
+      state: "cancelled",
+    },
+    jobs: [
+      {
+        ordinal: 1,
+        status: "succeeded",
+        prompt_id: "prompt-1",
+        started_at: "2026-09-01T11:59:00Z",
+        completed_at: "2026-09-01T12:01:00Z",
+        error: null,
+        diagnostics: [],
+        result_count: 1,
+      },
+      {
+        ordinal: 2,
+        status: "cancelled",
+        prompt_id: null,
+        started_at: null,
+        completed_at: "2026-09-01T12:00:00Z",
+        error: null,
+        diagnostics: [],
+        result_count: 0,
       },
     ],
   };

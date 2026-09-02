@@ -8,7 +8,7 @@ _Last consolidated: 2026-09-01._
 
 ## Current focus
 
-1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Next)
+1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, In Progress)
 2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, Planned)
 3. [BC-003C: Interrupt owned ComfyUI Job](#bc-003c-interrupt-owned-comfyui-job) (P2, Planned)
 4. [BC-002: Durable queued Runs](#bc-002-durable-queued-runs) (P2, Planned)
@@ -116,10 +116,19 @@ Every entry has these fields:
 | --- | --- |
 | ID | BC-003A |
 | Priority | P1 |
-| Status | Next |
+| Status | In Progress |
 | Area | Execution / Cancellation |
 | Summary | Let a user request that a running Run stop after its currently submitted Job reaches a proven terminal state. |
 | Dependencies / Notes | Follow ADR 0003: SQLite owns durable cancellation intent and `execution.json` owns the execution outcome. This operation must not clear unrelated ComfyUI queue work. It may introduce the minimum cancellation-intent storage needed without implementing the complete durable scheduler. |
+
+Implementation progress: cancellation intent persistence, execution format v3, the cancellation endpoint
+and read model, and stop-before-next-submission semantics are implemented. The frontend provides the
+confirmed Stop action, visible request/stopping state, ambiguous-response reconciliation, terminal unlock,
+closed-tab recovery, and preserved Result review. Automated coverage is complete. BC-003A remains
+`In Progress` until the required live ComfyUI verification confirms that the accepted current Job finishes,
+its Results remain, no later Job is submitted, and refresh restores the durable cancelled outcome. If the
+current Job is the final Job and succeeds, the honest Run outcome is `succeeded` because no unsubmitted
+Job remains to cancel.
 
 Why this matters:
 

@@ -13,7 +13,12 @@ from pydantic import (
     model_validator,
 )
 
-from batchcraft.application import ComfyUIStatus, RunCreationInput
+from batchcraft.application import (
+    ComfyUIStatus,
+    RunCancellation,
+    RunCancellationRequestResult,
+    RunCreationInput,
+)
 from batchcraft.comfyui import workflow_profile_image_inputs, workflow_profile_parameters
 from batchcraft.db import (
     ProjectRecord,
@@ -1067,6 +1072,44 @@ class JobExecutionResponse(ApiModel):
     result_count: int
 
 
+class RunCancellationRequest(ApiModel):
+    mode: Literal["after_current_job"]
+
+
+class RunCancellationResponse(ApiModel):
+    mode: Literal["after_current_job"]
+    requested_at: datetime | None
+    state: Literal[
+        "stop_requested",
+        "stopping_after_current_job",
+        "cancelled",
+        "finished",
+    ]
+
+    @classmethod
+    def from_cancellation(cls, cancellation: RunCancellation) -> Self:
+        return cls(
+            mode="after_current_job",
+            requested_at=cancellation.requested_at,
+            state=cancellation.state.value,
+        )
+
+
+class RunCancellationRequestedResponse(RunCancellationResponse):
+    run_id: str
+    created: bool
+
+    @classmethod
+    def from_result(cls, result: RunCancellationRequestResult) -> Self:
+        return cls(
+            run_id=result.run_id,
+            mode="after_current_job",
+            requested_at=result.requested_at,
+            created=result.created,
+            state=result.state.value,
+        )
+
+
 class ExecutionResponse(ApiModel):
     run_id: str
     status: str
@@ -1076,9 +1119,12 @@ class ExecutionResponse(ApiModel):
     error: str | None
     diagnostics: list[str]
     jobs: list[JobExecutionResponse]
+    cancellation: RunCancellationResponse | None = None
 
     @classmethod
-    def from_state(cls, state: RunExecutionState) -> Self:
+    def from_state(
+        cls, state: RunExecutionState, cancellation: RunCancellation | None = None
+    ) -> Self:
         return cls(
             run_id=state.run_id,
             status=state.status.value,
@@ -1100,6 +1146,11 @@ class ExecutionResponse(ApiModel):
                 )
                 for job in state.jobs
             ],
+            cancellation=(
+                None
+                if cancellation is None
+                else RunCancellationResponse.from_cancellation(cancellation)
+            ),
         )
 
 
@@ -1191,7 +1242,12 @@ class RunResponse(RunCreatedResponse):
     execution: ExecutionResponse
 
     @classmethod
-    def from_run_and_state(cls, run: PublishedRun, state: RunExecutionState) -> Self:
+    def from_run_and_state(
+        cls,
+        run: PublishedRun,
+        state: RunExecutionState,
+        cancellation: RunCancellation | None = None,
+    ) -> Self:
         created = RunCreatedResponse.from_run(run)
         return cls(
             **created.model_dump(),
@@ -1209,7 +1265,7 @@ class RunResponse(RunCreatedResponse):
             ],
             plan=RunPlanResponse.from_run(run),
             batch_snapshot=BatchSnapshotV5.model_validate(run.batch_snapshot),
-            execution=ExecutionResponse.from_state(state),
+            execution=ExecutionResponse.from_state(state, cancellation),
         )
 
 

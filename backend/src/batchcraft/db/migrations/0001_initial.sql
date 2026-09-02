@@ -317,3 +317,10 @@ CREATE TABLE batch_parameter_binding_value (
         REFERENCES batch_parameter_binding(batch_id, position)
         ON UPDATE RESTRICT ON DELETE CASCADE
 ) STRICT;
+
+CREATE TABLE run_cancellation_request (
+    run_id TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
+    mode TEXT NOT NULL CHECK (mode IN ('after_current_job')),
+    requested_at TEXT NOT NULL CHECK (length(trim(requested_at)) > 0),
+    PRIMARY KEY (run_id, mode)
+) STRICT;

@@ -112,6 +112,27 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("requests stop after the current Job with the typed cancellation body", async () => {
+    const response = {
+      run_id: "run/one",
+      mode: "after_current_job",
+      requested_at: "2026-09-01T12:00:00Z",
+      created: true,
+      state: "stopping_after_current_job",
+    };
+    const fetchMock = successfulFetch(response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new BatchcraftApiClient("http://api.test").cancelRun("run/one");
+
+    expect(result).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/runs/run%2Fone/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "after_current_job" }),
+    });
+  });
+
   it("lists active Projects without an archived query by default", async () => {
     const fetchMock = successfulFetch({ projects: [] });
     vi.stubGlobal("fetch", fetchMock);

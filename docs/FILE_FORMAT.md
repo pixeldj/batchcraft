@@ -223,13 +223,13 @@ A standalone CSV file is not sufficient for guaranteed exact replay. Exact repla
 
 `execution.json` is the versioned mutable execution record. It is reconstructable without SQLite and remains separate from generation-significant data in `manifest.json`.
 
-Only execution format v2 is supported. Execution format v1 is intentionally unsupported and has no compatibility loader. This version change does not alter `run.json` or `manifest.json` versions.
+Only execution format v3 is supported. Execution formats v1 and v2 are intentionally unsupported and have no compatibility loader. This version change does not alter `run.json` or `manifest.json` versions.
 
-The v2 shape is:
+The v3 shape is:
 
 ```json
 {
-  "format_version": 2,
+  "format_version": 3,
   "run_id": "...",
   "status": "running",
   "started_at": "...",
@@ -258,11 +258,15 @@ The v2 shape is:
 }
 ```
 
-Legal Run transitions are `created -> running | cancelled`, then `running -> succeeded | failed | blocked`; explicit reconciliation may move `blocked -> running | succeeded | failed`. `cancelled` is Run-only: discarding does not add a Job status, and every Job remains pristine `pending`. Legal Job transitions are `pending -> preparing -> submitting`, then `submitting -> submitted | submission_unknown | failed`, and `submitted -> succeeded | failed`. Preparation may also transition directly to `failed`, while explicit reconciliation may move `submission_unknown -> submitted | failed`. `succeeded`, `failed`, and `cancelled` states are terminal and are not rewritten.
+Legal Run transitions are `created -> running | cancelled`, then `running -> succeeded | failed | blocked | cancelled`; explicit reconciliation may move `blocked -> running | succeeded | failed`. Legal Job transitions are `pending -> preparing | cancelled`, `preparing -> submitting | failed | cancelled`, `submitting -> submitted | submission_unknown | failed`, and `submitted -> succeeded | failed`. Explicit reconciliation may move `submission_unknown -> submitted | failed`. `succeeded`, `failed`, and `cancelled` states are terminal and are not rewritten.
 
 A discarded state has Run status `cancelled`, `started_at: null`, a discard-clock `completed_at`, `current_job_ordinal: null`, `error: null`, and exactly one Run diagnostic: `discarded_before_start`. Every Job must exactly match its initial pending state, with no client ID, submission disposition or response, prompt ID, timestamps, errors, diagnostics, history, or Results.
 
+A stop-after-current state has Run status `cancelled`, non-null `started_at` and `completed_at`, `current_job_ordinal: null`, `error: null`, and exactly one Run diagnostic: `stopped_after_current_job`. Its Jobs form a succeeded prefix followed by a non-empty cancelled suffix. A cancelled Job has the Run cancellation timestamp and no submission disposition or response, prompt ID, error, diagnostics, history, or Results. The first cancelled Job may retain its local preparation `client_id` and `started_at`; later cancelled Jobs retain no preparation evidence.
+
 `submitting` means the one submission attempt has started. After a restart it must not be treated as never submitted. `submission_unknown` stops automatic progression and preserves correlation data; a future explicit reconciliation may prove that it was accepted or failed, but the executor never retries it automatically. `submitted` carries a known prompt ID; if bounded history reconciliation cannot prove a terminal outcome, the Job remains submitted and the Run becomes blocked.
+
+Stop-after-current never interrupts ComfyUI or clears its queue. If submission admission already occurred, the current Job continues through normal history reconciliation and Result ingestion. A failed current Job leaves the Run `failed`; an unresolved accepted or ambiguous submission leaves it `blocked`. If the final Job succeeds after a cancellation request, no unsubmitted suffix remains and the Run honestly finishes `succeeded`.
 
 Every update writes canonical JSON to a unique sibling temporary file, fsyncs it, atomically replaces `execution.json`, and fsyncs the Run directory. A failed temporary write leaves the prior complete state file in place. Loading execution state verifies every recorded Result's existence, size, and SHA-256. Saving validates state transitions and append-only Result metadata, but reads and hashes only newly appended Result files.
 
@@ -371,7 +375,7 @@ Example:
 }
 ```
 
-The pre-release baseline supports `run.json` v1, manifest v7 with required snapshot v5, execution v2,
+The pre-release baseline supports `run.json` v1, manifest v7 with required snapshot v5, execution v3,
 and `asset.json` v1. Unsupported development versions fail closed. The application does not rewrite
 or delete them automatically. Version fields and migration boundaries remain so a future change can
 add an explicit compatibility path when released data requires one.

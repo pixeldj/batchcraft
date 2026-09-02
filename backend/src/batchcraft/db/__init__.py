@@ -1,3 +1,8 @@
+from batchcraft.db.cancellations import (
+    RunCancellationRequestStore,
+    RunCancellationStoreError,
+    RunCancellationValidationError,
+)
 from batchcraft.db.connection import connect_database, open_connection
 from batchcraft.db.migrations import (
     Migration,
@@ -10,6 +15,8 @@ from batchcraft.db.models import (
     PromptListRecord,
     PromptRecord,
     PromptVersionRecord,
+    RunCancellationMode,
+    RunCancellationRequestRecord,
     SavedBatchDefinition,
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
@@ -108,6 +115,11 @@ __all__ = [
     "PromptVersionIdConflictError",
     "PromptVersionNotFoundError",
     "PromptVersionRecord",
+    "RunCancellationMode",
+    "RunCancellationRequestRecord",
+    "RunCancellationRequestStore",
+    "RunCancellationStoreError",
+    "RunCancellationValidationError",
     "SavedBatchConflictError",
     "SavedBatchDefinition",
     "SavedBatchDetailRecord",

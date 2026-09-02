@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import re
@@ -5,6 +6,7 @@ import stat
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -14,6 +16,14 @@ from batchcraft.comfyui import (
     WorkflowPreparationValues,
     prepare_workflow,
 )
+from batchcraft.db import (
+    RunCancellationMode,
+    RunCancellationRequestRecord,
+    RunCancellationRequestStore,
+)
+from batchcraft.db import (
+    RunCancellationStoreError as DatabaseRunCancellationStoreError,
+)
 from batchcraft.domain import BatchDefinition, CompiledRunPlan, compile_batch
 from batchcraft.execution import (
     DISCARDED_BEFORE_START,
@@ -21,7 +31,9 @@ from batchcraft.execution import (
     ExecutionConfig,
     ExecutionStateError,
     ExecutionStateStore,
+    JobExecutionStatus,
     ResultRecord,
+    RunCancellationControl,
     RunExecutionState,
     RunExecutionStatus,
     execute_run,
@@ -39,6 +51,7 @@ from batchcraft.files import (
     is_safe_filesystem_key,
 )
 
+from .cancellation import ActiveRunCancellationControl
 from .errors import (
     AssetDataError,
     AssetNotFoundError,
@@ -47,6 +60,8 @@ from .errors import (
     ExecutionNotEligibleError,
     InvalidProjectKeyError,
     ResultNotFoundError,
+    RunCancellationNotEligibleError,
+    RunCancellationStoreError,
     RunCreationError,
     RunDataError,
     RunDiscardNotEligibleError,
@@ -77,6 +92,7 @@ class RunExecutor(Protocol):
         run: PublishedRun,
         client: ExecutionClient,
         config: ExecutionConfig,
+        cancellation_control: RunCancellationControl,
     ) -> Coroutine[object, object, RunExecutionState]: ...
 
 
@@ -104,6 +120,26 @@ class ComfyUIStatus:
     diagnostic: str | None
 
 
+class RunCancellationState(StrEnum):
+    STOP_REQUESTED = "stop_requested"
+    STOPPING_AFTER_CURRENT_JOB = "stopping_after_current_job"
+    CANCELLED = "cancelled"
+    FINISHED = "finished"
+
+
+@dataclass(frozen=True, slots=True)
+class RunCancellation:
+    mode: RunCancellationMode
+    requested_at: datetime | None
+    state: RunCancellationState
+
+
+@dataclass(frozen=True, slots=True)
+class RunCancellationRequestResult(RunCancellation):
+    run_id: str
+    created: bool
+
+
 class BatchcraftService:
     def __init__(
         self,
@@ -111,6 +147,7 @@ class BatchcraftService:
         projects_root: Path,
         comfyui_client: ApplicationComfyUIClient,
         task_registry: RunTaskRegistry,
+        cancellation_store: RunCancellationRequestStore,
         execution_config: ExecutionConfig,
         run_store: RunFilesystemStore | None = None,
         executor: RunExecutor = execute_run,
@@ -119,6 +156,7 @@ class BatchcraftService:
         self.projects_root = projects_root
         self.comfyui_client = comfyui_client
         self.task_registry = task_registry
+        self.cancellation_store = cancellation_store
         self.execution_config = execution_config
         self.run_store = run_store or RunFilesystemStore(projects_root)
         self._executor = executor
@@ -267,8 +305,20 @@ class BatchcraftService:
         except ExecutionStateError as error:
             raise RunDataError(f"execution state is invalid for Run {run.run_id!r}") from error
 
+    def get_run_cancellation(self, state: RunExecutionState) -> RunCancellation | None:
+        intent = self._get_cancellation_intent(state.run_id)
+        if intent is None and state.status is not RunExecutionStatus.CANCELLED:
+            return None
+        return _run_cancellation(state, intent)
+
     async def start_execution(self, run_id: str) -> PublishedRun:
         run = self.get_run(run_id)
+        intent = await asyncio.to_thread(self._get_cancellation_intent, run_id)
+        cancellation_control = ActiveRunCancellationControl(
+            run_id,
+            self.cancellation_store,
+            requested=intent is not None,
+        )
 
         def create_execution() -> Coroutine[object, object, RunExecutionState]:
             state_store = ExecutionStateStore(run.path)
@@ -287,10 +337,63 @@ class BatchcraftService:
                 run=run,
                 client=self.comfyui_client,
                 config=self.execution_config,
+                cancellation_control=cancellation_control,
             )
 
-        await self.task_registry.start(run_id, create_execution)
+        await self.task_registry.start(run_id, cancellation_control, create_execution)
         return run
+
+    async def request_run_cancellation(self, run_id: str) -> RunCancellationRequestResult:
+        run = self.get_run(run_id)
+        state = self.get_execution_state(run)
+        intent = await asyncio.to_thread(self._get_cancellation_intent, run_id)
+        if intent is not None:
+            return _cancellation_request_result(state, intent, created=False)
+        if state.status is RunExecutionStatus.CANCELLED:
+            return RunCancellationRequestResult(
+                run_id=run_id,
+                mode=RunCancellationMode.AFTER_CURRENT_JOB,
+                requested_at=None,
+                created=False,
+                state=RunCancellationState.CANCELLED,
+            )
+        if state.status in {
+            RunExecutionStatus.SUCCEEDED,
+            RunExecutionStatus.FAILED,
+            RunExecutionStatus.BLOCKED,
+        }:
+            raise RunCancellationNotEligibleError(
+                f"Run {run_id!r} is not eligible for cancellation from {state.status.value!r} state"
+            )
+
+        try:
+            requested = await self.task_registry.request_cancellation(run_id)
+        except DatabaseRunCancellationStoreError as error:
+            raise RunCancellationStoreError(
+                "Run cancellation request could not be stored"
+            ) from error
+        if requested is not None:
+            record, created = requested
+            return _cancellation_request_result(
+                self.get_execution_state(run), record, created=created
+            )
+
+        # The execution may have reached a terminal state while this request was admitted.
+        state = self.get_execution_state(run)
+        intent = await asyncio.to_thread(self._get_cancellation_intent, run_id)
+        if intent is not None:
+            return _cancellation_request_result(state, intent, created=False)
+        if state.status is RunExecutionStatus.CANCELLED:
+            return RunCancellationRequestResult(
+                run_id=run_id,
+                mode=RunCancellationMode.AFTER_CURRENT_JOB,
+                requested_at=None,
+                created=False,
+                state=RunCancellationState.CANCELLED,
+            )
+        raise RunCancellationNotEligibleError(
+            f"Run {run_id!r} does not have an active execution task"
+        )
 
     async def discard_run(self, run_id: str) -> RunExecutionState:
         run = self.get_run(run_id)
@@ -327,6 +430,12 @@ class BatchcraftService:
     def list_results(self, run: PublishedRun) -> tuple[ResultRecord, ...]:
         state = self.get_execution_state(run)
         return tuple(result for job in state.jobs for result in job.results)
+
+    def _get_cancellation_intent(self, run_id: str) -> RunCancellationRequestRecord | None:
+        try:
+            return self.cancellation_store.get(run_id, RunCancellationMode.AFTER_CURRENT_JOB)
+        except DatabaseRunCancellationStoreError as error:
+            raise RunCancellationStoreError("Run cancellation data could not be read") from error
 
     def get_result(
         self, run: PublishedRun, job_ordinal: int, artifact_ordinal: int
@@ -434,6 +543,54 @@ class BatchcraftService:
 
 def _is_within(path: Path, root: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
+
+
+def _cancellation_request_result(
+    state: RunExecutionState,
+    intent: RunCancellationRequestRecord,
+    *,
+    created: bool,
+) -> RunCancellationRequestResult:
+    cancellation = _run_cancellation(state, intent)
+    return RunCancellationRequestResult(
+        run_id=state.run_id,
+        mode=cancellation.mode,
+        requested_at=cancellation.requested_at,
+        created=created,
+        state=cancellation.state,
+    )
+
+
+def _run_cancellation(
+    state: RunExecutionState,
+    intent: RunCancellationRequestRecord | None,
+) -> RunCancellation:
+    if state.status is RunExecutionStatus.CANCELLED:
+        cancellation_state = RunCancellationState.CANCELLED
+    elif state.status in {
+        RunExecutionStatus.SUCCEEDED,
+        RunExecutionStatus.FAILED,
+        RunExecutionStatus.BLOCKED,
+    }:
+        cancellation_state = RunCancellationState.FINISHED
+    elif state.status is RunExecutionStatus.RUNNING and any(
+        job.ordinal == state.current_job_ordinal
+        and job.status
+        in {
+            JobExecutionStatus.SUBMITTING,
+            JobExecutionStatus.SUBMISSION_UNKNOWN,
+            JobExecutionStatus.SUBMITTED,
+        }
+        for job in state.jobs
+    ):
+        cancellation_state = RunCancellationState.STOPPING_AFTER_CURRENT_JOB
+    else:
+        cancellation_state = RunCancellationState.STOP_REQUESTED
+    return RunCancellation(
+        mode=RunCancellationMode.AFTER_CURRENT_JOB,
+        requested_at=None if intent is None else intent.requested_at,
+        state=cancellation_state,
+    )
 
 
 def _timestamp(clock: Callable[[], datetime]) -> str:

@@ -3,7 +3,7 @@ import copy
 import mimetypes
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AbstractAsyncContextManager, suppress
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,7 +31,7 @@ from .models import (
     RunExecutionState,
     RunExecutionStatus,
 )
-from .state import ExecutionStateStore, safe_extension
+from .state import STOPPED_AFTER_CURRENT_JOB, ExecutionStateStore, safe_extension
 
 
 class EventSource(Protocol):
@@ -59,6 +59,21 @@ class ExecutionClient(Protocol):
     async def download_artifact(self, artifact: RemoteOutputArtifact) -> DownloadedArtifact: ...
 
 
+class RunCancellationControl(Protocol):
+    def cancellation_requested(self) -> bool: ...
+
+    def submission_admission(self) -> AbstractAsyncContextManager[bool]: ...
+
+
+class _NoOpRunCancellationControl:
+    def cancellation_requested(self) -> bool:
+        return False
+
+    @asynccontextmanager
+    async def submission_admission(self) -> AsyncIterator[bool]:
+        yield True
+
+
 WorkflowPreparer = Callable[
     [Mapping[str, object], Mapping[str, object], WorkflowPreparationValues],
     dict[str, object],
@@ -80,11 +95,13 @@ async def execute_run(
     id_factory: Callable[[], str] | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    cancellation_control: RunCancellationControl | None = None,
 ) -> RunExecutionState:
     settings = config or ExecutionConfig()
     store = state_store or ExecutionStateStore(run.path)
     current_time = clock or (lambda: datetime.now(UTC))
     new_id = id_factory or (lambda: str(uuid4()))
+    cancellation = cancellation_control or _NoOpRunCancellationControl()
     immutable_files = _immutable_file_bytes(run.path)
     original_plan = copy.deepcopy(run.compiled_plan)
     original_workflow = copy.deepcopy(run.workflow)
@@ -108,6 +125,8 @@ async def execute_run(
 
         persisted_jobs = tuple(sorted(run.jobs, key=lambda job: job.compiled_job.ordinal))
         for persisted_job in persisted_jobs:
+            if cancellation.cancellation_requested():
+                return _cancel_run(run, store, state, current_time)
             ordinal = persisted_job.compiled_job.ordinal
             state = replace(state, current_job_ordinal=ordinal)
             store.save(run, state)
@@ -123,9 +142,14 @@ async def execute_run(
                 id_factory=new_id,
                 sleep=sleep,
                 monotonic=monotonic,
+                cancellation_control=cancellation,
             )
+            if state.status is RunExecutionStatus.CANCELLED:
+                return state
             job_state = state.jobs[ordinal - 1]
             if job_state.status is JobExecutionStatus.SUCCEEDED:
+                if ordinal < len(persisted_jobs) and cancellation.cancellation_requested():
+                    return _cancel_run(run, store, state, current_time)
                 continue
             if job_state.status in {
                 JobExecutionStatus.SUBMISSION_UNKNOWN,
@@ -178,6 +202,7 @@ async def _execute_job(
     id_factory: Callable[[], str],
     sleep: Callable[[float], Awaitable[None]],
     monotonic: Callable[[], float],
+    cancellation_control: RunCancellationControl,
 ) -> RunExecutionState:
     ordinal = persisted_job.compiled_job.ordinal
     job_state = state.jobs[ordinal - 1]
@@ -234,16 +259,21 @@ async def _execute_job(
             ),
         )
     except Exception as error:
+        if cancellation_control.cancellation_requested():
+            return _cancel_run(run, store, state, clock)
         return _fail_job(run, store, state, ordinal, error, clock)
 
     reconciling = False
     try:
         async with client.open_event_stream(client_id) as event_source:
-            submitting = replace(
-                state.jobs[ordinal - 1],
-                status=JobExecutionStatus.SUBMITTING,
-            )
-            state = _persist_job(run, store, state, submitting)
+            async with cancellation_control.submission_admission() as admitted:
+                if not admitted:
+                    return _cancel_run(run, store, state, clock)
+                submitting = replace(
+                    state.jobs[ordinal - 1],
+                    status=JobExecutionStatus.SUBMITTING,
+                )
+                state = _persist_job(run, store, state, submitting)
             try:
                 submission = await client.submit_prompt(prepared, client_id=client_id)
             except Exception as error:
@@ -303,6 +333,8 @@ async def _execute_job(
     except Exception as error:
         current = state.jobs[ordinal - 1]
         if current.status is JobExecutionStatus.PREPARING:
+            if cancellation_control.cancellation_requested():
+                return _cancel_run(run, store, state, clock)
             return _fail_job(run, store, state, ordinal, error, clock)
         if current.status is JobExecutionStatus.SUBMITTING:
             unknown = replace(
@@ -514,6 +546,32 @@ def _persist_job(
     updated = replace(state, jobs=tuple(jobs))
     store.save(run, updated)
     return updated
+
+
+def _cancel_run(
+    run: PublishedRun,
+    store: ExecutionStateStore,
+    state: RunExecutionState,
+    clock: Callable[[], datetime],
+) -> RunExecutionState:
+    completed_at = _timestamp(clock)
+    jobs = tuple(
+        replace(job, status=JobExecutionStatus.CANCELLED, completed_at=completed_at)
+        if job.status in {JobExecutionStatus.PENDING, JobExecutionStatus.PREPARING}
+        else job
+        for job in state.jobs
+    )
+    cancelled = replace(
+        state,
+        status=RunExecutionStatus.CANCELLED,
+        completed_at=completed_at,
+        current_job_ordinal=None,
+        error=None,
+        diagnostics=(STOPPED_AFTER_CURRENT_JOB,),
+        jobs=jobs,
+    )
+    store.save(run, cancelled)
+    return cancelled
 
 
 def _fail_job(

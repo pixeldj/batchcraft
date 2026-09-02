@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, apiClient, type BatchcraftApi, type RunDiscardApi } from "./api/client";
+import {
+  ApiError,
+  apiClient,
+  type BatchcraftApi,
+  type RunCancellationApi,
+  type RunDiscardApi,
+} from "./api/client";
 import type {
   BatchRequest,
   EditableBatchSnapshot,
@@ -43,7 +49,7 @@ import { ComfyUIStatus } from "./features/status/ComfyUIStatus";
 import { errorMessage } from "./utils/errors";
 
 interface Props {
-  api?: BatchcraftApi & RunDiscardApi;
+  api?: BatchcraftApi & RunDiscardApi & RunCancellationApi;
   pollIntervalMs?: number;
 }
 
@@ -386,6 +392,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             runId,
             runNumber: restoredRun.run_number,
             results: restoredResults.results,
+            execution: restoredRun.execution,
             loading: false,
             error: null,
           },
@@ -470,6 +477,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
               runId,
               runNumber: restoredRun.run_number,
               results,
+              execution,
               loading: false,
               error: resultsError,
             },
@@ -826,6 +834,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           runId: nextRun.run_id,
           runNumber: nextRun.run_number,
           results: [],
+          execution: null,
           loading: false,
           error: null,
         },
@@ -922,13 +931,23 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     currentSnapshotIdentity !== editableBatchSnapshotIdentity(currentRunSnapshot)
   );
 
-  function updateCurrentRunGalleryResults(runId: string, results: ResultResponse[]) {
+  function updateCurrentRunGalleryResults(
+    runId: string,
+    execution: ExecutionResponse | null,
+    results: ResultResponse[],
+    error: string | null,
+  ) {
     if (!sessionRunIds.includes(runId)) {
       return;
     }
     setGalleryRunsById((current) => {
       const existing = current[runId] ?? loadingGalleryRun(runId);
-      if (existing.results === results && !existing.loading && existing.error === null) {
+      if (
+        existing.execution === execution &&
+        existing.results === results &&
+        !existing.loading &&
+        existing.error === error
+      ) {
         return current;
       }
       return {
@@ -937,8 +956,9 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           ...existing,
           runNumber: existing.runNumber ?? (run?.run_id === runId ? run.run_number : null),
           results,
+          execution,
           loading: false,
-          error: null,
+          error,
         },
       };
     });
@@ -1100,7 +1120,7 @@ function runMatchesBatch(run: RunCreatedResponse, identity: string): boolean {
 }
 
 function loadingGalleryRun(runId: string): BatchGalleryRun {
-  return { runId, runNumber: null, results: [], loading: true, error: null };
+  return { runId, runNumber: null, results: [], execution: null, loading: true, error: null };
 }
 
 function withoutGalleryRun(

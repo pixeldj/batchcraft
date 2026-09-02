@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-31
 - **Supersedes:** Compatibility requirements in ADR 0002 and ADR 0003 for superseded development formats.
-- **Superseded in part by:** ADR 0005 for named Image Input persistence, ADR 0007 for manifest v7, ADR 0008 for parameter alternatives, ADR 0009 for Batch snapshot v5 and the current SQLite baseline, and ADR 0010 for browser working-session recovery v1.
+- **Superseded in part by:** ADR 0005 for named Image Input persistence, ADR 0007 for manifest v7, ADR 0008 for parameter alternatives, ADR 0009 for Batch snapshot v5, ADR 0010 for browser working-session recovery v1, and the BC-003A addendum below for execution v3 and the current SQLite baseline.
 
 ## Context
 
@@ -38,6 +38,14 @@ development state manually after inspecting what will be removed.
 A future released format or external consumer may justify an explicit migration or compatibility
 reader. That work requires a concrete use case, tests, and an updated decision rather than speculative
 adapters in advance.
+
+### BC-003A Addendum (2026-09-01)
+
+The stop-after-current backend pass establishes execution format v3 and replaces the consolidated
+`0001_initial.sql` baseline with one that includes durable Run cancellation intent. Execution formats
+v1 and v2 are unsupported. Databases carrying an earlier applied `0001` checksum are unsupported and
+must be inspected and recreated manually. The application fails closed and never deletes, rewrites, or
+automatically upgrades those databases or Run directories.
 
 ## Consequences
 

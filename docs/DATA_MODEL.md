@@ -388,7 +388,9 @@ Once Run creation succeeds, these effective values and the compiled Job plan are
 
 Run execution state is separate from immutable provenance. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance while execution proceeds.
 
-The v2 filesystem representation stores this mutable data in `execution.json`; v1 execution state is unsupported. Run states are `created`, `running`, `succeeded`, `failed`, `blocked`, and `cancelled`. `blocked` means automatic progression stopped on an unresolved accepted or ambiguous submission and is not permission to retry. It remains available for a future explicit reconciliation operation. `cancelled` means the Run was explicitly discarded before any execution or submission evidence existed. It is a Run-only terminal state: Jobs remain pristine `pending`, frozen provenance remains inspectable, and the stable Run diagnostic is `discarded_before_start`. `succeeded`, `failed`, and `cancelled` are immutable terminal Run states.
+The v3 filesystem representation stores this mutable data in `execution.json`; v1 and v2 execution state are unsupported. Run states are `created`, `running`, `succeeded`, `failed`, `blocked`, and `cancelled`. `blocked` means automatic progression stopped on an unresolved accepted or ambiguous submission and is not permission to retry. It remains available for a future explicit reconciliation operation. `cancelled` has two valid shapes: a pristine pre-execution discard with diagnostic `discarded_before_start`, or a started Run with diagnostic `stopped_after_current_job`, a succeeded Job prefix, and a non-empty cancelled Job suffix. Frozen provenance remains inspectable in both cases. `succeeded`, `failed`, and `cancelled` are immutable terminal Run states.
+
+SQLite stores durable Run cancellation intent as `(run_id, mode, requested_at)`, where the only current mode is `after_current_job`. This intent is not copied into `execution.json`: SQLite is authoritative for the request, while execution v3 is authoritative for the resulting Run and Job outcomes. Losing SQLite request metadata does not prevent reconstructing a completed cancellation outcome from the Run filesystem.
 
 ## Job
 
@@ -438,7 +440,7 @@ materialized to explicit values through exact scaled-integer arithmetic. Every J
 
 A Job must never contain unresolved prompt variables.
 
-The v1 execution states are `pending`, `preparing`, `submitting`, `submitted`, `submission_unknown`, `succeeded`, and `failed`. `submitting` records that a submission attempt began. `submitted` always carries a known ComfyUI prompt ID. `submission_unknown` carries the client correlation ID and available submission diagnostics but never advances automatically; a future explicit reconciliation may move it to `submitted` with a proved prompt ID or to `failed`.
+The execution states are `pending`, `preparing`, `submitting`, `submitted`, `submission_unknown`, `succeeded`, `failed`, and `cancelled`. `submitting` records that a submission attempt began. `submitted` always carries a known ComfyUI prompt ID. `submission_unknown` carries the client correlation ID and available submission diagnostics but never advances automatically; a future explicit reconciliation may move it to `submitted` with a proved prompt ID or to `failed`. `cancelled` applies only to a Job without submission evidence. It means batchcraft deliberately did not submit that Job, not that remote ComfyUI work was interrupted.
 
 ## Result
 

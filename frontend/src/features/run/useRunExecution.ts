@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError, type BatchcraftApi, type RunDiscardApi } from "../../api/client";
+import {
+  ApiError,
+  type BatchcraftApi,
+  type RunCancellationApi,
+  type RunDiscardApi,
+} from "../../api/client";
 import type {
   ExecutionResponse,
   ResultResponse,
@@ -12,7 +17,7 @@ import { errorMessage } from "../../utils/errors";
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked", "cancelled"]);
 
 export function useRunExecution(
-  api: BatchcraftApi & RunDiscardApi,
+  api: BatchcraftApi & RunDiscardApi & RunCancellationApi,
   run: RunCreatedResponse | null,
   pollIntervalMs: number,
   initialExecution: ExecutionResponse | null,
@@ -24,6 +29,8 @@ export function useRunExecution(
   const [results, setResults] = useState<ResultResponse[]>(initialResults);
   const [starting, setStarting] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const [requestingStop, setRequestingStop] = useState(false);
+  const [reconcilingStop, setReconcilingStop] = useState(false);
   const [polling, setPolling] = useState(initialExecution?.status === "running");
   const [refreshingResults, setRefreshingResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +38,8 @@ export function useRunExecution(
   const [createdUnavailable, setCreatedUnavailable] = useState(false);
   const reconciliation = useRef<"start" | "discard" | null>(null);
   const createdReconciliationPolls = useRef(0);
+  const stopReconciliation = useRef(false);
+  const stopRetryAvailable = useRef(false);
 
   useEffect(() => {
     onStatusChange(execution?.status ?? (run ? "created" : null));
@@ -54,7 +63,27 @@ export function useRunExecution(
         if (disposed) {
           return;
         }
-        setExecution(nextExecution);
+        setExecution((current) => (
+          current?.cancellation &&
+          nextExecution.status === "running" &&
+          !nextExecution.cancellation
+            ? { ...nextExecution, cancellation: current.cancellation }
+            : nextExecution
+        ));
+
+        if (stopReconciliation.current) {
+          stopReconciliation.current = false;
+          setReconcilingStop(false);
+          stopRetryAvailable.current = nextExecution.status === "running" && !nextExecution.cancellation;
+          setError(
+            stopRetryAvailable.current
+              ? "The Stop request was not observed; it is safe to request again."
+              : null,
+          );
+        }
+        if (nextExecution.cancellation || TERMINAL_STATUSES.has(nextExecution.status)) {
+          stopRetryAvailable.current = false;
+        }
 
         if (reconciliation.current && nextExecution.status === "created") {
           createdReconciliationPolls.current += 1;
@@ -71,7 +100,9 @@ export function useRunExecution(
         } else {
           reconciliation.current = null;
           setCreatedUnavailable(false);
-          setError(null);
+          if (!stopRetryAvailable.current) {
+            setError(null);
+          }
         }
 
         try {
@@ -185,6 +216,45 @@ export function useRunExecution(
     }
   }
 
+  async function stopAfterCurrentJob() {
+    if (
+      !run ||
+      requestingStop ||
+      reconcilingStop ||
+      execution?.status !== "running" ||
+      execution.cancellation
+    ) {
+      return;
+    }
+    setRequestingStop(true);
+    stopRetryAvailable.current = false;
+    setError(null);
+    try {
+      const response = await api.cancelRun(run.run_id);
+      setExecution((current) => current ? {
+        ...current,
+        cancellation: {
+          mode: response.mode,
+          requested_at: response.requested_at,
+          state: response.state,
+        },
+      } : current);
+      setPolling(true);
+    } catch (caught) {
+      const message = errorMessage(caught);
+      if (caught instanceof ApiError && caught.code === "network_error") {
+        stopReconciliation.current = true;
+        setReconcilingStop(true);
+        setError(`${message}. The Stop response was ambiguous; checking durable state.`);
+        setPolling(true);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setRequestingStop(false);
+    }
+  }
+
   async function refreshResults() {
     if (!run || refreshingResults) {
       return;
@@ -206,6 +276,8 @@ export function useRunExecution(
     results,
     starting,
     discarding,
+    requestingStop,
+    reconcilingStop,
     polling,
     refreshingResults,
     error,
@@ -213,6 +285,7 @@ export function useRunExecution(
     createdUnavailable,
     start,
     discard,
+    stopAfterCurrentJob,
     refreshResults,
   };
 }

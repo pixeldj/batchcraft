@@ -21,6 +21,7 @@ class JobExecutionStatus(StrEnum):
     SUBMITTED = "submitted"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)

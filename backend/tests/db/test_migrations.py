@@ -40,6 +40,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "batch_image_binding_value",
             "batch_parameter_binding",
             "batch_parameter_binding_value",
+            "run_cancellation_request",
         }
         indexes = {
             row[0]
@@ -77,6 +78,17 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
         assert [
             row[1] for row in connection.execute("PRAGMA table_info(batch_variable_binding)")
         ] == ["batch_id", "position", "placeholder", "values_json"]
+        assert connection.execute("PRAGMA table_info(run_cancellation_request)").fetchall() == [
+            (0, "run_id", "TEXT", 1, None, 1),
+            (1, "mode", "TEXT", 1, None, 2),
+            (2, "requested_at", "TEXT", 1, None, 0),
+        ]
+        assert connection.execute(
+            "SELECT strict FROM pragma_table_list WHERE name = 'run_cancellation_request'"
+        ).fetchone() == (1,)
+        assert (
+            connection.execute("PRAGMA foreign_key_list(run_cancellation_request)").fetchall() == []
+        )
 
         migration_path = (
             Path(__file__).parents[2]

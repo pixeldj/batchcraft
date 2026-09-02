@@ -136,7 +136,7 @@ Batch request snapshot plus the required `batch_snapshot` object. Frontend Rando
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
 provenance into manifest v7 with Batch snapshot v5. SQLite now owns current Project metadata, the immutable-version Prompt,
-Workflow, and Workflow Profile libraries, and mutable Saved Batches; searchable filesystem-derived
+Workflow, and Workflow Profile libraries, mutable Saved Batches, and durable Run cancellation intent; searchable filesystem-derived
 indexes remain a later slice.
 
 ## Application Queue
@@ -169,7 +169,9 @@ Initial queue depth should be configurable, with `1` as a safe default.
 
 The first production executor fixes queue depth at exactly `1` and executes one published Run. It submits the next Job only after history proves the prior Job succeeded and every discovered Result is durable. Global Run selection, prioritization, concurrency, retries, and automatic recovery remain outside this layer.
 
-FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. Start admission and discard-before-start use the same registry lock: discard cannot race execution start and independently requires absent or exactly pristine initial state with no active task for that Run. Discard writes terminal `cancelled` execution state without deleting the Run or changing frozen provenance. The registry is not durable scheduler state: execution format v2 in `execution.json` remains authoritative, and a restarted API refuses automatic recovery of non-created execution state. Execution v1 is intentionally unsupported.
+FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. Start admission and discard-before-start use the same registry lock: discard cannot race execution start and independently requires absent or exactly pristine initial state with no active task for that Run. Discard writes terminal `cancelled` execution state without deleting the Run or changing frozen provenance.
+
+Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. The executor cancels only unsubmitted Jobs, allows admitted work to reach an honest succeeded, failed, or blocked outcome, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while execution format v3 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. Execution formats v1 and v2 are intentionally unsupported.
 
 Benefits:
 
@@ -304,7 +306,8 @@ SQLite currently stores:
 - logical Prompts and immutable PromptVersions;
 - logical Workflows and immutable WorkflowVersions;
 - logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
-- mutable Saved Batches with ordered prompt, variable, named image, and typed parameter-alternative bindings.
+- mutable Saved Batches with ordered prompt, variable, named image, and typed parameter-alternative bindings;
+- durable Run cancellation requests keyed by Run ID and mode, currently only `after_current_job`.
 
 Later migrations may add:
 
@@ -381,7 +384,7 @@ cancelled
 
 `submission_unknown` means the submission outcome was ambiguous and requires reconciliation. It is not a signal to retry.
 
-The first executor uses `created`, `running`, `succeeded`, `failed`, and `blocked` for Run state. Job state uses `pending`, `preparing`, `submitting`, `submitted`, `submission_unknown`, `succeeded`, and `failed`. `submitting` is persisted before the network call so a crash during submission is never confused with a Job that was never submitted. A history timeout leaves an accepted Job in `submitted` with its prompt ID and blocks the Run. Blocked and unknown-submission states stop automatic execution but permit a future explicit reconciliation transition without weakening immutable succeeded/failed states.
+The first executor uses `created`, `running`, `succeeded`, `failed`, `blocked`, and `cancelled` for Run state. Job state uses `pending`, `preparing`, `submitting`, `submitted`, `submission_unknown`, `succeeded`, `failed`, and `cancelled`. `submitting` is persisted before the network call so a crash during submission is never confused with a Job that was never submitted. A history timeout leaves an accepted Job in `submitted` with its prompt ID and blocks the Run. Blocked and unknown-submission states stop automatic execution but permit a future explicit reconciliation transition without weakening immutable succeeded/failed states. Local Job `cancelled` is restricted to work with no submission evidence and does not claim remote cancellation.
 
 A backend restart should eventually be able to reconcile submitted/running Jobs against ComfyUI history.
 

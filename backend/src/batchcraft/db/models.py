@@ -120,6 +120,17 @@ class SavedBatchSeedMode(StrEnum):
     RANDOM = "random"
 
 
+class RunCancellationMode(StrEnum):
+    AFTER_CURRENT_JOB = "after_current_job"
+
+
+@dataclass(frozen=True, slots=True)
+class RunCancellationRequestRecord:
+    run_id: str
+    mode: RunCancellationMode
+    requested_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class SavedBatchSeedIntent:
     mode: SavedBatchSeedMode
