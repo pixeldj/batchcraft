@@ -365,6 +365,9 @@ Suggested fields:
 id
 batch_id
 run_number
+name
+description
+filesystem_key
 status
 created_at
 started_at
@@ -372,6 +375,11 @@ completed_at
 run_path
 manifest_version
 ```
+
+`name` and `description` are optional immutable creation-time provenance. `filesystem_key` is the
+immutable `NNN-<slug>` directory name derived once from `run_number` and `name`, with `run` as the slug
+fallback. The stable `id` remains the true identity. Loading resolves by ID and verifies the directory
+name against the persisted filesystem key rather than regenerating it from the display name.
 
 The Run snapshot must include effective copies of:
 
@@ -382,7 +390,8 @@ The Run snapshot must include effective copies of:
 - seed policy and resolved seeds;
 - exposed workflow parameters;
 - output naming configuration;
-- compiled Job list.
+- compiled Job list;
+- optional Run name and description plus the immutable filesystem key.
 
 Once Run creation succeeds, these effective values and the compiled Job plan are immutable. This freeze occurs before scheduling begins.
 

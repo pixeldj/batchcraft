@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Annotated, Literal, Self
 from urllib.parse import quote
@@ -10,6 +10,7 @@ from pydantic import (
     Field,
     StrictBool,
     StrictStr,
+    field_validator,
     model_validator,
 )
 
@@ -270,6 +271,25 @@ class BatchRequest(ApiModel):
             workflow=self.workflow,
             workflow_profile=self.workflow_profile,
             batch_snapshot=self.batch_snapshot.model_dump(mode="json"),
+        )
+
+
+class RunCreateRequest(BatchRequest):
+    run_name: str | None = Field(default=None, max_length=200)
+    run_description: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("run_name", "run_description", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    def to_creation_input(self) -> RunCreationInput:
+        return replace(
+            super().to_creation_input(),
+            name=self.run_name,
+            description=self.run_description,
         )
 
 
@@ -1163,6 +1183,9 @@ class ExecutionResponse(ApiModel):
 class RunCreatedResponse(ApiModel):
     run_id: str
     run_number: int
+    run_name: str | None
+    run_description: str | None
+    filesystem_key: str
     project_id: str
     project_name: str
     batch_id: str
@@ -1175,6 +1198,9 @@ class RunCreatedResponse(ApiModel):
         return cls(
             run_id=run.run_id,
             run_number=run.run_number,
+            run_name=run.name,
+            run_description=run.description,
+            filesystem_key=run.filesystem_key,
             project_id=run.project.id,
             project_name=run.project.name,
             batch_id=run.batch.id,

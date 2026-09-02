@@ -4,7 +4,9 @@ import io
 import json
 import math
 import os
+import re
 import shutil
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -73,10 +75,15 @@ from batchcraft.files.snapshots import (
     SnapshotParameterValuesBinding,
 )
 
-RUN_FORMAT_VERSION = 1
-MANIFEST_FORMAT_VERSION = 7
+RUN_FORMAT_VERSION = 2
+MANIFEST_FORMAT_VERSION = 8
 OWNER_FORMAT_VERSION = 1
+RUN_NAME_MAX_LENGTH = 200
+RUN_DESCRIPTION_MAX_LENGTH = 4000
+RUN_SLUG_MAX_LENGTH = 80
 _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+_RUN_FILESYSTEM_KEY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
+_RUN_SLUG_SEPARATOR = re.compile(r"[^a-z0-9]+")
 _CSV_COLUMNS = (
     "job_ordinal",
     "job_id",
@@ -119,6 +126,8 @@ class RunFilesystemStore:
         image_assets: Mapping[str, AssetRecord],
         workflow: Mapping[str, object],
         workflow_profile: Mapping[str, object],
+        name: str | None = None,
+        description: str | None = None,
     ) -> PublishedRun:
         self._validate_owner(project.id, project.filesystem_key, project.name, "Project")
         self._validate_owner(batch.id, batch.filesystem_key, batch.name, "Batch")
@@ -143,9 +152,15 @@ class RunFilesystemStore:
 
         asset_store = ProjectAssetStore(project_path)
         assets_by_id = self._validate_image_assets(plan, image_assets, asset_store)
+        run_name = _normalize_run_text(name, "Run name", RUN_NAME_MAX_LENGTH)
+        run_description = _normalize_run_text(
+            description, "Run description", RUN_DESCRIPTION_MAX_LENGTH
+        )
+        run_slug = slugify_run_name(run_name)
         run_id = self._new_id("Run")
         created_at = self._timestamp()
-        run_number, reservation_path, final_path = self._reserve_run_number(batch_path)
+        run_number, reservation_path, final_path = self._reserve_run_number(batch_path, run_slug)
+        filesystem_key = final_path.name
         staging_root = batch_path / ".staging"
         staging_path = staging_root / run_id
         staging_created = False
@@ -197,6 +212,9 @@ class RunFilesystemStore:
             run_metadata = _run_metadata(
                 run_id=run_id,
                 run_number=run_number,
+                name=run_name,
+                description=run_description,
+                filesystem_key=filesystem_key,
                 created_at=created_at,
                 project=project,
                 batch=batch,
@@ -262,11 +280,9 @@ class RunFilesystemStore:
                 f"Run path is not inside a Project Batch path: {run_path}"
             ) from error
         published_run = self._load_run(run_path, project_path, validate_csv=False)
-        expected_name = f"run-{published_run.run_number:03d}"
-        if run_path.name != expected_name:
+        if run_path.name != published_run.filesystem_key:
             raise RunStoreError(
-                f"Run directory name {run_path.name!r} does not match Run number "
-                f"{published_run.run_number}"
+                f"Run directory name {run_path.name!r} does not match its recorded filesystem key"
             )
         if run_path.parent.name != published_run.batch.filesystem_key:
             raise RunStoreError("Run directory is not under its recorded Batch filesystem key")
@@ -366,6 +382,9 @@ class RunFilesystemStore:
         return PublishedRun(
             run_id=loaded.run_id,
             run_number=loaded.run_number,
+            name=loaded.name,
+            description=loaded.description,
+            filesystem_key=loaded.filesystem_key,
             created_at=loaded.created_at,
             path=run_path,
             project=loaded.project,
@@ -407,21 +426,21 @@ class RunFilesystemStore:
                     raise RunStoreError(f"invalid image asset {asset_id!r}: {error}") from error
         return assets_by_id
 
-    def _reserve_run_number(self, batch_path: Path) -> tuple[int, Path, Path]:
+    def _reserve_run_number(self, batch_path: Path, slug: str) -> tuple[int, Path, Path]:
         allocations_path = batch_path / ".allocations"
         ensure_directory(allocations_path)
         for run_number in count(1):
-            name = f"run-{run_number:03d}"
-            final_path = batch_path / name
-            reservation_path = allocations_path / name
-            if final_path.exists():
+            prefix = f"{run_number:03d}"
+            final_path = batch_path / f"{prefix}-{slug}"
+            reservation_path = allocations_path / prefix
+            if _run_number_is_published(batch_path, prefix):
                 continue
             try:
                 reservation_path.mkdir()
                 fsync_directory(allocations_path)
             except FileExistsError:
                 continue
-            if final_path.exists():
+            if _run_number_is_published(batch_path, prefix):
                 reservation_path.rmdir()
                 continue
             return run_number, reservation_path, final_path
@@ -570,10 +589,46 @@ class RunFilesystemStore:
         fsync_directory(final_path.parent)
 
 
+def slugify_run_name(name: str | None) -> str:
+    if name is None:
+        return "run"
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = _RUN_SLUG_SEPARATOR.sub("-", ascii_name.lower()).strip("-")
+    slug = slug[:RUN_SLUG_MAX_LENGTH].rstrip("-")
+    return slug or "run"
+
+
+def _normalize_run_text(value: str | None, label: str, max_length: int) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > max_length:
+        raise RunStoreError(f"{label} must contain at most {max_length} characters")
+    return normalized
+
+
+def _run_number_is_published(batch_path: Path, prefix: str) -> bool:
+    return any(candidate.name.startswith(f"{prefix}-") for candidate in batch_path.iterdir())
+
+
+def _validate_run_filesystem_key(filesystem_key: str, run_number: int) -> None:
+    if (
+        not _RUN_FILESYSTEM_KEY.fullmatch(filesystem_key)
+        or not is_safe_filesystem_key(filesystem_key)
+        or not filesystem_key.startswith(f"{run_number:03d}-")
+    ):
+        raise RunStoreError("Run filesystem key is invalid or does not match its Run number")
+
+
 def _run_metadata(
     *,
     run_id: str,
     run_number: int,
+    name: str | None,
+    description: str | None,
+    filesystem_key: str,
     created_at: str,
     project: ProjectIdentity,
     batch: BatchIdentity,
@@ -585,6 +640,9 @@ def _run_metadata(
         "format_version": RUN_FORMAT_VERSION,
         "run_id": run_id,
         "run_number": run_number,
+        "name": name,
+        "description": description,
+        "filesystem_key": filesystem_key,
         "created_at": created_at,
         "status": "created",
         "project": _project_data(project),
@@ -609,6 +667,9 @@ def _manifest(
         "run": {
             "run_id": run_metadata["run_id"],
             "run_number": run_metadata["run_number"],
+            "name": run_metadata["name"],
+            "description": run_metadata["description"],
+            "filesystem_key": run_metadata["filesystem_key"],
             "created_at": run_metadata["created_at"],
             "project": run_metadata["project"],
             "batch": run_metadata["batch"],
@@ -763,6 +824,17 @@ def _parse_run(
 
     run_id = _required_string(run_data, "run_id")
     run_number = _positive_integer(run_data, "run_number")
+    name = _optional_string(run_data, "name")
+    description = _optional_string(run_data, "description")
+    if _normalize_run_text(name, "Run name", RUN_NAME_MAX_LENGTH) != name:
+        raise RunStoreError("Run name is not normalized")
+    if (
+        _normalize_run_text(description, "Run description", RUN_DESCRIPTION_MAX_LENGTH)
+        != description
+    ):
+        raise RunStoreError("Run description is not normalized")
+    filesystem_key = _required_string(run_data, "filesystem_key")
+    _validate_run_filesystem_key(filesystem_key, run_number)
     created_at = _required_string(run_data, "created_at")
     _required_string(run_data, "status")
     project = _parse_project(_required_object(run_data, "project"))
@@ -775,6 +847,12 @@ def _parse_run(
         raise RunStoreError("Run ID differs between run.json and manifest.json")
     if _positive_integer(manifest_run, "run_number") != run_number:
         raise RunStoreError("Run number differs between run.json and manifest.json")
+    if _optional_string(manifest_run, "name") != name:
+        raise RunStoreError("Run name differs between run.json and manifest.json")
+    if _optional_string(manifest_run, "description") != description:
+        raise RunStoreError("Run description differs between run.json and manifest.json")
+    if _required_string(manifest_run, "filesystem_key") != filesystem_key:
+        raise RunStoreError("Run filesystem key differs between run.json and manifest.json")
     if _required_string(manifest_run, "created_at") != created_at:
         raise RunStoreError("creation timestamp differs between run.json and manifest.json")
     if _parse_project(_required_object(manifest_run, "project")) != project:
@@ -875,6 +953,9 @@ def _parse_run(
     return PublishedRun(
         run_id=run_id,
         run_number=run_number,
+        name=name,
+        description=description,
+        filesystem_key=filesystem_key,
         created_at=created_at,
         path=run_path,
         project=project,

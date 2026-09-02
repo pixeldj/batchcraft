@@ -8,6 +8,7 @@ import type {
 } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
 import { errorMessage } from "../../utils/errors";
+import { runDisplayLabel } from "../run/runDisplay";
 
 interface Props {
   runId: string;
@@ -86,7 +87,9 @@ export function ResultDetailsDialog({
       >
         <div className="result-details-heading">
           <div>
-            <p className="result-details-kicker">Result details</p>
+            <p className="result-details-kicker">
+              Result details{run ? ` · ${runDisplayLabel(run)}` : ""}
+            </p>
             <h2 id="result-details-title">
               Job {String(result.job_ordinal).padStart(3, "0")} · Artifact {result.artifact_ordinal}
             </h2>
@@ -210,7 +213,8 @@ function TechnicalDetails({
     <details className="technical-details result-technical-details">
       <summary>Technical details</summary>
       <dl>
-        <Detail label="Run" value={`Run ${run.run_number}`} code={run.run_id} />
+        <Detail label="Run" value={runDisplayLabel(run)} code={run.run_id} />
+        <Detail label="Run folder" value={run.filesystem_key} code={run.filesystem_key} />
         <Detail label="Job ordinal" value={String(result.job_ordinal)} />
         <Detail label="Artifact ordinal" value={String(result.artifact_ordinal)} />
         <Detail label="ComfyUI prompt ID" value={executionJob?.prompt_id ?? "Unavailable"} code={executionJob?.prompt_id ?? undefined} />

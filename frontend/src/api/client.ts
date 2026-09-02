@@ -29,8 +29,9 @@ import type {
   PromptUpdateRequest,
   PromptVersionsResponse,
   ResultsResponse,
-  RunCreatedResponse,
   RunCancellationRequestedResponse,
+  RunCreatedResponse,
+  RunCreateRequest,
   RunResponse,
   SavedBatchAdoptRequest,
   SavedBatchCreateRequest,
@@ -116,7 +117,7 @@ export interface BatchcraftApi {
   getWorkflowProfileVersion(versionId: string, signal?: AbortSignal): Promise<LibraryWorkflowProfileVersion>;
   archiveWorkflowProfileVersion(versionId: string): Promise<LibraryWorkflowProfileVersion>;
   previewBatch(batch: BatchRequest): Promise<PreviewResponse>;
-  createRun(batch: BatchRequest): Promise<RunCreatedResponse>;
+  createRun(request: RunCreateRequest): Promise<RunCreatedResponse>;
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse>;
   startRun(runId: string): Promise<ExecutionStartedResponse>;
   getExecution(runId: string, signal?: AbortSignal): Promise<ExecutionResponse>;
@@ -351,8 +352,8 @@ export class BatchcraftApiClient implements BatchcraftApi {
     return this.request("/api/batches/preview", this.jsonRequest(batch, "POST"));
   }
 
-  createRun(batch: BatchRequest): Promise<RunCreatedResponse> {
-    return this.request("/api/runs", this.jsonRequest(batch, "POST"));
+  createRun(request: RunCreateRequest): Promise<RunCreatedResponse> {
+    return this.request("/api/runs", this.jsonRequest(request, "POST"));
   }
 
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse> {

@@ -238,6 +238,10 @@ The Results Viewer is a first-class product feature.
 
 A Run may be rerun from batchcraft or re-imported from its authoritative JSON manifest and related Run/Project artifacts.
 
+A Run may have an optional creation name and notes. Both are frozen as provenance. Its directory uses
+the immutable human-readable form `NNN-<slug>`, falling back to `NNN-run` when unnamed. The interface
+uses the Run name where useful while retaining the Run number as secondary chronological context.
+
 A rerun creates a new incremented Run directory and never overwrites the original.
 
 Potential rerun scopes include:

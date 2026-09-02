@@ -595,6 +595,9 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     createRun: vi.fn(async () => ({
       run_id: "run-1",
       run_number: 1,
+      run_name: null,
+      run_description: null,
+      filesystem_key: "001-run",
       project_id: "project-1",
       project_name: "Project",
       batch_id: "batch-1",

@@ -73,6 +73,11 @@ export interface BatchRequest {
   batch_snapshot: EditableBatchSnapshot;
 }
 
+export interface RunCreateRequest extends BatchRequest {
+  run_name: string | null;
+  run_description: string | null;
+}
+
 export interface EditableBatchSnapshot {
   snapshot_version: 5;
   project: IdentityRequest;
@@ -502,6 +507,9 @@ export interface PreviewResponse {
 export interface RunCreatedResponse {
   run_id: string;
   run_number: number;
+  run_name: string | null;
+  run_description: string | null;
+  filesystem_key: string;
   project_id: string;
   project_name: string;
   batch_id: string;

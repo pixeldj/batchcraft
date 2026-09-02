@@ -7,6 +7,7 @@ import { ResultGallery } from "./ResultGallery";
 export interface BatchGalleryRun {
   runId: string;
   runNumber: number | null;
+  runName: string | null;
   results: ResultResponse[];
   execution: ExecutionResponse | null;
   loading: boolean;
@@ -73,9 +74,10 @@ export function BatchResultsGallery({
       <div className="batch-results-runs">
         {runIds.map((runId, index) => {
           const run = runsById[runId];
-          const runLabel = run?.runNumber === null || run?.runNumber === undefined
+          const runNumberLabel = run?.runNumber === null || run?.runNumber === undefined
             ? `Run pending ${index + 1}`
             : `Run ${run.runNumber}`;
+          const runLabel = run?.runName ? `${run.runName} · ${runNumberLabel}` : runNumberLabel;
           const orderedResults = [...(run?.results ?? [])].sort(
             (left, right) =>
               left.job_ordinal - right.job_ordinal ||
@@ -87,7 +89,11 @@ export function BatchResultsGallery({
             <section className="batch-results-run" aria-label={runLabel} key={runId}>
               <div className="batch-results-run-heading">
                 <div>
-                  <strong>{runLabel} · {resultCount(orderedResults.length)}</strong>
+                  <strong>
+                    {run?.runName ?? runNumberLabel}
+                    {run?.runName ? <span className="run-number-secondary">{runNumberLabel}</span> : null}
+                    <span className="run-result-count">{resultCount(orderedResults.length)}</span>
+                  </strong>
                   {expanded ? (
                     <details className="technical-details">
                       <summary>Run details</summary>

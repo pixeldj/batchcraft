@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { ExecutionResponse, RunCreatedResponse, RunResponse } from "../../api/types";
 import { RunPlanDialog } from "./RunPlanDialog";
+import { runDisplayName, runNumberLabel } from "./runDisplay";
 
 interface Props {
   run: RunCreatedResponse | RunResponse | null;
@@ -94,7 +95,10 @@ export function RunPanel({
   return (
     <section className={`section-card run-card status-${status}`} aria-labelledby="run-heading">
       <div className="section-heading">
-        <h2 id="run-heading">Run {run.run_number}</h2>
+        <div className="run-heading-title">
+          <h2 id="run-heading">{runDisplayName(run)}</h2>
+          {run.run_name ? <span>{runNumberLabel(run)}</span> : null}
+        </div>
         <span className={`status-pill ${status}`} role="status" aria-live="polite">
           {statusText}
         </span>
@@ -102,6 +106,7 @@ export function RunPanel({
 
       <div className="run-summary">
         <strong>{completedJobs} / {run.job_count} Jobs</strong>
+        {run.run_description ? <p className="run-description">{run.run_description}</p> : null}
         {dimensions ? <p>{dimensions}</p> : <p>Loading frozen Run Plan...</p>}
         {workflow?.workflow_name ? (
           <p>Workflow: <strong>{workflow.workflow_name}</strong>{formatVersion(workflow.workflow_version_number)}</p>
@@ -132,6 +137,7 @@ export function RunPanel({
       <details className="technical-details">
         <summary>Run details</summary>
         <p>Run ID: <code>{run.run_id}</code></p>
+        <p>Filesystem key: <code>{run.filesystem_key}</code></p>
       </details>
 
       {execution && status !== "created" ? (

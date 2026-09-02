@@ -26,7 +26,7 @@ projects/
             ├── batch.json
             ├── .allocations/
             ├── .staging/
-            ├── run-001/
+            ├── 001-baseline/
             │   ├── run.json
             │   ├── manifest.json
              │   ├── manifest.csv
@@ -37,41 +37,55 @@ projects/
             │       ├── 000001-01.png
             │       ├── 000002-01.png
             │       └── ...
-            ├── run-002/
-            └── run-003/
+            ├── 002-new-prompt/
+            └── 003-run/
 ```
 
 Project and Batch paths use stable, path-safe filesystem keys rather than editable display names. Renaming a Project or Batch does not move historical paths. Stable internal IDs remain distinct from both filesystem keys and display names. `project.json` and `batch.json` bind each filesystem key to its stable internal ID so the same path cannot later be reused for another entity.
 
 Names in owner identity files are the labels present when those files were first created. Each Run snapshots the Project and Batch labels current at its own creation time.
 
-The incrementing Run directory identifies each execution within its Batch path. `run.json` and `manifest.json` retain the stable internal Run ID.
+The immutable Run filesystem key identifies each execution within its Batch path. `run.json` and
+`manifest.json` retain the stable internal Run ID as the true identity.
 
 ## Run Directory Naming
 
-Use a deterministic incrementing scheme:
+Use a deterministic incrementing number followed by a creation-time name slug:
 
 ```text
-run-001
-run-002
-run-003
+001-baseline
+002-new-prompt
+003-run
 ```
 
-Rerunning never overwrites an existing Run directory.
+The slug is derived by trimming the optional Run name, applying Unicode NFKD normalization and ASCII
+transliteration where available, lowercasing, replacing non-alphanumeric runs with `-`, stripping edge
+hyphens, and truncating to 80 characters. An empty result uses `run`. The resulting filesystem key is
+frozen at successful Run creation; later labels or annotations must not rename the directory.
 
-Run creation claims the first available number through an atomic directory creation under `.allocations/`; it does not calculate a maximum and assume the next number is free. The reservation is removed after publication or a safely handled failure. Concurrent local creators therefore receive distinct numbers while preserving human readability.
+Rerunning never overwrites an existing Run directory. Similar names remain distinct because each Run
+has a different number.
+
+Run creation claims the first available number through an atomic number-only directory creation under
+`.allocations/`; it does not calculate a maximum and assume the next number is free. Any published
+`NNN-*` directory occupies its numeric prefix regardless of slug. The reservation is removed after
+publication or a safely handled failure. Concurrent local creators therefore receive distinct numbers
+while preserving human readability.
 
 ## `run.json`
 
 Stores Run-level metadata.
 
-The v1 creation schema is:
+The v2 creation schema is:
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "run_id": "...",
   "run_number": 3,
+  "name": "CFG sweep",
+  "description": "Compare the stable prompt at several CFG values.",
+  "filesystem_key": "003-cfg-sweep",
   "status": "created",
   "created_at": "...",
   "project": {
@@ -115,9 +129,10 @@ The file uses canonical JSON encoding. Its SHA-256 is recorded separately from t
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The current manifest has `format_version: 7` and contains:
+The current manifest has `format_version: 8` and contains:
 
-- Run ID, number, creation timestamp, and Project/Batch identity snapshots;
+- Run ID, number, optional immutable name and description, filesystem key, creation timestamp, and
+  Project/Batch identity snapshots;
 - ordered PromptVersion snapshots containing ID, name, and exact Prompt Template text;
 - compiler warnings;
 - workflow and Workflow Profile snapshot paths and hashes;
@@ -134,7 +149,7 @@ The current manifest has `format_version: 7` and contains:
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v7 creation manifest contains immutable plan and
+`manifest.json` is authoritative for exact replay. The v8 creation manifest contains immutable plan and
 provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
 versioned execution representation.
 
@@ -159,7 +174,7 @@ Every Job contains ordered `resolved_parameters` entries shaped as
 Every entry remains scalar because parameter alternatives are resolved during compilation, before the
 Job reaches execution.
 
-Manifest v7 requires a top-level `batch_snapshot` object with `snapshot_version: 5`. It stores variable
+Manifest v8 requires a top-level `batch_snapshot` object with `snapshot_version: 5`. It stores variable
 bindings canonically as `{ "placeholder": string, "values": string[] }`. Zero values may
 appear in mutable Saved Batch drafts but a successfully compiled Run cannot use a zero-value binding.
 An empty string is one concrete value. New writes reject exact duplicate values, including duplicate
@@ -178,7 +193,7 @@ resolved scalar or Base workflow choice.
 Snapshots may also preserve optional human-readable Workflow and Profile names plus immutable version
 numbers. These labels support historical UI inspection and are not required for replay.
 
-Manifest v1-v6 and snapshot v1-v4 are unsupported. The loader rejects them and never rewrites Run files.
+Manifest v1-v7 and snapshot v1-v4 are unsupported. The loader rejects them and never rewrites Run files.
 
 ## `manifest.csv`
 
@@ -330,7 +345,7 @@ Human review metadata such as ratings and notes may be stored separately or in e
 
 ## Import and Rerun
 
-batchcraft should support importing the current manifest v7 for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
+batchcraft should support importing the current manifest v8 for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
 
 The application should recognize enough metadata to:
 
@@ -348,14 +363,15 @@ Modified reruns can be added later.
 
 ## Loading and Validation
 
-Loading a published Run requires `run.json`, canonical manifest v7, `manifest.csv`, both snapshot
-files, and `outputs/`. Manifest v7 requires a batch snapshot with `snapshot_version: 5`, a non-empty
+Loading a published Run requires `run.json`, canonical manifest v8, `manifest.csv`, both snapshot
+files, and `outputs/`. Manifest v8 requires a batch snapshot with `snapshot_version: 5`, a non-empty
 ordered PromptVersion collection, unique PromptVersion IDs, required names, and every Job's
 association with a known PromptVersion. The loader validates ordered, unique Profile slot metadata and
 requires every Job to contain the same ordered slot keys. Each resolved slot must contain either a
 complete Reference Asset object or explicit `null`; a missing slot or asset key is invalid.
 
-The loader also validates Run/Project/Batch identity consistency, one-based contiguous Job ordinals,
+The loader also validates Run/Project/Batch identity consistency, the directory name against the frozen
+`filesystem_key`, one-based contiguous Job ordinals,
 unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata,
 size, and content hash. It also validates frozen parameter definitions, ordered Job keys, and each
 resolved value against its declared type. The Batch snapshot must contain the same identities and Workflow/Profile
@@ -379,14 +395,22 @@ Example:
 }
 ```
 
-The pre-release baseline supports `run.json` v1, manifest v7 with required snapshot v5, execution v3,
+The pre-release baseline supports `run.json` v2, manifest v8 with required snapshot v5, execution v3,
 and `asset.json` v1. Unsupported development versions fail closed. The application does not rewrite
 or delete them automatically. Version fields and migration boundaries remain so a future change can
 add an explicit compatibility path when released data requires one.
 
+Development Runs using `run-NNN`, `run.json` v1, or manifest v7 are unsupported. Developers must
+inspect and recreate them manually when needed; batchcraft does not migrate, rename, rewrite, or delete
+those directories.
+
 ## Filesystem Publication and SQLite Indexing
 
-Run creation writes and validates a sibling directory under the Batch's `.staging/`, then renames the complete directory to `run-NNN` on the same filesystem before future SQLite indexing. Here, complete means that every required plan and provenance file exists and validates; execution need not have started or reached a terminal state. A Run is not ready for scheduling until both publication and future indexing succeed.
+Run creation writes and validates a sibling directory under the Batch's `.staging/`, then renames the
+complete directory to its immutable `NNN-<slug>` filesystem key on the same filesystem before future
+SQLite indexing. Here, complete means that every required plan and provenance file exists and validates;
+execution need not have started or reached a terminal state. A Run is not ready for scheduling until
+both publication and future indexing succeed.
 
 Filesystem publication must be atomic within the destination filesystem. An incomplete staging directory is not a Run. If SQLite state is missing or incomplete, batchcraft can discover complete published Runs and rebuild their index records from the versioned files.
 

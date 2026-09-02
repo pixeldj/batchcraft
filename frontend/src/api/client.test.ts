@@ -101,6 +101,24 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("creates a Run with metadata separate from the Preview Batch request", async () => {
+    const fetchMock = successfulFetch({ run_id: "run-1" });
+    vi.stubGlobal("fetch", fetchMock);
+    const request = {
+      ...batchRequest(),
+      run_name: "Baseline",
+      run_description: "First stable settings.",
+    };
+
+    await new BatchcraftApiClient("http://api.test").createRun(request);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+  });
+
   it("discards a Run with POST and an encoded ID", async () => {
     const fetchMock = successfulFetch({ run_id: "run/one", status: "cancelled" });
     vi.stubGlobal("fetch", fetchMock);

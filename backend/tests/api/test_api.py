@@ -1903,7 +1903,7 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
     assert response.json()["error"]["code"] == "invalid_request"
 
 
-def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v7(
+def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v8(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -1937,9 +1937,9 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v7
 
     assert preview.status_code == 200
     assert created.status_code == 201
-    run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+    run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert manifest["format_version"] == 7
+    assert manifest["format_version"] == 8
     expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
     assert manifest["batch_snapshot"] == expected_snapshot
     assert [job["seed"] for job in manifest["jobs"]] == [
@@ -1985,7 +1985,7 @@ def test_run_api_requires_complete_snapshot_v5_and_rejects_malformed_durable_sna
     ) as http:
         run_id = _create_run(http, request)
         valid = http.get(f"/api/runs/{run_id}")
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         manifest_path = run_path / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
         snapshot = manifest["batch_snapshot"]
@@ -2027,7 +2027,7 @@ def test_preview_and_run_creation_allow_zero_image_input_slots(tmp_path: Path) -
     assert created.status_code == 201
     assert all(job["resolved_image_inputs"] == [] for job in run.json()["plan"]["jobs"])
 
-    run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+    run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
     assert all(job["resolved_image_inputs"] == [] for job in manifest["jobs"])
     assert not (settings.projects_root / "project_key" / "assets").exists()
@@ -2191,16 +2191,60 @@ def test_run_creation_and_lookup_use_real_durable_store(tmp_path: Path) -> None:
         lookup = http.get(f"/api/runs/{run_id}")
         missing = http.get("/api/runs/missing")
 
-    run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+    run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     published = RunFilesystemStore(settings.projects_root).load_run(run_path)
     assert published.run_id == run_id
+    assert published.path.name == "001-run"
+    assert published.name is None
+    assert published.description is None
+    assert published.filesystem_key == "001-run"
     assert created["job_count"] == 4
     assert created["durable_status"] == "created"
+    assert created["run_name"] is None
+    assert created["run_description"] is None
+    assert created["filesystem_key"] == "001-run"
     assert lookup.status_code == 200
     assert lookup.json()["execution"]["status"] == "created"
     assert not (run_path / "execution.json").exists()
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "run_not_found"
+
+
+def test_named_run_api_round_trips_provenance_without_changing_plan_or_results(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+    batch_request = _batch_request((asset_id,))
+    create_request = {
+        **batch_request,
+        "run_name": "  Café / Baseline #1  ",
+        "run_description": "  First named comparison.  ",
+    }
+    client = FakeComfyUIClient(artifact_count=1)
+
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        preview = http.post("/api/batches/preview", json=batch_request)
+        created = http.post("/api/runs", json=create_request)
+        body = created.json()
+        lookup = http.get(f"/api/runs/{body['run_id']}")
+        assert http.post(f"/api/runs/{body['run_id']}/execute").status_code == 202
+        terminal = _wait_for_status(http, body["run_id"], "succeeded")
+        results = http.get(f"/api/runs/{body['run_id']}/results")
+        result_content = http.get(results.json()["results"][0]["download_url"])
+
+    assert preview.status_code == 200
+    assert created.status_code == 201
+    assert body["run_name"] == "Café / Baseline #1"
+    assert body["run_description"] == "First named comparison."
+    assert body["filesystem_key"] == "001-cafe-baseline-1"
+    assert lookup.json()["run_name"] == body["run_name"]
+    assert lookup.json()["run_description"] == body["run_description"]
+    assert lookup.json()["filesystem_key"] == body["filesystem_key"]
+    assert lookup.json()["plan"]["jobs"] == preview.json()["jobs"]
+    assert terminal.status == "succeeded"
+    assert result_content.status_code == 200
+    assert result_content.content == b"bytes:prompt-1-1.png"
 
 
 def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
@@ -2220,7 +2264,7 @@ def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
         )
     ) as http:
         run_id = _create_run(http, request)
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         immutable_before = {
             name: (run_path / name).read_bytes()
             for name in (
@@ -2298,7 +2342,7 @@ def test_discard_accepts_persisted_exact_initial_state(tmp_path: Path) -> None:
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         run = RunFilesystemStore(settings.projects_root).load_run(run_path)
         initial = ExecutionStateStore(run_path).initialize(run)
 
@@ -2324,7 +2368,7 @@ def test_discard_persists_no_intermediate_created_state_when_write_fails(
         raise_server_exceptions=False,
     ) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
 
         response = http.post(f"/api/runs/{run_id}/discard")
 
@@ -2375,7 +2419,7 @@ def test_discard_rejects_nonpristine_or_submission_bearing_state(tmp_path: Path,
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         run = RunFilesystemStore(settings.projects_root).load_run(run_path)
         store = ExecutionStateStore(run_path)
         state = store.initialize(run)
@@ -2505,7 +2549,7 @@ def test_repeated_multi_prompt_run_creation_freezes_identical_plans_with_new_ide
     assert (first_response.json()["run_number"], second_response.json()["run_number"]) == (1, 2)
 
     store = RunFilesystemStore(settings.projects_root)
-    first_path, second_path = sorted(settings.projects_root.glob("*/batches/*/run-*"))
+    first_path, second_path = sorted(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     first = store.load_run(first_path)
     second = store.load_run(second_path)
 
@@ -2536,7 +2580,7 @@ def test_run_lookup_ignores_corrupt_unrelated_run_and_only_loads_target(
     ) as http:
         target_run_id = _create_run(http, _batch_request((asset_id,)))
         _create_run(http, _batch_request((asset_id,)))
-        target_path, unrelated_path = sorted(settings.projects_root.glob("*/batches/*/run-*"))
+        target_path, unrelated_path = sorted(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         (unrelated_path / "workflow.json").write_bytes(b"{}")
         loaded_paths: list[Path] = []
         real_load_run = RunFilesystemStore.load_run
@@ -2562,7 +2606,7 @@ def test_run_lookup_rejects_corrupt_matching_run(tmp_path: Path) -> None:
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         (run_path / "workflow.json").write_bytes(b"{}")
 
         response = http.get(f"/api/runs/{run_id}")
@@ -2579,9 +2623,9 @@ def test_run_lookup_rejects_duplicate_matching_run_ids(tmp_path: Path) -> None:
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         duplicate_path = (
-            settings.projects_root / "duplicate_project" / "batches" / "batch_key" / "run-001"
+            settings.projects_root / "duplicate_project" / "batches" / "batch_key" / "001-run"
         )
         duplicate_path.parent.mkdir(parents=True)
         shutil.copytree(run_path, duplicate_path)
@@ -2604,7 +2648,7 @@ def test_invalid_workflow_fails_without_partial_run_publication(tmp_path: Path) 
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_workflow_profile"
-    assert not tuple(settings.projects_root.glob("*/batches/*/run-*"))
+    assert not tuple(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
 
 
 def test_preview_validates_the_same_workflow_profile_pair_as_run_creation(
@@ -2711,7 +2755,7 @@ def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path)
 
     with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         immutable_before = {
             name: (run_path / name).read_bytes()
             for name in ("run.json", "manifest.json", "workflow.json", "workflow-profile.json")
@@ -2783,7 +2827,7 @@ def test_api_state_queries_skip_result_hashing_and_download_verifies_selected_re
         run_id = _create_run(http, _batch_request((asset_id,)))
         assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
         _wait_for_status(http, run_id, "succeeded")
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         hashed_paths: list[Path] = []
         real_sha256_file = execution_state_module._sha256_file
 
@@ -2856,7 +2900,7 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         )
     ) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         first = http.post(f"/api/runs/{run_id}/execute")
         assert first.status_code == 202
         assert started.wait(timeout=1)
@@ -2939,7 +2983,7 @@ def test_execution_rejects_unsafe_outputs_before_starting_task(tmp_path: Path) -
 
     with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
         run_id = _create_run(http, _batch_request((asset_id,)))
-        run_path = next(settings.projects_root.glob("*/batches/*/run-*"))
+        run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         outputs = run_path / "outputs"
         outputs.rmdir()
         outside = tmp_path / "outside-outputs"

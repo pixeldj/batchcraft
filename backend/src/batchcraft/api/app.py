@@ -121,6 +121,7 @@ from .schemas import (
     RunCancellationRequest,
     RunCancellationRequestedResponse,
     RunCreatedResponse,
+    RunCreateRequest,
     RunResponse,
     SavedBatchAdoptRequest,
     SavedBatchCreateRequest,
@@ -829,7 +830,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     async def create_run(
-        request: BatchRequest,
+        request: RunCreateRequest,
         service: ServiceDependency,
     ) -> RunCreatedResponse:
         return RunCreatedResponse.from_run(service.create_run(request.to_creation_input()))

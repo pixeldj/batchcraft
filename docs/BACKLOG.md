@@ -8,8 +8,8 @@ _Last consolidated: 2026-09-01._
 
 ## Current focus
 
-1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, In Progress)
-2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, In Progress)
+1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Done)
+2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, Done)
 3. [BC-003C: Interrupt owned ComfyUI Job](#bc-003c-interrupt-owned-comfyui-job) (P2, Planned)
 4. [BC-002: Durable queued Runs](#bc-002-durable-queued-runs) (P2, Planned)
 
@@ -116,7 +116,7 @@ Every entry has these fields:
 | --- | --- |
 | ID | BC-003A |
 | Priority | P1 |
-| Status | In Progress |
+| Status | Done |
 | Area | Execution / Cancellation |
 | Summary | Let a user request that a running Run stop after its currently submitted Job reaches a proven terminal state. |
 | Dependencies / Notes | Follow ADR 0003: SQLite owns durable cancellation intent and `execution.json` owns the execution outcome. This operation must not clear unrelated ComfyUI queue work. It may introduce the minimum cancellation-intent storage needed without implementing the complete durable scheduler. |
@@ -124,11 +124,9 @@ Every entry has these fields:
 Implementation progress: cancellation intent persistence, execution format v3, the cancellation endpoint
 and read model, and stop-before-next-submission semantics are implemented. The frontend provides the
 confirmed Stop action, visible request/stopping state, ambiguous-response reconciliation, terminal unlock,
-closed-tab recovery, and preserved Result review. Automated coverage is complete. BC-003A remains
-`In Progress` until the required live ComfyUI verification confirms that the accepted current Job finishes,
-its Results remain, no later Job is submitted, and refresh restores the durable cancelled outcome. If the
-current Job is the final Job and succeeds, the honest Run outcome is `succeeded` because no unsubmitted
-Job remains to cancel.
+closed-tab recovery, and preserved Result review. Automated coverage and owner acceptance are complete.
+If the current Job is the final Job and succeeds, the honest Run outcome is `succeeded` because no
+unsubmitted Job remains to cancel.
 
 Why this matters:
 
@@ -162,7 +160,7 @@ Non-goals:
 | --- | --- |
 | ID | BC-003B |
 | Priority | P1 |
-| Status | In Progress |
+| Status | Done |
 | Area | Execution / Cancellation |
 | Summary | Let the user regain control when ComfyUI observation or history reconciliation appears hung. |
 | Dependencies / Notes | Coordinate with BC-003A's durable cancellation state. Preserve ADR 0001 and ADR 0003 rules for ambiguous remote outcomes and unsafe resubmission. This is a local-control escape hatch, not proof of remote cancellation. |
@@ -171,9 +169,7 @@ Implementation progress: durable `detach` intent, executor-owned local task wake
 finalization, API/read-model support, and the confirmed frontend `Stop waiting` action are implemented.
 Known submission evidence and already durable Results are preserved, later Jobs remain pending, refresh
 restores the blocked outcome, and no ComfyUI interrupt or queue-clear operation is used. Automated
-coverage is complete. BC-003B remains `In Progress` until live ComfyUI verification confirms prompt
-preservation, prompt local unlock, no later submission, and closed-tab recovery while the old remote Job
-may still be running.
+coverage and owner acceptance are complete.
 
 Expected behavior:
 
@@ -738,7 +734,7 @@ This should be bundled with comparable small presentation fixes rather than trea
 | --- | --- |
 | ID | BC-017 |
 | Priority | P2 |
-| Status | Planned |
+| Status | Done |
 | Area | Runs / Provenance / Filesystem |
 | Summary | Allow Runs to have a human-readable name and optional description, and use an immutable run-number-prefixed filesystem slug for the Run directory. |
 | Dependencies / Notes | Fits the existing immutable Run provenance model and will improve BC-007 Project-wide Run browsing. Because batchcraft is pre-release, prefer a clean Run-directory convention change rather than preserving obsolete development layouts. |

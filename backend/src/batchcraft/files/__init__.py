@@ -22,7 +22,7 @@ from batchcraft.files.project_owners import (
     ProjectOwnerMissingError,
     ProjectOwnerStore,
 )
-from batchcraft.files.runs import RunFilesystemStore, RunStoreError
+from batchcraft.files.runs import RunFilesystemStore, RunStoreError, slugify_run_name
 from batchcraft.files.snapshots import BatchSnapshotV5
 
 __all__ = [
@@ -48,4 +48,5 @@ __all__ = [
     "RunFilesystemStore",
     "RunStoreError",
     "is_safe_filesystem_key",
+    "slugify_run_name",
 ]

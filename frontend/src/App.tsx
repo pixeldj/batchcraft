@@ -118,6 +118,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [restoredRunSeed, setRestoredRunSeed] = useState<RestoredRunSeed | null>(null);
   const [previewRunAssociation, setPreviewRunAssociation] =
     useState<PreviewRunAssociation | null>(null);
+  const [runName, setRunName] = useState("");
+  const [runDescription, setRunDescription] = useState("");
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [restoringRun, setRestoringRun] = useState(initialSession.currentRunId !== null);
@@ -391,6 +393,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           [runId]: {
             runId,
             runNumber: restoredRun.run_number,
+            runName: restoredRun.run_name,
             results: restoredResults.results,
             execution: restoredRun.execution,
             loading: false,
@@ -476,6 +479,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             [runId]: {
               runId,
               runNumber: restoredRun.run_number,
+              runName: restoredRun.run_name,
               results,
               execution,
               loading: false,
@@ -775,6 +779,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           singleUse: form.seedMode === "random",
         });
         setPreviewRunAssociation(null);
+        setRunName("");
+        setRunDescription("");
       }
     } catch (caught) {
       if (requestedRevision === formRevision.current) {
@@ -804,13 +810,19 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setCreateError(null);
     setConsistencyError(null);
     try {
-      const nextRun = await api.createRun(snapshot.request);
+      const nextRun = await api.createRun({
+        ...snapshot.request,
+        run_name: runName.trim() || null,
+        run_description: runDescription.trim() || null,
+      });
       if (requestedBatchIdentity !== currentBatchIdentityRef.current) {
         return;
       }
       const consistent = nextRun.job_count === snapshot.response.job_count;
       runRevision.current += 1;
       setRun(nextRun);
+      setRunName("");
+      setRunDescription("");
       setRunStatus("created");
       setRunSnapshotIdentity({ runId: nextRun.run_id, snapshot: snapshot.request.batch_snapshot });
       setRestoredRunSeed(null);
@@ -833,6 +845,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         [nextRun.run_id]: {
           runId: nextRun.run_id,
           runNumber: nextRun.run_number,
+          runName: nextRun.run_name,
           results: [],
           execution: null,
           loading: false,
@@ -955,6 +968,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         [runId]: {
           ...existing,
           runNumber: existing.runNumber ?? (run?.run_id === runId ? run.run_number : null),
+          runName: existing.runName ?? (run?.run_id === runId ? run.run_name : null),
           results,
           execution,
           loading: false,
@@ -1040,6 +1054,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           creationBlockedMessage={creationBlockedMessage}
           association={previewRunAssociation}
           error={createError}
+          runName={runName}
+          runDescription={runDescription}
+          onRunNameChange={setRunName}
+          onRunDescriptionChange={setRunDescription}
           onCreateRun={createRun}
         />
         {consistencyError ? (
@@ -1120,7 +1138,15 @@ function runMatchesBatch(run: RunCreatedResponse, identity: string): boolean {
 }
 
 function loadingGalleryRun(runId: string): BatchGalleryRun {
-  return { runId, runNumber: null, results: [], execution: null, loading: true, error: null };
+  return {
+    runId,
+    runNumber: null,
+    runName: null,
+    results: [],
+    execution: null,
+    loading: true,
+    error: null,
+  };
 }
 
 function withoutGalleryRun(

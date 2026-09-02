@@ -268,6 +268,10 @@ dialog form { display: grid; gap: 0.9rem; }
 .overlay-layer > dialog { position: static; margin: 0; }
 .consistency-error { margin: 0 0 1.25rem; padding: 0.9rem 1rem; color: #6e201b; background: var(--danger-bg); border: 2px solid var(--danger); box-shadow: 3px 3px 0 rgba(163, 58, 50, 0.22); font-weight: 700; line-height: 1.45; }
 .preview-run-note { margin: 1rem 0 0; padding: 0.65rem 0.8rem; color: var(--accent); background: rgba(36, 92, 69, 0.08); border-left: 4px solid var(--accent); font-size: 0.78rem; }
+.run-creation-panel { margin-top: 1.25rem; padding: 1rem; background: rgba(255, 255, 255, 0.35); border: 1px solid var(--line); }
+.run-creation-fields { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr); gap: 1rem; }
+.run-creation-fields textarea { min-height: 5.5rem; resize: vertical; }
+.run-creation-panel .action-row { margin-top: 1rem; }
 .frozen-run-note { margin-top: 1rem; padding: 0.7rem 0.85rem; color: var(--ink); background: rgba(36, 92, 69, 0.08); border-left: 4px solid var(--accent); font-size: 0.82rem; }
 .frozen-run-note p { margin: 0; }
 .frozen-run-note p + p { margin-top: 0.3rem; color: var(--muted); }
@@ -294,6 +298,9 @@ td { padding: 0.7rem; border-top: 1px solid var(--line); vertical-align: top; }
 .status-pill.failed { color: var(--danger); background: var(--danger-bg); }
 .status-pill.blocked { color: var(--blocked); background: #eee4fa; }
 .status-pill.cancelled { color: #6b4f00; background: var(--warning-bg); }
+.run-heading-title { display: grid; gap: 0.1rem; }
+.run-heading-title h2 { margin: 0; }
+.run-heading-title span { color: var(--muted); font: 700 0.68rem "SFMono-Regular", monospace; text-transform: uppercase; }
 .run-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 1rem; align-items: center; margin-bottom: 1rem; padding: 0.8rem; background: rgba(255, 255, 255, 0.4); border-top: 2px solid var(--line-strong); }
 .run-summary > strong, .run-summary > p { grid-column: 1; }
 .run-summary > p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
@@ -387,6 +394,9 @@ progress::-webkit-progress-value { background: var(--accent); }
 .batch-results-run + .batch-results-run { padding-top: 1.2rem; border-top: 1px solid var(--line); }
 .batch-results-run-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
 .batch-results-run-heading strong { font: 500 1.25rem Georgia, serif; }
+.batch-results-run-heading strong > span { display: block; margin-top: 0.15rem; }
+.batch-results-run-heading .run-number-secondary { color: var(--muted); font: 700 0.68rem "SFMono-Regular", monospace; text-transform: uppercase; }
+.batch-results-run-heading .run-result-count { color: var(--muted); font: 400 0.75rem system-ui, sans-serif; }
 .batch-results-run-heading code { color: var(--muted); font-size: 0.68rem; }
 .batch-results-run-content { display: grid; gap: 0.8rem; }
 
@@ -472,6 +482,7 @@ progress::-webkit-progress-value { background: var(--accent); }
   .three-columns, .two-columns, .run-metadata, .workflow-library-grid { grid-template-columns: 1fr; }
   .workflow-mapping-list, .workflow-mapping-fields { grid-template-columns: 1fr; }
   .action-row { align-items: flex-end; flex-direction: column; }
+  .run-creation-fields { grid-template-columns: 1fr; }
   .action-row .button-primary { width: 100%; }
   .run-action-buttons { width: 100%; }
   .run-action-buttons > button { flex: 1; }

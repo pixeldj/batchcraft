@@ -328,6 +328,18 @@ unlocks editing only after a terminal outcome. BC-003A stays `In Progress` until
 verification succeeds. This pass does not add executor restart recovery, retries, a durable scheduler, or
 remote interruption.
 
+### Phase 2.11: Named Runs and human-readable Run folders
+
+BC-017 adds optional immutable Run name and notes provenance. Published Run directories now use
+`NNN-<slug>`, with deterministic ASCII slugging and `run` as the unnamed fallback. Run ID remains the
+true identity; discovery narrows candidates by directory convention, lookup matches persisted Run ID,
+and loading verifies the directory against the frozen filesystem key.
+
+This change establishes `run.json` v2 and manifest v8. Batch snapshot v5, execution v3, browser
+working-session recovery v1, and SQLite remain current. Existing development `run-NNN` directories,
+`run.json` v1, and manifest v7 Runs are unsupported and must be inspected and recreated manually when
+needed. batchcraft does not migrate, rename, rewrite, or delete them automatically.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.

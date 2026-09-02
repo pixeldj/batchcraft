@@ -455,8 +455,81 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
     expect(await screen.findByRole("heading", { name: "Run 2" })).toBeInTheDocument();
-    expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
+    expect(vi.mocked(api.createRun).mock.calls[0][0]).toEqual({
+      ...previewRequest,
+      run_name: null,
+      run_description: null,
+    });
     expect(screen.getByText("0 / 2 Jobs")).toBeInTheDocument();
+  });
+
+  it("creates and displays immutable Run metadata without invalidating Preview", async () => {
+    const artifact = result(1, 1, "image/png", "named.png", 2048);
+    const createdRun = runResponse(
+      "run-named",
+      12,
+      2,
+      "Baseline",
+      "Compare the first stable settings.",
+    );
+    const frozenRun = {
+      ...runLookupResponse("created", "run-named", 12),
+      ...createdRun,
+    };
+    const api = makeApi({
+      createRun: vi.fn(async () => createdRun),
+      getRun: vi.fn(async () => frozenRun),
+      getExecution: vi.fn(async () => execution("succeeded", "run-named")),
+      getResults: vi.fn(async () => ({ run_id: "run-named", results: [artifact] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await enterAsset();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+    const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+
+    fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), {
+      target: { value: "  Baseline  " },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Notes/ }), {
+      target: { value: "  Compare the first stable settings.  " },
+    });
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+
+    expect(await screen.findByRole("heading", { name: "Baseline" })).toBeInTheDocument();
+    expect(api.createRun).toHaveBeenCalledWith({
+      ...previewRequest,
+      run_name: "Baseline",
+      run_description: "Compare the first stable settings.",
+    });
+    expect(screen.getByRole("textbox", { name: /Run Name/ })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: /Notes/ })).toHaveValue("");
+    expect(within(currentRunSection()).getByText("Run 12")).toBeInTheDocument();
+    expect(within(currentRunSection()).getByText("Compare the first stable settings."))
+      .toBeInTheDocument();
+    expect(screen.getByText("Created as Baseline · Run 12.")).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Run Plan" }));
+    const plan = await screen.findByRole("dialog", { name: "Baseline Plan" });
+    expect(within(plan).getByText("Baseline · Run 12")).toBeInTheDocument();
+    expect(within(plan).getByText("Compare the first stable settings.")).toBeInTheDocument();
+    expect(within(plan).getByText("012-baseline")).toBeInTheDocument();
+    fireEvent.click(within(plan).getByRole("button", { name: "Close" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    const galleryRun = within(batchResultsSection()).getByRole("region", {
+      name: "Baseline · Run 12",
+    });
+    expect(within(galleryRun).getByText("Run 12")).toBeInTheDocument();
+    fireEvent.click(within(galleryRun).getByRole("button", {
+      name: "Details for Job 1, artifact 1",
+    }));
+    const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(details).getByText("Result details · Baseline · Run 12")).toBeInTheDocument();
+    expect(within(details).getByText("012-baseline")).toBeInTheDocument();
   });
 
   it("materializes Random seeds once and consumes the Preview after successful Run creation", async () => {
@@ -488,7 +561,11 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
 
     expect(await screen.findByRole("heading", { name: "Run 4" })).toBeInTheDocument();
-    expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
+    expect(vi.mocked(api.createRun).mock.calls[0][0]).toEqual({
+      ...previewRequest,
+      run_name: null,
+      run_description: null,
+    });
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Seed mode")).toHaveValue("random");
@@ -509,15 +586,31 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     const createRun = await screen.findByRole("button", { name: "Create Run" });
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+    fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), {
+      target: { value: "Retry name" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Notes/ }), {
+      target: { value: "Keep on failure" },
+    });
 
     fireEvent.click(createRun);
 
     expect(await screen.findByText("Run publication failed")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /Run Name/ })).toHaveValue("Retry name");
+    expect(screen.getByRole("textbox", { name: /Notes/ })).toHaveValue("Keep on failure");
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await waitFor(() => expect(api.createRun).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(api.createRun).mock.calls[0][0]).toBe(previewRequest);
-    expect(vi.mocked(api.createRun).mock.calls[1][0]).toBe(previewRequest);
+    expect(vi.mocked(api.createRun).mock.calls[0][0]).toEqual({
+      ...previewRequest,
+      run_name: "Retry name",
+      run_description: "Keep on failure",
+    });
+    expect(vi.mocked(api.createRun).mock.calls[1][0]).toEqual({
+      ...previewRequest,
+      run_name: "Retry name",
+      run_description: "Keep on failure",
+    });
   });
 
   it("invalidates Preview after Image Input edits and requires Preview before creation", async () => {
@@ -1747,8 +1840,16 @@ describe("Repeated Runs", () => {
     expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
     expect(within(currentRunSection()).getByText("run-2")).toBeInTheDocument();
     expect(createRun).toHaveBeenCalledTimes(2);
-    expect(createRun.mock.calls[0][0]).toBe(previewRequest);
-    expect(createRun.mock.calls[1][0]).toBe(previewRequest);
+    expect(createRun.mock.calls[0][0]).toEqual({
+      ...previewRequest,
+      run_name: null,
+      run_description: null,
+    });
+    expect(createRun.mock.calls[1][0]).toEqual({
+      ...previewRequest,
+      run_name: null,
+      run_description: null,
+    });
     expect(previewRequest.prompt_versions.map((prompt) => prompt.name)).toEqual(["Portrait"]);
     expect(within(screen.getByRole("group", { name: "Prompt Versions" })).getByText("1 prompt")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
@@ -2640,7 +2741,7 @@ describe("Batch working-session Results gallery", () => {
     expect(within(gallery).getAllByRole("region")).toHaveLength(2);
     const runA = within(gallery).getByRole("region", { name: "Run 10" });
     const runB = within(gallery).getByRole("region", { name: "Run 11" });
-    expect(within(runA).getByText("Run 10 · 1 Result")).toBeInTheDocument();
+    expect(within(runA).getByText("1 Result")).toBeInTheDocument();
     fireEvent.click(within(runA).getByRole("button", { name: "Collapse" }));
     expect(within(runA).queryByAltText("Result 1 from Job 1: Run 10 / run-a.png")).not.toBeInTheDocument();
     expect(within(runB).getByAltText("Result 1 from Job 1: Run 11 / run-b.png")).toBeInTheDocument();
@@ -2909,10 +3010,15 @@ function runResponse(
   runId = "run-123",
   runNumber = 7,
   jobCount = 2,
+  runName: string | null = null,
+  runDescription: string | null = null,
 ): RunCreatedResponse {
   return {
     run_id: runId,
     run_number: runNumber,
+    run_name: runName,
+    run_description: runDescription,
+    filesystem_key: `${String(runNumber).padStart(3, "0")}-${runName ? "baseline" : "run"}`,
     project_id: "project-1",
     project_name: "My Project",
     batch_id: "batch-1",
@@ -3243,7 +3349,7 @@ function currentResultsSection(): HTMLElement {
 }
 
 function currentRunSection(): HTMLElement {
-  const section = screen.getByRole("heading", { name: /^Run \d+$/ }).closest("section");
+  const section = document.querySelector<HTMLElement>(".run-card");
   if (!section) {
     throw new Error("Current Run section was not rendered");
   }

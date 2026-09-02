@@ -1,4 +1,6 @@
 import type { PreviewResponse, RunCreatedResponse, RunStatus } from "../../api/types";
+import { Field, TextAreaField } from "../../components/Field";
+import { runDisplayLabel } from "../run/runDisplay";
 
 interface Props {
   preview: PreviewResponse | null;
@@ -9,6 +11,10 @@ interface Props {
   creationBlockedMessage: string | null;
   association: { runId: string; runNumber: number; consistent: boolean } | null;
   error: string | null;
+  runName: string;
+  runDescription: string;
+  onRunNameChange(value: string): void;
+  onRunDescriptionChange(value: string): void;
   onCreateRun(): void;
 }
 
@@ -21,6 +27,10 @@ export function PreviewPanel({
   creationBlockedMessage,
   association,
   error,
+  runName,
+  runDescription,
+  onRunNameChange,
+  onRunDescriptionChange,
   onCreateRun,
 }: Props) {
   if (!preview) {
@@ -116,28 +126,52 @@ export function PreviewPanel({
       </div>
 
       {error ? <p className="operation-error" role="alert">{error}</p> : null}
-      {association && association.runId === currentRun?.run_id ? (
+      {association && currentRun && association.runId === currentRun.run_id ? (
         <p className={association.consistent ? "preview-run-note" : "operation-error"}>
           {association.consistent
-            ? `Created as Run ${association.runNumber}.`
+            ? `Created as ${runDisplayLabel(currentRun)}.`
             : `Run ${association.runNumber} was created but does not match this Preview.`}
         </p>
       ) : null}
-      <div className="action-row">
-        <p>
-          {creationBlockedMessage ??
-            (currentRun && currentRunStatus && ["succeeded", "failed", "blocked", "cancelled"].includes(currentRunStatus)
-              ? "Create a new immutable Run from this inspected Preview. The previous Run is unchanged."
-              : "Run creation submits the exact Batch specification used for this Preview.")}
-        </p>
-        <button
-          className="button-primary"
-          type="button"
-          disabled={creating || !canCreateRun}
-          onClick={onCreateRun}
-        >
-          {creating ? "Creating Run..." : currentRun ? "Create Another Run" : "Create Run"}
-        </button>
+      <div className="run-creation-panel">
+        <div className="run-creation-fields">
+          <Field
+            id="run-name"
+            label="Run Name"
+            hint="Optional. Used for this Run's permanent folder name."
+            maxLength={200}
+            placeholder="Baseline"
+            value={runName}
+            disabled={creating}
+            onChange={(event) => onRunNameChange(event.target.value)}
+          />
+          <TextAreaField
+            id="run-description"
+            label="Notes"
+            hint="Optional notes frozen with this Run."
+            maxLength={4000}
+            rows={3}
+            value={runDescription}
+            disabled={creating}
+            onChange={(event) => onRunDescriptionChange(event.target.value)}
+          />
+        </div>
+        <div className="action-row">
+          <p>
+            {creationBlockedMessage ??
+              (currentRun && currentRunStatus && ["succeeded", "failed", "blocked", "cancelled"].includes(currentRunStatus)
+                ? "Create a new immutable Run from this inspected Preview. The previous Run is unchanged."
+                : "Run creation submits the exact Batch specification used for this Preview.")}
+          </p>
+          <button
+            className="button-primary"
+            type="button"
+            disabled={creating || !canCreateRun}
+            onClick={onCreateRun}
+          >
+            {creating ? "Creating Run..." : currentRun ? "Create Another Run" : "Create Run"}
+          </button>
+        </div>
       </div>
     </section>
   );

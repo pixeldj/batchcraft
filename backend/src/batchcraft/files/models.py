@@ -56,6 +56,9 @@ class PersistedImageInput:
 class PublishedRun:
     run_id: str
     run_number: int
+    name: str | None
+    description: str | None
+    filesystem_key: str
     created_at: str
     path: Path
     project: ProjectIdentity

@@ -71,7 +71,7 @@ from .errors import (
 )
 from .tasks import RunTaskRegistry
 
-_RUN_DIRECTORY = re.compile(r"run-[0-9]+")
+_RUN_DIRECTORY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
 _IMAGE_MIME_TYPES = {
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
@@ -105,6 +105,8 @@ class RunCreationInput:
     workflow: Mapping[str, object]
     workflow_profile: Mapping[str, object]
     batch_snapshot: Mapping[str, object]
+    name: str | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +246,8 @@ class BatchcraftService:
                 image_assets=assets,
                 workflow=creation.workflow,
                 workflow_profile=creation.workflow_profile,
+                name=creation.name,
+                description=creation.description,
             )
         except OSError as error:
             raise RunPublicationError("Run publication failed") from error
@@ -578,7 +582,7 @@ class BatchcraftService:
         if not self.projects_root.is_dir():
             return ()
         candidates: list[Path] = []
-        for candidate in sorted(self.projects_root.glob("*/batches/*/run-*")):
+        for candidate in sorted(self.projects_root.glob("*/batches/*/*-*")):
             if not _RUN_DIRECTORY.fullmatch(candidate.name) or not candidate.is_dir():
                 continue
             if candidate.is_symlink() or not _is_within(candidate, self.projects_root):

@@ -135,7 +135,7 @@ backend-authoritative Run and Result data; they are not a Project-wide history i
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into manifest v7 with Batch snapshot v5. SQLite now owns current Project metadata, the immutable-version Prompt,
+provenance into manifest v8 with Batch snapshot v5. SQLite now owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, mutable Saved Batches, and durable Run cancellation intent; searchable filesystem-derived
 indexes remain a later slice.
 
@@ -293,7 +293,7 @@ dimension in Profile order. Each compiled Job carries one resolved scalar or Bas
 Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
 boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
 Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
-the plan and provenance into manifest v7 with Batch snapshot v5. Editing a Saved Batch after Run creation never alters the
+the plan and provenance into manifest v8 with Batch snapshot v5. Editing a Saved Batch after Run creation never alters the
 existing Run.
 
 ## Persistence Strategy
@@ -342,9 +342,14 @@ If SQLite state is lost or incomplete, batchcraft can scan complete filesystem R
 
 ## Identity and Display Names
 
-Domain entities use stable internal IDs. Filesystem paths use stable, path-safe identities that do not change when a user edits a display name.
+Domain entities use stable internal IDs. Project and Batch filesystem paths use stable, path-safe
+identities that do not change when a user edits a display name. A Run freezes its optional name,
+optional description, and `NNN-<slug>` filesystem key at creation while retaining its Run ID as the
+true identity.
 
 Display names remain editable labels. Renaming a Project, Batch, Prompt Template, Variable List, Reference Collection, or Workflow Profile must not move historical Run directories or change references stored in existing Runs.
+Historical Run directories are likewise never renamed; future mutable annotations must remain separate
+from the frozen creation name and filesystem key.
 
 ## Local-First Behavior
 

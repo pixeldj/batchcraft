@@ -197,8 +197,11 @@ Preview calls the production Batch compiler, validates the exact workflow/Profil
 same preparation logic as Run creation, and returns every resolved Job in deterministic order.
 Each Preview Job includes `prompt_version_id` and `prompt_version_name`; clients do not infer source
 identity from resolved text. Run creation compiles and validates the request again, resolves existing
-Project assets, and publishes through `RunFilesystemStore`.
-The compact Run creation response is unchanged. `GET /api/runs/{run_id}` additionally returns the
+Project assets, and publishes through `RunFilesystemStore`. `POST /api/runs` accepts optional
+`run_name` and `run_description` fields in addition to the unchanged Batch request fields. These values
+are creation metadata and do not participate in Preview or compilation.
+The Run creation and lookup responses include immutable `run_name`, `run_description`, and
+`filesystem_key` provenance. `GET /api/runs/{run_id}` additionally returns the
 ordered frozen PromptVersion snapshots, each Job ordinal's PromptVersion ID association, and a
 `plan` projection loaded from the published Run manifest. The plan contains compiler warnings and
 every concrete Job's resolved prompt, resolved variables, ordered `resolved_image_inputs`, ordered
@@ -206,7 +209,7 @@ every concrete Job's resolved prompt, resolved variables, ordered `resolved_imag
 materialized seed. Each resolved image entry has `slot_key`, frozen `label`, nullable `asset_id`, and a
 nullable frozen filename. The required `batch_snapshot` exposes canonical
 editable intent, including optional frozen Workflow/Profile display labels and version numbers. The
-Run loader supports manifest v7 with `snapshot_version: 5`; unsupported manifest or snapshot versions
+Run loader supports manifest v8 with `snapshot_version: 5`; unsupported manifest or snapshot versions
 make the Run invalid rather than producing a partial response.
 
 ## Project Assets

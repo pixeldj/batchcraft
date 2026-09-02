@@ -31,6 +31,7 @@ from batchcraft.files import (
     PublishedRun,
     RunFilesystemStore,
     RunStoreError,
+    slugify_run_name,
 )
 from batchcraft.files._io import canonical_json_bytes
 
@@ -204,6 +205,8 @@ def _create(
     batch_snapshot: Mapping[str, object] | None = None,
     workflow: Mapping[str, object] = WORKFLOW,
     workflow_profile: Mapping[str, object] = WORKFLOW_PROFILE,
+    name: str | None = None,
+    description: str | None = None,
 ) -> PublishedRun:
     return store.create_run(
         project=project,
@@ -236,6 +239,8 @@ def _create(
         image_assets={} if asset is None else {asset.asset_id: asset},
         workflow=workflow,
         workflow_profile=workflow_profile,
+        name=name,
+        description=description,
     )
 
 
@@ -277,7 +282,7 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
 
     published = _create(store, plan, asset)
 
-    expected_path = projects_path / "project_key" / "batches" / "batch_key" / "run-001"
+    expected_path = projects_path / "project_key" / "batches" / "batch_key" / "001-run"
     assert published.path == expected_path
     assert published.run_id == "run-id"
     assert published.run_number == 1
@@ -314,7 +319,7 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
             + "\n"
         ).encode()
     )
-    assert manifest["format_version"] == 7
+    assert manifest["format_version"] == 8
     assert manifest["batch_snapshot"] == BATCH_SNAPSHOT
     assert manifest["prompt_versions"] == [
         {
@@ -353,6 +358,104 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
     assert json.loads(rows[0]["resolved_variables_json"]) == [{"name": "animal", "value": "dog"}]
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (None, "run"),
+        ("  Baseline  ", "baseline"),
+        ("New Prompt", "new-prompt"),
+        ("Café portrait", "cafe-portrait"),
+        ("CFG_4 / Steps: 20", "cfg-4-steps-20"),
+        ("!!!", "run"),
+        ("漢字", "run"),
+        ("a" * 100, "a" * 80),
+    ],
+)
+def test_run_name_slugging_is_deterministic_and_filesystem_safe(
+    name: str | None, expected: str
+) -> None:
+    assert slugify_run_name(name) == expected
+
+
+def test_named_run_round_trips_immutable_metadata_and_filesystem_key(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    plan = _fixture_plan(asset.asset_id)
+    store = RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME)
+
+    created = _create(
+        store,
+        plan,
+        asset,
+        name="  Portrait Resolution Test  ",
+        description="  Compare 1024 and 1536 output quality.  ",
+    )
+    loaded = store.load_run(created.path)
+    run_data = json.loads((created.path / "run.json").read_text())
+    manifest = json.loads((created.path / "manifest.json").read_text())
+
+    assert created.path.name == "001-portrait-resolution-test"
+    assert created.name == loaded.name == "Portrait Resolution Test"
+    assert created.description == loaded.description == "Compare 1024 and 1536 output quality."
+    assert created.filesystem_key == loaded.filesystem_key == created.path.name
+    assert run_data["format_version"] == 2
+    assert run_data["name"] == created.name
+    assert run_data["description"] == created.description
+    assert run_data["filesystem_key"] == created.filesystem_key
+    assert manifest["run"]["name"] == created.name
+    assert manifest["run"]["description"] == created.description
+    assert manifest["run"]["filesystem_key"] == created.filesystem_key
+    assert loaded.compiled_plan == plan
+
+
+def test_unnamed_and_similarly_named_runs_keep_distinct_monotonic_numbers(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    plan = _fixture_plan(asset.asset_id)
+    store = RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME)
+
+    unnamed = _create(store, plan, asset)
+    first_named = _create(store, plan, asset, name="New Prompt")
+    similar_named = _create(store, plan, asset, name="new---prompt")
+
+    assert [run.run_number for run in (unnamed, first_named, similar_named)] == [1, 2, 3]
+    assert [run.path.name for run in (unnamed, first_named, similar_named)] == [
+        "001-run",
+        "002-new-prompt",
+        "003-new-prompt",
+    ]
+    assert all(run.compiled_plan == plan for run in (unnamed, first_named, similar_named))
+
+
+def test_run_number_allocation_treats_any_published_numeric_prefix_as_occupied(
+    tmp_path: Path,
+) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    plan = _fixture_plan(asset.asset_id)
+    store = RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME)
+    batch_path = projects_path / PROJECT.filesystem_key / "batches" / BATCH.filesystem_key
+    batch_path.mkdir(parents=True)
+    (batch_path / "001-existing-name").mkdir()
+
+    created = _create(store, plan, asset, name="Baseline")
+
+    assert created.run_number == 2
+    assert created.path.name == "002-baseline"
+
+
+def test_run_loader_rejects_a_historical_directory_rename(tmp_path: Path) -> None:
+    projects_path = tmp_path / "projects"
+    asset = _asset_fixture(projects_path)
+    store = RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME)
+    created = _create(store, _fixture_plan(asset.asset_id), asset, name="Baseline")
+    renamed_path = created.path.with_name("001-renamed")
+    created.path.rename(renamed_path)
+
+    with pytest.raises(RunStoreError, match="recorded filesystem key"):
+        store.load_run(renamed_path)
+
+
 def test_published_run_reconstructs_without_sqlite(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     asset = _asset_fixture(projects_path)
@@ -379,7 +482,7 @@ def test_published_run_reconstructs_without_sqlite(tmp_path: Path) -> None:
     assert loaded.jobs[0].image_inputs[0].asset == asset
 
 
-def test_manifest_v7_round_trips_ordered_prompt_versions_and_job_associations(
+def test_manifest_v8_round_trips_ordered_prompt_versions_and_job_associations(
     tmp_path: Path,
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -445,7 +548,7 @@ def test_manifest_v7_round_trips_ordered_prompt_versions_and_job_associations(
     ]
 
 
-def test_manifest_v7_recovers_range_snapshot_into_frozen_scalar_jobs_and_csv(
+def test_manifest_v8_recovers_range_snapshot_into_frozen_scalar_jobs_and_csv(
     tmp_path: Path,
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -627,7 +730,7 @@ def test_run_load_rejects_python_equal_parameter_scalar_representation_mismatch(
     "corruption",
     ("duplicate_prompt", "unknown_job_prompt", "missing_prompt_versions", "missing_job_prompt"),
 )
-def test_manifest_v7_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
+def test_manifest_v8_rejects_invalid_prompt_provenance(tmp_path: Path, corruption: str) -> None:
     projects_path = tmp_path / "projects"
     asset = _asset_fixture(projects_path)
     created = _create(
@@ -691,7 +794,7 @@ def test_manifest_v1_through_v5_are_rejected(tmp_path: Path, manifest_version: i
         ),
     ),
 )
-def test_manifest_v7_preserves_seed_intent_separately_from_concrete_job_seeds(
+def test_manifest_v8_preserves_seed_intent_separately_from_concrete_job_seeds(
     tmp_path: Path,
     seed_mode: str,
     concrete_seeds: tuple[int, ...],
@@ -720,7 +823,7 @@ def test_manifest_v7_preserves_seed_intent_separately_from_concrete_job_seeds(
     assert [job["seed"] for job in manifest["jobs"]] == list(concrete_seeds) * 2
 
 
-def test_manifest_v7_snapshot_has_no_input_or_output_aliases(tmp_path: Path) -> None:
+def test_manifest_v8_snapshot_has_no_input_or_output_aliases(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     seed_values = [17, 18]
     batch_snapshot: dict[str, object] = {
@@ -749,7 +852,7 @@ def test_manifest_v7_snapshot_has_no_input_or_output_aliases(tmp_path: Path) -> 
     assert loaded.batch_snapshot == expected_snapshot
 
 
-def test_manifest_v7_round_trips_null_image_inputs(tmp_path: Path) -> None:
+def test_manifest_v8_round_trips_null_image_inputs(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     plan = _fixture_plan(None)
     created = _create(
@@ -776,7 +879,7 @@ def test_manifest_v7_round_trips_null_image_inputs(tmp_path: Path) -> None:
         rows = list(csv.DictReader(file))
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
-    assert manifest["format_version"] == 7
+    assert manifest["format_version"] == 8
     assert manifest["batch_snapshot"]["image_bindings"] == [
         {"slot_key": "reference", "values": [None]}
     ]
@@ -786,7 +889,7 @@ def test_manifest_v7_round_trips_null_image_inputs(tmp_path: Path) -> None:
     assert all(job.image_inputs[0].asset is None for job in loaded.jobs)
 
 
-def test_manifest_v7_preserves_batch_alternatives_and_concrete_job_choices(
+def test_manifest_v8_preserves_batch_alternatives_and_concrete_job_choices(
     tmp_path: Path,
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -828,7 +931,7 @@ def test_manifest_v7_preserves_batch_alternatives_and_concrete_job_choices(
     manifest = json.loads((created.path / "manifest.json").read_text())
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
-    assert manifest["format_version"] == 7
+    assert manifest["format_version"] == 8
     assert manifest["batch_snapshot"]["snapshot_version"] == 5
     assert manifest["batch_snapshot"]["image_bindings"] == snapshot["image_bindings"]
     assert [job["resolved_image_inputs"][0]["asset"] is None for job in manifest["jobs"]] == [
@@ -846,7 +949,7 @@ def test_manifest_v7_preserves_batch_alternatives_and_concrete_job_choices(
     ]
 
 
-def test_manifest_v7_rejects_missing_resolved_image_inputs(tmp_path: Path) -> None:
+def test_manifest_v8_rejects_missing_resolved_image_inputs(tmp_path: Path) -> None:
     projects_path = tmp_path / "projects"
     created = _create(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
@@ -866,7 +969,7 @@ def test_manifest_v7_rejects_missing_resolved_image_inputs(tmp_path: Path) -> No
     ("field", "value"),
     (("slot_key", "other"), ("slot_label", "Other")),
 )
-def test_manifest_v7_rejects_job_image_input_that_differs_from_frozen_profile(
+def test_manifest_v8_rejects_job_image_input_that_differs_from_frozen_profile(
     tmp_path: Path,
     field: str,
     value: str,
@@ -897,7 +1000,7 @@ def test_manifest_v7_rejects_job_image_input_that_differs_from_frozen_profile(
         "duplicate_values",
     ),
 )
-def test_manifest_v7_rejects_missing_or_malformed_batch_snapshot(
+def test_manifest_v8_rejects_missing_or_malformed_batch_snapshot(
     tmp_path: Path, corruption: str
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -930,7 +1033,7 @@ def test_manifest_v7_rejects_missing_or_malformed_batch_snapshot(
     "corruption",
     ("project", "batch", "prompt", "binding", "images", "seed", "expansion", "workflow"),
 )
-def test_manifest_v7_rejects_batch_snapshot_that_contradicts_frozen_run(
+def test_manifest_v8_rejects_batch_snapshot_that_contradicts_frozen_run(
     tmp_path: Path, corruption: str
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -1045,7 +1148,7 @@ def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
     )
     manifest_path = created.path / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["format_version"] = 8
+    manifest["format_version"] = 9
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
     with pytest.raises(RunStoreError, match="unsupported manifest.json format version"):
@@ -1215,7 +1318,7 @@ def test_failed_creation_cleans_staging_without_partial_final_run(tmp_path: Path
 
     batch_path = projects_path / "project_key" / "batches" / "batch_key"
     assert store.saw_complete_staging
-    assert not (batch_path / "run-001").exists()
+    assert not (batch_path / "001-run").exists()
     assert tuple((batch_path / ".staging").iterdir()) == ()
     assert tuple((batch_path / ".allocations").iterdir()) == ()
 
@@ -1232,7 +1335,7 @@ def test_post_rename_error_returns_the_complete_published_run(tmp_path: Path) ->
 
     published = _create(store, plan, asset)
 
-    assert published.path.name == "run-001"
+    assert published.path.name == "001-run"
     assert published.path.is_dir()
     assert store.load_run(published.path).compiled_plan == plan
 
@@ -1319,7 +1422,7 @@ def test_multiple_runs_allocate_distinct_identity_and_preserve_display_name_hist
 
     assert first.run_id != second.run_id
     assert (first.run_number, second.run_number) == (1, 2)
-    assert (first.path.name, second.path.name) == ("run-001", "run-002")
+    assert (first.path.name, second.path.name) == ("001-run", "002-run")
     assert first.path.parent == second.path.parent
     assert first.path.is_dir()
     assert store.load_run(first.path).project.name == "Portrait tests"

@@ -3,6 +3,7 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { EditableBatchSnapshot, RunPlanJobResponse, RunResponse } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
 import { parameterRangeCount, profileParameters } from "../batch/form";
+import { runDisplayLabel, runDisplayName, runNumberLabel } from "./runDisplay";
 
 interface Props {
   run: RunResponse;
@@ -40,8 +41,8 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
       >
       <div className="run-plan-heading">
         <div>
-          <p className="run-plan-kicker">Frozen experiment specification</p>
-          <h2 id="run-plan-title">Run {run.run_number} Plan</h2>
+          <p className="run-plan-kicker">Frozen experiment specification · {runNumberLabel(run)}</p>
+          <h2 id="run-plan-title">{runDisplayName(run)} Plan</h2>
         </div>
         <button className="button-link" type="button" onClick={onClose} ref={closeRef}>Close</button>
       </div>
@@ -49,8 +50,11 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
       <div className="run-plan-content">
       <section className="run-plan-overview" aria-labelledby="run-plan-overview-title">
         <h3 id="run-plan-overview-title">{snapshot.batch.name}</h3>
+        <p className="run-plan-run-label">{runDisplayLabel(run)}</p>
+        {run.run_description ? <p className="run-plan-description">{run.run_description}</p> : null}
         {snapshot.batch.description ? <p>{snapshot.batch.description}</p> : null}
         <dl>
+          <div><dt>Run folder</dt><dd><code>{run.filesystem_key}</code></dd></div>
           <div><dt>Total Jobs</dt><dd>{run.plan.job_count}</dd></div>
           <div><dt>Image Inputs</dt><dd>{imageInputSummary(run)}</dd></div>
           <div><dt>Parameters</dt><dd>{parameterSummary(run)}</dd></div>
