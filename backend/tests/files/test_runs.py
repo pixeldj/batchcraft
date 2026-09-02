@@ -15,6 +15,8 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
+    LinkedParameterRow,
+    LinkedParameterSet,
     ParameterBinding,
     ParameterValueType,
     PromptVersion,
@@ -62,7 +64,7 @@ WORKFLOW_PROFILE: dict[str, object] = {
     "parameters": [],
 }
 BATCH_SNAPSHOT: dict[str, object] = {
-    "snapshot_version": 5,
+    "snapshot_version": 6,
     "project": {
         "id": PROJECT.id,
         "filesystem_key": PROJECT.filesystem_key,
@@ -90,6 +92,7 @@ BATCH_SNAPSHOT: dict[str, object] = {
     ],
     "image_bindings": [{"slot_key": "reference", "values": ["asset-id"]}],
     "parameter_bindings": [],
+    "linked_parameter_sets": [],
     "seed_intent": {
         "mode": "explicit",
         "values": [9, 3],
@@ -319,7 +322,7 @@ def test_run_creation_persists_identity_plan_snapshots_and_manifests(tmp_path: P
             + "\n"
         ).encode()
     )
-    assert manifest["format_version"] == 8
+    assert manifest["format_version"] == 9
     assert manifest["batch_snapshot"] == BATCH_SNAPSHOT
     assert manifest["prompt_versions"] == [
         {
@@ -599,6 +602,7 @@ def test_manifest_v8_recovers_range_snapshot_into_frozen_scalar_jobs_and_csv(
                 "range": {"start": "-5", "end": "0", "step": "5"},
             }
         ],
+        "linked_parameter_sets": [],
         "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
         "workflow_selection": {
             **workflow_selection,
@@ -649,6 +653,149 @@ def test_manifest_v8_recovers_range_snapshot_into_frozen_scalar_jobs_and_csv(
         RunFilesystemStore(projects_path).load_run(created.path)
 
 
+def test_manifest_v9_roundtrips_linked_set_provenance_and_rejects_tampering(
+    tmp_path: Path,
+) -> None:
+    projects_path = tmp_path / "projects"
+    workflow = json.loads(json.dumps(WORKFLOW))
+    workflow["114"]["inputs"].update({"width": 512, "height": 512})
+    profile = json.loads(json.dumps(WORKFLOW_PROFILE))
+    profile["parameters"] = [
+        {
+            "key": "width",
+            "label": "Width",
+            "node_id": "114",
+            "input_name": "width",
+            "value_type": "integer",
+        },
+        {
+            "key": "height",
+            "label": "Height",
+            "node_id": "114",
+            "input_name": "height",
+            "value_type": "integer",
+        },
+    ]
+    plan = compile_batch(
+        BatchDefinition(
+            prompt_versions=(PromptVersion("prompt-v3", "Portrait prompt", "Portrait"),),
+            variable_bindings=(),
+            image_input_slots=(ImageInputSlot("reference", "Reference", "221", "image"),),
+            image_bindings=(ImageBinding("reference", (None,)),),
+            seeds=SeedInput.fixed(9),
+            parameters=(
+                WorkflowParameter("width", "Width", "114", "width", ParameterValueType.INTEGER),
+                WorkflowParameter("height", "Height", "114", "height", ParameterValueType.INTEGER),
+            ),
+            linked_parameter_sets=(
+                LinkedParameterSet(
+                    "resolution",
+                    "Resolution",
+                    ("height", "width"),
+                    (
+                        LinkedParameterRow((768, 1024), "Landscape"),
+                        LinkedParameterRow((1024, 768), None),
+                    ),
+                ),
+            ),
+        )
+    )
+    workflow_selection = BATCH_SNAPSHOT["workflow_selection"]
+    assert isinstance(workflow_selection, dict)
+    snapshot = {
+        **BATCH_SNAPSHOT,
+        "prompt_versions": [
+            {
+                "id": "prompt-v3",
+                "prompt_id": None,
+                "version_number": None,
+                "name": "Portrait prompt",
+                "text": "Portrait",
+            }
+        ],
+        "variable_bindings": [],
+        "image_bindings": [{"slot_key": "reference", "values": [None]}],
+        "parameter_bindings": [],
+        "linked_parameter_sets": [
+            {
+                "set_key": "resolution",
+                "set_label": "Resolution",
+                "members": ["height", "width"],
+                "rows": [
+                    {
+                        "row_label": "Landscape",
+                        "values": {"height": 768, "width": 1024},
+                    },
+                    {
+                        "row_label": None,
+                        "values": {"height": 1024, "width": 768},
+                    },
+                ],
+            }
+        ],
+        "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
+        "workflow_selection": {
+            **workflow_selection,
+            "workflow": workflow,
+            "workflow_profile": profile,
+        },
+    }
+    created = _create(
+        RunFilesystemStore(
+            projects_path,
+            id_factory=SequentialIds("run-id", "job-1", "job-2"),
+            clock=lambda: FIXED_TIME,
+        ),
+        plan,
+        None,
+        batch_snapshot=snapshot,
+        workflow=workflow,
+        workflow_profile=profile,
+    )
+
+    manifest_path = created.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    with (created.path / "manifest.csv").open(newline="") as file:
+        rows = list(csv.DictReader(file))
+    expected_provenance = [
+        {
+            "set_key": "resolution",
+            "set_label": "Resolution",
+            "row_ordinal": 1,
+            "row_label": "Landscape",
+        }
+    ]
+    assert manifest["format_version"] == 9
+    assert manifest["jobs"][0]["resolved_parameter_sets"] == expected_provenance
+    assert json.loads(rows[0]["resolved_parameter_sets_json"]) == expected_provenance
+    assert RunFilesystemStore(projects_path).load_run(created.path).compiled_plan == plan
+
+    for field, value in (
+        ("set_key", "tampered"),
+        ("set_label", "Tampered"),
+        ("row_ordinal", 2),
+        ("row_label", "Tampered"),
+    ):
+        tampered = json.loads(json.dumps(manifest))
+        tampered["jobs"][0]["resolved_parameter_sets"][0][field] = value
+        manifest_path.write_bytes(canonical_json_bytes(tampered))
+        with pytest.raises(RunStoreError, match="does not reconstruct the compiled Run plan"):
+            RunFilesystemStore(projects_path).load_run(created.path)
+
+    for mutate in ("member", "cell", "duplicate_row"):
+        tampered = json.loads(json.dumps(manifest))
+        linked_set = tampered["batch_snapshot"]["linked_parameter_sets"][0]
+        if mutate == "member":
+            linked_set["members"][1] = "unknown"
+        elif mutate == "cell":
+            linked_set["rows"][0]["values"]["width"] = 640
+        else:
+            linked_set["rows"][1]["values"] = linked_set["rows"][0]["values"]
+        manifest_path.write_bytes(canonical_json_bytes(tampered))
+        with pytest.raises(RunStoreError):
+            RunFilesystemStore(projects_path).load_run(created.path)
+
+
 def test_run_load_rejects_python_equal_parameter_scalar_representation_mismatch(
     tmp_path: Path,
 ) -> None:
@@ -693,6 +840,7 @@ def test_run_load_rejects_python_equal_parameter_scalar_representation_mismatch(
         "variable_bindings": [],
         "image_bindings": [{"slot_key": "reference", "values": [None]}],
         "parameter_bindings": [{"parameter_key": "cfg", "mode": "values", "values": [1]}],
+        "linked_parameter_sets": [],
         "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
         "workflow_selection": {
             **workflow_selection,
@@ -757,8 +905,8 @@ def test_manifest_v8_rejects_invalid_prompt_provenance(tmp_path: Path, corruptio
         RunFilesystemStore(projects_path).load_run(created.path)
 
 
-@pytest.mark.parametrize("manifest_version", (1, 2, 3, 4, 5))
-def test_manifest_v1_through_v5_are_rejected(tmp_path: Path, manifest_version: int) -> None:
+@pytest.mark.parametrize("manifest_version", range(1, 9))
+def test_manifest_versions_before_v9_are_rejected(tmp_path: Path, manifest_version: int) -> None:
     projects_path = tmp_path / "projects"
     created = _create(
         RunFilesystemStore(projects_path, clock=lambda: FIXED_TIME),
@@ -879,7 +1027,7 @@ def test_manifest_v8_round_trips_null_image_inputs(tmp_path: Path) -> None:
         rows = list(csv.DictReader(file))
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
-    assert manifest["format_version"] == 8
+    assert manifest["format_version"] == 9
     assert manifest["batch_snapshot"]["image_bindings"] == [
         {"slot_key": "reference", "values": [None]}
     ]
@@ -931,8 +1079,8 @@ def test_manifest_v8_preserves_batch_alternatives_and_concrete_job_choices(
     manifest = json.loads((created.path / "manifest.json").read_text())
     loaded = RunFilesystemStore(projects_path).load_run(created.path)
 
-    assert manifest["format_version"] == 8
-    assert manifest["batch_snapshot"]["snapshot_version"] == 5
+    assert manifest["format_version"] == 9
+    assert manifest["batch_snapshot"]["snapshot_version"] == 6
     assert manifest["batch_snapshot"]["image_bindings"] == snapshot["image_bindings"]
     assert [job["resolved_image_inputs"][0]["asset"] is None for job in manifest["jobs"]] == [
         True,
@@ -995,12 +1143,13 @@ def test_manifest_v8_rejects_job_image_input_that_differs_from_frozen_profile(
         "missing",
         "array",
         "version_one",
+        "version_five",
         "incomplete",
         "old_binding_field",
         "duplicate_values",
     ),
 )
-def test_manifest_v8_rejects_missing_or_malformed_batch_snapshot(
+def test_manifest_v9_rejects_missing_or_malformed_batch_snapshot(
     tmp_path: Path, corruption: str
 ) -> None:
     projects_path = tmp_path / "projects"
@@ -1015,8 +1164,8 @@ def test_manifest_v8_rejects_missing_or_malformed_batch_snapshot(
         manifest.pop("batch_snapshot")
     elif corruption == "array":
         manifest["batch_snapshot"] = []
-    elif corruption == "version_one":
-        manifest["batch_snapshot"]["snapshot_version"] = 1
+    elif corruption in {"version_one", "version_five"}:
+        manifest["batch_snapshot"]["snapshot_version"] = 1 if corruption == "version_one" else 5
     elif corruption == "incomplete":
         manifest["batch_snapshot"].pop("workflow_selection")
     elif corruption == "old_binding_field":
@@ -1025,7 +1174,7 @@ def test_manifest_v8_rejects_missing_or_malformed_batch_snapshot(
         manifest["batch_snapshot"]["variable_bindings"][0]["values"] = ["dog", "dog"]
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
-    with pytest.raises(RunStoreError, match="batch_snapshot must|invalid Batch snapshot v5"):
+    with pytest.raises(RunStoreError, match="batch_snapshot must|invalid Batch snapshot v6"):
         RunFilesystemStore(projects_path).load_run(created.path)
 
 
@@ -1068,7 +1217,7 @@ def test_manifest_v8_rejects_batch_snapshot_that_contradicts_frozen_run(
 
 
 @pytest.mark.parametrize("corruption", ("version_one", "incomplete", "old_binding_field"))
-def test_create_run_rejects_malformed_snapshot_v5(tmp_path: Path, corruption: str) -> None:
+def test_create_run_rejects_malformed_snapshot_v6(tmp_path: Path, corruption: str) -> None:
     batch_snapshot = json.loads(
         json.dumps(
             {**BATCH_SNAPSHOT, "image_bindings": [{"slot_key": "reference", "values": [None]}]}
@@ -1081,7 +1230,7 @@ def test_create_run_rejects_malformed_snapshot_v5(tmp_path: Path, corruption: st
     else:
         batch_snapshot["variable_bindings"][0]["fixed_value"] = "dog"
 
-    with pytest.raises(RunStoreError, match="invalid Batch snapshot v5"):
+    with pytest.raises(RunStoreError, match="invalid Batch snapshot v6"):
         _create(
             RunFilesystemStore(tmp_path / "projects"),
             _fixture_plan(None),
@@ -1148,7 +1297,7 @@ def test_manifest_load_rejects_unknown_format_version(tmp_path: Path) -> None:
     )
     manifest_path = created.path / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["format_version"] = 9
+    manifest["format_version"] = 10
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n")
 
     with pytest.raises(RunStoreError, match="unsupported manifest.json format version"):
@@ -1212,6 +1361,7 @@ def test_run_load_rejects_semantically_invalid_frozen_workflow_profile_pair(
             "variable_bindings": [],
             "image_bindings": [{"slot_key": "reference", "values": [None]}],
             "parameter_bindings": [{"parameter_key": "steps", "mode": "values", "values": [None]}],
+            "linked_parameter_sets": [],
             "seed_intent": {"mode": "fixed", "values": [9], "random_seed_count": None},
             "workflow_selection": {
                 **workflow_selection,

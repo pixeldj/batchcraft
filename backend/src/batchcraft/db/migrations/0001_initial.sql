@@ -318,6 +318,67 @@ CREATE TABLE batch_parameter_binding_value (
         ON UPDATE RESTRICT ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE batch_linked_parameter_set (
+    batch_id TEXT NOT NULL CHECK (length(trim(batch_id)) > 0),
+    position INTEGER NOT NULL CHECK (position >= 1),
+    set_key TEXT NOT NULL CHECK (
+        set_key GLOB '[a-z]*'
+        AND set_key NOT GLOB '*[^a-z0-9_]*'
+        AND set_key NOT GLOB '*__*'
+        AND substr(set_key, -1) != '_'
+    ),
+    set_label TEXT NOT NULL CHECK (length(trim(set_label)) > 0),
+    PRIMARY KEY (batch_id, position),
+    UNIQUE (batch_id, set_key),
+    FOREIGN KEY (batch_id) REFERENCES batch(id) ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE batch_linked_parameter_set_member (
+    batch_id TEXT NOT NULL,
+    set_position INTEGER NOT NULL CHECK (set_position >= 1),
+    member_position INTEGER NOT NULL CHECK (member_position >= 1),
+    parameter_key TEXT NOT NULL CHECK (
+        parameter_key GLOB '[a-z]*'
+        AND parameter_key NOT GLOB '*[^a-z0-9_]*'
+        AND parameter_key NOT GLOB '*__*'
+        AND substr(parameter_key, -1) != '_'
+    ),
+    PRIMARY KEY (batch_id, set_position, member_position),
+    UNIQUE (batch_id, parameter_key),
+    FOREIGN KEY (batch_id, set_position)
+        REFERENCES batch_linked_parameter_set(batch_id, position)
+        ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE batch_linked_parameter_set_row (
+    batch_id TEXT NOT NULL,
+    set_position INTEGER NOT NULL CHECK (set_position >= 1),
+    row_position INTEGER NOT NULL CHECK (row_position >= 1),
+    row_label TEXT CHECK (row_label IS NULL OR length(trim(row_label)) > 0),
+    PRIMARY KEY (batch_id, set_position, row_position),
+    FOREIGN KEY (batch_id, set_position)
+        REFERENCES batch_linked_parameter_set(batch_id, position)
+        ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE batch_linked_parameter_set_value (
+    batch_id TEXT NOT NULL,
+    set_position INTEGER NOT NULL CHECK (set_position >= 1),
+    row_position INTEGER NOT NULL CHECK (row_position >= 1),
+    member_position INTEGER NOT NULL CHECK (member_position >= 1),
+    value_json TEXT NOT NULL CHECK (
+        json_valid(value_json)
+        AND json_type(value_json) IN ('null', 'text', 'integer', 'real', 'true', 'false')
+    ),
+    PRIMARY KEY (batch_id, set_position, row_position, member_position),
+    FOREIGN KEY (batch_id, set_position, row_position)
+        REFERENCES batch_linked_parameter_set_row(batch_id, set_position, row_position)
+        ON UPDATE RESTRICT ON DELETE CASCADE,
+    FOREIGN KEY (batch_id, set_position, member_position)
+        REFERENCES batch_linked_parameter_set_member(batch_id, set_position, member_position)
+        ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE run_cancellation_request (
     run_id TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     mode TEXT NOT NULL CHECK (mode IN ('after_current_job', 'detach')),

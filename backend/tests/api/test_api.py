@@ -372,11 +372,12 @@ def _batch_request(
         "variable_bindings": bindings,
         "image_bindings": image_bindings,
         "parameter_bindings": [],
+        "linked_parameter_sets": [],
         "seeds": seeds,
         "workflow": workflow,
         "workflow_profile": profile,
         "batch_snapshot": {
-            "snapshot_version": 5,
+            "snapshot_version": 6,
             "project": copy.deepcopy(project),
             "source_saved_batch": None,
             "batch": {**batch, "description": None},
@@ -384,6 +385,7 @@ def _batch_request(
             "variable_bindings": copy.deepcopy(bindings),
             "image_bindings": copy.deepcopy(image_bindings),
             "parameter_bindings": [],
+            "linked_parameter_sets": [],
             "seed_intent": {**seeds, "random_seed_count": None},
             "workflow_selection": {
                 "workflow_id": None,
@@ -404,6 +406,7 @@ def _sync_batch_snapshot(request: dict[str, object]) -> None:
     snapshot["variable_bindings"] = request["variable_bindings"]
     snapshot["image_bindings"] = request["image_bindings"]
     snapshot["parameter_bindings"] = request["parameter_bindings"]
+    snapshot["linked_parameter_sets"] = request["linked_parameter_sets"]
     workflow_selection = snapshot["workflow_selection"]
     assert isinstance(workflow_selection, dict)
     workflow_selection["workflow"] = request["workflow"]
@@ -474,6 +477,157 @@ def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> 
     assert run.json()["batch_snapshot"]["parameter_bindings"] == [
         {"parameter_key": "steps", "mode": "values", "values": [None, -5, 0]}
     ]
+
+
+def test_linked_parameter_sets_preview_run_and_execute_as_scalar_overrides(tmp_path: Path) -> None:
+    request = _batch_request(())
+    workflow = cast(dict[str, object], request["workflow"])
+    profile = cast(dict[str, object], request["workflow_profile"])
+    sampler_inputs = cast(dict[str, object], cast(dict[str, object], workflow["7"])["inputs"])
+    sampler_inputs.update({"width": 512, "height": 512})
+    profile["parameters"] = [
+        {
+            "key": "width",
+            "label": "Width",
+            "node_id": "7",
+            "input_name": "width",
+            "value_type": "integer",
+        },
+        {
+            "key": "height",
+            "label": "Height",
+            "node_id": "7",
+            "input_name": "height",
+            "value_type": "integer",
+        },
+    ]
+    request["linked_parameter_sets"] = [
+        {
+            "set_key": "resolution",
+            "set_label": "Resolution",
+            "members": ["height", "width"],
+            "rows": [
+                {
+                    "row_label": "Landscape",
+                    "values": {"width": 1024, "height": 768},
+                },
+                {
+                    "row_label": None,
+                    "values": {"height": 1024, "width": 768},
+                },
+            ],
+        }
+    ]
+    _sync_batch_snapshot(request)
+    client = FakeComfyUIClient()
+
+    with TestClient(
+        create_app(_settings(tmp_path), client_factory=lambda _settings: client)
+    ) as http:
+        preview = http.post("/api/batches/preview", json=request)
+        run_id = _create_run(http, request)
+        run = http.get(f"/api/runs/{run_id}")
+        assert http.post(f"/api/runs/{run_id}/execute").status_code == 202
+        _wait_for_status(http, run_id, "succeeded")
+
+    assert preview.status_code == 200
+    assert preview.json()["job_count"] == 8
+    assert preview.json()["jobs"][0]["resolved_parameters"] == [
+        {"parameter_key": "width", "label": "Width", "value": 1024},
+        {"parameter_key": "height", "label": "Height", "value": 768},
+    ]
+    assert preview.json()["jobs"][0]["resolved_parameter_sets"] == [
+        {
+            "set_key": "resolution",
+            "set_label": "Resolution",
+            "row_ordinal": 1,
+            "row_label": "Landscape",
+        }
+    ]
+    assert run.json()["plan"]["jobs"][2]["resolved_parameter_sets"][0]["row_ordinal"] == 2
+    submitted_sizes = [
+        (
+            cast(dict[str, object], cast(dict[str, object], item["7"])["inputs"])["width"],
+            cast(dict[str, object], cast(dict[str, object], item["7"])["inputs"])["height"],
+        )
+        for item in client.submitted_workflows
+    ]
+    assert submitted_sizes == ([(1024, 768)] * 2 + [(768, 1024)] * 2) * 2
+    assert all(
+        all(not isinstance(value, (dict, list)) for value in size) for size in submitted_sizes
+    )
+
+
+def test_linked_parameter_set_request_rejects_missing_or_extra_row_values() -> None:
+    request = _batch_request(())
+    request["linked_parameter_sets"] = [
+        {
+            "set_key": "resolution",
+            "set_label": "Resolution",
+            "members": ["width", "height"],
+            "rows": [{"row_label": None, "values": {"width": 512, "extra": 512}}],
+        }
+    ]
+    _sync_batch_snapshot(request)
+
+    with pytest.raises(ValueError, match="exactly match set members"):
+        BatchRequest.model_validate(request)
+
+
+def test_batch_request_rejects_numeric_type_only_snapshot_mismatches() -> None:
+    independent = _batch_request(())
+    independent_profile = cast(dict[str, object], independent["workflow_profile"])
+    independent_profile["parameters"] = [
+        {
+            "key": "cfg",
+            "label": "CFG",
+            "node_id": "7",
+            "input_name": "cfg",
+            "value_type": "float",
+        }
+    ]
+    independent["parameter_bindings"] = [{"parameter_key": "cfg", "mode": "values", "values": [1]}]
+    _sync_batch_snapshot(independent)
+    independent_snapshot = cast(dict[str, object], independent["batch_snapshot"])
+    independent_snapshot["parameter_bindings"] = [
+        {"parameter_key": "cfg", "mode": "values", "values": [1.0]}
+    ]
+
+    linked = _batch_request(())
+    linked_profile = cast(dict[str, object], linked["workflow_profile"])
+    linked_profile["parameters"] = [
+        {
+            "key": key,
+            "label": key.title(),
+            "node_id": "7",
+            "input_name": key,
+            "value_type": "float",
+        }
+        for key in ("width", "height")
+    ]
+    linked["linked_parameter_sets"] = [
+        {
+            "set_key": "resolution",
+            "set_label": "Resolution",
+            "members": ["width", "height"],
+            "rows": [{"row_label": None, "values": {"width": 1, "height": 2}}],
+        }
+    ]
+    _sync_batch_snapshot(linked)
+    linked_snapshot = cast(dict[str, object], linked["batch_snapshot"])
+    linked_snapshot["linked_parameter_sets"] = [
+        {
+            "set_key": "resolution",
+            "set_label": "Resolution",
+            "members": ["width", "height"],
+            "rows": [{"row_label": None, "values": {"width": 1.0, "height": 2}}],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="parameter bindings do not match"):
+        BatchRequest.model_validate(independent)
+    with pytest.raises(ValueError, match="linked parameter sets do not match"):
+        BatchRequest.model_validate(linked)
 
 
 def test_batch_request_materializes_range_intent_before_compilation(tmp_path: Path) -> None:
@@ -593,7 +747,9 @@ def test_batch_request_rejects_snapshot_version_one_and_non_integer_aliases(
         BatchRequest.model_validate(request)
 
 
-def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, object]:
+def _saved_batch_definition(
+    http: TestClient, project_id: str, *, linked_parameters: bool = False
+) -> dict[str, object]:
     request = _batch_request(())
     workflow = request["workflow"]
     profile = request["workflow_profile"]
@@ -601,6 +757,25 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
     assert isinstance(profile, dict)
     mappings = profile["mappings"]
     assert isinstance(mappings, dict)
+    if linked_parameters:
+        sampler_inputs = cast(dict[str, object], cast(dict[str, object], workflow["7"])["inputs"])
+        sampler_inputs.update({"width": 512, "height": 512})
+        profile["parameters"] = [
+            {
+                "key": "width",
+                "label": "Width",
+                "node_id": "7",
+                "input_name": "width",
+                "value_type": "integer",
+            },
+            {
+                "key": "height",
+                "label": "Height",
+                "node_id": "7",
+                "input_name": "height",
+                "value_type": "integer",
+            },
+        ]
     prompt = http.post(
         f"/api/projects/{project_id}/prompts",
         json={"name": "Saved prompt", "text": "Portrait of {{animal}}"},
@@ -642,6 +817,27 @@ def _saved_batch_definition(http: TestClient, project_id: str) -> dict[str, obje
             {"slot_key": "style", "values": [None]},
         ],
         "parameter_bindings": [],
+        "linked_parameter_sets": (
+            [
+                {
+                    "set_key": "resolution",
+                    "set_label": "Resolution",
+                    "members": ["width", "height"],
+                    "rows": [
+                        {
+                            "row_label": "Square",
+                            "values": {"width": 512, "height": 512},
+                        },
+                        {
+                            "row_label": "Landscape",
+                            "values": {"width": 1024, "height": 768},
+                        },
+                    ],
+                }
+            ]
+            if linked_parameters
+            else []
+        ),
         "seed_intent": {"mode": "explicit", "values": [9, 3], "random_seed_count": None},
         "selected_workflow_version": {
             "id": workflow_version["id"],
@@ -1349,6 +1545,27 @@ def test_saved_batch_lifecycle_is_durable_lightweight_and_project_scoped(
         assert persisted.json()["name"] == "Updated"
 
 
+def test_saved_batch_api_roundtrips_linked_parameter_sets(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects", json={"name": "Linked", "filesystem_key": "linked"}
+        ).json()
+        definition = _saved_batch_definition(http, project["id"], linked_parameters=True)
+        created = http.post(
+            f"/api/projects/{project['id']}/batches",
+            json={"filesystem_key": "linked_batch", **definition},
+        )
+        assert created.status_code == 201, created.text
+        loaded = http.get(f"/api/batches/{created.json()['id']}")
+
+    assert loaded.status_code == 200
+    assert loaded.json()["parameter_bindings"] == []
+    assert loaded.json()["linked_parameter_sets"] == definition["linked_parameter_sets"]
+
+
 def test_saved_batch_owner_orphans_and_explicit_adoption(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     with TestClient(
@@ -1496,11 +1713,12 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
                 {"slot_key": "style", "values": [None]},
             ],
             "parameter_bindings": [],
+            "linked_parameter_sets": [],
             "seeds": {"mode": "fixed", "values": [11]},
             "workflow": workflow["workflow"],
             "workflow_profile": profile["profile"],
             "batch_snapshot": {
-                "snapshot_version": 5,
+                "snapshot_version": 6,
                 "project": {
                     "id": project["id"],
                     "filesystem_key": project["filesystem_key"],
@@ -1528,6 +1746,7 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
                     {"slot_key": "style", "values": [None]},
                 ],
                 "parameter_bindings": [],
+                "linked_parameter_sets": [],
                 "seed_intent": {
                     "mode": "fixed",
                     "values": [11],
@@ -1939,7 +2158,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v8
     assert created.status_code == 201
     run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert manifest["format_version"] == 8
+    assert manifest["format_version"] == 9
     expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
     assert manifest["batch_snapshot"] == expected_snapshot
     assert [job["seed"] for job in manifest["jobs"]] == [

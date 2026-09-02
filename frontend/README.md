@@ -5,8 +5,8 @@ selecting and configuring a saved or new Saved Batch, previewing its compiled Jo
 Runs, watching Job state, viewing the current Run's Results, and reviewing accumulated Batch Results
 from this browser working session. It communicates only with the batchcraft FastAPI application.
 
-The browser stores one strict working-session recovery v1 record under
-`batchcraft.working-session-recovery.v1` in `localStorage`. It contains editable Batch intent, selected
+The browser stores one strict working-session recovery v2 record under
+`batchcraft.working-session-recovery.v2` in `localStorage`. It contains editable Batch intent, selected
 Project and Saved Batch pointers, current Run ID, and ordered unique session Run IDs. Linked
 Workflow/Profile JSON is reconstructed by immutable version ID; detached JSON remains draft state.
 Unsupported or malformed records start a clean working session. Refreshing or reopening a tab restores
@@ -19,17 +19,18 @@ more ordered Base workflow and Reference Asset alternatives. Profile changes rec
 stable slot key, preserve matching selections, add new slots as Base workflow, and remove bindings for
 deleted slots. Missing Reference Assets remain visible and block Preview until repaired.
 
-The selected ProfileVersion also defines ordered Parameters targeting literal workflow inputs. Each
-Parameter independently selects one or more ordered Base workflow or typed string, integer, float, or
+The selected ProfileVersion also defines ordered Parameters targeting literal workflow inputs. An
+independent Parameter selects one or more ordered Base workflow or typed string, integer, float, or
 boolean alternatives. Integer and float Parameters may instead preserve a decimal-text Range with
 Start, End, Step, and independent Base inclusion. The backend materializes Range intent before the
-existing compiler. Profile changes reconcile these values by stable key and compatible declared type.
-Each Parameter independently multiplies Job count, while every concrete Job contains one scalar or Base
-workflow choice.
+existing compiler. Two or more Parameters may instead form a named Preset whose explicit rows each count
+as one compiler alternative. Profile changes preserve same-key, same-type bindings and Presets; an
+incompatible Preset dissolves to independent Base bindings. Every concrete Job still contains one scalar
+or Base workflow choice per Parameter.
 
 Preview and Result Details render every concrete Job slot and Parameter by its frozen label and resolved
-value. Run Plan also shows all frozen Batch alternatives. Each slot and Parameter independently
-multiplies Job count.
+value, plus selected Preset row provenance. Run Plan also shows all frozen Batch alternatives and Preset
+rows. Each Image Input slot, independent Parameter, and Preset row axis multiplies Job count.
 
 Generated image cards render at their intrinsic aspect ratio without a fixed preview frame. Reference
 Asset cards retain a uniform contained thumbnail frame, so neither generated nor input images are
@@ -64,10 +65,12 @@ The Workflow editor selects Project-scoped immutable WorkflowVersions and exact 
 ProfileVersions. The visual Profile mapper keeps prompt, seed, and output-prefix mappings separate from
 ordered named Image Inputs and typed generic Parameters. Both collections support add, remove, move,
 editable labels, stable keys, and target repair. Parameter types are inferred from compatible literal
-workflow values and may be string, integer, float, or boolean. The Batch editor leaves each parameter
-with ordered Values or, for numeric types, a deterministic Range. The Parameters section uses the same
+workflow values and may be string, integer, float, or boolean. The Batch editor leaves each unlinked
+parameter with ordered Values or, for numeric types, a deterministic Range, and supports explicit
+row-based Presets for linked parameters. The Parameters section uses the same
 collapsible Edit/Done interaction as other configuration sections; collapsing changes no form state or
-Preview validity. Parameter dimensions follow Image Input slots in Profile order and precede seeds.
+Preview validity. Parameter dimensions follow Image Input slots in Profile order and precede seeds; a
+Preset appears at its earliest member's Profile position.
 Selecting another WorkflowVersion clears an incompatible Profile selection and
 blocks Preview until a compatible version is chosen. Library reconciliation never rewrites a restored
 snapshot with different content; unavailable or integrity-mismatched pairs remain detached and are

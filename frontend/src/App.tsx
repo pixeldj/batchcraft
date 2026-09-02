@@ -250,6 +250,13 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     void (async () => {
       try {
         const current = formRef.current;
+        const requestedSelection = {
+          projectId: current.projectId,
+          workflowId: current.workflowId,
+          workflowVersionId: current.workflowVersionId,
+          workflowProfileId: current.workflowProfileId,
+          workflowProfileVersionId: current.workflowProfileVersionId,
+        };
         const [workflowVersion, profileVersion] = await Promise.all([
           initialSession.workflowSnapshotRecoveryRequired && current.workflowVersionId
             ? api.getWorkflowVersion(current.workflowVersionId, controller.signal)
@@ -276,6 +283,15 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           throw new Error("The recovered ProfileVersion does not match this Project and WorkflowVersion.");
         }
         setForm((latest) => {
+          if (
+            latest.projectId !== requestedSelection.projectId
+            || latest.workflowId !== requestedSelection.workflowId
+            || latest.workflowVersionId !== requestedSelection.workflowVersionId
+            || latest.workflowProfileId !== requestedSelection.workflowProfileId
+            || latest.workflowProfileVersionId !== requestedSelection.workflowProfileVersionId
+          ) {
+            return latest;
+          }
           let recovered = {
             ...latest,
             workflowJson: workflowVersion
@@ -619,6 +635,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       prompts: [],
       imageBindings: [],
       parameterBindings: [],
+      linkedParameterSets: [],
       workflowJson: "{}",
       workflowProfileJson: "{}",
       workflowLibraryProjectId: null,

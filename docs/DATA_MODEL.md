@@ -311,6 +311,10 @@ Ordered child tables complete the aggregate:
   independent Base inclusion, and decimal-text Range fields.
 - `batch_parameter_binding_value` — ordered typed JSON scalar or `null` Base-workflow alternatives for
   `values` mode only.
+- `batch_linked_parameter_set` — ordered stable set keys and editable labels.
+- `batch_linked_parameter_set_member` — ordered unique Profile parameter keys for each set.
+- `batch_linked_parameter_set_row` — ordered rows with optional labels.
+- `batch_linked_parameter_set_value` — one typed JSON scalar or `null` cell per row member.
 
 Saved Batches may be intentionally incomplete: they may have zero prompt selections, zero values for
 a variable binding, no workflow/profile selection, and zero image bindings when no Profile is selected
@@ -334,8 +338,13 @@ Parameter bindings are discriminated editable intent. `values` mode stores
 stores `{ "parameter_key": string, "mode": "range", "include_base": boolean,
 "range": { "start": string, "end": string, "step": string } }`. Saved Batches preserve exact Range
 decimal text rather than replacing it with generated values. Preview and Run creation resolve binding
-records by stable key and materialize Range intent once at the backend domain boundary. Each parameter
-then supplies one or more ordered, unique, type-correct alternatives to the existing compiler.
+records by stable key and materialize Range intent once at the backend domain boundary.
+
+A Batch may instead store `linked_parameter_sets`. Each set has a stable key, editable label, at least
+two ordered Profile parameter keys, and one or more ordered rows. A row has an optional label and exactly
+one concrete typed scalar or `null` value for every member. Independent bindings and linked membership
+partition the selected Profile parameters exactly once. A linked member has no persisted independent
+binding or inactive Range source of truth. Duplicate complete typed row tuples are invalid.
 
 Editing a Saved Batch increments its `revision`; concurrent conflicting saves fail rather than
 silently overwrite. Detached Prompt or Workflow-Profile snapshots must be explicitly imported or
@@ -391,6 +400,7 @@ The Run snapshot must include effective copies of:
 - exposed workflow parameters;
 - output naming configuration;
 - compiled Job list;
+- complete editable Linked Parameter Set definitions and rows;
 - optional Run name and description plus the immutable filesystem key.
 
 Once Run creation succeeds, these effective values and the compiled Job plan are immutable. This freeze occurs before scheduling begins.
@@ -442,10 +452,11 @@ alternatives, while every Job's `resolved_image_inputs` contains one concrete ch
 Each entry records `slot_key` and `asset_id`, where `null` means Base workflow. Frozen Run persistence
 adds the Profile's slot label and complete asset provenance.
 
-Each generic parameter is also an independent Batch dimension. The Batch snapshot preserves all
-ordered explicit alternatives or exact editable Range intent. Before compilation, Range intent is
-materialized to explicit values through exact scaled-integer arithmetic. Every Job's
-`resolved_parameters` contains one concrete scalar or Base workflow choice per Profile parameter.
+Each unlinked generic parameter is an independent Batch dimension. A Linked Parameter Set replaces all
+of its members with one ordered row dimension at the earliest member's Profile position. Before
+compilation, independent Range intent is materialized through exact scaled-integer arithmetic. Every
+Job's `resolved_parameters` remains complete and in Profile order. `resolved_parameter_sets` additionally
+records the selected set key, frozen label, row ordinal, and optional row label as provenance only.
 
 A Job must never contain unresolved prompt variables.
 

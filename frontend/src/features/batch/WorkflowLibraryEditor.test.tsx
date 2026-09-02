@@ -70,6 +70,15 @@ describe("WorkflowLibraryEditor", () => {
       listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [incompatibleLatest, compatible] })),
     });
     let current = initialBatchForm();
+    current.linkedParameterSets = [{
+      setKey: "stale_preset",
+      setLabel: "Stale preset",
+      members: [
+        { parameterKey: "width", valueType: "integer" },
+        { parameterKey: "height", valueType: "integer" },
+      ],
+      rows: [{ rowLabel: "", values: { width: { kind: "base" }, height: { kind: "base" } } }],
+    }];
     const view = render(<WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(component()); }} onMetadataChange={() => undefined} />);
     function component() { return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(component()); }} onMetadataChange={() => undefined} />; }
 
@@ -79,6 +88,7 @@ describe("WorkflowLibraryEditor", () => {
 
     expect(current.workflowVersionId).toBe("workflow-v1");
     expect(current.workflowProfileVersionId).toBe("profile-v1");
+    expect(current.linkedParameterSets).toEqual([]);
     expect(JSON.parse(current.workflowJson)).toEqual({ node: "one" });
     expect(JSON.parse(current.workflowProfileJson)).toEqual(workflowProfileSnapshot({ prompt: "v1" }));
   });

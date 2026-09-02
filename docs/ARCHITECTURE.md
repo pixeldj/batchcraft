@@ -126,7 +126,7 @@ This layout is illustrative, not mandatory. Avoid creating abstractions before b
 The first application slice follows this split. `api/` owns HTTP DTOs, routes, status codes, CORS, configuration, and lifecycle. `application/` coordinates the existing production packages and provides narrow Run/asset discovery plus an in-process Run task registry. It contains no generic repository, command bus, event bus, or scheduler framework.
 
 Saved Batch definitions are durably persisted in SQLite with a monotonic `revision`. The browser also
-retains one strict working-session recovery v1 record in `localStorage`. That record contains editable
+retains one strict working-session recovery v2 record in `localStorage`. That record contains editable
 Batch intent plus stable Project, Saved Batch, current Run, and ordered session Run identity pointers.
 It contains no Preview, execution, Job, Result, or frozen Run response. Linked Workflow/Profile JSON is
 reconstructed by version ID; detached JSON remains editable draft state. Every cold load requires a new
@@ -135,7 +135,7 @@ backend-authoritative Run and Result data; they are not a Project-wide history i
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into manifest v8 with Batch snapshot v5. SQLite now owns current Project metadata, the immutable-version Prompt,
+provenance into manifest v9 with Batch snapshot v6. SQLite now owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, mutable Saved Batches, and durable Run cancellation intent; searchable filesystem-derived
 indexes remain a later slice.
 
@@ -203,8 +203,9 @@ PromptVersion -> prompt variables -> Image Input slots -> parameters -> seeds
 PromptVersion is the first Batch dimension. Selected PromptVersions preserve user order, and each is
 templated independently against the bindings it references. The rightmost dimension varies fastest.
 Each compiled Job still resolves to one final prompt string mapped to one friendly workflow prompt
-input. Every Profile Image Input slot and generic parameter is an independent ordered Cartesian
-dimension, while every compiled Job contains one resolved value per slot and parameter. Parameter axes
+input. Every Profile Image Input slot and unlinked generic parameter is an independent ordered Cartesian
+dimension. A Linked Parameter Set replaces its members with one row dimension at the earliest member's
+Profile position. Every compiled Job contains one resolved value per slot and parameter. Parameter axes
 follow Profile order, and seeds remain the fastest-varying dimension. Editable numeric Range intent is
 materialized into explicit parameter alternatives before this compiler boundary. Multiple workflow
 prompt or text slots are deferred.
@@ -281,19 +282,21 @@ or more ordered, unique alternatives and forms an independent Cartesian dimensio
 Base workflow, so the executor performs no upload and the adapter leaves that target unchanged for that
 concrete Job.
 
-Batch/API/Saved Batch parameter bindings use
+Independent Batch/API/Saved Batch parameter bindings use
 `{"parameter_key":"cfg","mode":"values","values":[null,7.0,7.5]}` or numeric Range intent shaped as
 `{"parameter_key":"cfg","mode":"range","include_base":true,"range":{"start":"3.0","end":"7.0","step":"0.5"}}`.
 One backend domain materializer converts Range intent through exact scaled-integer arithmetic into the
-same ordered explicit alternatives before compilation. Every parameter forms an independent Cartesian
-dimension in Profile order. Each compiled Job carries one resolved scalar or Base state per parameter.
+same ordered explicit alternatives before compilation. A Batch may instead cover two or more Profile
+parameters with one Linked Parameter Set containing explicit typed rows. The compiler inserts that row
+dimension at its earliest member in Profile order and skips the remaining members as independent axes.
+Each compiled Job still carries one resolved scalar or Base state per Profile parameter.
 
 ## Saved Batch vs Run Boundary
 
 Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
 boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
 Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
-the plan and provenance into manifest v8 with Batch snapshot v5. Editing a Saved Batch after Run creation never alters the
+the plan and provenance into manifest v9 with Batch snapshot v6. Editing a Saved Batch after Run creation never alters the
 existing Run.
 
 ## Persistence Strategy
@@ -306,7 +309,8 @@ SQLite currently stores:
 - logical Prompts and immutable PromptVersions;
 - logical Workflows and immutable WorkflowVersions;
 - logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
-- mutable Saved Batches with ordered prompt, variable, named image, and typed parameter-alternative bindings;
+- mutable Saved Batches with ordered prompt, variable, named image, independent parameter bindings, and
+  Linked Parameter Set rows;
 - durable Run cancellation requests keyed by Run ID and mode: `after_current_job` and `detach`.
 
 Later migrations may add:

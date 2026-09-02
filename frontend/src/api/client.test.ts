@@ -429,6 +429,7 @@ function batchRequest() {
   const promptVersions = [{ id: "prompt", name: "Portrait", text: "Portrait" }];
   const imageBindings = [{ slot_key: "source", values: ["asset"] as [string] }];
   const parameterBindings: [] = [];
+  const linkedParameterSets: [] = [];
   const seeds = { mode: "fixed" as const, values: [1] };
   const workflow = {};
   const workflowProfile = {};
@@ -439,11 +440,12 @@ function batchRequest() {
     variable_bindings: [],
     image_bindings: imageBindings,
     parameter_bindings: parameterBindings,
+    linked_parameter_sets: linkedParameterSets,
     seeds,
     workflow,
     workflow_profile: workflowProfile,
     batch_snapshot: {
-      snapshot_version: 5 as const,
+      snapshot_version: 6 as const,
       project,
       source_saved_batch: null,
       batch: { ...batch, description: null },
@@ -455,6 +457,7 @@ function batchRequest() {
       variable_bindings: [],
       image_bindings: imageBindings,
       parameter_bindings: parameterBindings,
+      linked_parameter_sets: linkedParameterSets,
       seed_intent: { mode: "fixed" as const, values: [1], random_seed_count: null },
       workflow_selection: {
         workflow_id: null,

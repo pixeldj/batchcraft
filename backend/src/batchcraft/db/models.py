@@ -175,6 +175,20 @@ class SavedBatchImageBinding:
     values: tuple[str | None, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SavedBatchLinkedParameterRow:
+    values: tuple[ParameterScalar | None, ...]
+    label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SavedBatchLinkedParameterSet:
+    set_key: str
+    set_label: str
+    member_keys: tuple[str, ...]
+    rows: tuple[SavedBatchLinkedParameterRow, ...]
+
+
 SavedBatchParameterScalar = ParameterScalar
 SavedBatchParameterBinding = EditableParameterBinding
 
@@ -215,6 +229,7 @@ class SavedBatchDefinition:
     variable_bindings: tuple[SavedBatchVariableBinding, ...] = ()
     image_bindings: tuple[SavedBatchImageBinding, ...] = ()
     parameter_bindings: tuple[SavedBatchParameterBinding, ...] = ()
+    linked_parameter_sets: tuple[SavedBatchLinkedParameterSet, ...] = ()
     selected_workflow_version: SavedBatchWorkflowVersionSnapshot | None = None
     selected_workflow_profile_id: str | None = None
     selected_workflow_profile_version: SavedBatchWorkflowProfileVersionSnapshot | None = None
@@ -250,6 +265,7 @@ class SavedBatchDetailRecord(SavedBatchRecord):
     variable_bindings: tuple[SavedBatchVariableBinding, ...]
     image_bindings: tuple[SavedBatchImageBinding, ...]
     parameter_bindings: tuple[SavedBatchParameterBinding, ...]
+    linked_parameter_sets: tuple[SavedBatchLinkedParameterSet, ...]
     selected_workflow_version: SavedBatchWorkflowVersionSnapshot | None
     selected_workflow_profile_name: str | None
     selected_workflow_profile_archived_at: datetime | None

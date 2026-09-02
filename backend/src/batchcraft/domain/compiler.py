@@ -1,6 +1,7 @@
 import math
 import re
 from itertools import product
+from typing import cast
 
 from batchcraft.domain.image_slots import validate_image_input_slot_key, validate_stable_key
 from batchcraft.domain.models import (
@@ -10,8 +11,12 @@ from batchcraft.domain.models import (
     CompilationWarningCode,
     CompiledJob,
     CompiledRunPlan,
+    LinkedParameterRow,
+    LinkedParameterSet,
+    ParameterScalar,
     ResolvedImageInput,
     ResolvedParameter,
+    ResolvedParameterSet,
     ResolvedVariable,
     SeedMode,
     VariableBinding,
@@ -205,20 +210,98 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                 f"parameter binding for {parameter_binding.parameter_key!r} is invalid: {error}"
             ) from error
         parameter_values[parameter_binding.parameter_key] = parameter_binding.values
+    linked_sets_by_key: dict[str, LinkedParameterSet] = {}
+    linked_set_by_member: dict[str, LinkedParameterSet] = {}
+    for linked_set in batch.linked_parameter_sets:
+        try:
+            validate_stable_key(linked_set.key)
+        except ValueError as error:
+            raise CompilationError(f"linked parameter set {error}") from error
+        if linked_set.key in linked_sets_by_key:
+            raise CompilationError(f"duplicate linked parameter set key: {linked_set.key!r}")
+        if not linked_set.label.strip():
+            raise CompilationError(
+                f"linked parameter set {linked_set.key!r} label must be nonblank"
+            )
+        if len(linked_set.member_keys) < 2 or len(set(linked_set.member_keys)) != len(
+            linked_set.member_keys
+        ):
+            raise CompilationError(
+                f"linked parameter set {linked_set.key!r} must contain at least two unique members"
+            )
+        unknown_members = set(linked_set.member_keys) - set(parameter_keys)
+        if unknown_members:
+            raise CompilationError(
+                f"linked parameter set {linked_set.key!r} contains unknown parameters: "
+                f"{', '.join(sorted(unknown_members))}"
+            )
+        duplicate_members = set(linked_set.member_keys) & set(linked_set_by_member)
+        if duplicate_members:
+            raise CompilationError(
+                "parameters may belong to at most one linked parameter set: "
+                f"{', '.join(sorted(duplicate_members))}"
+            )
+        if not linked_set.rows:
+            raise CompilationError(
+                f"linked parameter set {linked_set.key!r} must contain at least one row"
+            )
+        seen_rows: list[tuple[object, ...]] = []
+        definitions = {parameter.key: parameter for parameter in batch.parameters}
+        for row_ordinal, row in enumerate(linked_set.rows, 1):
+            if row.label is not None and not row.label.strip():
+                raise CompilationError(
+                    f"linked parameter set {linked_set.key!r} row {row_ordinal} label must be nonblank"
+                )
+            if len(row.values) != len(linked_set.member_keys):
+                raise CompilationError(
+                    f"linked parameter set {linked_set.key!r} row {row_ordinal} must define every member"
+                )
+            for member_key, value in zip(linked_set.member_keys, row.values, strict=True):
+                _validate_parameter_value(
+                    member_key, definitions[member_key].value_type.value, value
+                )
+            if any(_parameter_rows_equal(row.values, prior) for prior in seen_rows):
+                raise CompilationError(
+                    f"linked parameter set {linked_set.key!r} contains duplicate row tuples"
+                )
+            seen_rows.append(row.values)
+        linked_sets_by_key[linked_set.key] = linked_set
+        linked_set_by_member.update({key: linked_set for key in linked_set.member_keys})
+
     unknown_parameters = set(parameter_values) - set(parameter_keys)
-    missing_parameters = set(parameter_keys) - set(parameter_values)
+    overlap = set(parameter_values) & set(linked_set_by_member)
+    missing_parameters = set(parameter_keys) - set(parameter_values) - set(linked_set_by_member)
     if unknown_parameters:
         raise CompilationError(
             f"parameter bindings contain unknown parameters: {', '.join(sorted(unknown_parameters))}"
+        )
+    if overlap:
+        raise CompilationError(
+            f"linked parameters must not have independent bindings: {', '.join(sorted(overlap))}"
         )
     if missing_parameters:
         raise CompilationError(
             f"parameter bindings are missing parameters: {', '.join(sorted(missing_parameters))}"
         )
     for parameter in batch.parameters:
-        for value in parameter_values[parameter.key]:
-            _validate_parameter_value(parameter.key, parameter.value_type.value, value)
-    parameter_axes = tuple(parameter_values[parameter.key] for parameter in batch.parameters)
+        if parameter.key in parameter_values:
+            for value in parameter_values[parameter.key]:
+                _validate_parameter_value(parameter.key, parameter.value_type.value, value)
+    parameter_axes: list[tuple[object, ...]] = []
+    parameter_axis_sets: list[LinkedParameterSet | None] = []
+    parameter_axis_keys: list[str | None] = []
+    emitted_sets: set[str] = set()
+    for parameter in batch.parameters:
+        axis_linked_set = linked_set_by_member.get(parameter.key)
+        if axis_linked_set is None:
+            parameter_axes.append(parameter_values[parameter.key])
+            parameter_axis_sets.append(None)
+            parameter_axis_keys.append(parameter.key)
+        elif axis_linked_set.key not in emitted_sets:
+            parameter_axes.append(axis_linked_set.rows)
+            parameter_axis_sets.append(axis_linked_set)
+            parameter_axis_keys.append(None)
+            emitted_sets.add(axis_linked_set.key)
 
     seeds = _seed_values(batch)
     if max_jobs is not None:
@@ -281,9 +364,36 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                     for key, asset_id in zip(slot_keys, image_values, strict=True)
                 )
                 for parameter_values_for_job in product(*parameter_axes):
+                    selected_values: dict[str, ParameterScalar | None] = {}
+                    resolved_parameter_sets: list[ResolvedParameterSet] = []
+                    for axis_value, axis_linked_set, parameter_key in zip(
+                        parameter_values_for_job,
+                        parameter_axis_sets,
+                        parameter_axis_keys,
+                        strict=True,
+                    ):
+                        if axis_linked_set is None:
+                            assert parameter_key is not None
+                            selected_values[parameter_key] = cast(
+                                ParameterScalar | None, axis_value
+                            )
+                            continue
+                        row = cast(LinkedParameterRow, axis_value)
+                        for member_key, value in zip(
+                            axis_linked_set.member_keys, row.values, strict=True
+                        ):
+                            selected_values[member_key] = value
+                        resolved_parameter_sets.append(
+                            ResolvedParameterSet(
+                                set_key=axis_linked_set.key,
+                                set_label=axis_linked_set.label,
+                                row_ordinal=axis_linked_set.rows.index(row) + 1,
+                                row_label=row.label,
+                            )
+                        )
                     resolved_parameters = tuple(
-                        ResolvedParameter(parameter_key=key, value=value)
-                        for key, value in zip(parameter_keys, parameter_values_for_job, strict=True)
+                        ResolvedParameter(parameter_key=key, value=selected_values[key])
+                        for key in parameter_keys
                     )
                     for seed in seeds:
                         jobs.append(
@@ -294,6 +404,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                                 resolved_variables=resolved_variables,
                                 resolved_image_inputs=resolved_image_inputs,
                                 resolved_parameters=resolved_parameters,
+                                resolved_parameter_sets=tuple(resolved_parameter_sets),
                                 seed=seed,
                             )
                         )
@@ -336,3 +447,20 @@ def _validate_parameter_value(key: str, value_type: str, value: object) -> None:
         valid = isinstance(value, bool)
     if not valid:
         raise CompilationError(f"parameter binding for {key!r} must be {value_type} or null")
+
+
+def _parameter_rows_equal(left: tuple[object, ...], right: tuple[object, ...]) -> bool:
+    return all(
+        _parameter_values_equal(left_value, right_value)
+        for left_value, right_value in zip(left, right, strict=True)
+    )
+
+
+def _parameter_values_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is right
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, str) or isinstance(right, str):
+        return isinstance(left, str) and isinstance(right, str) and left == right
+    return isinstance(left, (int, float)) and isinstance(right, (int, float)) and left == right

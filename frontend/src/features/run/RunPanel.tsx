@@ -370,12 +370,14 @@ function summarizeDimensions(run: RunResponse): string {
       ? `${countLabel(1, "image slot")} · ${countLabel(imageDimensions[0], "alternative")}`
       : `${countLabel(imageDimensions.length, "image slot")} · ${imageDimensions.join(" × ")} alternatives`;
   const seeds = new Set(run.plan.jobs.map((job) => job.seed));
+  const presetSummary = run.batch_snapshot.linked_parameter_sets.map((set) => `${set.set_label}: ${countLabel(set.rows.length, "row")}`);
   return [
     countLabel(run.prompt_versions.length, "prompt"),
     variableCombinations.size
       ? countLabel(variableCombinations.size, "variable combination")
       : "No variables",
     imageSummary,
+    ...presetSummary,
     countLabel(seeds.size, "seed"),
   ].join(" · ");
 }

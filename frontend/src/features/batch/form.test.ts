@@ -9,6 +9,7 @@ import {
   MAX_RANDOM_SEED_COUNT,
   newPrompt,
   reconcileParameterBindings,
+  reconcileParameterState,
   reconcileImageBindings,
   parameterRangeCount,
 } from "./form";
@@ -57,6 +58,7 @@ describe("buildBatchRequest", () => {
       ],
       image_bindings: [{ slot_key: "source", values: [null, "asset-1", "asset-2"] }],
       parameter_bindings: [],
+      linked_parameter_sets: [],
       seeds: { mode: "explicit", values: [9, 3] },
       workflow: { "7": { class_type: "KSampler", inputs: { seed: 0 } } },
       workflow_profile: {
@@ -65,7 +67,7 @@ describe("buildBatchRequest", () => {
         parameters: [],
       },
       batch_snapshot: expect.objectContaining({
-        snapshot_version: 5,
+        snapshot_version: 6,
         source_saved_batch: null,
       }),
     });
@@ -224,6 +226,48 @@ describe("buildBatchRequest", () => {
       parameterBinding("enabled", "integer", [{ kind: "base" }]),
       parameterBinding("steps", "float", [{ kind: "base" }]),
     ]);
+  });
+
+  it("preserves compatible Presets and dissolves an incompatible set to Base independent bindings", () => {
+    const preset = {
+      setKey: "resolution", setLabel: "Resolution",
+      members: [{ parameterKey: "width", valueType: "integer" as const }, { parameterKey: "height", valueType: "integer" as const }],
+      rows: [{ rowLabel: "Landscape", values: { width: { kind: "override" as const, value: "1024" }, height: { kind: "override" as const, value: "768" } } }],
+    };
+    const profile = [
+      { key: "width", label: "Width", node_id: "1", input_name: "width", value_type: "integer" as const },
+      { key: "height", label: "Height", node_id: "1", input_name: "height", value_type: "integer" as const },
+    ];
+    expect(reconcileParameterState([], [preset], profile)).toEqual({ parameterBindings: [], linkedParameterSets: [preset] });
+    expect(reconcileParameterState([], [preset], [{ ...profile[0], value_type: "float" }, profile[1]])).toEqual({
+      linkedParameterSets: [],
+      parameterBindings: [parameterBinding("width", "float", [{ kind: "base" }]), parameterBinding("height", "integer", [{ kind: "base" }])],
+    });
+  });
+
+  it("builds linked rows as typed API values and excludes members from independent bindings", () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "width", label: "Width", node_id: "1", input_name: "width", value_type: "integer" },
+      { key: "height", label: "Height", node_id: "1", input_name: "height", value_type: "integer" },
+      { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
+    ] });
+    form.parameterBindings = [parameterBinding("enabled", "boolean", [{ kind: "override", value: "false" }])];
+    form.linkedParameterSets = [{
+      setKey: "resolution", setLabel: " Resolution ",
+      members: [{ parameterKey: "width", valueType: "integer" }, { parameterKey: "height", valueType: "integer" }],
+      rows: [
+        { rowLabel: " Landscape ", values: { width: { kind: "override", value: "1024" }, height: { kind: "override", value: "768" } } },
+        { rowLabel: "", values: { width: { kind: "base" }, height: { kind: "override", value: "512" } } },
+      ],
+    }];
+    const request = buildBatchRequest(form);
+    expect(request.parameter_bindings).toEqual([{ parameter_key: "enabled", mode: "values", values: [false] }]);
+    expect(request.linked_parameter_sets).toEqual([{ set_key: "resolution", set_label: "Resolution", members: ["width", "height"], rows: [
+      { row_label: "Landscape", values: { width: 1024, height: 768 } },
+      { row_label: null, values: { width: null, height: 512 } },
+    ] }]);
+    expect(request.batch_snapshot.linked_parameter_sets).toEqual(request.linked_parameter_sets);
   });
 
   it.each([

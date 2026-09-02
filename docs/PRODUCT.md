@@ -177,6 +177,11 @@ Base workflow alternatives and forms an independent Cartesian compiler dimension
 contains one concrete resolved value per slot. Zipped, row-linked, and collection-link semantics remain
 deferred.
 
+At the Batch level, users may group two or more scalar Workflow Profile parameters into a named Preset.
+Each ordered row keeps those values together as one compiler choice. For example, Landscape, Portrait,
+and Square Width/Height rows produce three variants, not a Width by Height product. Jobs remain fully
+resolved to ordinary scalar or Base workflow values before execution.
+
 ### Result
 
 A single output artifact associated with a Job. A Job may produce multiple Results.

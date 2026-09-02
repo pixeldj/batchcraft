@@ -12,6 +12,87 @@ const PARAMETERS: WorkflowProfileParameter[] = [
 ];
 
 describe("ParameterBindingsEditor", () => {
+  it("creates and edits a stable keyed Preset, manages typed rows, and confirms unlinking to Base", () => {
+    const onChange = vi.fn();
+    let parameterBindings = PARAMETERS.map((parameter) => binding(parameter.key, parameter.value_type, [{ kind: "base" }]));
+    let linkedParameterSets: Parameters<typeof ParameterBindingsEditor>[0]["linkedParameterSets"] = [];
+    const view = render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={parameterBindings} linkedParameterSets={linkedParameterSets} onChange={onChange} />);
+    const rerenderFromLastChange = () => {
+      ({ parameterBindings, linkedParameterSets } = onChange.mock.calls.at(-1)?.[0] as { parameterBindings: ParameterBindingForm[]; linkedParameterSets: typeof linkedParameterSets });
+      view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={parameterBindings} linkedParameterSets={linkedParameterSets} onChange={onChange} />);
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "Create preset" }));
+    const picker = screen.getByRole("group", { name: "Choose at least two independent parameters" });
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Caption" }));
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Enabled" }));
+    fireEvent.click(within(picker).getByRole("button", { name: "Create preset" }));
+    rerenderFromLastChange();
+
+    expect(linkedParameterSets[0].setKey).toBe("caption_enabled");
+    expect(screen.queryByRole("button", { name: "Add override for Caption" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add override for Steps" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Preset label caption_enabled"), { target: { value: "Display states" } });
+    rerenderFromLastChange();
+    expect(linkedParameterSets[0]).toMatchObject({ setKey: "caption_enabled", setLabel: "Display states" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add row" }));
+    rerenderFromLastChange();
+    fireEvent.change(screen.getByLabelText("Display states row 2 label"), { target: { value: "Enabled caption" } });
+    rerenderFromLastChange();
+    fireEvent.change(screen.getByLabelText("Display states row 2 Caption source"), { target: { value: "override" } });
+    rerenderFromLastChange();
+    fireEvent.change(screen.getByLabelText("Display states row 2 Caption value"), { target: { value: "ready" } });
+    rerenderFromLastChange();
+    fireEvent.change(screen.getByLabelText("Display states row 2 Enabled source"), { target: { value: "override" } });
+    rerenderFromLastChange();
+    fireEvent.change(screen.getByLabelText("Display states row 2 Enabled value"), { target: { value: "false" } });
+    rerenderFromLastChange();
+    expect(linkedParameterSets[0].rows[0].values.caption).toEqual({ kind: "base" });
+    expect(linkedParameterSets[0].rows[1]).toMatchObject({ rowLabel: "Enabled caption", values: { caption: { value: "ready" }, enabled: { value: "false" } } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Move Display states row 2 up" }));
+    rerenderFromLastChange();
+    expect(linkedParameterSets[0].rows[0].rowLabel).toBe("Enabled caption");
+    fireEvent.click(screen.getByRole("button", { name: "Add row" }));
+    rerenderFromLastChange();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Display states row 3" }));
+    rerenderFromLastChange();
+    expect(linkedParameterSets[0].rows).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Remove preset" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Discard every Preset row and label");
+    expect(screen.getByRole("button", { name: "Confirm remove" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Remove preset" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Remove preset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm remove" }));
+    rerenderFromLastChange();
+    expect(linkedParameterSets).toEqual([]);
+    expect(parameterBindings.map((item) => [item.parameterKey, item.alternatives])).toEqual([
+      ["caption", [{ kind: "base" }]], ["enabled", [{ kind: "base" }]], ["steps", [{ kind: "base" }]],
+    ]);
+  });
+
+  it("marks Preset table headings as column headers", () => {
+    render(<ParameterBindingsEditor
+      parameters={PARAMETERS}
+      parameterBindings={[binding("steps", "integer", [{ kind: "base" }])]}
+      linkedParameterSets={[{
+        setKey: "display_states",
+        setLabel: "Display states",
+        members: [
+          { parameterKey: "caption", valueType: "string" },
+          { parameterKey: "enabled", valueType: "boolean" },
+        ],
+        rows: [{ rowLabel: "", values: { caption: { kind: "base" }, enabled: { kind: "base" } } }],
+      }]}
+      onChange={vi.fn()}
+    />);
+
+    expect(screen.getAllByRole("columnheader")).toHaveLength(5);
+    for (const heading of screen.getAllByRole("columnheader")) expect(heading).toHaveAttribute("scope", "col");
+  });
+
   it("adds, removes, and reorders ordered overrides while toggling Base independently", () => {
     const onChange = vi.fn();
     const bindings: ParameterBindingForm[] = [
@@ -19,7 +100,7 @@ describe("ParameterBindingsEditor", () => {
       binding("enabled", "boolean", [{ kind: "base" }]),
       binding("steps", "integer", [{ kind: "base" }]),
     ];
-    const view = render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} onChange={onChange} />);
+    const view = render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} linkedParameterSets={[]} onChange={onChange} />);
 
     expect(screen.getByRole("button", { name: "Add override for Caption" })).toHaveTextContent("Add override");
     expect(screen.getByRole("checkbox", { name: "Include Base workflow for Caption" })).toBeChecked();
@@ -30,43 +111,43 @@ describe("ParameterBindingsEditor", () => {
       bindings[1],
       bindings[2],
     ];
-    expect(onChange).toHaveBeenLastCalledWith(withOne);
+    expect(onChange).toHaveBeenLastCalledWith({ parameterBindings: withOne, linkedParameterSets: [] });
 
-    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={withOne} onChange={onChange} />);
+    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={withOne} linkedParameterSets={[]} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Caption override 2"), { target: { value: "first" } });
     const edited = [
       { ...withOne[0], alternatives: [{ kind: "base" as const }, { kind: "override" as const, value: "first" }] },
       bindings[1],
       bindings[2],
     ];
-    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={edited} onChange={onChange} />);
+    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={edited} linkedParameterSets={[]} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: "Add override for Caption" }));
     const withTwo = [
       { ...edited[0], alternatives: [...edited[0].alternatives, { kind: "override" as const, value: "" }] },
       bindings[1],
       bindings[2],
     ];
-    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={withTwo} onChange={onChange} />);
+    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={withTwo} linkedParameterSets={[]} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: "Move Caption alternative 3 up" }));
-    expect(onChange).toHaveBeenLastCalledWith([
+    expect(onChange).toHaveBeenLastCalledWith({ linkedParameterSets: [], parameterBindings: [
       { ...withTwo[0], alternatives: [withTwo[0].alternatives[0], withTwo[0].alternatives[2], withTwo[0].alternatives[1]] },
       bindings[1],
       bindings[2],
-    ]);
+    ] });
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Caption alternative 3" }));
-    expect(onChange).toHaveBeenLastCalledWith([
+    expect(onChange).toHaveBeenLastCalledWith({ linkedParameterSets: [], parameterBindings: [
       { ...withTwo[0], alternatives: withTwo[0].alternatives.slice(0, 2) },
       bindings[1],
       bindings[2],
-    ]);
+    ] });
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Include Base workflow for Caption" }));
-    expect(onChange).toHaveBeenLastCalledWith([
+    expect(onChange).toHaveBeenLastCalledWith({ linkedParameterSets: [], parameterBindings: [
       { ...withTwo[0], alternatives: withTwo[0].alternatives.slice(1) },
       bindings[1],
       bindings[2],
-    ]);
+    ] });
     expect(screen.queryByText("caption")).not.toBeInTheDocument();
   });
 
@@ -76,7 +157,7 @@ describe("ParameterBindingsEditor", () => {
       binding("caption", "string", [{ kind: "override", value: "" }]),
       binding("enabled", "boolean", [{ kind: "override", value: "false" }]),
     ];
-    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} onChange={onChange} />);
+    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} linkedParameterSets={[]} onChange={onChange} />);
 
     expect(screen.getByLabelText("Caption override 1")).toHaveValue("");
     expect(screen.getByLabelText("Enabled override 1")).toHaveValue("false");
@@ -85,7 +166,7 @@ describe("ParameterBindingsEditor", () => {
 
   it("does not render or emit a synthetic binding when form state is missing", () => {
     const onChange = vi.fn();
-    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={[]} onChange={onChange} />);
+    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={[]} linkedParameterSets={[]} onChange={onChange} />);
 
     expect(screen.queryByRole("group", { name: "Parameters" })).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
@@ -98,23 +179,23 @@ describe("ParameterBindingsEditor", () => {
       binding("enabled", "boolean", [{ kind: "override", value: "false" }]),
       binding("steps", "integer", [{ kind: "override", value: "30" }]),
     ];
-    const view = render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} onChange={onChange} />);
+    const view = render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} linkedParameterSets={[]} onChange={onChange} />);
 
     expect(screen.queryByRole("group", { name: "Caption mode" })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Enabled mode" })).not.toBeInTheDocument();
     fireEvent.click(within(screen.getByRole("group", { name: "Steps mode" })).getByRole("button", { name: "Range" }));
     const rangeMode = bindings.map((item) => item.parameterKey === "steps" ? { ...item, mode: "range" as const } : item);
-    expect(onChange).toHaveBeenLastCalledWith(rangeMode);
+    expect(onChange).toHaveBeenLastCalledWith({ parameterBindings: rangeMode, linkedParameterSets: [] });
 
-    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={rangeMode} onChange={onChange} />);
+    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={rangeMode} linkedParameterSets={[]} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Steps range end"), { target: { value: "20" } });
     const editedRange = rangeMode.map((item) => item.parameterKey === "steps" ? { ...item, range: { ...item.range, end: "20" } } : item);
-    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={editedRange} onChange={onChange} />);
+    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={editedRange} linkedParameterSets={[]} onChange={onChange} />);
     expect(screen.getAllByText("21 alternatives")).toHaveLength(2);
     fireEvent.click(within(screen.getByRole("group", { name: "Steps mode" })).getByRole("button", { name: "Values" }));
 
-    expect(onChange).toHaveBeenLastCalledWith(editedRange.map((item) => item.parameterKey === "steps" ? { ...item, mode: "values" } : item));
-    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={editedRange.map((item) => item.parameterKey === "steps" ? { ...item, mode: "values" as const } : item)} onChange={onChange} />);
+    expect(onChange).toHaveBeenLastCalledWith({ parameterBindings: editedRange.map((item) => item.parameterKey === "steps" ? { ...item, mode: "values" } : item), linkedParameterSets: [] });
+    view.rerender(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={editedRange.map((item) => item.parameterKey === "steps" ? { ...item, mode: "values" as const } : item)} linkedParameterSets={[]} onChange={onChange} />);
     expect(screen.getByLabelText("Steps override 1")).toHaveValue("30");
   });
 
@@ -124,7 +205,7 @@ describe("ParameterBindingsEditor", () => {
     ];
     bindings[0].range.step = "0";
 
-    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} onChange={vi.fn()} />);
+    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} linkedParameterSets={[]} onChange={vi.fn()} />);
 
     const error = screen.getByRole("alert");
     expect(error).toHaveTextContent("step must not be zero");

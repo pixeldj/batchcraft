@@ -38,6 +38,18 @@ export interface ParameterRangeBindingRequest {
 
 export type ParameterBindingRequest = ParameterValuesBindingRequest | ParameterRangeBindingRequest;
 
+export interface LinkedParameterRowRequest {
+  row_label: string | null;
+  values: Record<string, ParameterScalar | null>;
+}
+
+export interface LinkedParameterSetRequest {
+  set_key: string;
+  set_label: string;
+  members: string[];
+  rows: LinkedParameterRowRequest[];
+}
+
 export interface WorkflowProfileParameter {
   key: string;
   label: string;
@@ -64,6 +76,7 @@ export interface BatchRequest {
   variable_bindings: VariableBindingRequest[];
   image_bindings: ImageBindingRequest[];
   parameter_bindings: ParameterBindingRequest[];
+  linked_parameter_sets: LinkedParameterSetRequest[];
   seeds: {
     mode: "fixed" | "explicit";
     values: number[];
@@ -79,7 +92,7 @@ export interface RunCreateRequest extends BatchRequest {
 }
 
 export interface EditableBatchSnapshot {
-  snapshot_version: 5;
+  snapshot_version: 6;
   project: IdentityRequest;
   source_saved_batch: { id: string; revision: number } | null;
   batch: IdentityRequest & { description: string | null };
@@ -93,6 +106,7 @@ export interface EditableBatchSnapshot {
   variable_bindings: VariableBindingRequest[];
   image_bindings: ImageBindingRequest[];
   parameter_bindings: ParameterBindingRequest[];
+  linked_parameter_sets: LinkedParameterSetRequest[];
   seed_intent: SavedBatchSeedIntent;
   workflow_selection: {
     workflow_id: string | null;
@@ -226,6 +240,7 @@ export interface SavedBatchDefinitionRequest {
   variable_bindings: SavedBatchVariableBinding[];
   image_bindings: ImageBindingRequest[];
   parameter_bindings: ParameterBindingRequest[];
+  linked_parameter_sets: LinkedParameterSetRequest[];
   seed_intent: SavedBatchSeedIntent;
   selected_workflow_version: SavedBatchWorkflowVersion | null;
   selected_workflow_profile_id: string | null;
@@ -269,6 +284,7 @@ export interface SavedBatchDetail extends SavedBatchListItem {
   variable_bindings: SavedBatchVariableBinding[];
   image_bindings: ImageBindingRequest[];
   parameter_bindings: ParameterBindingRequest[];
+  linked_parameter_sets: LinkedParameterSetRequest[];
   selected_workflow_version: SavedBatchWorkflowVersion | null;
   selected_workflow_profile_version: SavedBatchWorkflowProfileVersion | null;
 }
@@ -482,6 +498,7 @@ export interface JobPreviewResponse {
   resolved_variables: Array<{ name: string; value: string }>;
   resolved_image_inputs: ResolvedImageInputResponse[];
   resolved_parameters: ResolvedParameterResponse[];
+  resolved_parameter_sets: ResolvedParameterSetResponse[];
   seed: number;
 }
 
@@ -496,6 +513,13 @@ export interface ResolvedParameterResponse {
   parameter_key: string;
   label: string;
   value: ParameterScalar | null;
+}
+
+export interface ResolvedParameterSetResponse {
+  set_key: string;
+  set_label: string;
+  row_ordinal: number;
+  row_label: string | null;
 }
 
 export interface PreviewResponse {

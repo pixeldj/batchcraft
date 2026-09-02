@@ -177,6 +177,9 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
             value={formatParameterValue(parameter.value)}
           />
         ))}
+        {job.resolved_parameter_sets.map((set) => (
+          <Detail key={set.set_key} label={`${set.set_label} preset`} value={set.row_label ?? `Row ${set.row_ordinal}`} />
+        ))}
         <Detail
           label="Workflow"
           value={formatVersioned(

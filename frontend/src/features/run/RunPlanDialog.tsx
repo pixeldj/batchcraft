@@ -92,8 +92,23 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
               );
             })}
           </dl>
-        ) : <p className="empty-note">This Profile has no parameters.</p>}
+        ) : <p className="empty-note">{snapshot.linked_parameter_sets.length ? "Linked parameters are shown as Presets below." : "This Profile has no parameters."}</p>}
       </section>
+
+      {snapshot.linked_parameter_sets.length ? (
+        <section className="run-plan-section" aria-labelledby="run-plan-presets-title">
+          <h3 id="run-plan-presets-title">Presets</h3>
+          <div className="run-plan-presets">
+            {snapshot.linked_parameter_sets.map((set) => (
+              <div className="run-plan-preset" key={set.set_key}>
+                <strong>{set.set_label}</strong>
+                <span>{set.members.map((member) => parameterLabel(run, member)).join(" + ")}</span>
+                <ol>{set.rows.map((row, index) => <li key={index}><strong>{row.row_label ?? `Row ${index + 1}`}</strong><span>{set.members.map((member) => `${parameterLabel(run, member)}: ${formatParameterValue(row.values[member])}`).join(" · ")}</span></li>)}</ol>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="run-plan-section" aria-labelledby="run-plan-prompts-title">
         <h3 id="run-plan-prompts-title">PromptVersions</h3>
@@ -171,6 +186,7 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
   const variables = job.resolved_variables.map((variable) => variable.value).join(" · ");
   const imageInputs = job.resolved_image_inputs.map((input) => `${input.label}: ${input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}`).join(" · ");
   const parameters = job.resolved_parameters.map((parameter) => `${parameter.label}: ${formatParameterValue(parameter.value)}`).join(" · ");
+  const presets = job.resolved_parameter_sets.map((set) => `${set.set_label}: ${set.row_label ?? `Row ${set.row_ordinal}`}`).join(" · ");
   return (
     <details className="run-plan-job">
       <summary>
@@ -179,6 +195,7 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
         {variables ? <span>{variables}</span> : null}
         {imageInputs ? <span>{imageInputs}</span> : null}
         {parameters ? <span>{parameters}</span> : null}
+        {presets ? <span>{presets}</span> : null}
         <code>seed {job.seed}</code>
       </summary>
       <div>
@@ -201,6 +218,9 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
               <dt>{parameter.label}</dt>
               <dd>{formatParameterValue(parameter.value)}</dd>
             </div>
+          ))}
+          {job.resolved_parameter_sets.map((set) => (
+            <div key={set.set_key}><dt>{set.set_label} preset</dt><dd>{set.row_label ?? `Row ${set.row_ordinal}`}</dd></div>
           ))}
           <div><dt>Seed</dt><dd><code>{job.seed}</code></dd></div>
         </dl>
@@ -232,13 +252,19 @@ function parameterSummary(run: RunResponse): string {
   const parameters = run.plan.jobs[0]?.resolved_parameters ?? [];
   if (parameters.length === 0) return "No parameters";
   const bindings = new Map(run.batch_snapshot.parameter_bindings.map((binding) => [binding.parameter_key, binding]));
-  return parameters.map((parameter) => {
+  const independent = parameters.flatMap((parameter) => {
     const binding = bindings.get(parameter.parameter_key);
     const count = binding?.mode === "values"
       ? binding.values.length
       : binding?.mode === "range" ? rangeBindingCount(run.batch_snapshot, binding) : 0;
-    return `${parameter.label}: ${count} ${count === 1 ? "alternative" : "alternatives"}`;
-  }).join(" · ");
+    return binding ? [`${parameter.label}: ${count} ${count === 1 ? "alternative" : "alternatives"}`] : [];
+  });
+  const presets = run.batch_snapshot.linked_parameter_sets.map((set) => `${set.set_label}: ${set.rows.length} ${set.rows.length === 1 ? "row" : "rows"}`);
+  return [...independent, ...presets].join(" · ");
+}
+
+function parameterLabel(run: RunResponse, parameterKey: string): string {
+  return run.plan.jobs[0]?.resolved_parameters.find((parameter) => parameter.parameter_key === parameterKey)?.label ?? parameterKey;
 }
 
 function rangeBindingCount(

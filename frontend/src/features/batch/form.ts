@@ -3,6 +3,7 @@ import type {
   EditableBatchSnapshot,
   ImageBindingRequest,
   JsonObject,
+  LinkedParameterSetRequest,
   ParameterBindingRequest,
   ParameterScalar,
   ParameterValueType,
@@ -42,6 +43,18 @@ export interface ParameterRangeDraft {
   includeBase: boolean;
 }
 
+export interface LinkedParameterSetForm {
+  setKey: string;
+  setLabel: string;
+  members: Array<{ parameterKey: string; valueType: ParameterValueType }>;
+  rows: LinkedParameterRowForm[];
+}
+
+export interface LinkedParameterRowForm {
+  rowLabel: string;
+  values: Record<string, ParameterAlternativeForm>;
+}
+
 export type ParameterAlternativeForm =
   | { kind: "base" }
   | { kind: "override"; value: string };
@@ -58,6 +71,7 @@ export interface BatchFormState {
   variableBindings: VariableBindingForm[];
   imageBindings: ImageBindingRequest[];
   parameterBindings: ParameterBindingForm[];
+  linkedParameterSets: LinkedParameterSetForm[];
   seedMode: "fixed" | "explicit" | "random";
   seedValues: string;
   randomSeedCount: string;
@@ -128,6 +142,7 @@ export function initialBatchForm(): BatchFormState {
     variableBindings: [binding],
     imageBindings: [],
     parameterBindings: [],
+    linkedParameterSets: [],
     seedMode: "fixed",
     seedValues: "1",
     randomSeedCount: "1",
@@ -192,6 +207,7 @@ export function buildBatchRequest(
     variable_bindings: batchSnapshot.variable_bindings,
     image_bindings: batchSnapshot.image_bindings,
     parameter_bindings: batchSnapshot.parameter_bindings,
+    linked_parameter_sets: batchSnapshot.linked_parameter_sets,
     seeds: seedInput,
     workflow: batchSnapshot.workflow_selection.workflow,
     workflow_profile: batchSnapshot.workflow_selection.workflow_profile,
@@ -268,9 +284,13 @@ export function buildEditableBatchSnapshot(
   }
   const imageBindings = reconcileImageBindings(form.imageBindings, profileImageInputs(workflowProfile));
   validateImageBindings(imageBindings);
-  const parameterBindings = buildParameterBindings(
-    reconcileParameterBindings(form.parameterBindings, profileParameters(workflowProfile)),
+  const parameterState = reconcileParameterState(
+    form.parameterBindings,
+    form.linkedParameterSets,
+    profileParameters(workflowProfile),
   );
+  const parameterBindings = buildParameterBindings(parameterState.parameterBindings);
+  const linkedParameterSets = buildLinkedParameterSets(parameterState.linkedParameterSets);
   const seedIntent = form.seedMode === "random"
     ? {
       mode: "random" as const,
@@ -284,7 +304,7 @@ export function buildEditableBatchSnapshot(
     };
 
   return {
-    snapshot_version: 5,
+    snapshot_version: 6,
     project,
     source_saved_batch: context.sourceSavedBatch,
     batch: { ...batch, description: form.batchDescription.trim() || null },
@@ -296,6 +316,7 @@ export function buildEditableBatchSnapshot(
     variable_bindings: variableBindings,
     image_bindings: imageBindings,
     parameter_bindings: parameterBindings,
+    linked_parameter_sets: linkedParameterSets,
     seed_intent: seedIntent,
     workflow_selection: {
       workflow_id: form.workflowId,
@@ -393,10 +414,37 @@ export function reconcileParameterBindings(
 }
 
 export function reconcileFormBindings(form: BatchFormState, profileJson: string): BatchFormState {
+  const parameterState = reconcileParameterState(
+    form.parameterBindings,
+    form.linkedParameterSets,
+    profileParameters(profileJson),
+  );
   return {
     ...form,
     imageBindings: reconcileImageBindings(form.imageBindings, profileImageInputs(profileJson)),
-    parameterBindings: reconcileParameterBindings(form.parameterBindings, profileParameters(profileJson)),
+    ...parameterState,
+  };
+}
+
+export function reconcileParameterState(
+  currentBindings: ParameterBindingForm[],
+  currentSets: LinkedParameterSetForm[],
+  parameters: WorkflowProfileParameter[],
+): Pick<BatchFormState, "parameterBindings" | "linkedParameterSets"> {
+  const profileByKey = new Map(parameters.map((parameter) => [parameter.key, parameter]));
+  const validSets = currentSets.filter((set) => set.members.length >= 2 && set.members.every((member) => (
+    profileByKey.get(member.parameterKey)?.value_type === member.valueType
+  )));
+  const validSetKeys = new Set(validSets.map((set) => set.setKey));
+  const dissolvedMembers = new Set(currentSets
+    .filter((set) => !validSetKeys.has(set.setKey))
+    .flatMap((set) => set.members.map((member) => member.parameterKey)));
+  const linkedMembers = new Set(validSets.flatMap((set) => set.members.map((member) => member.parameterKey)));
+  const preserved = currentBindings.filter((binding) => !dissolvedMembers.has(binding.parameterKey));
+  return {
+    linkedParameterSets: validSets,
+    parameterBindings: reconcileParameterBindings(preserved, parameters)
+      .filter((binding) => !linkedMembers.has(binding.parameterKey)),
   };
 }
 
@@ -438,6 +486,47 @@ export function buildParameterBindings(bindings: ParameterBindingForm[]): Parame
     }
     return { parameter_key: binding.parameterKey, mode: "values", values };
   });
+}
+
+export function buildLinkedParameterSets(sets: LinkedParameterSetForm[]): LinkedParameterSetRequest[] {
+  return sets.map((set) => {
+    const label = set.setLabel.trim();
+    if (!label) throw new FormBuildError("parameters", "Preset label is required.");
+    if (set.members.length < 2) {
+      throw new FormBuildError("parameters", `${label} must contain at least two parameters.`);
+    }
+    if (set.rows.length === 0) {
+      throw new FormBuildError("parameters", `${label} must contain at least one row.`);
+    }
+    const members = set.members.map((member) => member.parameterKey);
+    const rows = set.rows.map((row, rowIndex) => ({
+      row_label: row.rowLabel.trim() || null,
+      values: Object.fromEntries(set.members.map((member) => {
+        const value = row.values[member.parameterKey];
+        if (!value) {
+          throw new FormBuildError("parameters", `${label} row ${rowIndex + 1} is missing ${member.parameterKey}.`);
+        }
+        return [member.parameterKey, value.kind === "base"
+          ? null
+          : parseParameterValue(value.value, member.valueType, member.parameterKey)];
+      })),
+    }));
+    const tuples = rows.map((row) => JSON.stringify(members.map((member) => row.values[member])));
+    if (new Set(tuples).size !== tuples.length) {
+      throw new FormBuildError("parameters", `${label} contains duplicate rows.`);
+    }
+    return { set_key: set.setKey, set_label: label, members, rows };
+  });
+}
+
+export function deriveLinkedParameterSetKey(label: string, existingKeys: string[]): string {
+  const normalized = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const base = /^[a-z]/.test(normalized) ? normalized : normalized ? `preset_${normalized}` : "preset";
+  const existing = new Set(existingKeys);
+  if (!existing.has(base)) return base;
+  let suffix = 2;
+  while (existing.has(`${base}_${suffix}`)) suffix += 1;
+  return `${base}_${suffix}`;
 }
 
 export function defaultParameterRange(valueType: ParameterValueType): ParameterRangeDraft {

@@ -108,6 +108,10 @@ It produces a concrete ComfyUI API workflow and submits it.
 The adapter validates each override against the frozen Profile definition and mutates the mapped literal
 input with a native JSON string, integer, finite number, or boolean on a deep copy.
 
+Linked Parameter Set definitions and rows stop at compilation. The executor receives only each Job's
+complete scalar/Base `resolved_parameters`; it omits Base entries when constructing the override map.
+No linked-set object, row, list, or Range reaches workflow preparation or ComfyUI.
+
 The returned ComfyUI prompt ID must be stored on the Job.
 
 ### Ambiguous submission outcomes

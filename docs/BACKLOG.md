@@ -224,10 +224,10 @@ Expected behavior:
 | --- | --- |
 | ID | BC-001 |
 | Priority | P2 |
-| Status | Planned |
+| Status | In Progress |
 | Area | Compiler / Parameters |
 | Summary | Let related parameter values form one row-based compiler dimension instead of an unwanted Cartesian product with each other. |
-| Dependencies / Notes | Requires an ADR because it changes the independent parameter-dimension semantics accepted in ADR 0008. Builds on current typed parameter alternatives and numeric ranges. Compiled Jobs must still contain only resolved scalar values. |
+| Dependencies / Notes | ADR 0011 defines the Batch-owned row model and supersedes ADR 0008's independent-only rule. Implementation and automated verification are complete; the required live ComfyUI Resolution smoke test remains. Compiled Jobs contain only resolved scalar values. |
 
 Primary acceptance case:
 

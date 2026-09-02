@@ -3,14 +3,14 @@ import {
   newPrompt,
   newVariableBinding,
   profileParameters,
-  reconcileParameterBindings,
+  reconcileParameterState,
   type BatchFormState,
   type PromptForm,
   type VariableBindingForm,
 } from "../batch/form";
 
-export const WORKING_SESSION_RECOVERY_KEY = "batchcraft.working-session-recovery.v1";
-const WORKING_SESSION_RECOVERY_VERSION = 1;
+export const WORKING_SESSION_RECOVERY_KEY = "batchcraft.working-session-recovery.v2";
+const WORKING_SESSION_RECOVERY_VERSION = 2;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
 type StoredPrompt = Omit<PromptForm, "key">;
@@ -25,8 +25,8 @@ interface StoredBatchForm extends Omit<
   workflowProfileJson: string | null;
 }
 
-interface WorkingSessionRecoveryV1 {
-  format_version: 1;
+interface WorkingSessionRecoveryV2 {
+  format_version: 2;
   updated_at: string;
   draft: StoredBatchForm;
   current_run_id: string | null;
@@ -85,7 +85,7 @@ export function saveWorkingSessionRecovery(
   if (currentRunId && !normalizedRunIds.includes(currentRunId)) {
     normalizedRunIds.push(currentRunId);
   }
-  const envelope: WorkingSessionRecoveryV1 = {
+  const envelope: WorkingSessionRecoveryV2 = {
     format_version: WORKING_SESSION_RECOVERY_VERSION,
     updated_at: new Date().toISOString(),
     draft: dehydrateForm(form),
@@ -133,6 +133,13 @@ function dehydrateForm(form: BatchFormState): StoredBatchForm {
 
 function hydrateForm(form: StoredBatchForm): BatchFormState {
   const workflowProfileJson = form.workflowProfileJson ?? "{}";
+  const parameterState = form.workflowProfileJson === null
+    ? { parameterBindings: form.parameterBindings, linkedParameterSets: form.linkedParameterSets }
+    : reconcileParameterState(
+      form.parameterBindings,
+      form.linkedParameterSets,
+      profileParameters(workflowProfileJson),
+    );
   return {
     ...form,
     workflowJson: form.workflowJson ?? "{}",
@@ -145,12 +152,7 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
       ...binding,
       key: newVariableBinding().key,
     })),
-    parameterBindings: form.workflowProfileJson === null
-      ? form.parameterBindings
-      : reconcileParameterBindings(
-        form.parameterBindings,
-        profileParameters(workflowProfileJson),
-      ),
+    ...parameterState,
   };
 }
 
@@ -168,7 +170,7 @@ function defaultSession(): RestoredWorkingSession {
   };
 }
 
-function restoredSession(value: WorkingSessionRecoveryV1): RestoredWorkingSession {
+function restoredSession(value: WorkingSessionRecoveryV2): RestoredWorkingSession {
   return {
     form: hydrateForm(value.draft),
     currentRunId: value.current_run_id,
@@ -190,7 +192,7 @@ function browserLocalStorage(): Storage | null {
   }
 }
 
-function isWorkingSessionRecoveryV1(value: unknown): value is WorkingSessionRecoveryV1 {
+function isWorkingSessionRecoveryV1(value: unknown): value is WorkingSessionRecoveryV2 {
   return (
     isRecord(value) &&
     hasExactKeys(value, [
@@ -249,6 +251,7 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
       "variableBindings",
       "imageBindings",
       "parameterBindings",
+      "linkedParameterSets",
       "seedMode",
       "seedValues",
       "randomSeedCount",
@@ -278,6 +281,8 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
     value.variableBindings.every(isStoredVariableBinding) &&
     isImageBindings(value.imageBindings) &&
     isParameterBindings(value.parameterBindings) &&
+    isLinkedParameterSets(value.linkedParameterSets) &&
+    parameterPartitionIsUnique(value.parameterBindings, value.linkedParameterSets) &&
     (value.seedMode === "fixed" || value.seedMode === "explicit" || value.seedMode === "random") &&
     isNullableString(value.workflowLibraryProjectId) &&
     isNullableString(value.workflowId) &&
@@ -292,11 +297,55 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
   );
 }
 
+function isLinkedParameterSets(value: unknown): boolean {
+  if (!Array.isArray(value) || !value.every((set) => (
+    isRecord(set)
+    && hasExactKeys(set, ["setKey", "setLabel", "members", "rows"])
+    && isStableKey(set.setKey)
+    && typeof set.setLabel === "string"
+    && Array.isArray(set.members)
+    && set.members.length >= 2
+    && set.members.every((member: unknown) => isRecord(member)
+      && hasExactKeys(member, ["parameterKey", "valueType"])
+      && isStableKey(member.parameterKey)
+      && ["string", "integer", "float", "boolean"].includes(String(member.valueType)))
+    && new Set(set.members.map((member: unknown) => (member as { parameterKey: string }).parameterKey)).size === set.members.length
+    && Array.isArray(set.rows)
+    && set.rows.length >= 1
+    && set.rows.every((row) => isRecord(row)
+      && hasExactKeys(row, ["rowLabel", "values"])
+      && typeof row.rowLabel === "string"
+      && isRecord(row.values)
+      && Object.keys(row.values).length === (set.members as unknown[]).length
+      && (set.members as unknown[]).every((member: unknown) => {
+        const parameterKey = (member as { parameterKey: string }).parameterKey;
+        const cell = (row.values as Record<string, unknown>)[parameterKey];
+        return isRecord(cell) && (
+          (hasExactKeys(cell, ["kind"]) && cell.kind === "base")
+          || (hasExactKeys(cell, ["kind", "value"]) && cell.kind === "override" && typeof cell.value === "string")
+        );
+      }))
+  ))) return false;
+  const keys = value.map((set) => (set as { setKey: string }).setKey);
+  const allMembers = value.flatMap((set) => (set as { members: Array<{ parameterKey: string }> }).members.map((member) => member.parameterKey));
+  return new Set(keys).size === keys.length && new Set(allMembers).size === allMembers.length;
+}
+
+function parameterPartitionIsUnique(bindings: unknown, sets: unknown): boolean {
+  const independent = (bindings as Array<{ parameterKey: string }>).map((binding) => binding.parameterKey);
+  const linked = (sets as Array<{ members: Array<{ parameterKey: string }> }>).flatMap((set) => set.members.map((member) => member.parameterKey));
+  return new Set([...independent, ...linked]).size === independent.length + linked.length;
+}
+
+function isStableKey(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(value);
+}
+
 function isParameterBindings(value: unknown): boolean {
   if (!Array.isArray(value) || !value.every((binding) => (
     isRecord(binding)
     && hasExactKeys(binding, ["parameterKey", "valueType", "mode", "alternatives", "range"])
-    && isNonEmptyString(binding.parameterKey)
+    && isStableKey(binding.parameterKey)
     && ["string", "integer", "float", "boolean"].includes(String(binding.valueType))
     && (binding.mode === "values" || binding.mode === "range")
     && (binding.mode !== "range" || binding.valueType === "integer" || binding.valueType === "float")

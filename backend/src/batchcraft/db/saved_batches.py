@@ -14,6 +14,8 @@ from batchcraft.db.models import (
     SavedBatchDefinition,
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
+    SavedBatchLinkedParameterRow,
+    SavedBatchLinkedParameterSet,
     SavedBatchListRecord,
     SavedBatchPromptSelection,
     SavedBatchRecord,
@@ -24,11 +26,17 @@ from batchcraft.db.models import (
     SavedBatchWorkflowVersionSnapshot,
 )
 from batchcraft.domain import (
+    BatchDefinition,
+    LinkedParameterRow,
+    LinkedParameterSet,
     ParameterDecimalRange,
     ParameterRangeIntent,
     ParameterValuesIntent,
     ParameterValueType,
+    PromptVersion,
+    SeedInput,
     WorkflowParameter,
+    compile_batch,
     materialize_parameter_bindings,
     validate_image_input_slot_key,
     validate_parameter_alternatives,
@@ -345,6 +353,39 @@ def _validate_definition(definition: SavedBatchDefinition) -> None:
             )
         ):
             raise SavedBatchValidationError("parameter range intent is malformed")
+    set_keys: set[str] = set()
+    linked_members: set[str] = set()
+    for linked_set in definition.linked_parameter_sets:
+        if not isinstance(linked_set, SavedBatchLinkedParameterSet):
+            raise SavedBatchValidationError("linked parameter sets must be typed records")
+        try:
+            validate_stable_key(linked_set.set_key)
+        except ValueError as error:
+            raise SavedBatchValidationError(f"linked parameter set {error}") from error
+        if linked_set.set_key in set_keys:
+            raise SavedBatchValidationError(
+                f"duplicate linked parameter set: {linked_set.set_key!r}"
+            )
+        set_keys.add(linked_set.set_key)
+        _nonblank(linked_set.set_label, "Linked parameter set label")
+        if len(linked_set.member_keys) < 2 or len(set(linked_set.member_keys)) != len(
+            linked_set.member_keys
+        ):
+            raise SavedBatchValidationError(
+                "linked parameter sets must contain at least two unique members"
+            )
+        if linked_members.intersection(linked_set.member_keys):
+            raise SavedBatchValidationError("a parameter may belong to at most one linked set")
+        linked_members.update(linked_set.member_keys)
+        if not linked_set.rows:
+            raise SavedBatchValidationError("linked parameter sets must contain at least one row")
+        for row in linked_set.rows:
+            if not isinstance(row, SavedBatchLinkedParameterRow):
+                raise SavedBatchValidationError("linked parameter rows must be typed records")
+            if row.label is not None:
+                _nonblank(row.label, "Linked parameter row label")
+            if len(row.values) != len(linked_set.member_keys):
+                raise SavedBatchValidationError("linked parameter rows must define every member")
     if definition.selected_workflow_version is not None:
         _validate_workflow_snapshot(definition.selected_workflow_version)
     if definition.selected_workflow_profile_id is not None:
@@ -560,20 +601,45 @@ def _validate_library_selections(
             _profile_parameter_key(value, index)
             for index, value in enumerate(raw_parameters, start=1)
         )
+        linked_members = {
+            member
+            for linked_set in definition.linked_parameter_sets
+            for member in linked_set.member_keys
+        }
+        expected_independent_keys = tuple(
+            key for key in profile_parameter_keys if key not in linked_members
+        )
         if (
             tuple(binding.parameter_key for binding in definition.parameter_bindings)
-            != profile_parameter_keys
+            != expected_independent_keys
         ):
             raise SavedBatchIntegrityError(
-                "Saved Batch parameter bindings must match the selected ProfileVersion parameter order"
+                "Saved Batch independent parameter bindings must match unlinked Profile parameters in order"
             )
         try:
-            materialize_parameter_bindings(
-                tuple(
-                    _workflow_parameter(value, index)
-                    for index, value in enumerate(raw_parameters, 1)
-                ),
-                definition.parameter_bindings,
+            parameters = tuple(
+                _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
+            )
+            bindings = materialize_parameter_bindings(parameters, definition.parameter_bindings)
+            compile_batch(
+                BatchDefinition(
+                    prompt_versions=(PromptVersion("saved-batch-validation", "Validation", ""),),
+                    variable_bindings=(),
+                    image_input_slots=(),
+                    image_bindings=(),
+                    parameters=parameters,
+                    parameter_bindings=bindings,
+                    linked_parameter_sets=tuple(
+                        LinkedParameterSet(
+                            item.set_key,
+                            item.set_label,
+                            item.member_keys,
+                            tuple(LinkedParameterRow(row.values, row.label) for row in item.rows),
+                        )
+                        for item in definition.linked_parameter_sets
+                    ),
+                    seeds=SeedInput.fixed(0),
+                )
             )
         except ValueError as error:
             raise SavedBatchIntegrityError(str(error)) from error
@@ -585,7 +651,7 @@ def _validate_library_selections(
         raise SavedBatchIntegrityError(
             "Saved Batch image bindings require an exact selected ProfileVersion"
         )
-    elif definition.parameter_bindings:
+    elif definition.parameter_bindings or definition.linked_parameter_sets:
         raise SavedBatchIntegrityError(
             "Saved Batch parameter bindings require an exact selected ProfileVersion"
         )
@@ -633,6 +699,7 @@ def _replace_children(
     connection.execute("DELETE FROM batch_variable_binding WHERE batch_id = ?", (batch_id,))
     connection.execute("DELETE FROM batch_image_binding WHERE batch_id = ?", (batch_id,))
     connection.execute("DELETE FROM batch_parameter_binding WHERE batch_id = ?", (batch_id,))
+    connection.execute("DELETE FROM batch_linked_parameter_set WHERE batch_id = ?", (batch_id,))
     connection.executemany(
         """
         INSERT INTO batch_prompt_selection (batch_id, position, prompt_version_id)
@@ -641,6 +708,53 @@ def _replace_children(
         (
             (batch_id, position, selection.prompt_version_id)
             for position, selection in enumerate(definition.prompt_selections, 1)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO batch_linked_parameter_set (batch_id, position, set_key, set_label)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (batch_id, position, item.set_key, item.set_label)
+            for position, item in enumerate(definition.linked_parameter_sets, 1)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO batch_linked_parameter_set_member
+            (batch_id, set_position, member_position, parameter_key)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (batch_id, set_position, member_position, member_key)
+            for set_position, item in enumerate(definition.linked_parameter_sets, 1)
+            for member_position, member_key in enumerate(item.member_keys, 1)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO batch_linked_parameter_set_row
+            (batch_id, set_position, row_position, row_label)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (batch_id, set_position, row_position, row.label)
+            for set_position, item in enumerate(definition.linked_parameter_sets, 1)
+            for row_position, row in enumerate(item.rows, 1)
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO batch_linked_parameter_set_value
+            (batch_id, set_position, row_position, member_position, value_json)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            (batch_id, set_position, row_position, member_position, _canonical_scalar(value))
+            for set_position, item in enumerate(definition.linked_parameter_sets, 1)
+            for row_position, row in enumerate(item.rows, 1)
+            for member_position, value in enumerate(row.values, 1)
         ),
     )
     connection.executemany(
@@ -766,11 +880,29 @@ def _get_detail(connection: sqlite3.Connection, batch_id: str) -> SavedBatchDeta
         """,
         (batch_id,),
     ).fetchall()
+    linked_set_rows = connection.execute(
+        """
+        SELECT s.position, s.set_key, s.set_label, m.member_position, m.parameter_key,
+                r.row_position, r.row_label, v.value_json
+        FROM batch_linked_parameter_set AS s
+        LEFT JOIN batch_linked_parameter_set_member AS m
+          ON m.batch_id = s.batch_id AND m.set_position = s.position
+        LEFT JOIN batch_linked_parameter_set_row AS r
+          ON r.batch_id = s.batch_id AND r.set_position = s.position
+        LEFT JOIN batch_linked_parameter_set_value AS v
+          ON v.batch_id = s.batch_id AND v.set_position = s.position
+         AND v.row_position = r.row_position AND v.member_position = m.member_position
+        WHERE s.batch_id = ?
+        ORDER BY s.position, r.row_position, m.member_position
+        """,
+        (batch_id,),
+    ).fetchall()
     workflow = _load_workflow_snapshot(connection, root.selected_workflow_version_id)
     profile_metadata = _load_profile_metadata(connection, root.selected_workflow_profile_id)
     profile = _load_profile_snapshot(connection, root.selected_workflow_profile_version_id)
     parameter_bindings = _parameter_bindings_from_rows(parameter_rows)
-    _validate_persisted_parameter_bindings(profile, parameter_bindings)
+    linked_parameter_sets = _linked_parameter_sets_from_rows(linked_set_rows)
+    _validate_persisted_parameter_bindings(profile, parameter_bindings, linked_parameter_sets)
     return SavedBatchDetailRecord(
         id=root.id,
         project_id=root.project_id,
@@ -803,6 +935,7 @@ def _get_detail(connection: sqlite3.Connection, batch_id: str) -> SavedBatchDeta
         variable_bindings=tuple(_binding_from_row(row) for row in bindings),
         image_bindings=_image_bindings_from_rows(image_rows),
         parameter_bindings=parameter_bindings,
+        linked_parameter_sets=linked_parameter_sets,
         selected_workflow_version=workflow,
         selected_workflow_profile_name=(None if profile_metadata is None else profile_metadata[0]),
         selected_workflow_profile_archived_at=(
@@ -1057,12 +1190,77 @@ def _parameter_bindings_from_rows(
     return tuple(bindings)
 
 
+def _linked_parameter_sets_from_rows(
+    rows: list[sqlite3.Row] | list[tuple[object, ...]],
+) -> tuple[SavedBatchLinkedParameterSet, ...]:
+    sets: list[SavedBatchLinkedParameterSet] = []
+    set_positions = sorted({_positive_int(row[0], "linked set position") for row in rows})
+    if set_positions != list(range(1, len(set_positions) + 1)):
+        raise SavedBatchStoreError(
+            "linked parameter set positions must be one-based and contiguous"
+        )
+    for set_position in set_positions:
+        set_rows = [row for row in rows if row[0] == set_position]
+        set_key = _string(set_rows[0][1], "linked set key")
+        set_label = _string(set_rows[0][2], "linked set label")
+        member_positions = sorted(
+            {_positive_int(row[3], "linked set member position") for row in set_rows}
+        )
+        row_positions = sorted(
+            {_positive_int(row[5], "linked set row position") for row in set_rows}
+        )
+        if (
+            member_positions != list(range(1, len(member_positions) + 1))
+            or len(member_positions) < 2
+        ):
+            raise SavedBatchStoreError(
+                "linked parameter set member positions must be contiguous with at least two members"
+            )
+        if row_positions != list(range(1, len(row_positions) + 1)) or not row_positions:
+            raise SavedBatchStoreError(
+                "linked parameter set row positions must be one-based and contiguous"
+            )
+        member_keys = tuple(
+            _string(
+                next(row[4] for row in set_rows if row[3] == member_position),
+                "linked set parameter key",
+            )
+            for member_position in member_positions
+        )
+        linked_rows: list[SavedBatchLinkedParameterRow] = []
+        for row_position in row_positions:
+            value_rows = [row for row in set_rows if row[5] == row_position]
+            if len(value_rows) != len(member_positions):
+                raise SavedBatchStoreError("linked parameter row must define every member")
+            value_rows.sort(key=lambda row: cast(int, row[3]))
+            values: list[str | int | float | bool | None] = []
+            for value_row in value_rows:
+                value = _json(value_row[7], "linked parameter value_json")
+                try:
+                    values.append(None if value is None else validate_parameter_scalar(value))
+                except ValueError as error:
+                    raise SavedBatchStoreError(
+                        f"invalid persisted linked parameter value: {error}"
+                    ) from error
+            linked_rows.append(
+                SavedBatchLinkedParameterRow(
+                    tuple(values),
+                    _optional_string(value_rows[0][6], "linked parameter row label"),
+                )
+            )
+        sets.append(
+            SavedBatchLinkedParameterSet(set_key, set_label, member_keys, tuple(linked_rows))
+        )
+    return tuple(sets)
+
+
 def _validate_persisted_parameter_bindings(
     profile: SavedBatchWorkflowProfileVersionSnapshot | None,
     bindings: tuple[ParameterValuesIntent | ParameterRangeIntent, ...],
+    linked_sets: tuple[SavedBatchLinkedParameterSet, ...],
 ) -> None:
     if profile is None:
-        if bindings:
+        if bindings or linked_sets:
             raise SavedBatchStoreError(
                 "persisted parameter bindings require a selected Workflow Profile version"
             )
@@ -1070,24 +1268,30 @@ def _validate_persisted_parameter_bindings(
     raw_parameters = profile.profile.get("parameters")
     if not isinstance(raw_parameters, list):
         raise SavedBatchStoreError("selected Workflow Profile version has invalid parameters")
-    if len(raw_parameters) != len(bindings):
-        raise SavedBatchStoreError(
-            "persisted parameter bindings do not match the selected Workflow Profile"
-        )
-    for position, (raw_parameter, binding) in enumerate(
-        zip(raw_parameters, bindings, strict=True), start=1
-    ):
-        expected_key = _profile_parameter_key(raw_parameter, position)
-        if binding.parameter_key != expected_key:
-            raise SavedBatchStoreError(
-                "persisted parameter bindings do not match the selected Workflow Profile"
-            )
     try:
-        materialize_parameter_bindings(
-            tuple(
-                _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
-            ),
-            bindings,
+        parameters = tuple(
+            _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
+        )
+        materialized = materialize_parameter_bindings(parameters, bindings)
+        compile_batch(
+            BatchDefinition(
+                prompt_versions=(PromptVersion("saved-batch-load", "Load", ""),),
+                variable_bindings=(),
+                image_input_slots=(),
+                image_bindings=(),
+                parameters=parameters,
+                parameter_bindings=materialized,
+                linked_parameter_sets=tuple(
+                    LinkedParameterSet(
+                        item.set_key,
+                        item.set_label,
+                        item.member_keys,
+                        tuple(LinkedParameterRow(row.values, row.label) for row in item.rows),
+                    )
+                    for item in linked_sets
+                ),
+                seeds=SeedInput.fixed(0),
+            )
         )
     except ValueError as error:
         raise SavedBatchStoreError(f"invalid persisted parameter intent: {error}") from error
@@ -1104,9 +1308,15 @@ def _normalize_parameter_bindings(definition: SavedBatchDefinition) -> SavedBatc
         return definition
     keys = tuple(_profile_parameter_key(value, index) for index, value in enumerate(raw, 1))
     by_key = {binding.parameter_key: binding for binding in definition.parameter_bindings}
-    if len(by_key) != len(definition.parameter_bindings) or set(by_key) != set(keys):
+    linked_keys = {
+        member
+        for linked_set in definition.linked_parameter_sets
+        for member in linked_set.member_keys
+    }
+    independent_keys = tuple(key for key in keys if key not in linked_keys)
+    if len(by_key) != len(definition.parameter_bindings) or set(by_key) != set(independent_keys):
         return definition
-    return replace(definition, parameter_bindings=tuple(by_key[key] for key in keys))
+    return replace(definition, parameter_bindings=tuple(by_key[key] for key in independent_keys))
 
 
 def _persisted_parameter_intent(

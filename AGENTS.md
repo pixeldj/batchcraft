@@ -186,12 +186,13 @@ Generic Workflow Parameters Pass 3B-2 is implemented end to end. ProfileVersions
 slots. Editable Batch/API/Saved Batch bindings use either ordered explicit typed alternatives or a
 numeric Range intent with decimal-text Start, End, Step, and independent Base inclusion. One backend
 scaled-integer materializer resolves Range intent to explicit values before the existing compiler.
-Parameters remain independent Cartesian dimensions in Profile order between Image Input slots and
-seeds; every Job and Result provenance record carries one resolved scalar or Base state per Profile
-parameter. Manifest v7, Batch snapshot v5, browser working-session recovery v1, and the replacement
-consolidated SQLite 0001 baseline are current. Recovery v1 stores editable intent and stable backend
+Unlinked parameters remain independent Cartesian dimensions; Batch-owned Linked Parameter Sets may
+replace two or more parameters with one ordered row dimension at the earliest member's Profile position.
+Every Job and Result provenance record still carries one resolved scalar or Base state per Profile
+parameter. Manifest v9, Batch snapshot v6, browser working-session recovery v2, and the replacement
+consolidated SQLite 0001 baseline are current. Recovery v2 stores editable intent and stable backend
 identity pointers in localStorage, always invalidates Preview on cold load, and reconstructs execution
-and Results from FastAPI. Enums, `/object_info`, LoRA discovery, random values, linked or zipped
-parameters, Project-wide Run history, and backend executor restart recovery remain deferred. Keep
+and Results from FastAPI. Enums, `/object_info`, LoRA discovery, random parameter values, linked Image
+Inputs, Project-wide Run history, and backend executor restart recovery remain deferred. Keep
 frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and
 persistence rules.

@@ -10,7 +10,11 @@ from pydantic import (
     model_validator,
 )
 
-from batchcraft.domain import validate_parameter_alternatives, validate_parameter_scalar
+from batchcraft.domain import (
+    validate_parameter_alternatives,
+    validate_parameter_scalar,
+    validate_stable_key,
+)
 from batchcraft.domain.image_slots import validate_image_input_slot_key
 
 
@@ -110,6 +114,35 @@ SnapshotParameterBinding = Annotated[
 ]
 
 
+class SnapshotLinkedParameterRow(SnapshotModel):
+    row_label: str | None = Field(default=None, min_length=1)
+    values: dict[str, SnapshotParameterScalar | None]
+
+
+class SnapshotLinkedParameterSet(SnapshotModel):
+    set_key: str
+    set_label: str = Field(min_length=1)
+    members: list[str] = Field(min_length=2)
+    rows: list[SnapshotLinkedParameterRow] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_set(self) -> Self:
+        validate_stable_key(self.set_key)
+        if not self.set_label.strip():
+            raise ValueError("linked parameter set label must be nonblank")
+        if len(set(self.members)) != len(self.members):
+            raise ValueError("linked parameter set members must be unique")
+        for member in self.members:
+            validate_stable_key(member)
+        expected = set(self.members)
+        for row in self.rows:
+            if row.row_label is not None and not row.row_label.strip():
+                raise ValueError("linked parameter row label must be nonblank")
+            if set(row.values) != expected:
+                raise ValueError("linked parameter row values must exactly match set members")
+        return self
+
+
 class SnapshotSeedIntent(SnapshotModel):
     mode: Literal["fixed", "explicit", "random"]
     values: list[SnapshotSeed]
@@ -139,8 +172,8 @@ class SnapshotWorkflowSelection(SnapshotModel):
     workflow_profile: dict[str, object]
 
 
-class BatchSnapshotV5(SnapshotModel):
-    snapshot_version: int = Field(strict=True, ge=5, le=5)
+class BatchSnapshotV6(SnapshotModel):
+    snapshot_version: int = Field(strict=True, ge=6, le=6)
     project: SnapshotIdentity
     source_saved_batch: SnapshotSourceSavedBatch | None
     batch: SnapshotBatch
@@ -148,6 +181,7 @@ class BatchSnapshotV5(SnapshotModel):
     variable_bindings: list[SnapshotVariableBinding]
     image_bindings: list[SnapshotImageBinding]
     parameter_bindings: list[SnapshotParameterBinding]
+    linked_parameter_sets: list[SnapshotLinkedParameterSet]
     seed_intent: SnapshotSeedIntent
     workflow_selection: SnapshotWorkflowSelection
 

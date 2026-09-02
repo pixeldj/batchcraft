@@ -170,7 +170,8 @@ This keeps previews, manifests, comparisons, and tests stable.
 Prompt-variable expansion is one part of the complete compiler order. The full dimensional order is
 PromptVersion, prompt variables, Profile Image Input slots, generic parameters, then seeds. The
 rightmost dimension varies fastest, and all dimensions preserve user selection order. Image Input slots
-and generic parameters appear in Profile order and each forms an independent Cartesian dimension.
+and generic parameter axes appear in Profile order. Each unlinked parameter is independent; a Linked
+Parameter Set contributes one ordered row axis at its earliest member's Profile position.
 
 PromptVersion is the first Batch dimension. PromptVersions preserve user selection order. Within each
 PromptVersion, placeholders are resolved independently in that template's first-occurrence order. A

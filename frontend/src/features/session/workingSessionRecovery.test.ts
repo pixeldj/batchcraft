@@ -8,7 +8,7 @@ import {
 } from "./workingSessionRecovery";
 
 describe("durable browser working-session recovery", () => {
-  it("writes recovery v1 metadata and omits reconstructable snapshots and UI keys", () => {
+  it("writes recovery v2 metadata and omits reconstructable snapshots and UI keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
@@ -38,7 +38,7 @@ describe("durable browser working-session recovery", () => {
     >;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.format_version).toBe(1);
+    expect(stored.format_version).toBe(2);
     expect(stored.updated_at).toEqual(expect.any(String));
     expect(stored).toMatchObject({
       current_run_id: "run-42",
@@ -181,6 +181,54 @@ describe("durable browser working-session recovery", () => {
     expect(loadWorkingSession(storage).form.parameterBindings[0]).toEqual(form.parameterBindings[0]);
   });
 
+  it("round-trips exact linked Preset drafts in recovery v2 and ignores the v1 key", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.parameterBindings = [];
+    form.linkedParameterSets = [{
+      setKey: "resolution", setLabel: "Resolution",
+      members: [{ parameterKey: "steps", valueType: "integer" }, { parameterKey: "enabled", valueType: "boolean" }],
+      rows: [{ rowLabel: "Draft", values: { steps: { kind: "override", value: "30" }, enabled: { kind: "base" } } }],
+    }];
+    saveWorkingSession(form, null, [], null, storage);
+    expect(loadWorkingSession(storage).form.linkedParameterSets).toEqual(form.linkedParameterSets);
+
+    const oldStorage = new MemoryStorage();
+    oldStorage.setItem("batchcraft.working-session-recovery.v1", storage.getItem(WORKING_SESSION_KEY) ?? "");
+    expectFreshSession(loadWorkingSession(oldStorage));
+  });
+
+  it.each([
+    ["consecutive underscores", "bad__key"],
+    ["trailing underscore", "bad_key_"],
+  ])("rejects linked Preset keys with %s", (_description, invalidKey) => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.parameterBindings = [];
+    form.linkedParameterSets = [{
+      setKey: "resolution",
+      setLabel: "Resolution",
+      members: [
+        { parameterKey: "steps", valueType: "integer" },
+        { parameterKey: "enabled", valueType: "boolean" },
+      ],
+      rows: [{ rowLabel: "Draft", values: { steps: { kind: "base" }, enabled: { kind: "base" } } }],
+    }];
+    saveWorkingSession(form, null, [], null, storage);
+    const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as {
+      draft: { linkedParameterSets: Array<{ setKey: string; members: Array<{ parameterKey: string }> }> };
+    };
+    envelope.draft.linkedParameterSets[0].setKey = invalidKey;
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
+    expectFreshSession(loadWorkingSession(storage));
+
+    saveWorkingSession(form, null, [], null, storage);
+    const memberEnvelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as typeof envelope;
+    memberEnvelope.draft.linkedParameterSets[0].members[0].parameterKey = invalidKey;
+    storage.setItem(WORKING_SESSION_KEY, JSON.stringify(memberEnvelope));
+    expectFreshSession(loadWorkingSession(storage));
+  });
+
   it("round-trips zero values and one exact empty value distinctly", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
@@ -276,6 +324,14 @@ describe("durable browser working-session recovery", () => {
       const alternatives = form.parameterBindings[0].alternatives as Array<Record<string, unknown>>;
       alternatives[0].value = 30;
     }],
+    ["overlapping independent and linked Parameters", (envelope: Record<string, unknown>) => {
+      const form = envelope.draft as Record<string, unknown>;
+      form.linkedParameterSets = [{
+        setKey: "overlap", setLabel: "Overlap",
+        members: [{ parameterKey: "steps", valueType: "integer" }, { parameterKey: "enabled", valueType: "boolean" }],
+        rows: [{ rowLabel: "", values: { steps: { kind: "base" }, enabled: { kind: "base" } } }],
+      }];
+    }],
   ] as const)("falls back for malformed recovery %s", (_name, mutate) => {
     const storage = new MemoryStorage();
     saveWorkingSession(
@@ -297,7 +353,7 @@ describe("durable browser working-session recovery", () => {
     expectFreshSession(loadWorkingSession(storage));
   });
 
-  it.each([0, 2, 13, 99])("resets an unsupported recovery version %i", (version) => {
+  it.each([0, 1, 13, 99])("resets an unsupported recovery version %i", (version) => {
     const storage = new MemoryStorage();
     saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<

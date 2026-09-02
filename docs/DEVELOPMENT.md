@@ -340,6 +340,19 @@ working-session recovery v1, and SQLite remain current. Existing development `ru
 `run.json` v1, and manifest v7 Runs are unsupported and must be inspected and recreated manually when
 needed. batchcraft does not migrate, rename, rewrite, or delete them automatically.
 
+### Phase 2.12: Linked Parameter Sets / Presets
+
+BC-001 adds Batch-owned named Presets that replace two or more independent parameter bindings with one
+ordered row dimension. The compiler inserts a linked set at its earliest Profile member, skips later
+members as independent axes, and emits complete scalar/Base parameters plus selected-row provenance.
+The executor and ComfyUI adapter remain unchanged and receive scalar overrides only.
+
+This change establishes Batch snapshot v6, manifest v9, CSV resolved-set provenance, browser
+working-session recovery v2, and normalized linked-set tables in the consolidated SQLite baseline.
+`run.json` v2 and execution v3 remain current. Existing databases, snapshot-v5/manifest-v8 development
+Runs, and recovery v1 drafts are unsupported. They require manual inspection and recreation when needed;
+batchcraft never migrates, rewrites, or deletes them automatically.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -382,7 +395,8 @@ one consolidated `0001_initial.sql` baseline. Generic Workflow Parameters Pass 3
 consolidated 0001 bytes and schema with normalized parameter binding storage; Pass 3B-1 replaced those
 bytes again to permit multiple positive parameter value positions; Pass 3B-2 replaced them again with
 Values/Range mode and decimal Range columns; the BC-003A backend pass replaced them again with the
-`run_cancellation_request` table. Any database created from an earlier baseline has
+`run_cancellation_request` table; BC-001 replaced it again with normalized linked-set, member, row, and
+cell tables. Any database created from an earlier baseline has
 unsupported migration history and must be recreated manually. The application fails
 startup and never erases it. The migration runner, ordered discovery,
 checksums, and transactional application remain the forward-change mechanism. Once preserving a
@@ -407,7 +421,7 @@ Keep API access in `src/api/`, feature components in `src/features/`, and small 
 execution transitions, and Result provenance on the backend.
 
 Browser working-session recovery is a pointer/cache, not runtime authority. Store the strict recovery
-v1 record under `batchcraft.working-session-recovery.v1` in localStorage. It may contain semantic form
+v2 record under `batchcraft.working-session-recovery.v2` in localStorage. It may contain semantic form
 values, selected Project and Saved Batch pointers, current Run ID, and ordered unique Run IDs for the
 current Batch working session. It must not contain Preview, execution, Job, Result, frozen Run response,
 or materialized Random seed data. Reconnect a saved Project only by exact Project ID and filesystem-key
@@ -424,11 +438,13 @@ changes reconcile by stable slot key, preserve complete matching value order, ad
 workflow, and remove deleted slots. Missing assets remain visible and block Preview until repaired. Any
 binding change invalidates Preview.
 
-The selected Profile also drives the generic parameter editor. It renders parameters in Profile order
-and lets each hold ordered Values or numeric Range intent. Range input remains decimal text and the
+The selected Profile also drives the generic parameter editor. It renders independent parameters in
+Profile order with ordered Values or numeric Range intent and lets users replace two or more independent
+bindings with one explicit row-based Preset. Range input remains decimal text and the
 frontend uses exact BigInt arithmetic only to validate and display count; it never emits generated Range
-values. Profile changes preserve same-key drafts only when the declared type remains compatible. Any
-semantic Values/Range change invalidates Preview. Collapsing the section is local UI state and does not.
+values. Profile changes preserve a Preset only when every member key and type remains compatible; an
+incompatible set dissolves to independent Base bindings rather than reinterpreting rows. Any semantic
+Values, Range, or Preset change invalidates Preview. Collapsing the section is local UI state and does not.
 Job count, authoritative Range materialization, and concrete expansion remain backend responsibilities.
 
 Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it

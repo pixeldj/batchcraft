@@ -32,6 +32,8 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
+    LinkedParameterRow,
+    LinkedParameterSet,
     ParameterDecimalRange,
     ParameterRangeIntent,
     ParameterValuesIntent,
@@ -39,6 +41,7 @@ from batchcraft.domain import (
     PromptVersion,
     ResolvedImageInput,
     ResolvedParameter,
+    ResolvedParameterSet,
     ResolvedVariable,
     SeedInput,
     VariableBinding,
@@ -70,13 +73,14 @@ from batchcraft.files.models import (
 )
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 from batchcraft.files.snapshots import (
-    BatchSnapshotV5,
+    BatchSnapshotV6,
+    SnapshotLinkedParameterSet,
     SnapshotParameterRangeBinding,
     SnapshotParameterValuesBinding,
 )
 
 RUN_FORMAT_VERSION = 2
-MANIFEST_FORMAT_VERSION = 8
+MANIFEST_FORMAT_VERSION = 9
 OWNER_FORMAT_VERSION = 1
 RUN_NAME_MAX_LENGTH = 200
 RUN_DESCRIPTION_MAX_LENGTH = 4000
@@ -94,6 +98,7 @@ _CSV_COLUMNS = (
     "resolved_variables_json",
     "resolved_image_inputs_json",
     "resolved_parameters_json",
+    "resolved_parameter_sets_json",
     "seed",
     "workflow_sha256",
     "workflow_profile_sha256",
@@ -567,6 +572,11 @@ class RunFilesystemStore:
                 raise RunStoreError(
                     f"compiled Job {job.ordinal} parameters do not match Profile order"
                 )
+            set_keys = tuple(item.set_key for item in job.resolved_parameter_sets)
+            if len(set(set_keys)) != len(set_keys):
+                raise RunStoreError(
+                    f"compiled Job {job.ordinal} contains duplicate resolved parameter sets"
+                )
 
     def _new_id(self, kind: str) -> str:
         value = self._id_factory()
@@ -742,6 +752,15 @@ def _manifest(
                     {"parameter_key": item.parameter_key, "value": item.value}
                     for item in job.compiled_job.resolved_parameters
                 ],
+                "resolved_parameter_sets": [
+                    {
+                        "set_key": item.set_key,
+                        "set_label": item.set_label,
+                        "row_ordinal": item.row_ordinal,
+                        "row_label": item.row_label,
+                    }
+                    for item in job.compiled_job.resolved_parameter_sets
+                ],
                 "seed": job.compiled_job.seed,
                 "workflow_sha256": workflow_sha256,
                 "workflow_profile_sha256": workflow_profile_sha256,
@@ -800,6 +819,19 @@ def _manifest_csv_bytes(
                     [
                         {"parameter_key": item.parameter_key, "value": item.value}
                         for item in job.compiled_job.resolved_parameters
+                    ]
+                )
+                .decode()
+                .rstrip("\n"),
+                "resolved_parameter_sets_json": canonical_json_bytes(
+                    [
+                        {
+                            "set_key": item.set_key,
+                            "set_label": item.set_label,
+                            "row_ordinal": item.row_ordinal,
+                            "row_label": item.row_label,
+                        }
+                        for item in job.compiled_job.resolved_parameter_sets
                     ]
                 )
                 .decode()
@@ -1000,6 +1032,10 @@ def _parse_job(
         _parse_resolved_parameter(_object_item(value, "resolved parameter"))
         for value in _required_array(data, "resolved_parameters")
     )
+    resolved_parameter_sets = tuple(
+        _parse_resolved_parameter_set(_object_item(value, "resolved parameter set"))
+        for value in _required_array(data, "resolved_parameter_sets")
+    )
     resolved_prompt = _required_string(data, "resolved_prompt", allow_empty=True)
     if "{{" in resolved_prompt or "}}" in resolved_prompt:
         raise RunStoreError("Job contains an unresolved prompt placeholder")
@@ -1016,6 +1052,7 @@ def _parse_job(
             for image_input in image_inputs
         ),
         resolved_parameters=resolved_parameters,
+        resolved_parameter_sets=resolved_parameter_sets,
         seed=_integer(data, "seed"),
     )
     return PersistedJob(
@@ -1059,6 +1096,15 @@ def _parse_resolved_parameter(data: dict[str, object]) -> ResolvedParameter:
     return ResolvedParameter(
         parameter_key=_required_string(data, "parameter_key"),
         value=scalar,
+    )
+
+
+def _parse_resolved_parameter_set(data: dict[str, object]) -> ResolvedParameterSet:
+    return ResolvedParameterSet(
+        set_key=_required_string(data, "set_key"),
+        set_label=_required_string(data, "set_label"),
+        row_ordinal=_positive_integer(data, "row_ordinal"),
+        row_label=_optional_string(data, "row_label"),
     )
 
 
@@ -1178,12 +1224,12 @@ def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, 
 
 def _parse_batch_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
     try:
-        parsed = BatchSnapshotV5.model_validate(snapshot)
+        parsed = BatchSnapshotV6.model_validate(snapshot)
     except ValidationError as error:
-        raise RunStoreError(f"invalid Batch snapshot v5: {error}") from error
+        raise RunStoreError(f"invalid Batch snapshot v6: {error}") from error
     canonical = cast(dict[str, object], parsed.model_dump(mode="json"))
     if canonical != snapshot:
-        raise RunStoreError("invalid Batch snapshot v5: snapshot must use its complete shape")
+        raise RunStoreError("invalid Batch snapshot v6: snapshot must use its complete shape")
     return canonical
 
 
@@ -1196,7 +1242,7 @@ def _validate_batch_snapshot_consistency(
     workflow: dict[str, object],
     workflow_profile: dict[str, object],
 ) -> None:
-    parsed = BatchSnapshotV5.model_validate(snapshot)
+    parsed = BatchSnapshotV6.model_validate(snapshot)
     if (
         parsed.project.id,
         parsed.project.filesystem_key,
@@ -1250,6 +1296,9 @@ def _validate_batch_snapshot_consistency(
                     _profile_parameters(workflow_profile),
                     tuple(_snapshot_parameter_intent(item) for item in parsed.parameter_bindings),
                 ),
+                linked_parameter_sets=tuple(
+                    _snapshot_linked_parameter_set(item) for item in parsed.linked_parameter_sets
+                ),
                 seeds=seeds,
             ),
             max_jobs=plan.job_count,
@@ -1272,6 +1321,21 @@ def _compiled_plans_match_exactly(left: CompiledRunPlan, right: CompiledRunPlan)
         for job in right.jobs
     )
     return left_values == right_values
+
+
+def _snapshot_linked_parameter_set(item: SnapshotLinkedParameterSet) -> LinkedParameterSet:
+    return LinkedParameterSet(
+        key=item.set_key,
+        label=item.set_label,
+        member_keys=tuple(item.members),
+        rows=tuple(
+            LinkedParameterRow(
+                values=tuple(row.values[key] for key in item.members),
+                label=row.row_label,
+            )
+            for row in item.rows
+        ),
+    )
 
 
 def _profile_image_inputs(

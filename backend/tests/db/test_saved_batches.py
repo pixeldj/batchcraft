@@ -14,6 +14,8 @@ from batchcraft.db import (
     SavedBatchDefinition,
     SavedBatchImageBinding,
     SavedBatchIntegrityError,
+    SavedBatchLinkedParameterRow,
+    SavedBatchLinkedParameterSet,
     SavedBatchPromptSelection,
     SavedBatchSeedIntent,
     SavedBatchSeedMode,
@@ -281,6 +283,128 @@ def test_complete_roundtrip_preserves_binding_order_and_canonical_rows(
     assert saved_without_profile_version.selected_workflow_profile_id == "profile-project-1"
     assert saved_without_profile_version.selected_workflow_profile_name == "Profile"
     assert saved_without_profile_version.selected_workflow_profile_version is None
+
+
+def test_linked_parameter_sets_roundtrip_normalized_rows_and_survive_update(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    definition = replace(
+        _complete_definition(path),
+        parameter_bindings=(),
+        linked_parameter_sets=(
+            SavedBatchLinkedParameterSet(
+                "render_preset",
+                "Render preset",
+                ("cfg", "steps"),
+                (
+                    SavedBatchLinkedParameterRow((None, 20), "Base CFG"),
+                    SavedBatchLinkedParameterRow((8.5, 30), None),
+                ),
+            ),
+        ),
+    )
+    store = SavedBatchStore(path, clock=lambda: NOW)
+
+    created = store.create("project-1", "linked", definition, batch_id="batch-linked")
+    updated = store.update(
+        created.id,
+        replace(definition, name="Linked updated"),
+        expected_revision=1,
+    )
+
+    assert created.linked_parameter_sets == definition.linked_parameter_sets
+    assert updated.linked_parameter_sets == definition.linked_parameter_sets
+    assert created.parameter_bindings == updated.parameter_bindings == ()
+    with closing(open_connection(path)) as connection:
+        assert connection.execute(
+            "SELECT position, set_key, set_label FROM batch_linked_parameter_set "
+            "WHERE batch_id = ? ORDER BY position",
+            (created.id,),
+        ).fetchall() == [(1, "render_preset", "Render preset")]
+        assert connection.execute(
+            "SELECT member_position, parameter_key FROM batch_linked_parameter_set_member "
+            "WHERE batch_id = ? ORDER BY member_position",
+            (created.id,),
+        ).fetchall() == [(1, "cfg"), (2, "steps")]
+        assert connection.execute(
+            "SELECT row_position, member_position, value_json "
+            "FROM batch_linked_parameter_set_value WHERE batch_id = ? "
+            "ORDER BY row_position, member_position",
+            (created.id,),
+        ).fetchall() == [
+            (1, 1, "null\n"),
+            (1, 2, "20\n"),
+            (2, 1, "8.5\n"),
+            (2, 2, "30\n"),
+        ]
+
+
+def test_saved_batch_update_repartitions_independent_and_linked_parameters(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    independent = _complete_definition(path)
+    linked = replace(
+        independent,
+        parameter_bindings=(),
+        linked_parameter_sets=(
+            SavedBatchLinkedParameterSet(
+                "render_preset",
+                "Render preset",
+                ("steps", "cfg"),
+                (SavedBatchLinkedParameterRow((30, 8.5), "Detailed"),),
+            ),
+        ),
+    )
+    store = SavedBatchStore(path, clock=lambda: NOW)
+    created = store.create("project-1", "repartition", independent, batch_id="batch-repartition")
+
+    linked_record = store.update(created.id, linked, expected_revision=1)
+    independent_record = store.update(created.id, independent, expected_revision=2)
+
+    assert linked_record.parameter_bindings == ()
+    assert linked_record.linked_parameter_sets == linked.linked_parameter_sets
+    assert independent_record.parameter_bindings == (
+        independent.parameter_bindings[1],
+        independent.parameter_bindings[0],
+    )
+    assert independent_record.linked_parameter_sets == ()
+    with closing(open_connection(path)) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM batch_linked_parameter_set WHERE batch_id = ?",
+            (created.id,),
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT parameter_key FROM batch_parameter_binding WHERE batch_id = ? "
+            "ORDER BY position",
+            (created.id,),
+        ).fetchall() == [("steps",), ("cfg",)]
+
+
+def test_saved_batch_read_rejects_incomplete_persisted_linked_set_graph(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    definition = replace(
+        _complete_definition(path),
+        parameter_bindings=(),
+        linked_parameter_sets=(
+            SavedBatchLinkedParameterSet(
+                "render_preset",
+                "Render preset",
+                ("steps", "cfg"),
+                (SavedBatchLinkedParameterRow((20, 7.0)),),
+            ),
+        ),
+    )
+    SavedBatchStore(path, clock=lambda: NOW).create(
+        "project-1", "linked", definition, batch_id="batch-linked"
+    )
+    with closing(open_connection(path)) as connection:
+        connection.execute(
+            "DELETE FROM batch_linked_parameter_set_value "
+            "WHERE batch_id = ? AND member_position = 2",
+            ("batch-linked",),
+        )
+        connection.commit()
+
+    with pytest.raises(SavedBatchStoreError, match="linked parameter value_json"):
+        SavedBatchStore(path).get("batch-linked")
 
 
 def test_saved_batch_range_intent_roundtrips_and_survives_revision_update(tmp_path: Path) -> None:

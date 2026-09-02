@@ -113,7 +113,7 @@ async def verify() -> dict[str, object]:
         project=project,
         batch=batch,
         batch_snapshot={
-            "snapshot_version": 5,
+            "snapshot_version": 6,
             "project": {
                 "id": project.id,
                 "filesystem_key": project.filesystem_key,
@@ -138,6 +138,7 @@ async def verify() -> dict[str, object]:
             "variable_bindings": [],
             "image_bindings": [{"slot_key": "reference", "values": [asset.asset_id]}],
             "parameter_bindings": [],
+            "linked_parameter_sets": [],
             "seed_intent": {
                 "mode": "explicit",
                 "values": [123456789, 123456790],

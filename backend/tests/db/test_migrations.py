@@ -40,6 +40,10 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "batch_image_binding_value",
             "batch_parameter_binding",
             "batch_parameter_binding_value",
+            "batch_linked_parameter_set",
+            "batch_linked_parameter_set_member",
+            "batch_linked_parameter_set_row",
+            "batch_linked_parameter_set_value",
             "run_cancellation_request",
         }
         indexes = {

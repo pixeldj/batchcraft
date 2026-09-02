@@ -76,6 +76,7 @@ export function PreviewPanel({
               <th scope="col">Variables</th>
               <th scope="col">Image Inputs</th>
               <th scope="col">Parameters</th>
+              <th scope="col">Presets</th>
               <th scope="col">Seed</th>
             </tr>
           </thead>
@@ -118,6 +119,9 @@ export function PreviewPanel({
                     </dl>
                   )}
                 </td>
+                <td>{job.resolved_parameter_sets.length ? job.resolved_parameter_sets.map((set) => (
+                  <span className="resolved-preset" key={set.set_key}><strong>{set.set_label}</strong>: {set.row_label ?? `Row ${set.row_ordinal}`}</span>
+                )) : "None"}</td>
                 <td><code>{job.seed}</code></td>
               </tr>
             ))}

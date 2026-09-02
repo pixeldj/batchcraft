@@ -24,7 +24,7 @@ A Batch may provide:
 - an ordered, non-empty collection of PromptVersions;
 - VariableBindings;
 - ordered named Image Input bindings;
-- ordered generic parameter bindings;
+- ordered independent parameter bindings and Linked Parameter Sets;
 - seed policy;
 - output naming configuration.
 
@@ -95,6 +95,10 @@ dimension, while multiple ordered values contribute a Cartesian dimension. The c
 text; it is not a zero-value binding. Exact duplicate values, including duplicate empty strings, fail
 compilation.
 
+An unlinked parameter contributes its normal Values or materialized Range axis. A Linked Parameter Set
+contributes one ordered row axis at its earliest member's Profile position; later members are skipped.
+Request ordering of linked sets does not affect this insertion rule.
+
 Named Image Inputs:
 
 ```text
@@ -144,7 +148,7 @@ For independent dimensions:
 jobs =
 sum(prompt-variable combinations for each PromptVersion)
 × product(Image Input alternatives per Profile slot)
-× product(parameter alternatives per Profile parameter)
+× product(independent parameter alternatives and linked-set row counts)
 × seed values
 ```
 
@@ -212,9 +216,10 @@ ordered `resolved_image_inputs` with one `{slot_key, asset_id}` choice per slot.
 Base workflow and requires no upload or workflow mutation. Zipped, row-linked, and collection-link
 semantics remain unsupported.
 
-## Generic Parameter Alternatives
+## Generic Parameter Dimensions
 
-Every exposed scalar workflow parameter is an independent Batch dimension.
+Every exposed scalar workflow parameter is covered exactly once by either an independent binding or one
+Linked Parameter Set.
 
 Examples:
 
@@ -237,10 +242,12 @@ when reached exactly. Descending ranges require a negative Step. Start equal to 
 for any nonzero Step. Base workflow is prepended after numeric materialization and never participates in
 arithmetic. Explicit values retain Pass 3B-1 ordering, type, duplicate, and Base-first validation.
 
-Parameters expand in Profile order before seeds. A Profile with no parameters contributes the
-multiplicative identity of one. The compiler receives only materialized `ParameterBinding.values`; it
-does not parse or calculate ranges. Enums, random values, and linked or zipped dimensions remain
-deferred.
+Independent parameters expand in Profile order before seeds. Linked sets contain explicit scalar/Base
+rows only. One row assigns every member and counts once, so three Width/Height rows produce three
+variants rather than nine combinations. The compiler emits complete scalar `resolved_parameters` in
+Profile order plus selected-row provenance. A Profile with no parameters contributes the multiplicative
+identity of one. The compiler does not parse or calculate ranges. Enums, random values, Range cells,
+linked Image Inputs, and dependent expressions remain deferred.
 
 ## Run Creation
 
@@ -250,7 +257,7 @@ Creating a Run should conceptually:
 2. snapshot effective source data;
 3. resolve prompt variants;
 4. materialize editable parameter Range intent into explicit values;
-5. expand named Image Input, parameter, and seed dimensions;
+5. expand named Image Input, independent parameter, linked row, and seed dimensions;
 6. assign deterministic Job ordinals;
 7. determine output naming;
 8. publish the initial Run/manifest artifacts;

@@ -104,6 +104,20 @@ class ParameterBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkedParameterRow:
+    values: tuple[ParameterScalar | None, ...]
+    label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedParameterSet:
+    key: str
+    label: str
+    member_keys: tuple[str, ...]
+    rows: tuple[LinkedParameterRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SeedInput:
     mode: SeedMode
     values: tuple[int, ...]
@@ -126,6 +140,7 @@ class BatchDefinition:
     seeds: SeedInput
     parameters: tuple[WorkflowParameter, ...] = ()
     parameter_bindings: tuple[ParameterBinding, ...] = ()
+    linked_parameter_sets: tuple[LinkedParameterSet, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +162,14 @@ class ResolvedParameter:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedParameterSet:
+    set_key: str
+    set_label: str
+    row_ordinal: int
+    row_label: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class CompilationWarning:
     code: CompilationWarningCode
     message: str
@@ -162,6 +185,7 @@ class CompiledJob:
     resolved_image_inputs: tuple[ResolvedImageInput, ...]
     seed: int
     resolved_parameters: tuple[ResolvedParameter, ...] = ()
+    resolved_parameter_sets: tuple[ResolvedParameterSet, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

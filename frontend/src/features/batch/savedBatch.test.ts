@@ -114,6 +114,35 @@ describe("Saved Batch Image Inputs", () => {
 });
 
 describe("Saved Batch Parameters", () => {
+  it("round-trips exact linked Presets and includes them in canonical dirty identity", () => {
+    const detail = savedBatchDetail();
+    detail.selected_workflow_version_id = "workflow-v1";
+    detail.selected_workflow_profile_id = "profile-1";
+    detail.selected_workflow_profile_version_id = "profile-v1";
+    detail.selected_workflow_version = {
+      id: "workflow-v1", content_sha256: "workflow-sha", workflow: { node: {} }, workflow_id: "workflow-1",
+      workflow_name: "Workflow", version_number: 1, name_snapshot: "Workflow", workflow_archived_at: null, version_archived_at: null,
+    };
+    detail.selected_workflow_profile_version = {
+      id: "profile-v1", workflow_profile_id: "profile-1", workflow_version_id: "workflow-v1", content_sha256: "profile-sha",
+      workflow_profile_name: "Profile", version_number: 1, name_snapshot: "Profile", workflow_profile_archived_at: null, version_archived_at: null,
+      profile: { mappings: {}, image_inputs: [], parameters: [
+        { key: "width", label: "Width", node_id: "1", input_name: "width", value_type: "integer" },
+        { key: "height", label: "Height", node_id: "1", input_name: "height", value_type: "integer" },
+      ] },
+    };
+    detail.linked_parameter_sets = [{ set_key: "resolution", set_label: "Resolution", members: ["width", "height"], rows: [
+      { row_label: "Landscape", values: { width: 1024, height: 768 } },
+      { row_label: null, values: { width: null, height: 512 } },
+    ] }];
+
+    const form = savedBatchToForm(detail, project());
+    expect(form.parameterBindings).toEqual([]);
+    expect(buildSavedBatchDefinition(form).linked_parameter_sets).toEqual(detail.linked_parameter_sets);
+    expect(canonicalBatchIntent({ ...form, linkedParameterSets: form.linkedParameterSets.map((set) => ({ ...set, setLabel: "Sizes" })) }))
+      .not.toBe(canonicalBatchIntent(form));
+  });
+
   it("round-trips Profile-ordered typed alternatives and dirty identity", () => {
     const detail = savedBatchDetail();
     detail.selected_workflow_version_id = "workflow-v1";
@@ -241,6 +270,7 @@ function savedBatchDetail(): SavedBatchDetail {
     variable_bindings: [{ placeholder: "subject", values: ["wolf", "fox"] }],
     image_bindings: [],
     parameter_bindings: [],
+    linked_parameter_sets: [],
     selected_workflow_version: null,
     selected_workflow_profile_version: null,
   };

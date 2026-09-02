@@ -10,6 +10,7 @@ import { ParameterBindingsEditor } from "./ParameterBindingsEditor";
 import {
   MAX_RANDOM_SEED_COUNT,
   buildParameterBindings,
+  buildLinkedParameterSets,
   parameterRangeCount,
   newVariableBinding,
   normalizedBindingValues,
@@ -100,7 +101,7 @@ export function BatchEditor({
   const seedsComplete = form.seedMode === "random"
     ? /^\d+$/.test(form.randomSeedCount.trim())
     : form.seedValues.trim().length > 0;
-  const parametersComplete = parameterBindingsComplete(form.parameterBindings, parameters);
+  const parametersComplete = parameterBindingsComplete(form.parameterBindings, form.linkedParameterSets, parameters);
   const previewUnavailable = previewing || !projectVerified || selectedProjectId !== form.projectId || workflowSelectionIncomplete;
   function update<K extends keyof BatchFormState>(key: K, value: BatchFormState[K]) {
     onChange({ ...form, [key]: value });
@@ -260,7 +261,7 @@ export function BatchEditor({
       {parameters.length ? (
         <ConfigurationSection
           title="Parameters"
-          summary={parameterSummary(form.parameterBindings, parameters.length)}
+          summary={parameterSummary(form.parameterBindings, form.linkedParameterSets, parameters.length)}
           expanded={parametersExpanded}
           collapsible={parametersComplete}
           controlsId="parameter-binding-controls"
@@ -269,7 +270,8 @@ export function BatchEditor({
           <ParameterBindingsEditor
             parameters={parameters}
             parameterBindings={form.parameterBindings}
-            onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
+            linkedParameterSets={form.linkedParameterSets}
+            onChange={(state) => onChange({ ...form, ...state })}
           />
         </ConfigurationSection>
       ) : null}
@@ -489,20 +491,24 @@ function seedSummary(form: BatchFormState): string {
 
 function parameterBindingsComplete(
   bindings: BatchFormState["parameterBindings"],
+  linkedSets: BatchFormState["linkedParameterSets"],
   parameters: ReturnType<typeof safeProfileParameters>,
 ): boolean {
-  if (bindings.length !== parameters.length || !parameters.every((parameter) => bindings.some(
-    (binding) => binding.parameterKey === parameter.key && binding.valueType === parameter.value_type,
+  const linkedMembers = linkedSets.flatMap((set) => set.members);
+  if (bindings.length + linkedMembers.length !== parameters.length || !parameters.every((parameter) => (
+    bindings.some((binding) => binding.parameterKey === parameter.key && binding.valueType === parameter.value_type)
+    || linkedMembers.some((member) => member.parameterKey === parameter.key && member.valueType === parameter.value_type)
   ))) return false;
   try {
     buildParameterBindings(bindings);
+    buildLinkedParameterSets(linkedSets);
     return true;
   } catch {
     return false;
   }
 }
 
-function parameterSummary(bindings: BatchFormState["parameterBindings"], parameterCount: number): string {
+function parameterSummary(bindings: BatchFormState["parameterBindings"], linkedSets: BatchFormState["linkedParameterSets"], parameterCount: number): string {
   const sweeping = bindings.filter((binding) => {
     if (binding.mode === "range") {
       try {
@@ -513,5 +519,7 @@ function parameterSummary(bindings: BatchFormState["parameterBindings"], paramet
     }
     return binding.alternatives.length > 1;
   }).length;
-  return `${parameterCount} ${parameterCount === 1 ? "parameter" : "parameters"} · ${sweeping} sweeping`;
+  const presetRows = linkedSets.reduce((count, set) => count + set.rows.length, 0);
+  const presets = linkedSets.length ? ` · ${linkedSets.length} ${linkedSets.length === 1 ? "preset" : "presets"} / ${presetRows} rows` : "";
+  return `${parameterCount} ${parameterCount === 1 ? "parameter" : "parameters"} · ${sweeping} independent sweeping${presets}`;
 }

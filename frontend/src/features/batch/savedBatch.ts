@@ -13,8 +13,9 @@ import {
   newVariableBinding,
   normalizedBindingValues,
   buildParameterBindings,
+  buildLinkedParameterSets,
   reconcileImageBindings,
-  reconcileParameterBindings,
+  reconcileParameterState,
   profileImageInputs,
   profileParameters,
   defaultParameterRange,
@@ -36,7 +37,7 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
       "Complete the Workflow Profile version before saving its Image Input bindings.",
     );
   }
-  if (!form.workflowProfileVersionId && form.parameterBindings.length > 0) {
+  if (!form.workflowProfileVersionId && (form.parameterBindings.length > 0 || form.linkedParameterSets.length > 0)) {
     throw new FormBuildError(
       "workflow_profile",
       "Complete the Workflow Profile version before saving its Parameter bindings.",
@@ -76,9 +77,13 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
 
   const imageBindings = reconcileImageBindings(form.imageBindings, profileImageInputs(profile));
   validateImageBindings(imageBindings);
-  const parameterBindings = buildParameterBindings(
-    reconcileParameterBindings(form.parameterBindings, profileParameters(profile)),
+  const parameterState = reconcileParameterState(
+    form.parameterBindings,
+    form.linkedParameterSets,
+    profileParameters(profile),
   );
+  const parameterBindings = buildParameterBindings(parameterState.parameterBindings);
+  const linkedParameterSets = buildLinkedParameterSets(parameterState.linkedParameterSets);
   return {
     name: required(form.batchName, "Batch name"),
     description: form.batchDescription.trim() || null,
@@ -98,6 +103,7 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
     })),
     image_bindings: imageBindings,
     parameter_bindings: parameterBindings,
+    linked_parameter_sets: linkedParameterSets,
     seed_intent: savedSeedIntent(form),
     selected_workflow_version: emptyWorkflow ? null : {
       id: form.workflowVersionId as string,
@@ -174,8 +180,9 @@ export function savedBatchToForm(
       values: [...binding.values],
     })),
     imageBindings: reconcileImageBindings(detail.image_bindings, profile ? profileImageInputs(profile.profile) : []),
-    parameterBindings: savedParameterBindingsToForm(
+    ...savedParameterStateToForm(
       detail.parameter_bindings,
+      detail.linked_parameter_sets,
       profile ? profileParameters(profile.profile) : [],
     ),
     seedMode: detail.seed_mode,
@@ -228,6 +235,7 @@ export function canonicalBatchIntent(form: BatchFormState): string {
         mode: binding.mode,
         alternatives: binding.alternatives,
       }),
+    linkedParameterSets: form.linkedParameterSets,
     seed: form.seedMode === "random"
       ? { mode: "random", randomSeedCount: form.randomSeedCount.trim() }
       : { mode: form.seedMode, values: splitSeeds(form.seedValues) },
@@ -248,15 +256,17 @@ export function canonicalBatchIntent(form: BatchFormState): string {
   });
 }
 
-function savedParameterBindingsToForm(
+function savedParameterStateToForm(
   bindings: SavedBatchDetail["parameter_bindings"],
+  linkedSets: SavedBatchDetail["linked_parameter_sets"],
   parameters: ReturnType<typeof profileParameters>,
-): BatchFormState["parameterBindings"] {
+): Pick<BatchFormState, "parameterBindings" | "linkedParameterSets"> {
   const byKey = new Map(bindings.map((binding) => [binding.parameter_key, binding]));
-  return parameters.map((parameter) => {
+  const parameterBindings = parameters.flatMap((parameter) => {
     const binding = byKey.get(parameter.key);
+    if (!binding) return [];
     const values = binding?.mode === "values" ? binding.values : undefined;
-    return {
+    return [{
       parameterKey: parameter.key,
       valueType: parameter.value_type,
       mode: binding?.mode ?? "values",
@@ -271,8 +281,31 @@ function savedParameterBindingsToForm(
           includeBase: binding.include_base,
         }
         : defaultParameterRange(parameter.value_type),
-    };
+    }];
   });
+  const parameterByKey = new Map(parameters.map((parameter) => [parameter.key, parameter]));
+  const linkedParameterSets = linkedSets.flatMap((set) => {
+    const members = set.members.flatMap((parameterKey) => {
+      const parameter = parameterByKey.get(parameterKey);
+      return parameter ? [{ parameterKey, valueType: parameter.value_type }] : [];
+    });
+    if (members.length !== set.members.length) return [];
+    return [{
+      setKey: set.set_key,
+      setLabel: set.set_label,
+      members,
+      rows: set.rows.map((row) => ({
+        rowLabel: row.row_label ?? "",
+        values: Object.fromEntries(members.map((member) => {
+          const value = row.values[member.parameterKey];
+          return [member.parameterKey, value === null
+            ? { kind: "base" as const }
+            : { kind: "override" as const, value: String(value) }];
+        })),
+      })),
+    }];
+  });
+  return reconcileParameterState(parameterBindings, linkedParameterSets, parameters);
 }
 
 function savedSeedIntent(form: BatchFormState) {

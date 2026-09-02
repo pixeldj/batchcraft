@@ -30,6 +30,7 @@ from batchcraft.domain import (
     ParameterBinding,
     ParameterValueType,
     PromptVersion,
+    ResolvedParameterSet,
     SeedInput,
     WorkflowParameter,
     compile_batch,
@@ -374,7 +375,7 @@ def _published_run(
         project=PROJECT,
         batch=BATCH,
         batch_snapshot={
-            "snapshot_version": 5,
+            "snapshot_version": 6,
             "project": {
                 "id": PROJECT.id,
                 "filesystem_key": PROJECT.filesystem_key,
@@ -411,6 +412,7 @@ def _published_run(
                     ),
                 }
             ],
+            "linked_parameter_sets": [],
             "seed_intent": {
                 "mode": seed_mode,
                 "values": list(seeds.values),
@@ -664,6 +666,51 @@ def test_null_bindings_skip_upload_and_preserve_base_workflow_values(
     assert client.submitted_workflows[0]["7"]["inputs"]["steps"] == 20  # type: ignore[index]
     assert client.submitted_workflows[0]["25"]["inputs"]["image"] == "original.png"  # type: ignore[index]
     assert client.submitted_workflows[0]["26"]["inputs"]["image"] == "second-original.png"  # type: ignore[index]
+
+
+def test_executor_ignores_linked_set_provenance_and_forwards_only_scalar_parameters(
+    tmp_path: Path,
+) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, with_images=False, parameter_value=-5)
+    provenance = (
+        ResolvedParameterSet(
+            set_key="render_preset",
+            set_label="Render preset",
+            row_ordinal=2,
+            row_label="Fast",
+        ),
+    )
+    jobs = tuple(
+        replace(job, compiled_job=replace(job.compiled_job, resolved_parameter_sets=provenance))
+        for job in run.jobs
+    )
+    run = replace(
+        run,
+        jobs=jobs,
+        compiled_plan=replace(
+            run.compiled_plan,
+            jobs=tuple(job.compiled_job for job in jobs),
+        ),
+    )
+    client = FakeExecutionClient(
+        submissions=[SubmissionSpec(SubmissionDisposition.ACCEPTED, "prompt-1")],
+        histories={"prompt-1": [_outcome("prompt-1", ExecutionStatus.SUCCEEDED)]},
+    )
+    preparation_values: list[WorkflowPreparationValues] = []
+
+    def observing_preparer(
+        workflow: Mapping[str, object],
+        profile: Mapping[str, object],
+        values: WorkflowPreparationValues,
+    ) -> dict[str, object]:
+        preparation_values.append(values)
+        return prepare_workflow(workflow, profile, values)
+
+    state = _run(run, client, preparer=observing_preparer)
+
+    assert state.status is RunExecutionStatus.SUCCEEDED
+    assert [dict(values.parameters) for values in preparation_values] == [{"steps": -5}]
+    assert client.submitted_workflows[0]["7"]["inputs"]["steps"] == -5  # type: ignore[index]
 
 
 def test_cartesian_jobs_reach_executor_with_one_resolved_value_per_slot(

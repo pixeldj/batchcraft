@@ -1,3 +1,4 @@
+import json
 from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Annotated, Literal, Self
@@ -30,6 +31,8 @@ from batchcraft.db import (
     SavedBatchDefinition,
     SavedBatchDetailRecord,
     SavedBatchImageBinding,
+    SavedBatchLinkedParameterRow,
+    SavedBatchLinkedParameterSet,
     SavedBatchListRecord,
     SavedBatchPromptSelection,
     SavedBatchSeedIntent,
@@ -51,6 +54,8 @@ from batchcraft.domain import (
     CompiledRunPlan,
     ImageBinding,
     ImageInputSlot,
+    LinkedParameterRow,
+    LinkedParameterSet,
     ParameterDecimalRange,
     ParameterRangeIntent,
     ParameterValuesIntent,
@@ -62,6 +67,7 @@ from batchcraft.domain import (
     materialize_parameter_bindings,
     validate_parameter_alternatives,
     validate_parameter_scalar,
+    validate_stable_key,
 )
 from batchcraft.execution import ResultRecord, RunExecutionState
 from batchcraft.files import (
@@ -69,7 +75,7 @@ from batchcraft.files import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
-    BatchSnapshotV5,
+    BatchSnapshotV6,
     ProjectIdentity,
     PublishedRun,
 )
@@ -145,6 +151,35 @@ ParameterBindingRequest = Annotated[
 ]
 
 
+class LinkedParameterRowRequest(ApiModel):
+    row_label: str | None = Field(default=None, min_length=1)
+    values: dict[str, ParameterScalarRequest | None]
+
+
+class LinkedParameterSetRequest(ApiModel):
+    set_key: str
+    set_label: str = Field(min_length=1)
+    members: list[str] = Field(min_length=2)
+    rows: list[LinkedParameterRowRequest] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_set(self) -> Self:
+        validate_stable_key(self.set_key)
+        if not self.set_label.strip():
+            raise ValueError("linked parameter set label must be nonblank")
+        if len(set(self.members)) != len(self.members):
+            raise ValueError("linked parameter set members must be unique")
+        for member in self.members:
+            validate_stable_key(member)
+        expected = set(self.members)
+        for row in self.rows:
+            if row.row_label is not None and not row.row_label.strip():
+                raise ValueError("linked parameter row label must be nonblank")
+            if set(row.values) != expected:
+                raise ValueError("linked parameter row values must exactly match set members")
+        return self
+
+
 class SeedRequest(ApiModel):
     mode: SeedMode
     values: list[SafeSeed]
@@ -157,10 +192,11 @@ class BatchRequest(ApiModel):
     variable_bindings: list[VariableBindingRequest] = Field(default_factory=list)
     image_bindings: list[ImageBindingRequest]
     parameter_bindings: list[ParameterBindingRequest]
+    linked_parameter_sets: list[LinkedParameterSetRequest]
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
-    batch_snapshot: BatchSnapshotV5
+    batch_snapshot: BatchSnapshotV6
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
@@ -204,10 +240,14 @@ class BatchRequest(ApiModel):
             (item.slot_key, item.values) for item in self.image_bindings
         ]:
             raise ValueError("Batch snapshot image bindings do not match")
-        if [item.model_dump(mode="json") for item in snapshot.parameter_bindings] != [
-            item.model_dump(mode="json") for item in self.parameter_bindings
+        if [_canonical_model_json(item) for item in snapshot.parameter_bindings] != [
+            _canonical_model_json(item) for item in self.parameter_bindings
         ]:
             raise ValueError("Batch snapshot parameter bindings do not match")
+        if [_canonical_model_json(item) for item in snapshot.linked_parameter_sets] != [
+            _canonical_model_json(item) for item in self.linked_parameter_sets
+        ]:
+            raise ValueError("Batch snapshot linked parameter sets do not match")
         workflow = snapshot.workflow_selection
         if workflow.workflow != self.workflow or workflow.workflow_profile != self.workflow_profile:
             raise ValueError("Batch snapshot Workflow selection does not match")
@@ -266,6 +306,9 @@ class BatchRequest(ApiModel):
                     parameters,
                     tuple(_parameter_intent(binding) for binding in self.parameter_bindings),
                 ),
+                linked_parameter_sets=tuple(
+                    _linked_parameter_set(item) for item in self.linked_parameter_sets
+                ),
                 seeds=SeedInput(mode=self.seeds.mode, values=tuple(self.seeds.values)),
             ),
             workflow=self.workflow,
@@ -296,6 +339,10 @@ class RunCreateRequest(BatchRequest):
 class HealthResponse(ApiModel):
     status: str
     version: str
+
+
+def _canonical_model_json(model: BaseModel) -> str:
+    return json.dumps(model.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
 
 
 class ProjectCreateRequest(ApiModel):
@@ -397,6 +444,7 @@ class SavedBatchImageBindingRequest(ApiModel):
 
 
 SavedBatchParameterBindingRequest = ParameterBindingRequest
+SavedBatchLinkedParameterSetRequest = LinkedParameterSetRequest
 
 
 class SavedBatchSeedIntentRequest(ApiModel):
@@ -453,6 +501,7 @@ class SavedBatchDefinitionRequest(ApiModel):
     variable_bindings: list[SavedBatchVariableBindingRequest] = Field(default_factory=list)
     image_bindings: list[SavedBatchImageBindingRequest] = Field(default_factory=list)
     parameter_bindings: list[SavedBatchParameterBindingRequest] = Field(default_factory=list)
+    linked_parameter_sets: list[SavedBatchLinkedParameterSetRequest] = Field(default_factory=list)
     seed_intent: SavedBatchSeedIntentRequest
     selected_workflow_version: SavedBatchWorkflowVersionRequest | None = None
     selected_workflow_profile_id: str | None = Field(default=None, min_length=1)
@@ -499,6 +548,20 @@ class SavedBatchDefinitionRequest(ApiModel):
                 for item in self.image_bindings
             ),
             parameter_bindings=tuple(_parameter_intent(item) for item in self.parameter_bindings),
+            linked_parameter_sets=tuple(
+                SavedBatchLinkedParameterSet(
+                    item.set_key,
+                    item.set_label,
+                    tuple(item.members),
+                    tuple(
+                        SavedBatchLinkedParameterRow(
+                            tuple(row.values[key] for key in item.members), row.row_label
+                        )
+                        for row in item.rows
+                    ),
+                )
+                for item in self.linked_parameter_sets
+            ),
             selected_workflow_version=(
                 None
                 if workflow is None
@@ -570,6 +633,7 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
     variable_bindings: list[SavedBatchVariableBindingRequest]
     image_bindings: list[SavedBatchImageBindingRequest]
     parameter_bindings: list[SavedBatchParameterBindingRequest]
+    linked_parameter_sets: list[SavedBatchLinkedParameterSetRequest]
     selected_workflow_version: SavedBatchWorkflowVersionRequest | None
     selected_workflow_profile_name: str | None
     selected_workflow_profile_archived_at: datetime | None
@@ -604,6 +668,9 @@ class SavedBatchDetailResponse(SavedBatchListResponse):
                 ],
                 "parameter_bindings": [
                     _parameter_intent_json(item) for item in batch.parameter_bindings
+                ],
+                "linked_parameter_sets": [
+                    _linked_parameter_set_json(item) for item in batch.linked_parameter_sets
                 ],
                 "selected_workflow_version": (
                     None
@@ -1001,6 +1068,13 @@ class ResolvedParameterResponse(ApiModel):
     value: ParameterScalarRequest | None
 
 
+class ResolvedParameterSetResponse(ApiModel):
+    set_key: str
+    set_label: str
+    row_ordinal: int
+    row_label: str | None
+
+
 class JobPreviewResponse(ApiModel):
     ordinal: int
     prompt_version_id: str
@@ -1009,6 +1083,7 @@ class JobPreviewResponse(ApiModel):
     resolved_variables: list[ResolvedVariableResponse]
     resolved_image_inputs: list["ResolvedImageInputResponse"]
     resolved_parameters: list[ResolvedParameterResponse]
+    resolved_parameter_sets: list[ResolvedParameterSetResponse]
     seed: int
 
     @classmethod
@@ -1049,6 +1124,15 @@ class JobPreviewResponse(ApiModel):
                     value=item.value,
                 )
                 for item in job.resolved_parameters
+            ],
+            resolved_parameter_sets=[
+                ResolvedParameterSetResponse(
+                    set_key=item.set_key,
+                    set_label=item.set_label,
+                    row_ordinal=item.row_ordinal,
+                    row_label=item.row_label,
+                )
+                for item in job.resolved_parameter_sets
             ],
             seed=job.seed,
         )
@@ -1270,7 +1354,7 @@ class RunResponse(RunCreatedResponse):
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
     plan: RunPlanResponse
-    batch_snapshot: BatchSnapshotV5
+    batch_snapshot: BatchSnapshotV6
     execution: ExecutionResponse
 
     @classmethod
@@ -1296,7 +1380,7 @@ class RunResponse(RunCreatedResponse):
                 for job in run.compiled_plan.jobs
             ],
             plan=RunPlanResponse.from_run(run),
-            batch_snapshot=BatchSnapshotV5.model_validate(run.batch_snapshot),
+            batch_snapshot=BatchSnapshotV6.model_validate(run.batch_snapshot),
             execution=ExecutionResponse.from_state(state, cancellation),
         )
 
@@ -1382,6 +1466,36 @@ def _parameter_intent_json(
         "mode": "range",
         "include_base": intent.include_base,
         "range": asdict(intent.range),
+    }
+
+
+def _linked_parameter_set(item: LinkedParameterSetRequest) -> LinkedParameterSet:
+    return LinkedParameterSet(
+        key=item.set_key,
+        label=item.set_label,
+        member_keys=tuple(item.members),
+        rows=tuple(
+            LinkedParameterRow(
+                values=tuple(row.values[key] for key in item.members),
+                label=row.row_label,
+            )
+            for row in item.rows
+        ),
+    )
+
+
+def _linked_parameter_set_json(item: SavedBatchLinkedParameterSet) -> dict[str, object]:
+    return {
+        "set_key": item.set_key,
+        "set_label": item.set_label,
+        "members": list(item.member_keys),
+        "rows": [
+            {
+                "row_label": row.label,
+                "values": dict(zip(item.member_keys, row.values, strict=True)),
+            }
+            for row in item.rows
+        ],
     }
 
 

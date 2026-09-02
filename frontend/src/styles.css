@@ -229,6 +229,18 @@ pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; over
 .parameter-value-field input, .parameter-value-field select { min-height: 2.1rem; }
 .parameter-alternative-actions { display: flex; gap: 0.65rem; align-items: center; }
 .parameter-alternative-actions .button-link { font-size: 0.7rem; }
+.parameter-preset-toolbar, .parameter-preset-actions, .parameter-preset-picker-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.7rem; align-items: center; }
+.parameter-preset-picker { display: flex; flex-wrap: wrap; gap: 0.65rem 1rem; margin-bottom: 0.9rem; padding: 0.8rem; border: 1px solid var(--line-strong); }
+.parameter-preset-picker legend { padding: 0 0.4rem; font-size: 0.75rem; font-weight: 700; }
+.parameter-preset-picker-actions { flex-basis: 100%; justify-content: flex-end; }
+.parameter-presets { margin: 0.8rem 0 1rem; }
+.parameter-preset { border-left: 4px solid var(--accent); }
+.parameter-preset-label { flex: 1; }
+.parameter-preset-table input, .parameter-preset-table select { min-width: 8rem; min-height: 2.1rem; }
+.parameter-preset-cell { display: grid; gap: 0.4rem; }
+.parameter-row-actions, .parameter-preset-confirm { display: flex; gap: 0.55rem; align-items: center; }
+.parameter-preset-actions { margin-top: 0.7rem; }
+.resolved-preset { display: block; white-space: nowrap; }
 
 .button-primary, .button-secondary {
   min-height: 2.55rem;
@@ -366,9 +378,14 @@ progress::-webkit-progress-value { background: var(--accent); }
 .run-plan-parameter-alternatives > span { display: flex; min-width: 0; gap: 0.5rem; align-items: baseline; overflow-wrap: anywhere; }
 .run-plan-parameter-alternatives > .run-plan-range-intent { display: grid; gap: 0.25rem; }
 .run-plan-range-intent span { color: var(--muted); font-size: 0.72rem; }
+.run-plan-presets { display: grid; gap: 0.75rem; }
+.run-plan-preset { padding: 0.7rem; background: var(--paper-raised); border-left: 3px solid var(--accent); }
+.run-plan-preset > span { display: block; margin-top: 0.2rem; color: var(--muted); font-size: 0.72rem; }
+.run-plan-preset ol { display: grid; gap: 0.35rem; margin: 0.6rem 0 0; padding-left: 1.5rem; }
+.run-plan-preset li span { display: block; color: var(--muted); font-size: 0.72rem; }
 .run-plan-jobs { display: grid; gap: 0.45rem; }
 .run-plan-job { background: var(--paper-raised); border: 1px solid var(--line); }
-.run-plan-job summary { display: grid; grid-template-columns: 3.2rem minmax(8rem, 1fr) minmax(6rem, 1fr) minmax(7rem, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.7rem; cursor: pointer; font-size: 0.76rem; }
+.run-plan-job summary { display: grid; grid-template-columns: 3.2rem repeat(auto-fit, minmax(7rem, 1fr)); gap: 0.75rem; align-items: center; padding: 0.7rem; cursor: pointer; font-size: 0.76rem; }
 .run-plan-job summary > span:not(.ordinal), .run-plan-job summary code { color: var(--muted); overflow-wrap: anywhere; }
 .run-plan-job > div { padding: 0.8rem; border-top: 1px solid var(--line); }
 .run-plan-job .resolved-prompt { margin-top: 0; white-space: pre-wrap; }
@@ -496,6 +513,8 @@ progress::-webkit-progress-value { background: var(--accent); }
   .field-grid.three-columns { grid-template-columns: 1fr; }
   .parameter-alternative-actions { grid-column: 2; flex-wrap: wrap; }
   .parameter-alternative-actions .button-link { display: inline-flex; min-width: 2.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.5rem; }
+  .parameter-row-actions { flex-wrap: wrap; }
+  .parameter-row-actions .button-link { display: inline-flex; min-width: 2.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.5rem; }
   .variable-binding-fields { grid-template-columns: 1fr; }
   .configuration-section-header { grid-template-columns: 1fr; }
   .configuration-section-header .section-summary-actions { justify-self: end; }

@@ -524,7 +524,7 @@ describe("Batch preview", () => {
       name: "Baseline · Run 12",
     });
     expect(within(galleryRun).getByText("Run 12")).toBeInTheDocument();
-    fireEvent.click(within(galleryRun).getByRole("button", {
+    fireEvent.click(await within(galleryRun).findByRole("button", {
       name: "Details for Job 1, artifact 1",
     }));
     const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
@@ -663,6 +663,7 @@ describe("Batch preview", () => {
         { parameter_key: "caption", label: "Caption", value: "" },
         { parameter_key: "enabled", label: "Enabled", value: false },
       ];
+      job.resolved_parameter_sets = [{ set_key: "display", set_label: "Display", row_ordinal: 1, row_label: "Editorial" }];
     });
     const api = makeApi({ previewBatch: vi.fn(async () => parameterPreview) });
     render(<App api={api} />);
@@ -684,6 +685,7 @@ describe("Batch preview", () => {
     ]);
     expect(screen.getAllByText('"" (empty string)').length).toBeGreaterThan(0);
     expect(screen.getAllByText("false").length).toBeGreaterThan(0);
+    expect([...document.querySelectorAll(".resolved-preset")].some((node) => node.textContent === "Display: Editorial")).toBe(true);
     fireEvent.change(screen.getByLabelText("Caption override 2"), { target: { value: "changed" } });
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
   });
@@ -715,6 +717,36 @@ describe("Batch preview", () => {
     expect(vi.mocked(api.previewBatch).mock.calls[0][0].parameter_bindings).toEqual([
       { parameter_key: "steps", mode: "values", values: [null, 30] },
     ]);
+  });
+
+  it("invalidates Preview when a Preset is created and sends linked members only in the set", async () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({ mappings: {}, image_inputs: [], parameters: [
+      { key: "width", label: "Width", node_id: "1", input_name: "width", value_type: "integer" },
+      { key: "height", label: "Height", node_id: "1", input_name: "height", value_type: "integer" },
+      { key: "steps", label: "Steps", node_id: "1", input_name: "steps", value_type: "integer" },
+    ] });
+    form.imageBindings = [];
+    saveWorkingSession(form, null, [], "project-1");
+    const api = makeApi();
+    render(<App api={api} />);
+    await screen.findByText(/Draft restored/);
+    await expandConfiguration("Parameters");
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create preset" }));
+    const picker = screen.getByRole("group", { name: "Choose at least two independent parameters" });
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Width" }));
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Height" }));
+    fireEvent.click(within(picker).getByRole("button", { name: "Create preset" }));
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add override for Width" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledTimes(2));
+    const request = vi.mocked(api.previewBatch).mock.calls[1][0];
+    expect(request.parameter_bindings.map((binding) => binding.parameter_key)).toEqual(["steps"]);
+    expect(request.linked_parameter_sets[0]).toMatchObject({ set_key: "width_height", members: ["width", "height"] });
   });
 });
 
@@ -870,7 +902,7 @@ describe("Browser working-session restoration", () => {
       range: { start: "30.00", end: "0.00", step: "-2.50", includeBase: true },
     }];
     saveWorkingSession(form, null, [], "project-1");
-    const stored = JSON.parse(localStorage.getItem("batchcraft.working-session-recovery.v1") ?? "{}") as {
+    const stored = JSON.parse(localStorage.getItem("batchcraft.working-session-recovery.v2") ?? "{}") as {
       draft: { workflowJson: unknown; workflowProfileJson: unknown };
     };
     expect(stored.draft.workflowJson).toBeNull();
@@ -1211,7 +1243,8 @@ describe("Run creation", () => {
           { name: "style", value: "editorial" },
         ],
         resolved_image_inputs: [{ slot_key: "source", label: "Source image", asset_id: null, filename: null }],
-        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: null }],
+        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: null }, { parameter_key: "width", label: "Width", value: 1024 }, { parameter_key: "height", label: "Height", value: 768 }],
+        resolved_parameter_sets: [{ set_key: "resolution", set_label: "Resolution", row_ordinal: 1, row_label: "Landscape" }],
         seed: 123,
       },
       {
@@ -1224,7 +1257,8 @@ describe("Run creation", () => {
           { name: "style", value: "editorial" },
         ],
         resolved_image_inputs: [{ slot_key: "source", label: "Source image", asset_id: "asset-1", filename: "portrait.png" }],
-        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: 30 }],
+        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: 30 }, { parameter_key: "width", label: "Width", value: 768 }, { parameter_key: "height", label: "Height", value: 1024 }],
+        resolved_parameter_sets: [{ set_key: "resolution", set_label: "Resolution", row_ordinal: 2, row_label: null }],
         seed: 456,
       },
     ];
@@ -1237,9 +1271,13 @@ describe("Run creation", () => {
       parameter_key: "steps", mode: "range", include_base: true,
       range: { start: "30", end: "0", step: "-15" },
     }];
+    frozen.batch_snapshot.linked_parameter_sets = [{ set_key: "resolution", set_label: "Resolution", members: ["width", "height"], rows: [
+      { row_label: "Landscape", values: { width: 1024, height: 768 } },
+      { row_label: null, values: { width: 768, height: 1024 } },
+    ] }];
     frozen.batch_snapshot.workflow_selection.workflow_profile = {
       mappings: {}, image_inputs: [{ key: "source", label: "Source image", node_id: "1", input_name: "image" }],
-      parameters: [{ key: "steps", label: "Steps", node_id: "2", input_name: "steps", value_type: "integer" }],
+      parameters: [{ key: "steps", label: "Steps", node_id: "2", input_name: "steps", value_type: "integer" }, { key: "width", label: "Width", node_id: "2", input_name: "width", value_type: "integer" }, { key: "height", label: "Height", node_id: "2", input_name: "height", value_type: "integer" }],
     };
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
     frozen.batch_snapshot.variable_bindings.push({ placeholder: "style", values: ["editorial"] });
@@ -1252,7 +1290,7 @@ describe("Run creation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await screen.findByRole("button", { name: "View Run Plan" });
-    expect(screen.getByText(/2 prompts · 2 variable combinations · 1 image slot · 2 alternatives · 2 seeds/))
+    expect(screen.getByText(/2 prompts · 2 variable combinations · 1 image slot · 2 alternatives · Resolution: 2 rows · 2 seeds/))
       .toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Edited afterward" } });
     const runPlanTrigger = screen.getByRole("button", { name: "View Run Plan" });
@@ -1276,6 +1314,9 @@ describe("Run creation", () => {
     expect(within(dialog).getAllByText("Steps").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("30").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("30 → 0 by -15")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Resolution").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Landscape").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Row 2").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("4 alternatives")).toBeInTheDocument();
     expect(within(dialog).getByText("Includes Base workflow")).toBeInTheDocument();
     expect(within(dialog).queryByText("steps")).not.toBeInTheDocument();
@@ -2540,6 +2581,21 @@ describe("Result Details", () => {
     expect(dialog).not.toHaveTextContent("caption_internal");
   });
 
+  it("renders the selected Preset row label in Result Details", async () => {
+    const frozen = frozenProvenanceRun();
+    frozen.plan.jobs[0].resolved_parameter_sets = [{ set_key: "resolution", set_label: "Resolution", row_ordinal: 1, row_label: "Landscape" }];
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: [result(1, 1, "image/png", "preset.png", 100)] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    fireEvent.click(await within(currentResultsSection()).findByRole("button", { name: "Details for Job 1, artifact 1" }));
+    const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(dialog).getByText("Resolution preset").nextElementSibling).toHaveTextContent("Landscape");
+  });
+
   it("uses the Job ordinal and preserves artifact-specific technical metadata", async () => {
     const frozen = frozenProvenanceRun();
     const api = makeApi({
@@ -2805,6 +2861,7 @@ describe("Batch working-session Results gallery", () => {
         variable_bindings: [],
         image_bindings: [],
         parameter_bindings: [],
+        linked_parameter_sets: [],
         selected_workflow_version: null,
         selected_workflow_profile_name: null,
         selected_workflow_profile_archived_at: null,
@@ -3000,6 +3057,7 @@ function previewResponse(jobCount = 2, imageAssetId: string | null = "asset-1"):
           filename: imageAssetId ? "portrait.png" : null,
         }],
         resolved_parameters: [],
+        resolved_parameter_sets: [],
         seed: 1,
       };
     }),
@@ -3051,7 +3109,7 @@ function runLookupResponse(
       jobs: previewResponse().jobs,
     },
     batch_snapshot: {
-      snapshot_version: 5,
+      snapshot_version: 6,
       project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
       source_saved_batch: { id: "batch-1", revision: 3 },
       batch: {
@@ -3077,6 +3135,7 @@ function runLookupResponse(
       ],
       image_bindings: [{ slot_key: "source", values: ["asset-1"] }],
       parameter_bindings: [],
+      linked_parameter_sets: [],
       seed_intent: { mode: "fixed", values: [1], random_seed_count: null },
       workflow_selection: {
         workflow_id: "workflow-1",
@@ -3316,6 +3375,7 @@ function savedBatchDetail(overrides: Partial<SavedBatchDetail> = {}): SavedBatch
     variable_bindings: [{ placeholder: "subject", values: ["wolf"] }],
     image_bindings: [],
     parameter_bindings: [],
+    linked_parameter_sets: [],
     selected_workflow_version: null,
     selected_workflow_profile_version: null,
     ...overrides,

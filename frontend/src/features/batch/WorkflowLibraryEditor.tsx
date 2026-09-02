@@ -549,7 +549,7 @@ function clearProfileLink(form: BatchFormState): BatchFormState {
 }
 
 function clearProfileSelectionAndSnapshot(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowProfileJson: "{}", imageBindings: [], parameterBindings: [] };
+  return { ...clearProfileLink(form), workflowProfileJson: "{}", imageBindings: [], parameterBindings: [], linkedParameterSets: [] };
 }
 
 function detach(form: BatchFormState): BatchFormState {

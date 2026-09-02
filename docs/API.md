@@ -112,10 +112,10 @@ The API applies the current baseline SQL migration and any future contiguous mig
 accepting requests. Startup fails on migration errors, unsupported migration history, gaps, or changed
 checksums. It never deletes or rewrites an unsupported database automatically. Request handlers run
 each synchronous SQLite store operation through a worker thread rather than blocking the event loop.
-The current consolidated `0001_initial.sql` baseline includes `run_cancellation_request`. A database
-created from the preceding Pass 3B-2 baseline has a different applied checksum and fails startup. After
-inspection, recreate that development database manually; batchcraft does not delete, rewrite, or
-automatically migrate it.
+The current consolidated `0001_initial.sql` baseline includes `run_cancellation_request` plus normalized
+Linked Parameter Set, member, row, and value tables. A database created from any preceding development
+baseline has a different applied checksum and fails startup. After inspection, recreate that database
+manually; batchcraft does not delete, rewrite, or automatically migrate it.
 
 ## Projects And Prompts
 
@@ -187,7 +187,8 @@ required `batch_snapshot` object containing the full editable Saved Batch state.
 Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
 template text, canonical variable bindings shaped as `{ "placeholder": string, "values": string[] }`,
 ordered image bindings shaped as `{ "slot_key": string, "values": [asset_id | null] }`, seed input,
-ordered parameter bindings using the discriminated `values` or `range` shapes documented below, the
+ordered independent parameter bindings using the discriminated `values` or `range` shapes documented
+below, ordered `linked_parameter_sets`, the
 API-format workflow, and its Workflow Profile snapshot. The singular `prompt_version` field is not
 accepted.
 The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
@@ -205,11 +206,11 @@ The Run creation and lookup responses include immutable `run_name`, `run_descrip
 ordered frozen PromptVersion snapshots, each Job ordinal's PromptVersion ID association, and a
 `plan` projection loaded from the published Run manifest. The plan contains compiler warnings and
 every concrete Job's resolved prompt, resolved variables, ordered `resolved_image_inputs`, ordered
-`resolved_parameters`, and
+scalar `resolved_parameters`, selected `resolved_parameter_sets` row provenance, and
 materialized seed. Each resolved image entry has `slot_key`, frozen `label`, nullable `asset_id`, and a
 nullable frozen filename. The required `batch_snapshot` exposes canonical
 editable intent, including optional frozen Workflow/Profile display labels and version numbers. The
-Run loader supports manifest v8 with `snapshot_version: 5`; unsupported manifest or snapshot versions
+Run loader supports manifest v9 with `snapshot_version: 6`; unsupported manifest or snapshot versions
 make the Run invalid rather than producing a partial response.
 
 ## Project Assets
@@ -261,13 +262,20 @@ Each value is either a nonblank Reference Asset ID or `null`; `null` means Base 
 when included, and does not upload or mutate that slot for its concrete Job. Every slot is an independent
 Cartesian dimension. Zipped, row-linked, and collection-link semantics are not supported.
 
-Saved Batch request and detail schemas also expose ordered `parameter_bindings`. When a Profile is
-selected, writes require the exact Profile parameter set in Profile order. Explicit bindings use
+Saved Batch request and detail schemas expose ordered independent `parameter_bindings` and
+`linked_parameter_sets`. When a Profile is selected, independent bindings plus linked membership must
+cover every Profile parameter exactly once. Explicit independent bindings use
 `{ "parameter_key": ..., "mode": "values", "values": [...] }` and retain Pass 3B-1 validation.
 Numeric Range bindings use `{ "parameter_key": ..., "mode": "range", "include_base": boolean,
 "range": { "start": decimal-string, "end": decimal-string, "step": decimal-string } }`. String and
 boolean parameters cannot use Range mode. Saved Batch responses preserve Range mode and exact decimal
 text. Optimistic revision behavior is unchanged.
+
+A linked set stores `set_key`, `set_label`, ordered `members`, and ordered `rows`. Each row stores an
+optional `row_label` and a `values` object with exactly one typed scalar or `null` for every member.
+Sets require at least two members and one row. Unknown, duplicate, overlapping, independently bound, or
+missing members are invalid, as are missing/extra cells and duplicate complete value tuples. A set row
+is one compiler alternative at the earliest member's Profile position.
 
 The backend is authoritative for Range materialization. It uses exact scaled-integer progression,
 supports ascending and descending ranges, includes End only when exactly reached, rejects zero or

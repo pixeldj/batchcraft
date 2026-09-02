@@ -8,6 +8,8 @@ from batchcraft.domain import (
     CompilationWarningCode,
     ImageBinding,
     ImageInputSlot,
+    LinkedParameterRow,
+    LinkedParameterSet,
     ParameterBinding,
     ParameterValueType,
     PromptVersion,
@@ -35,6 +37,7 @@ def batch_definition(
     seeds: SeedInput | None = None,
     parameters: tuple[WorkflowParameter, ...] = (),
     parameter_bindings: tuple[ParameterBinding, ...] = (),
+    linked_parameter_sets: tuple[LinkedParameterSet, ...] = (),
 ) -> BatchDefinition:
     return BatchDefinition(
         prompt_versions=prompt_versions
@@ -45,6 +48,7 @@ def batch_definition(
         seeds=seeds or SeedInput.fixed(123),
         parameters=parameters,
         parameter_bindings=parameter_bindings,
+        linked_parameter_sets=linked_parameter_sets,
     )
 
 
@@ -90,6 +94,234 @@ def test_parameters_expand_in_profile_order_before_seeds() -> None:
         for steps in (20, 30)
         for seed in (9, 3)
     ]
+
+
+def test_linked_parameter_sets_form_profile_ordered_axes_with_complete_scalar_jobs() -> None:
+    parameters = (
+        WorkflowParameter("width", "Width", "7", "width", ParameterValueType.INTEGER),
+        WorkflowParameter("cfg", "CFG", "7", "cfg", ParameterValueType.FLOAT),
+        WorkflowParameter("height", "Height", "7", "height", ParameterValueType.INTEGER),
+        WorkflowParameter("steps", "Steps", "7", "steps", ParameterValueType.INTEGER),
+        WorkflowParameter("quality", "Quality", "7", "quality", ParameterValueType.STRING),
+    )
+    resolution = LinkedParameterSet(
+        "resolution",
+        "Resolution",
+        ("height", "width"),
+        (
+            LinkedParameterRow((768, 1024), "Landscape"),
+            LinkedParameterRow((1024, 768), "Portrait"),
+        ),
+    )
+    quality = LinkedParameterSet(
+        "quality_preset",
+        "Quality preset",
+        ("quality", "steps"),
+        (
+            LinkedParameterRow(("draft", 10), None),
+            LinkedParameterRow(("final", 30), "Final"),
+        ),
+    )
+    batch = batch_definition(
+        "prompt",
+        seeds=SeedInput.explicit((5, 6)),
+        parameters=parameters,
+        parameter_bindings=(ParameterBinding("cfg", (7.0, 8.0)),),
+        # Request ordering does not control compiler axis ordering.
+        linked_parameter_sets=(quality, resolution),
+    )
+
+    plan = compile_batch(batch)
+
+    assert plan.job_count == 16
+    assert [
+        (
+            tuple(item.value for item in job.resolved_parameters),
+            tuple(
+                (item.set_key, item.set_label, item.row_ordinal, item.row_label)
+                for item in job.resolved_parameter_sets
+            ),
+            job.seed,
+        )
+        for job in plan.jobs
+    ] == [
+        (
+            (width, cfg, height, steps, quality_value),
+            (
+                ("resolution", "Resolution", resolution_ordinal, resolution_label),
+                ("quality_preset", "Quality preset", quality_ordinal, quality_label),
+            ),
+            seed,
+        )
+        for resolution_ordinal, (height, width, resolution_label) in enumerate(
+            ((768, 1024, "Landscape"), (1024, 768, "Portrait")), 1
+        )
+        for cfg in (7.0, 8.0)
+        for quality_ordinal, (quality_value, steps, quality_label) in enumerate(
+            (("draft", 10, None), ("final", 30, "Final")), 1
+        )
+        for seed in (5, 6)
+    ]
+
+
+def test_linked_parameter_rows_count_once_toward_job_limit() -> None:
+    parameters = (
+        WorkflowParameter("width", "Width", "7", "width", ParameterValueType.INTEGER),
+        WorkflowParameter("height", "Height", "7", "height", ParameterValueType.INTEGER),
+    )
+    batch = batch_definition(
+        "prompt",
+        parameters=parameters,
+        linked_parameter_sets=(
+            LinkedParameterSet(
+                "resolution",
+                "Resolution",
+                ("width", "height"),
+                (
+                    LinkedParameterRow((512, 512)),
+                    LinkedParameterRow((1024, 768)),
+                    LinkedParameterRow((768, 1024)),
+                ),
+            ),
+        ),
+        seeds=SeedInput.explicit((1, 2)),
+    )
+
+    assert compile_batch(batch, max_jobs=6).job_count == 6
+    with pytest.raises(CompilationError, match="beyond the maximum of 5 Jobs"):
+        compile_batch(batch, max_jobs=5)
+
+
+@pytest.mark.parametrize(
+    ("linked_sets", "bindings", "message"),
+    (
+        (
+            (
+                LinkedParameterSet(
+                    "bad-key", "Preset", ("width", "height"), (LinkedParameterRow((1, 2)),)
+                ),
+            ),
+            (),
+            "lowercase ASCII snake case",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset", " ", ("width", "height"), (LinkedParameterRow((1, 2)),)
+                ),
+            ),
+            (),
+            "label must be nonblank",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset", "Preset", ("width", "width"), (LinkedParameterRow((1, 2)),)
+                ),
+            ),
+            (),
+            "at least two unique members",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset", "Preset", ("width", "unknown"), (LinkedParameterRow((1, 2)),)
+                ),
+            ),
+            (),
+            "unknown parameters",
+        ),
+        (
+            (LinkedParameterSet("preset", "Preset", ("width", "height"), ()),),
+            (),
+            "at least one row",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset", "Preset", ("width", "height"), (LinkedParameterRow((1,)),)
+                ),
+            ),
+            (),
+            "define every member",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset", "Preset", ("width", "height"), (LinkedParameterRow((True, 2)),)
+                ),
+            ),
+            (),
+            "must be integer",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset",
+                    "Preset",
+                    ("width", "height"),
+                    (LinkedParameterRow((1, 2), "One"), LinkedParameterRow((1, 2), "Two")),
+                ),
+            ),
+            (),
+            "duplicate row tuples",
+        ),
+        (
+            (
+                LinkedParameterSet(
+                    "preset", "Preset", ("width", "height"), (LinkedParameterRow((1, 2)),)
+                ),
+            ),
+            (ParameterBinding("width", (1,)),),
+            "must not have independent bindings",
+        ),
+    ),
+)
+def test_linked_parameter_sets_reject_invalid_definitions(
+    linked_sets: tuple[LinkedParameterSet, ...],
+    bindings: tuple[ParameterBinding, ...],
+    message: str,
+) -> None:
+    parameters = (
+        WorkflowParameter("width", "Width", "7", "width", ParameterValueType.INTEGER),
+        WorkflowParameter("height", "Height", "7", "height", ParameterValueType.INTEGER),
+    )
+
+    with pytest.raises(CompilationError, match=message):
+        compile_batch(
+            batch_definition(
+                "prompt",
+                parameters=parameters,
+                parameter_bindings=bindings,
+                linked_parameter_sets=linked_sets,
+            )
+        )
+
+
+def test_linked_float_rows_use_existing_exact_numeric_duplicate_semantics() -> None:
+    parameters = (
+        WorkflowParameter("cfg", "CFG", "1", "cfg", ParameterValueType.FLOAT),
+        WorkflowParameter("denoise", "Denoise", "1", "denoise", ParameterValueType.FLOAT),
+    )
+
+    with pytest.raises(CompilationError, match="duplicate row tuples"):
+        compile_batch(
+            batch_definition(
+                "Prompt",
+                parameters=parameters,
+                linked_parameter_sets=(
+                    LinkedParameterSet(
+                        "settings",
+                        "Settings",
+                        ("cfg", "denoise"),
+                        (
+                            LinkedParameterRow((1, 0.5)),
+                            LinkedParameterRow((1.0, 0.5)),
+                        ),
+                    ),
+                ),
+            )
+        )
 
 
 @pytest.mark.parametrize(
