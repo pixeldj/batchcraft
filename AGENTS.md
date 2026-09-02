@@ -16,9 +16,12 @@ Read the project documentation before making substantial changes:
 - `docs/COMFYUI_INTEGRATION.md`
 - `docs/FILE_FORMAT.md`
 - `docs/DEVELOPMENT.md`
+- `docs/BACKLOG.md` when planning feature work
 - relevant records under `docs/adr/`
 
 When documentation and implementation disagree, do not silently choose one. Identify the discrepancy and resolve it deliberately.
+
+When feature work matches an existing backlog entry, reference its stable ID and update only that entry. Mark it `Done` only after required verification succeeds. Keep backlog maintenance scoped so it does not create unrelated documentation churn.
 
 ## Product Terminology
 
