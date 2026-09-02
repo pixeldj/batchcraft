@@ -204,10 +204,16 @@ describe("ProjectSelector transitions", () => {
     const api = makeApi();
     renderSelector(api, callbackProps(), { switchingBlocked: true });
 
-    expect(await screen.findByRole("combobox", { name: "Active Project" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "New Project" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Import from Folder" })).toBeDisabled();
-    expect(screen.getByText("Project changes are unavailable while a Run is active.")).toBeInTheDocument();
+    const selector = await screen.findByRole("combobox", { name: "Active Project" });
+    const create = screen.getByRole("button", { name: "New Project" });
+    const adopt = screen.getByRole("button", { name: "Import from Folder" });
+    expect(selector).toBeDisabled();
+    expect(create).toBeDisabled();
+    expect(adopt).toBeDisabled();
+    expect(selector).toHaveAttribute("title", "Project changes are unavailable while a Run is active.");
+    expect(create).not.toHaveClass("busy");
+    expect(adopt).not.toHaveClass("busy");
+    expect(screen.queryByText("Project changes are unavailable while a Run is active.")).not.toBeInTheDocument();
   });
 });
 

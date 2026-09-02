@@ -301,6 +301,7 @@ export function ProjectSelector({
           <select
             value={activeProject?.id ?? ""}
             disabled={switchingBlocked}
+            title={switchingBlocked ? "Project changes are unavailable while a Run is active." : undefined}
             onChange={(event) => {
               const project = projects.find((item) => item.id === event.target.value);
               if (project && project.id !== activeProject?.id) {
@@ -334,15 +335,12 @@ export function ProjectSelector({
       {!listState.loading && !listState.error && hasDraftIdentity && !activeProject ? (
         <p className="blocked-note" role="alert">The saved Project identity does not exactly match an active registered Project.</p>
       ) : null}
-      {switchingBlocked ? (
-        <p className="blocked-note" role="status">Project changes are unavailable while a Run is active.</p>
-      ) : null}
-
       <div className="action-row">
         <button
           className="button-secondary"
           type="button"
           disabled={switchingBlocked}
+          title={switchingBlocked ? "Project changes are unavailable while a Run is active." : undefined}
           onClick={(event) => {
             trigger.current = event.currentTarget;
             setCreateDraft(emptyCreateDraft);
@@ -355,6 +353,7 @@ export function ProjectSelector({
           className="button-secondary"
           type="button"
           disabled={switchingBlocked}
+          title={switchingBlocked ? "Project changes are unavailable while a Run is active." : undefined}
           onClick={(event) => {
             trigger.current = event.currentTarget;
             setAdoptDraft(emptyAdoptDraft);

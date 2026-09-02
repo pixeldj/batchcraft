@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { BatchcraftApi } from "../../api/client";
 import type {
   ExecutionResponse,
@@ -30,6 +32,8 @@ export function ResultsPanel({
   getCachedRun,
   loadRun,
 }: Props) {
+  const [expanded, setExpanded] = useState(true);
+
   if (!run && !error) {
     return (
       <section className="section-card quiet-card inactive-card" aria-labelledby="results-heading">
@@ -44,29 +48,48 @@ export function ResultsPanel({
   return (
     <section className="section-card results-section" aria-labelledby="results-heading">
       <div className="section-heading">
-        <h2 id="results-heading">Results</h2>
+        <div>
+          <h2 id="results-heading">Results</h2>
+          {run ? <span className="section-note">{resultCount(results.length)}</span> : null}
+        </div>
         {run ? (
           <div className="results-actions">
-            <span className="section-note">{results.length} artifacts</span>
             <button className="button-secondary compact" type="button" disabled={refreshing} onClick={onRefresh}>
               {refreshing ? "Refreshing..." : "Refresh Results"}
+            </button>
+            <button
+              className="button-secondary compact"
+              type="button"
+              aria-expanded={expanded}
+              aria-controls="current-run-results-content"
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? "Collapse" : "Expand"}
             </button>
           </div>
         ) : null}
       </div>
 
       {!run ? <p>Results will appear here after a Run starts producing artifacts.</p> : null}
-      {run && results.length === 0 ? <p>No Results have been ingested yet.</p> : null}
-      {error ? <p className="operation-error" role="alert">Results: {error}</p> : null}
-
-      <ResultGallery
-        api={api}
-        runId={run?.run_id ?? null}
-        execution={execution}
-        results={results}
-        getCachedRun={getCachedRun}
-        loadRun={loadRun}
-      />
+      {!run && error ? <p className="operation-error" role="alert">Results: {error}</p> : null}
+      {run && expanded ? (
+        <div id="current-run-results-content">
+          {results.length === 0 ? <p>No Results have been ingested yet.</p> : null}
+          {error ? <p className="operation-error" role="alert">Results: {error}</p> : null}
+          <ResultGallery
+            api={api}
+            runId={run.run_id}
+            execution={execution}
+            results={results}
+            getCachedRun={getCachedRun}
+            loadRun={loadRun}
+          />
+        </div>
+      ) : null}
     </section>
   );
+}
+
+function resultCount(count: number): string {
+  return `${count} ${count === 1 ? "Result" : "Results"}`;
 }

@@ -110,7 +110,9 @@ export function ResultLightbox({
           </button>
         </div>
         <div className="lightbox-image-stage">
-          <img className="result-lightbox-image" src={item.url} alt={item.alt} />
+          <div className="lightbox-image-fit">
+            <img className="result-lightbox-image" src={item.url} alt={item.alt} />
+          </div>
         </div>
         <p className="lightbox-caption">{item.label}</p>
       </dialog>

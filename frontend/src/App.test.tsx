@@ -158,6 +158,8 @@ describe("Batch preview", () => {
     const promptEdit = await within(prompts).findByRole("button", { name: "Edit" });
     expect(prompts).toHaveTextContent("1 prompt");
     expect(promptEdit).toHaveAttribute("aria-expanded", "false");
+    expect(promptEdit.closest(".section-summary-actions")?.parentElement).toHaveClass("configuration-section-header");
+    expect(promptEdit.closest(".configuration-section-header")?.querySelector(".configuration-section-heading")).not.toBeNull();
     expect(within(prompts).queryByRole("button", { name: "Add Prompt" })).not.toBeInTheDocument();
 
     const bindings = screen.getByRole("group", { name: "Variable bindings" });
@@ -172,20 +174,58 @@ describe("Batch preview", () => {
     expect(within(prompts).getByRole("button", { name: "Add Prompt" })).toBeInTheDocument();
   });
 
-  it("places Prompt and Variable add actions in the shared section action area", async () => {
+  it("places Prompt and Variable Binding actions in one footer after expanded content", async () => {
     render(<App api={makeApi()} />);
 
     await expandConfiguration("Prompt Versions");
     const prompts = screen.getByRole("group", { name: "Prompt Versions" });
     const addPrompt = within(prompts).getByRole("button", { name: "Add Prompt" });
-    expect(addPrompt.closest(".section-summary-actions")).not.toBeNull();
+    const promptDone = within(prompts).getByRole("button", { name: "Done" });
+    const promptActions = addPrompt.closest(".configuration-content-actions");
+    expect(promptActions).not.toBeNull();
+    expect(promptDone.closest(".configuration-content-actions")).toBe(promptActions);
+    expect(within(prompts).queryAllByRole("button", { name: "Done" })).toHaveLength(1);
+    expect(prompts.querySelector(".section-summary-actions")).toBeNull();
 
     await expandConfiguration("Variable bindings");
     const bindings = screen.getByRole("group", { name: "Variable bindings" });
     const addBinding = within(bindings).getByRole("button", { name: "Add Binding" });
-    expect(addBinding.closest(".section-summary-actions")).not.toBeNull();
+    const done = within(bindings).getByRole("button", { name: "Done" });
+    const actions = addBinding.closest(".configuration-content-actions");
+    expect(actions).not.toBeNull();
+    expect(done.closest(".configuration-content-actions")).toBe(actions);
+    expect(within(bindings).queryAllByRole("button", { name: "Add Binding" })).toHaveLength(1);
+    expect(within(bindings).getByText("Binding 1").compareDocumentPosition(actions as Node) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(bindings.querySelector(".section-summary-actions")).toBeNull();
     fireEvent.click(addBinding);
     expect(within(bindings).getAllByLabelText("Values")).toHaveLength(2);
+  });
+
+  it("uses the shared bottom Done footer for other expanded configuration sections", async () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({
+      mappings: {},
+      image_inputs: [{ key: "source", label: "Source image", node_id: "1", input_name: "image" }],
+      parameters: [{ key: "steps", label: "Steps", node_id: "2", input_name: "steps", value_type: "integer" }],
+    });
+    saveWorkingSession(form, null, [], "project-1");
+    render(<App api={makeApi()} />);
+    await screen.findByRole("button", { name: "Add portrait.png to Source image" });
+
+    for (const [title, action] of [
+      ["Workflow and Profile", "Change"],
+      ["Parameters", "Edit"],
+      ["Seeds", "Edit"],
+      ["Image Inputs", "Change"],
+    ] as const) {
+      const section = screen.getByRole("group", { name: title });
+      const expand = within(section).queryByRole("button", { name: action });
+      if (expand) fireEvent.click(expand);
+      const done = within(section).getByRole("button", { name: "Done" });
+      expect(done.closest(".configuration-content-actions")).not.toBeNull();
+      expect(within(section).queryAllByRole("button", { name: "Done" })).toHaveLength(1);
+      expect(section.querySelector(".section-summary-actions")).toBeNull();
+    }
   });
 
   it("edits ordered Variable Binding lines and toggles one exact empty value", async () => {
@@ -271,14 +311,33 @@ describe("Batch preview", () => {
     ]));
   });
 
-  it("places Image Inputs after the Workflow Profile that defines them", () => {
+  it("renders Batch configuration sections in dependency order", () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = JSON.stringify({
+      mappings: {},
+      image_inputs: [{ key: "source", label: "Source image", node_id: "1", input_name: "image" }],
+      parameters: [{ key: "steps", label: "Steps", node_id: "2", input_name: "steps", value_type: "integer" }],
+    });
+    saveWorkingSession(form, null, [], "project-1");
     const api = makeApi();
     render(<App api={api} />);
 
+    const project = screen.getByRole("group", { name: "Project" });
     const workflow = screen.getByRole("group", { name: "Workflow and Profile" });
+    const savedBatch = screen.getByRole("group", { name: "Batch" });
+    const prompts = screen.getByRole("group", { name: "Prompt Versions" });
+    const variables = screen.getByRole("group", { name: "Variable bindings" });
+    const parameters = screen.getByRole("group", { name: "Parameters" });
+    const seeds = screen.getByRole("group", { name: "Seeds" });
     const imageInputs = screen.getByRole("group", { name: "Image Inputs" });
 
-    expect(workflow.compareDocumentPosition(imageInputs) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(project.nextElementSibling).toBe(savedBatch);
+    expect(savedBatch.nextElementSibling).toBe(workflow);
+    const ordered = [project, savedBatch, workflow, prompts, variables, parameters, seeds, imageInputs];
+    ordered.slice(0, -1).forEach((section, index) => {
+      expect(section.compareDocumentPosition(ordered[index + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    });
+    expect(imageInputs.compareDocumentPosition(screen.getByRole("button", { name: "Preview Batch" })) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 
   it("builds the API request and renders Jobs and compiler warnings", async () => {
@@ -357,12 +416,18 @@ describe("Batch preview", () => {
     await enterAsset();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
 
+    const busyPreview = screen.getByRole("button", { name: "Previewing..." });
+    expect(busyPreview).toBeDisabled();
+    expect(busyPreview).toHaveClass("busy");
+    expect(busyPreview).toHaveAttribute("aria-busy", "true");
+
     fireEvent.change(screen.getByLabelText("Batch name"), {
       target: { value: "Changed while previewing" },
     });
     pendingPreview.resolve(previewResponse());
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Preview Batch" })).not.toHaveClass("busy");
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
   });
 
@@ -869,6 +934,43 @@ describe("Browser working-session restoration", () => {
 });
 
 describe("Image Input controls", () => {
+  it("collapses to an accurate summary without changing values or Preview validity", async () => {
+    const form = populatedBatchForm();
+    form.workflowProfileJson = profileJson([
+      { key: "style", label: "Style", node_id: "1", input_name: "image" },
+      { key: "pose", label: "Pose", node_id: "2", input_name: "image" },
+    ]);
+    form.imageBindings = [
+      { slot_key: "style", values: [null, "asset-a"] },
+      { slot_key: "pose", values: ["asset-b"] },
+    ];
+    saveWorkingSession(form, null, [], "project-1");
+    const api = makeApi({
+      listProjectAssets: vi.fn(async () => ({
+        assets: [asset("asset-a", "a.png"), asset("asset-b", "b.png")],
+      })),
+      previewBatch: vi.fn(async () => previewResponse()),
+    });
+    render(<App api={api} />);
+
+    await screen.findByRole("button", { name: "Remove a.png from Style" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Run" });
+
+    const imageInputs = screen.getByRole("group", { name: "Image Inputs" });
+    expect(imageInputs).toHaveTextContent("2 image inputs · 3 alternatives · 1 uses workflow default");
+    fireEvent.click(within(imageInputs).getByRole("button", { name: "Done" }));
+
+    expect(within(imageInputs).queryByRole("heading", { name: "Style" })).not.toBeInTheDocument();
+    expect(within(imageInputs).getByRole("button", { name: "Change" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(loadWorkingSession().form.imageBindings).toEqual(form.imageBindings);
+
+    fireEvent.click(within(imageInputs).getByRole("button", { name: "Change" }));
+    expect(within(imageInputs).getByRole("button", { name: "Remove a.png from Style" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(imageInputs).getByRole("button", { name: "Remove b.png from Pose" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("renders one control per slot in Profile order and fetches the library once", async () => {
     const form = populatedBatchForm();
     form.workflowProfileJson = profileJson([
@@ -1698,6 +1800,45 @@ describe("Results", () => {
     expect(await screen.findByAltText("Result 1 from Job 1: recovered.png")).toBeInTheDocument();
     expect(screen.queryByText("Results: Result index unavailable")).not.toBeInTheDocument();
   });
+
+  it("keeps current Results collapsed as new Results arrive and reopens loaded interactions without refetching", async () => {
+    const first = result(1, 1, "image/png", "first.png", 100);
+    const second = result(2, 1, "image/png", "second.png", 100);
+    const getResults = vi
+      .fn<BatchcraftApi["getResults"]>()
+      .mockResolvedValueOnce({ run_id: "run-123", results: [first] })
+      .mockResolvedValue({ run_id: "run-123", results: [first, second] });
+    const api = makeApi({
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults,
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+
+    const current = currentResultsSection();
+    expect(await within(current).findByAltText("Result 1 from Job 1: first.png")).toBeInTheDocument();
+    expect(within(current).getByText("1 Result")).toBeInTheDocument();
+    const fetchesBeforeCollapse = getResults.mock.calls.length;
+    fireEvent.click(within(current).getByRole("button", { name: "Collapse" }));
+
+    expect(within(current).queryByAltText("Result 1 from Job 1: first.png")).not.toBeInTheDocument();
+    expect(within(current).getByRole("button", { name: "Expand" })).toHaveAttribute("aria-expanded", "false");
+    expect(getResults).toHaveBeenCalledTimes(fetchesBeforeCollapse);
+
+    fireEvent.click(within(current).getByRole("button", { name: "Refresh Results" }));
+    await within(current).findByText("2 Results");
+    expect(within(current).queryByAltText("Result 1 from Job 2: second.png")).not.toBeInTheDocument();
+    expect(within(current).getByRole("button", { name: "Expand" })).toBeInTheDocument();
+
+    const fetchesBeforeExpand = getResults.mock.calls.length;
+    fireEvent.click(within(current).getByRole("button", { name: "Expand" }));
+    const image = within(current).getByAltText("Result 1 from Job 2: second.png");
+    expect(getResults).toHaveBeenCalledTimes(fetchesBeforeExpand);
+    fireEvent.click(image.closest("button") as HTMLElement);
+    const lightbox = await screen.findByRole("dialog", { name: "Result image preview" });
+    fireEvent.click(within(lightbox).getByRole("button", { name: "ⓘ Details" }));
+    expect(await screen.findByRole("dialog", { name: "Job 002 · Artifact 1" })).toBeInTheDocument();
+  });
 });
 
 describe("Result lightbox", () => {
@@ -1741,7 +1882,9 @@ describe("Result lightbox", () => {
     expect(fullImage).toHaveAttribute("target", "_blank");
     expect(fullImage).toHaveAttribute("rel", "noopener noreferrer");
     const previewImage = within(lightbox).getByAltText("Result 1 from Job 1: first.png");
-    expect(previewImage.parentElement).toHaveClass("lightbox-image-stage");
+    const fit = previewImage.parentElement;
+    expect(fit).toHaveClass("lightbox-image-fit");
+    expect(fit?.parentElement).toHaveClass("lightbox-image-stage");
     expect(previewImage).toHaveClass("result-lightbox-image");
 
     fireEvent.click(within(lightbox).getByRole("button", { name: "ⓘ Details" }));
@@ -2204,6 +2347,20 @@ describe("Batch working-session Results gallery", () => {
     expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 10 / run-a.png")).toBeInTheDocument();
     expect(await within(gallery).findByAltText("Result 1 from Job 1: Run 11 / run-b.png")).toBeInTheDocument();
     expect(within(gallery).getAllByRole("region")).toHaveLength(2);
+    const runA = within(gallery).getByRole("region", { name: "Run 10" });
+    const runB = within(gallery).getByRole("region", { name: "Run 11" });
+    expect(within(runA).getByText("Run 10 · 1 Result")).toBeInTheDocument();
+    fireEvent.click(within(runA).getByRole("button", { name: "Collapse" }));
+    expect(within(runA).queryByAltText("Result 1 from Job 1: Run 10 / run-a.png")).not.toBeInTheDocument();
+    expect(within(runB).getByAltText("Result 1 from Job 1: Run 11 / run-b.png")).toBeInTheDocument();
+    expect(api.getResults).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(within(gallery).getByRole("button", { name: "Collapse all" }));
+    expect(within(runA).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(runB).queryByRole("img")).not.toBeInTheDocument();
+    fireEvent.click(within(gallery).getByRole("button", { name: "Expand all" }));
+    expect(within(runA).getByAltText("Result 1 from Job 1: Run 10 / run-a.png")).toBeInTheDocument();
+    expect(within(runB).getByAltText("Result 1 from Job 1: Run 11 / run-b.png")).toBeInTheDocument();
     expect(api.getRun).toHaveBeenCalledTimes(2);
     expect(api.getResults).toHaveBeenCalledTimes(2);
     expect(api.startRun).not.toHaveBeenCalled();

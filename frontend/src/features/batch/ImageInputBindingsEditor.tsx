@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { BatchcraftApi } from "../../api/client";
 import type { AssetResponse, ImageBindingRequest, WorkflowProfileImageInput } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
+import { ConfigurationSection } from "./ConfigurationSection";
 import { profileImageInputs, reconcileImageBindings } from "./form";
 
 interface Props {
@@ -27,6 +28,7 @@ export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBi
   const [error, setError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const loadTag = useRef(0);
   const hasSlots = slots.length > 0;
 
@@ -58,6 +60,14 @@ export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBi
   const loading = Boolean(normalizedProjectKey && loadedProjectKey !== normalizedProjectKey);
   const visibleAssets = loadedProjectKey === normalizedProjectKey ? assets : [];
   const byId = new Map(visibleAssets.map((asset) => [asset.asset_id, asset]));
+  const missingSelectedAssets = loadedProjectKey === normalizedProjectKey && !error && bindings.some(
+    (binding) => binding.values.some((value) => value !== null && !byId.has(value)),
+  );
+  const complete = !loading
+    && !error
+    && !missingSelectedAssets
+    && bindings.length === slots.length
+    && bindings.every((binding) => binding.values.length > 0);
 
   function setSlotValues(slotKey: string, values: Array<string | null>) {
     onChange(bindings.map((binding) => binding.slot_key === slotKey
@@ -103,13 +113,25 @@ export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBi
   }
 
   return (
-    <fieldset className="image-input-bindings">
-      <legend>Image Inputs</legend>
+    <ConfigurationSection
+      title="Image Inputs"
+      summary={imageInputSummary(bindings, slots.length)}
+      expanded={expanded}
+      collapsible={complete}
+      controlsId="image-input-controls"
+      actionLabel="Change"
+      className="image-input-bindings"
+      onExpandedChange={setExpanded}
+    >
       <div className="asset-picker-toolbar">
         <p>Choose one or more ordered alternatives per slot. Alternatives expand into concrete Jobs. Remove and select an Asset again to move it to the end.</p>
         <div className="asset-picker-actions">
           <button className="button-secondary compact" type="button" disabled={!normalizedProjectKey || loading} onClick={() => setRefreshToken((value) => value + 1)}>Refresh library</button>
-          <label className={`button-secondary compact ${uploading ? "disabled" : ""}`}>
+          <label
+            className={`button-secondary compact ${!normalizedProjectKey ? "disabled" : ""} ${uploading ? "busy" : ""}`.replaceAll(/\s+/g, " ").trim()}
+            aria-disabled={!normalizedProjectKey || uploading}
+            aria-busy={uploading}
+          >
             {uploading ? "Importing..." : "Import images"}
             <input className="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple disabled={!normalizedProjectKey || uploading} onChange={uploadFiles} />
           </label>
@@ -197,8 +219,17 @@ export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBi
       {!normalizedProjectKey ? <p className="empty-note">Select a Project to load its image library.</p> : null}
       {loading ? <p role="status">Loading Project images...</p> : null}
       {error ? <p className="operation-error" role="alert">Asset library: {error}</p> : null}
-    </fieldset>
+    </ConfigurationSection>
   );
+}
+
+function imageInputSummary(bindings: ImageBindingRequest[], slotCount: number): string {
+  const alternativeCount = bindings.reduce((count, binding) => count + binding.values.length, 0);
+  const defaultCount = bindings.filter((binding) => binding.values.includes(null)).length;
+  const summary = `${slotCount} image ${slotCount === 1 ? "input" : "inputs"} · ${alternativeCount} ${alternativeCount === 1 ? "alternative" : "alternatives"}`;
+  return defaultCount > 0
+    ? `${summary} · ${defaultCount} ${defaultCount === 1 ? "uses" : "use"} workflow default`
+    : summary;
 }
 
 function sortAssets(assets: AssetResponse[]): AssetResponse[] {

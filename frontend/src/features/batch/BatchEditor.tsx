@@ -185,6 +185,14 @@ export function BatchEditor({
         </div>
       </fieldset>
 
+      <WorkflowLibraryEditor
+        api={api}
+        projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
+        form={form}
+        onChange={onChange}
+        onMetadataChange={onWorkflowMetadataChange}
+      />
+
       <PromptLibraryEditor
         api={api}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
@@ -249,6 +257,23 @@ export function BatchEditor({
         </div>
       </ConfigurationSection>
 
+      {parameters.length ? (
+        <ConfigurationSection
+          title="Parameters"
+          summary={parameterSummary(form.parameterBindings, parameters.length)}
+          expanded={parametersExpanded}
+          collapsible={parametersComplete}
+          controlsId="parameter-binding-controls"
+          onExpandedChange={setParametersExpanded}
+        >
+          <ParameterBindingsEditor
+            parameters={parameters}
+            parameterBindings={form.parameterBindings}
+            onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
+          />
+        </ConfigurationSection>
+      ) : null}
+
       <ConfigurationSection
         title="Seeds"
         summary={seedSummary(form)}
@@ -309,14 +334,6 @@ export function BatchEditor({
         </div>
       </ConfigurationSection>
 
-      <WorkflowLibraryEditor
-        api={api}
-        projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
-        form={form}
-        onChange={onChange}
-        onMetadataChange={onWorkflowMetadataChange}
-      />
-
       <ImageInputBindingsEditor
         api={api}
         projectKey={projectVerified && selectedProjectId === form.projectId ? form.projectFilesystemKey : ""}
@@ -325,26 +342,15 @@ export function BatchEditor({
         onChange={(imageBindings) => update("imageBindings", imageBindings)}
       />
 
-      {parameters.length ? (
-        <ConfigurationSection
-          title="Parameters"
-          summary={parameterSummary(form.parameterBindings, parameters.length)}
-          expanded={parametersExpanded}
-          collapsible={parametersComplete}
-          controlsId="parameter-binding-controls"
-          onExpandedChange={setParametersExpanded}
-        >
-          <ParameterBindingsEditor
-            parameters={parameters}
-            parameterBindings={form.parameterBindings}
-            onChange={(parameterBindings) => update("parameterBindings", parameterBindings)}
-          />
-        </ConfigurationSection>
-      ) : null}
-
       {error ? <p className="operation-error" role="alert">{error}</p> : null}
       <div className="action-row">
-        <button className="button-primary" type="button" disabled={previewUnavailable} onClick={onPreview}>
+        <button
+          className={`button-primary ${previewing ? "busy" : ""}`.trim()}
+          type="button"
+          disabled={previewUnavailable}
+          aria-busy={previewing}
+          onClick={onPreview}
+        >
           {previewing ? "Previewing..." : "Preview Batch"}
         </button>
       </div>

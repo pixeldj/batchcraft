@@ -26,30 +26,46 @@ export function ConfigurationSection({
   children,
 }: Props) {
   const showContent = expanded || !collapsible;
+  const titleId = `${controlsId}-title`;
+  const toggleButton = (
+    <button
+      className="button-secondary compact"
+      type="button"
+      aria-expanded={showContent}
+      aria-controls={controlsId}
+      disabled={showContent && !collapsible}
+      onClick={() => onExpandedChange(!showContent)}
+    >
+      {showContent ? "Done" : actionLabel}
+    </button>
+  );
 
   return (
-    <fieldset className={`configuration-section ${className}`.trim()}>
-      <legend>{title}</legend>
-      <div className="configuration-summary section-summary-row">
-        <div className="configuration-summary-text">{summary}</div>
-        {action && showContent || collapsible ? (
+    <section
+      className={`configuration-section ${className}`.trim()}
+      role="group"
+      aria-labelledby={titleId}
+    >
+      <div className="configuration-section-header">
+        <div className="configuration-section-heading">
+          <div className="configuration-section-title" id={titleId}>{title}</div>
+          <div className="configuration-summary-text">{summary}</div>
+        </div>
+        {!showContent && collapsible ? (
           <div className="section-summary-actions">
-            {action && showContent ? action : null}
-            {collapsible ? (
-              <button
-                className="button-secondary compact"
-                type="button"
-                aria-expanded={showContent}
-                aria-controls={controlsId}
-                onClick={() => onExpandedChange(!showContent)}
-              >
-                {showContent ? "Done" : actionLabel}
-              </button>
-            ) : null}
+            {toggleButton}
           </div>
         ) : null}
       </div>
-      {showContent ? <div className="configuration-content" id={controlsId}>{children}</div> : null}
-    </fieldset>
+      {showContent ? (
+        <div className="configuration-content" id={controlsId}>
+          {children}
+          <div className="configuration-content-actions">
+            {action}
+            {toggleButton}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
