@@ -159,7 +159,7 @@ describe("Batch preview", () => {
   it("summarizes configured experiment sections before expanding their controls", async () => {
     render(<App api={makeApi()} />);
 
-    const prompts = screen.getByRole("group", { name: "Prompt Versions" });
+    const prompts = screen.getByRole("group", { name: "Prompts" });
     const promptEdit = await within(prompts).findByRole("button", { name: "Edit" });
     expect(prompts).toHaveTextContent("1 prompt");
     expect(promptEdit).toHaveAttribute("aria-expanded", "false");
@@ -182,8 +182,8 @@ describe("Batch preview", () => {
   it("places Prompt and Variable Binding actions in one footer after expanded content", async () => {
     render(<App api={makeApi()} />);
 
-    await expandConfiguration("Prompt Versions");
-    const prompts = screen.getByRole("group", { name: "Prompt Versions" });
+    await expandConfiguration("Prompts");
+    const prompts = screen.getByRole("group", { name: "Prompts" });
     const addPrompt = within(prompts).getByRole("button", { name: "Add Prompt" });
     const promptDone = within(prompts).getByRole("button", { name: "Done" });
     const promptActions = addPrompt.closest(".configuration-content-actions");
@@ -330,7 +330,7 @@ describe("Batch preview", () => {
     const project = screen.getByRole("group", { name: "Project" });
     const workflow = screen.getByRole("group", { name: "Workflow and Profile" });
     const savedBatch = screen.getByRole("group", { name: "Batch" });
-    const prompts = screen.getByRole("group", { name: "Prompt Versions" });
+    const prompts = screen.getByRole("group", { name: "Prompts" });
     const variables = screen.getByRole("group", { name: "Variable bindings" });
     const parameters = screen.getByRole("group", { name: "Parameters" });
     const seeds = screen.getByRole("group", { name: "Seeds" });
@@ -763,7 +763,7 @@ describe("PromptVersion editor", () => {
     });
     render(<App api={api} />);
 
-    expect(screen.getByRole("group", { name: "Prompt Versions" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Prompts" })).toBeInTheDocument();
     expect(screen.getByText("A studio portrait of {{subject}}.")).toBeInTheDocument();
     expect(within(promptCards()[0]).getByRole("button", { name: "Remove" })).toBeEnabled();
 
@@ -788,7 +788,7 @@ describe("PromptVersion editor", () => {
     expect(api.previewBatch).not.toHaveBeenCalled();
   });
 
-  it("creates a new PromptVersion through form change and invalidates Preview", async () => {
+  it("keeps Preview while editing the library and invalidates it only when the new revision is added", async () => {
     const nextVersion = promptVersion({
       id: "prompt-v2",
       version_number: 2,
@@ -796,40 +796,43 @@ describe("PromptVersion editor", () => {
     });
     const api = makeApi({ createPromptVersion: vi.fn(async () => nextVersion) });
     render(<App api={api} />);
-    await expandConfiguration("Prompt Versions");
-    const edit = await screen.findByRole("button", { name: "Edit as new version" });
     await reachPreview();
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
 
-    fireEvent.click(edit);
+    await expandConfiguration("Prompts");
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Prompt" }));
     fireEvent.change(screen.getByLabelText("Prompt template"), {
       target: { value: "Changed {{subject}}" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create version" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
 
-    expect(await screen.findByText(/Preview required/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Add to Batch" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
     expect(api.createPromptVersion).toHaveBeenCalledWith("prompt-1", {
       text: "Changed {{subject}}",
       note: null,
     });
+    fireEvent.click(screen.getByRole("button", { name: "Add to Batch" }));
+    expect(await screen.findByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
   });
 
-  it("retains Preview when only the logical Prompt name changes", async () => {
-    const renamed = { ...projectPrompt(), name: "Renamed" };
-    const api = makeApi({ updatePrompt: vi.fn(async () => renamed) });
+  it("retains Preview while browsing, searching, and opening History", async () => {
+    const api = makeApi();
     render(<App api={api} />);
-    await expandConfiguration("Prompt Versions");
-    const rename = await screen.findByRole("button", { name: "Rename Prompt" });
     await reachPreview();
 
-    fireEvent.click(rename);
-    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-
-    expect(await screen.findByText("Renamed")).toBeInTheDocument();
+    const promptSection = screen.getByRole("group", { name: "Prompts" });
+    const editPrompts = within(promptSection).queryByRole("button", { name: "Edit" });
+    if (editPrompts) fireEvent.click(editPrompts);
+    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.change(screen.getByLabelText("Search Prompts"), { target: { value: "portrait" } });
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
-    expect(screen.getByText("Saved as Portrait")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
   });
 });
 
@@ -977,7 +980,9 @@ describe("Browser working-session restoration", () => {
     expect(loadWorkingSession().form.randomSeedCount).toBe("3");
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    const previewBatch = screen.getByRole("button", { name: "Preview Batch" });
+    await waitFor(() => expect(previewBatch).toBeEnabled());
+    fireEvent.click(previewBatch);
     await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
     const seeds = vi.mocked(api.previewBatch).mock.calls[0][0].seeds.values;
     expect(seeds).toHaveLength(3);
@@ -1892,7 +1897,7 @@ describe("Repeated Runs", () => {
       run_description: null,
     });
     expect(previewRequest.prompt_versions.map((prompt) => prompt.name)).toEqual(["Portrait"]);
-    expect(within(screen.getByRole("group", { name: "Prompt Versions" })).getByText("1 prompt")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Prompts" })).getByText("1 prompt")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
     expect(loadWorkingSession().currentRunId).toBe("run-2");
   });
@@ -3452,17 +3457,12 @@ function projectPrompt(
 async function addExistingPrompt(name: string) {
   await pause(0);
   await waitFor(() => expect(
-    within(screen.getByRole("group", { name: "Prompt Versions" }))
+    within(screen.getByRole("group", { name: "Prompts" }))
       .queryByText("Loading Prompt library..."),
   ).not.toBeInTheDocument());
   await waitFor(() => {
-    if (screen.queryByRole("heading", { name: "Choose an active Prompt" })) return;
-    const chooseExisting = screen.queryByRole("button", { name: "Choose existing" });
-    if (chooseExisting) {
-      fireEvent.click(chooseExisting);
-      throw new Error("Waiting for the Prompt list");
-    }
-    const section = screen.getByRole("group", { name: "Prompt Versions" });
+    if (screen.queryByRole("dialog", { name: "Prompts" })) return;
+    const section = screen.getByRole("group", { name: "Prompts" });
     const add = within(section).queryByRole("button", { name: "Add Prompt" });
     if (add && !add.hasAttribute("disabled")) {
       fireEvent.click(add);
@@ -3475,16 +3475,20 @@ async function addExistingPrompt(name: string) {
     }
     throw new Error("Prompt section is not ready");
   });
-  const dialog = screen.getByRole("dialog", { name: "Add Prompt" });
-  const nameNode = within(dialog).getByText(name, { selector: "strong" });
-  const card = nameNode.closest(".repeater-card");
-  if (!card) throw new Error(`Prompt card was not rendered for ${name}`);
-  fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Use latest version" }));
+  const dialog = screen.getByRole("dialog", { name: "Prompts" });
+  const nameNode = within(dialog).getByText(name, { selector: ".prompt-library-item strong" });
+  const item = nameNode.closest("button");
+  if (!item) throw new Error(`Prompt item was not rendered for ${name}`);
+  fireEvent.click(item);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add to Batch" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
 }
 
 async function expandConfiguration(title: string, action = "Edit") {
   const section = screen.getByRole("group", { name: title });
-  const button = await within(section).findByRole("button", { name: action });
+  const existingButton = within(section).queryByRole("button", { name: action });
+  if (!existingButton && action === "Edit" && within(section).queryByRole("button", { name: "Done" })) return;
+  const button = existingButton ?? await within(section).findByRole("button", { name: action });
   if (button.getAttribute("aria-expanded") === "false") fireEvent.click(button);
 }
 

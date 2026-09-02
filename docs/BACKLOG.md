@@ -224,10 +224,10 @@ Expected behavior:
 | --- | --- |
 | ID | BC-001 |
 | Priority | P2 |
-| Status | In Progress |
+| Status | Done |
 | Area | Compiler / Parameters |
 | Summary | Let related parameter values form one row-based compiler dimension instead of an unwanted Cartesian product with each other. |
-| Dependencies / Notes | ADR 0011 defines the Batch-owned row model and supersedes ADR 0008's independent-only rule. Implementation and automated verification are complete; the required live ComfyUI Resolution smoke test remains. Compiled Jobs contain only resolved scalar values. |
+| Dependencies / Notes | ADR 0011 defines the Batch-owned row model and supersedes ADR 0008's independent-only rule. Automated verification and the live ComfyUI Resolution smoke test passed. Compiled Jobs contain only resolved scalar values. |
 
 Primary acceptance case:
 
@@ -298,10 +298,10 @@ Initial non-goals:
 | --- | --- |
 | ID | BC-004 |
 | Priority | P3 |
-| Status | Planned |
+| Status | Done |
 | Area | Prompt Library / UX |
 | Summary | Improve Prompt selection, creation, and duplication while keeping immutable version history available when needed. |
-| Dependencies / Notes | Selected-version duplication, suggested copy naming, history selection, and direct Prompt creation have partial implementation. The remaining work is primarily to simplify the normal chooser and de-emphasize version mechanics. Automatic placeholder binding assistance is tracked separately in BC-014. |
+| Dependencies / Notes | The modal Prompt Library workspace, exact-revision duplication, collision-safe copy naming, lazy history selection, direct Prompt creation, and ordered Batch-selection controls are implemented. Automatic placeholder binding assistance remains tracked separately in BC-014. |
 
 Improve the normal flow to:
 

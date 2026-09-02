@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import type { MouseEventHandler, ReactNode } from "react";
 
-type OverlayLevel = "lightbox" | "details" | "run-plan";
+type OverlayLevel = "lightbox" | "details" | "run-plan" | "prompt-library";
 
 interface Props {
   level: OverlayLevel;

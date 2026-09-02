@@ -2,140 +2,154 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiError, type BatchcraftApi } from "../../api/client";
-import type {
-  LibraryPromptVersion,
-  ProjectPrompt,
-  Prompt,
-  PromptsResponse,
-} from "../../api/types";
+import type { LibraryPromptVersion, ProjectPrompt, Prompt, PromptsResponse } from "../../api/types";
 import type { PromptForm } from "./form";
 import { PromptLibraryEditor } from "./PromptLibraryEditor";
 
-describe("PromptLibraryEditor library loading", () => {
-  it("clears old Project data and ignores a stale response", async () => {
-    const oldRequest = deferred<PromptsResponse>();
-    const api = makeApi({
-      listPrompts: vi.fn((projectId: string) => projectId === "old" ? oldRequest.promise : Promise.resolve({
-        prompts: [libraryPrompt("new-prompt", "New Project Prompt")],
-      })),
-    });
+describe("PromptLibraryEditor workspace", () => {
+  it("opens the portaled library directly, locks page scroll, closes on Escape, and restores trigger focus", async () => {
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })) });
     const callbacks = callbackProps();
-    const view = render(
-      <PromptLibraryEditor api={api} projectId="old" prompts={[]} {...callbacks} />,
-    );
-    await waitFor(() => expect(api.listPrompts).toHaveBeenCalledWith("old", expect.any(AbortSignal)));
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
 
-    view.rerender(<PromptLibraryEditor api={api} projectId="new" prompts={[]} {...callbacks} />);
-
-    expect(screen.queryByText("Old Project Prompt")).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Add Prompt" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
-    expect(await screen.findByText("New Project Prompt")).toBeInTheDocument();
-    await act(async () => oldRequest.resolve({ prompts: [libraryPrompt("old-prompt", "Old Project Prompt")] }));
-    expect(screen.queryByText("Old Project Prompt")).not.toBeInTheDocument();
-  });
-
-  it("shows a specific missing-Project error and retries", async () => {
-    const listPrompts = vi.fn<BatchcraftApi["listPrompts"]>()
-      .mockRejectedValueOnce(new ApiError("missing", "project_not_found", 404))
-      .mockResolvedValueOnce({ prompts: [] });
-    const api = makeApi({ listPrompts });
-    render(<PromptLibraryEditor api={api} projectId="missing" prompts={[]} {...callbackProps()} />);
-
-    expect(await screen.findByText("Project was not found. Check the Project ID and try again.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByText("This Project has no active Prompts.")).toBeInTheDocument();
-    expect(listPrompts).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not load an empty Project ID", () => {
-    const api = makeApi();
-    render(<PromptLibraryEditor api={api} projectId="" prompts={[]} {...callbackProps()} />);
-
-    expect(screen.getByText("Select a Project to load its Prompt library.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add Prompt" })).toBeDisabled();
-    expect(api.listPrompts).not.toHaveBeenCalled();
-  });
-
-  it("warns when a linked Prompt is unregistered", async () => {
-    const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [] })),
-      getPromptVersion: vi.fn(async () => { throw new ApiError("unavailable", "prompt_version_not_found", 404); }),
-    });
-    render(
-      <PromptLibraryEditor
-        api={api}
-        projectId="project-1"
-        prompts={[formPrompt({ promptId: "gone" })]}
-        {...callbackProps()}
-      />,
-    );
-
-    expect(await screen.findByText("The linked Prompt is not registered in this Project.")).toBeInTheDocument();
-  });
-
-  it("uses the Project library's current logical name without changing the snapshot", async () => {
-    const stored = formPrompt({ promptName: "Old logical name", snapshotName: "Version snapshot" });
-    const callbacks = callbackProps();
-    const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Current logical name")] })),
-    });
-    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[stored]} {...callbacks} />);
-
-    await expandPromptEditor();
-    expect(await screen.findByText("Current logical name")).toBeInTheDocument();
-    expect(screen.getByText("Saved as Version snapshot")).toBeInTheDocument();
-    expect(callbacks.onMetadataChange).toHaveBeenCalledWith([{
-      ...stored,
-      promptName: "Current logical name",
-    }]);
+    const trigger = await openLibrary();
+    const dialog = screen.getByRole("dialog", { name: "Prompts" });
+    expect(dialog.parentElement).toHaveAttribute("data-overlay-level", "prompt-library");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.queryByRole("button", { name: "Choose existing" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    expect(document.body.style.overflow).toBe("hidden");
     expect(callbacks.onChange).not.toHaveBeenCalled();
+
+    const newPrompt = screen.getByRole("button", { name: "New Prompt" });
+    const done = within(dialog).getByRole("button", { name: "Done" });
+    done.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(newPrompt).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(done).toHaveFocus();
+    screen.getByRole("button", { name: "Close" }).focus();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Prompts" })).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps sidebar inspection and search separate from Batch selection", async () => {
+    const portrait = {
+      ...libraryPrompt("portrait", "Portrait", version({
+        id: "portrait-v3",
+        prompt_id: "portrait",
+        version_number: 3,
+        name_snapshot: "Portrait snapshot",
+        text: "  first line\n\nlast line  ",
+      })),
+      description: "Portrait lighting study",
+    };
+    const editorial = libraryPrompt("editorial", "Editorial", version({
+      id: "editorial-v1",
+      prompt_id: "editorial",
+      text: "editorial text",
+    }));
+    const selected = formPrompt({
+      promptId: "portrait",
+      promptName: "Portrait",
+      versionId: "portrait-v2",
+      versionNumber: 2,
+    });
+    const callbacks = callbackProps();
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [portrait, editorial] })) });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbacks} />);
+
+    await openLibrary();
+    const sidebar = screen.getByRole("complementary", { name: "Prompt library" });
+    expect(within(sidebar).getByText("In Batch: v2")).toBeInTheDocument();
+    expect(screen.getByText("Portrait lighting study")).toBeInTheDocument();
+    expect(screen.getByText("v3", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(document.querySelector(".prompt-library-text")).toHaveTextContent("first line last line");
+    expect(document.querySelector(".prompt-library-text")?.textContent).toBe("  first line\n\nlast line  ");
+
+    fireEvent.change(screen.getByLabelText("Search Prompts"), { target: { value: "editor" } });
+    expect(within(sidebar).queryByRole("button", { name: /Portrait/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Portrait lighting study")).toBeInTheDocument();
+    fireEvent.click(within(sidebar).getByRole("button", { name: /Editorial/ }));
+    expect(screen.getByText("editorial text")).toBeInTheDocument();
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+  });
+
+  it("opens an empty library with a useful New Prompt action", async () => {
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [] })) });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbackProps()} />);
+
+    await openLibrary();
+    expect(screen.getByRole("heading", { name: "Create your first Prompt" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "New Prompt" })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("heading", { name: "Create your first Prompt" }).parentElement!.querySelector("button")!);
+    expect(screen.getByRole("heading", { name: "New Prompt" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Prompt name")).toHaveFocus();
   });
 });
 
-describe("PromptLibraryEditor selection and creation", () => {
-  it("chooses latest_active_version directly and blocks a duplicate version", async () => {
-    const first = libraryPrompt("prompt-1", "First", version({ id: "version-2", prompt_id: "prompt-1", version_number: 2 }));
-    const latest = version({ id: "version-5", prompt_id: "prompt-2", version_number: 5, text: "latest text" });
-    const second = libraryPrompt("prompt-2", "Second", latest);
-    const callbacks = callbackProps();
-    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [first, second] })) });
-    render(
-      <PromptLibraryEditor
-        api={api}
-        projectId="project-1"
-        prompts={[formPrompt({ promptId: first.id, versionId: "version-2", versionNumber: 2 })]}
-        {...callbacks}
-      />,
-    );
+describe("PromptLibraryEditor Batch selection", () => {
+  it("appends the exact latest revision, blocks only that exact ID, and allows another revision", async () => {
+    const latest = version({ id: "portrait-v3", version_number: 3, text: "latest" });
+    const older = formPrompt({ versionId: "portrait-v2", versionNumber: 2, text: "older" });
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Portrait", latest)] })) });
+    const onChange = vi.fn<(prompts: PromptForm[]) => void>();
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[older]} onChange={onChange} onMetadataChange={vi.fn()} />);
 
-    await expandPromptEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "Add Prompt" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
-    const picker = screen.getByRole("dialog", { name: "Add Prompt" });
-    expect(picker).toHaveClass("prompt-dialog");
-    const firstCard = within(picker).getByText("First").closest(".repeater-card");
-    const secondCard = within(picker).getByText("Second").closest(".repeater-card");
-    expect(within(firstCard as HTMLElement).getByRole("button", { name: "Already added" })).toBeDisabled();
-    fireEvent.click(within(secondCard as HTMLElement).getByRole("button", { name: "Use latest version" }));
+    await openLibrary();
+    expect(screen.getByRole("button", { name: "Add to Batch" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Add to Batch" }));
 
-    expect(callbacks.onChange).toHaveBeenCalledWith([
-      expect.any(Object),
-      expect.objectContaining({
-        promptId: "prompt-2",
-        promptName: "Second",
-        versionId: "version-5",
-        versionNumber: 5,
-        snapshotName: latest.name_snapshot,
-        text: "latest text",
-      }),
+    expect(onChange).toHaveBeenCalledWith([
+      older,
+      expect.objectContaining({ versionId: "portrait-v3", versionNumber: 3, text: "latest" }),
     ]);
-    expect(api.listPromptVersions).not.toHaveBeenCalled();
   });
 
-  it("preserves a failed create draft and appends returned v1 after success", async () => {
-    const createdVersion = version({ id: "created-v1", prompt_id: "created", version_number: 1, text: "new text" });
+  it("shows and changes exact ordered selections in the stable footer", async () => {
+    const first = formPrompt({ key: 1, promptId: "one", promptName: "One", versionId: "one-v1" });
+    const second = formPrompt({ key: 2, promptId: "two", promptName: "Two", versionId: "two-v4", versionNumber: 4 });
+    const changes = vi.fn<(prompts: PromptForm[]) => void>();
+    const api = makeApi({ listPrompts: vi.fn(async () => ({
+      prompts: [libraryPrompt("one", "One"), libraryPrompt("two", "Two")],
+    })) });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[first, second]} onChange={changes} onMetadataChange={vi.fn()} />);
+
+    await openLibrary();
+    const footer = screen.getByLabelText("Prompts selected for Batch");
+    const items = within(footer).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("One v1");
+    expect(items[1]).toHaveTextContent("Two v4");
+    fireEvent.click(within(items[1]).getByRole("button", { name: "Move Two up" }));
+    expect(changes).toHaveBeenLastCalledWith([second, first]);
+    fireEvent.click(within(items[0]).getByRole("button", { name: "Remove One" }));
+    expect(changes).toHaveBeenLastCalledWith([second]);
+  });
+
+  it("keeps an exact old Saved Batch snapshot visible outside the library", async () => {
+    const saved = formPrompt({
+      promptName: "Current logical name",
+      snapshotName: "Saved revision name",
+      versionId: "old-v2",
+      versionNumber: 2,
+      text: "frozen old revision text",
+    });
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Current logical name")] })) });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[saved]} {...callbackProps()} />);
+
+    await expandPrompts();
+    expect(screen.getByText("frozen old revision text")).toBeInTheDocument();
+    expect(screen.getByText("v2")).toBeInTheDocument();
+    expect(screen.getByText("Saved as Saved revision name")).toBeInTheDocument();
+  });
+});
+
+describe("PromptLibraryEditor creation and revisions", () => {
+  it("retains a failed New Prompt draft and on success stays open without changing the Batch", async () => {
+    const createdVersion = version({ id: "created-v1", prompt_id: "created", text: "new text" });
     const createdPrompt = prompt("created", "Created Prompt");
     const createPrompt = vi.fn<BatchcraftApi["createPrompt"]>()
       .mockRejectedValueOnce(new ApiError("Name already exists", "prompt_name_conflict", 409))
@@ -144,295 +158,171 @@ describe("PromptLibraryEditor selection and creation", () => {
     const api = makeApi({ createPrompt, listPrompts: vi.fn(async () => ({ prompts: [] })) });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add Prompt" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create new" }));
-    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Created Prompt" } });
-    fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "new text" } });
-    fireEvent.change(screen.getByLabelText("Description (optional)"), { target: { value: "description" } });
+    await openLibrary();
+    fireEvent.click(screen.getAllByRole("button", { name: "New Prompt" })[0]);
+    fillPromptForm("Created Prompt", "new text", "description");
     fireEvent.click(screen.getByRole("button", { name: "Create Prompt" }));
-
     expect(await screen.findByText("Name already exists")).toBeInTheDocument();
     expect(screen.getByLabelText("Prompt template")).toHaveValue("new text");
     fireEvent.click(screen.getByRole("button", { name: "Create Prompt" }));
 
-    await waitFor(() => expect(callbacks.onChange).toHaveBeenCalledWith([
-      expect.objectContaining({ versionId: "created-v1", promptId: "created", text: "new text" }),
-    ]));
-    expect(createPrompt).toHaveBeenLastCalledWith("project-1", {
-      name: "Created Prompt",
-      text: "new text",
-      description: "description",
-    });
-  });
-
-  it("ignores a create response after the Project changes", async () => {
-    const request = deferred<{ prompt: Prompt; version: LibraryPromptVersion }>();
-    const callbacks = callbackProps();
-    const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [] })),
-      createPrompt: vi.fn(() => request.promise),
-    });
-    const view = render(
-      <PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />,
-    );
-    const add = await screen.findByRole("button", { name: "Add Prompt" });
-    await waitFor(() => expect(add).toBeEnabled());
-    fireEvent.click(add);
-    fireEvent.click(screen.getByRole("button", { name: "Create new" }));
-    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Stale" } });
-    fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "stale text" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Prompt" }));
-
-    view.rerender(
-      <PromptLibraryEditor api={api} projectId="project-2" prompts={[]} {...callbacks} />,
-    );
-    await act(() => request.resolve({
-      prompt: prompt("stale", "Stale"),
-      version: version({ id: "stale-v1", prompt_id: "stale", text: "stale text" }),
-    }));
-
+    expect(await screen.findByRole("heading", { name: "Created Prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Prompts" })).toBeInTheDocument();
+    expect(screen.getByText("new text")).toBeInTheDocument();
     expect(callbacks.onChange).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
-});
-
-describe("PromptLibraryEditor version operations", () => {
-  it("loads history lazily and selects an older unarchived version", async () => {
-    const current = version({ id: "v2", version_number: 2, text: "current" });
-    const older = version({ id: "v1", version_number: 1, text: "older", note: "Original wording" });
-    const archived = version({ id: "v0", version_number: 0, text: "archived", archived_at: "2026-08-20T00:00:00Z" });
-    const logicalPrompt = libraryPrompt("prompt-1", "Current logical name", current);
-    const callbacks = callbackProps();
-    const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [logicalPrompt] })),
-      listPromptVersions: vi.fn(async () => ({ prompt_versions: [current, older, archived] })),
-    });
-    render(
-      <PromptLibraryEditor api={api} projectId="project-1" prompts={[formPrompt({ text: "current", versionId: "v2", versionNumber: 2 })]} {...callbacks} />,
-    );
-
-    await expandPromptEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "History / change version" }));
-    expect(await screen.findByText("Original wording")).toBeInTheDocument();
-    expect(api.listPromptVersions).toHaveBeenCalledWith("prompt-1", true, expect.any(AbortSignal));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "History / change version" }));
-    expect(screen.getByText("Original wording")).toBeInTheDocument();
-    expect(api.listPromptVersions).toHaveBeenCalledTimes(1);
-    const olderCard = screen.getByText("older").closest(".repeater-card");
-    const archivedCard = screen.getByText("archived").closest(".repeater-card");
-    expect(within(archivedCard as HTMLElement).getByRole("button", { name: "Archived" })).toBeDisabled();
-    fireEvent.click(within(olderCard as HTMLElement).getByRole("button", { name: "Use this version" }));
-
-    expect(callbacks.onChange).toHaveBeenCalledWith([
-      expect.objectContaining({
-        versionId: "v1",
-        versionNumber: 1,
-        snapshotName: older.name_snapshot,
-        text: "older",
-        promptName: "Current logical name",
-      }),
-    ]);
   });
 
-  it("retains a failed edit and replaces the selection only after success", async () => {
-    const next = version({ id: "v3", version_number: 3, text: "edited" });
-    const createPromptVersion = vi.fn<BatchcraftApi["createPromptVersion"]>()
-      .mockRejectedValueOnce(new ApiError("Write failed", "write_failed", 500))
-      .mockResolvedValueOnce(next);
+  it("edits from the viewed revision, creates a new current revision, and preserves selected older snapshots", async () => {
+    const selected = formPrompt({ versionId: "portrait-v1", versionNumber: 1, text: "selected old text" });
+    const latest = version({ id: "portrait-v2", version_number: 2, text: "viewed source" });
+    const next = version({ id: "portrait-v3", version_number: 3, text: "edited text" });
+    const createPromptVersion = vi.fn<BatchcraftApi["createPromptVersion"]>(async () => next);
     const callbacks = callbackProps();
     const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })),
+      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Portrait", latest)] })),
       createPromptVersion,
     });
-    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[formPrompt()]} {...callbacks} />);
-
-    await expandPromptEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit as new version" }));
-    fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "edited" } });
-    fireEvent.change(screen.getByLabelText("Version note (optional)"), { target: { value: "Make it shorter" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create version" }));
-
-    expect(await screen.findByText("Write failed")).toBeInTheDocument();
-    expect(callbacks.onChange).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Prompt template")).toHaveValue("edited");
-    fireEvent.click(screen.getByRole("button", { name: "Create version" }));
-
-    await waitFor(() => expect(callbacks.onChange).toHaveBeenCalledWith([
-      expect.objectContaining({ versionId: "v3", versionNumber: 3, text: "edited" }),
-    ]));
-    expect(createPromptVersion).toHaveBeenLastCalledWith("prompt-1", {
-      text: "edited",
-      note: "Make it shorter",
-    });
-  });
-
-  it("prefills Duplicate from the selected PromptVersion rather than the latest version", async () => {
-    const latest = version({
-      id: "portrait-v5",
-      version_number: 5,
-      name_snapshot: "Portrait",
-      text: "latest v5 template",
-    });
-    const logicalPrompt = {
-      ...libraryPrompt("prompt-1", "Portrait", latest),
-      description: "Portrait starting point",
-    };
-    const selected = formPrompt({
-      promptName: "Portrait",
-      snapshotName: "Portrait",
-      versionId: "portrait-v2",
-      versionNumber: 2,
-      text: "selected v2 template",
-    });
-    const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [logicalPrompt] })),
-    });
-    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbackProps()} />);
-
-    await expandPromptEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "Duplicate Prompt" }));
-
-    const dialog = screen.getByRole("dialog", { name: "Duplicate Prompt" });
-    expect(within(dialog).getByLabelText("Prompt name")).toHaveValue("Portrait copy");
-    expect(within(dialog).getByLabelText("Prompt template")).toHaveValue("selected v2 template");
-    expect(within(dialog).getByLabelText("Prompt template")).not.toHaveValue("latest v5 template");
-    expect(within(dialog).getByLabelText("Description (optional)"))
-      .toHaveValue("Portrait starting point");
-  });
-
-  it("creates an editable-named logical Prompt at v1, refreshes the library, and leaves the source selected", async () => {
-    const latest = version({
-      id: "portrait-v5",
-      version_number: 5,
-      name_snapshot: "Portrait",
-      text: "latest v5 template",
-    });
-    const sourcePrompt = libraryPrompt("prompt-1", "Portrait", latest);
-    const selected = formPrompt({
-      promptName: "Portrait",
-      snapshotName: "Portrait",
-      versionId: "portrait-v2",
-      versionNumber: 2,
-      text: "selected v2 template",
-    });
-    const createdVersion = version({
-      id: "copy-v1",
-      prompt_id: "prompt-copy",
-      version_number: 1,
-      name_snapshot: "Portrait study",
-      text: "edited duplicate template",
-    });
-    const createdPrompt = prompt("prompt-copy", "Portrait study");
-    const duplicatedLibraryPrompt = {
-      ...createdPrompt,
-      latest_active_version: createdVersion,
-    };
-    const listPrompts = vi.fn<BatchcraftApi["listPrompts"]>()
-      .mockResolvedValueOnce({ prompts: [sourcePrompt] })
-      .mockResolvedValueOnce({ prompts: [sourcePrompt, duplicatedLibraryPrompt] });
-    const createPrompt = vi.fn<BatchcraftApi["createPrompt"]>(async () => ({
-      prompt: createdPrompt,
-      version: createdVersion,
-    }));
-    const callbacks = callbackProps();
-    const api = makeApi({ listPrompts, createPrompt });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbacks} />);
 
-    await expandPromptEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "Duplicate Prompt" }));
-    const dialog = screen.getByRole("dialog", { name: "Duplicate Prompt" });
-    fireEvent.change(within(dialog).getByLabelText("Prompt name"), {
-      target: { value: "Portrait study" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Prompt template"), {
-      target: { value: "edited duplicate template" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Description (optional)"), {
-      target: { value: "A separate study" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Duplicate Prompt" }));
+    await openLibrary();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Prompt" }));
+    expect(screen.getByLabelText("Prompt template")).toHaveValue("viewed source");
+    expect(screen.getByText(/Saving creates a new revision/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "edited text" } });
+    fireEvent.change(screen.getByLabelText("Revision note (optional)"), { target: { value: "Shorter" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
 
-    await waitFor(() => expect(createPrompt).toHaveBeenCalledWith("project-1", {
-      name: "Portrait study",
-      text: "edited duplicate template",
-      description: "A separate study",
-    }));
-    await waitFor(() => expect(listPrompts).toHaveBeenCalledTimes(2));
-    expect(api.createPromptVersion).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.querySelector(".prompt-library-text")?.textContent).toBe("edited text"));
+    expect(screen.getByText("v3", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(createPromptVersion).toHaveBeenCalledWith("prompt-1", { text: "edited text", note: "Shorter" });
     expect(callbacks.onChange).not.toHaveBeenCalled();
-    expect(callbacks.onMetadataChange).not.toHaveBeenCalled();
-    expect(screen.getByText("selected v2 template")).toBeInTheDocument();
-    expect(screen.getByText("v2")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose existing" }));
-    const duplicatedCard = screen.getByText("Portrait study").closest(".repeater-card");
-    expect(within(duplicatedCard as HTMLElement).getByText("Latest active version: v1"))
-      .toBeInTheDocument();
+    expect(screen.getByLabelText("Prompts selected for Batch")).toHaveTextContent("Portrait v1");
   });
 
-  it("renames through metadata without changing snapshot fields", async () => {
-    const original = formPrompt({ promptName: "Current name", snapshotName: "Saved name", text: "frozen text" });
+  it("duplicates an old viewed history revision with collision-safe naming as a new v1 without changing the Batch", async () => {
+    const current = version({ id: "portrait-v3", version_number: 3, text: "current text" });
+    const old = version({ id: "portrait-v1", version_number: 1, text: "old exact text" });
+    const source = { ...libraryPrompt("prompt-1", "Portrait", current), description: "source description" };
+    const existingCopy = libraryPrompt("copy", "Portrait copy");
+    const createdVersion = version({ id: "copy2-v1", prompt_id: "copy-2", version_number: 1, name_snapshot: "Portrait copy 2", text: "old exact text" });
+    const createdPrompt = prompt("copy-2", "Portrait copy 2");
+    const createPrompt = vi.fn<BatchcraftApi["createPrompt"]>(async () => ({ prompt: createdPrompt, version: createdVersion }));
     const callbacks = callbackProps();
     const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Current name")] })),
-      updatePrompt: vi.fn(async () => ({ ...prompt("prompt-1", "Renamed"), updated_at: "2026-08-29T12:00:00Z" })),
+      listPrompts: vi.fn(async () => ({ prompts: [source, existingCopy] })),
+      listPromptVersions: vi.fn(async () => ({ prompt_versions: [current, old] })),
+      createPrompt,
     });
-    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[original]} {...callbacks} />);
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
 
-    await expandPromptEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "Rename Prompt" }));
-    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await openLibrary();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    const oldCard = (await screen.findByText("old exact text")).closest("article")!;
+    fireEvent.click(within(oldCard).getByRole("button", { name: "Duplicate" }));
+    expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait copy 2");
+    expect(screen.getByLabelText("Prompt template")).toHaveValue("old exact text");
+    expect(screen.getByLabelText("Prompt template")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Description (optional)")).toHaveValue("source description");
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate Prompt" }));
 
-    await waitFor(() => expect(callbacks.onMetadataChange).toHaveBeenCalledWith([{
-      ...original,
-      promptName: "Renamed",
-    }]));
+    expect(await screen.findByRole("heading", { name: "Portrait copy 2" })).toBeInTheDocument();
+    expect(screen.getByText("v1", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(createPrompt).toHaveBeenCalledWith("project-1", {
+      name: "Portrait copy 2",
+      text: "old exact text",
+      description: "source description",
+    });
     expect(callbacks.onChange).not.toHaveBeenCalled();
+  });
+
+  it("locks workspace navigation while an immutable revision save is in flight", async () => {
+    const pending = deferred<LibraryPromptVersion>();
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })),
+      createPromptVersion: vi.fn(() => pending.promise),
+    });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbackProps()} />);
+
+    await openLibrary();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Prompt" }));
+    fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "pending text" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Prompts" });
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Portrait/ })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(dialog).toBeInTheDocument();
+
+    await act(async () => pending.resolve(version({ id: "version-2", version_number: 2, text: "pending text" })));
+    await waitFor(() => expect(dialog).not.toHaveAttribute("aria-busy"));
+    expect(document.querySelector(".prompt-library-text")?.textContent).toBe("pending text");
+  });
+
+  it("loads and caches History lazily and can add an exact active historical revision", async () => {
+    const current = version({ id: "v2", version_number: 2, text: "current" });
+    const older = version({ id: "v1", version_number: 1, text: "older", note: "Original" });
+    const listPromptVersions = vi.fn(async () => ({ prompt_versions: [current, older] }));
+    const callbacks = callbackProps();
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Portrait", current)] })),
+      listPromptVersions,
+    });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
+
+    await openLibrary();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    const olderCard = (await screen.findByText("older")).closest("article")!;
+    expect(within(olderCard).getByText("Original")).toBeInTheDocument();
+    fireEvent.click(within(olderCard).getByRole("button", { name: "Inspect revision 1" }));
+    expect(olderCard).toHaveClass("viewed");
+    fireEvent.click(within(olderCard).getByRole("button", { name: "Add this revision" }));
+    expect(callbacks.onChange).toHaveBeenCalledWith([
+      expect.objectContaining({ versionId: "v1", versionNumber: 1, text: "older" }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Back to Prompt" }));
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(listPromptVersions).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("PromptLibraryEditor ordering and linkage", () => {
-  it("moves and removes entries, including the final selection", async () => {
-    const first = formPrompt({ key: 1, promptId: "p1", versionId: "v1", promptName: "One" });
-    const second = formPrompt({ key: 2, promptId: "p2", versionId: "v2", promptName: "Two" });
-    const callbacks = callbackProps();
+describe("PromptLibraryEditor loading and linkage", () => {
+  it("clears old Project data and ignores a stale response", async () => {
+    const oldRequest = deferred<PromptsResponse>();
     const api = makeApi({
-      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("p1", "One"), libraryPrompt("p2", "Two")] })),
+      listPrompts: vi.fn((projectId: string) => projectId === "old" ? oldRequest.promise : Promise.resolve({
+        prompts: [libraryPrompt("new-prompt", "New Project Prompt")],
+      })),
     });
-    const view = render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[first, second]} {...callbacks} />);
-    await expandPromptEditor();
-    await screen.findByText("One");
+    const callbacks = callbackProps();
+    const view = render(<PromptLibraryEditor api={api} projectId="old" prompts={[]} {...callbacks} />);
+    await waitFor(() => expect(api.listPrompts).toHaveBeenCalledWith("old", expect.any(AbortSignal)));
+    view.rerender(<PromptLibraryEditor api={api} projectId="new" prompts={[]} {...callbacks} />);
+    await openLibrary();
+    expect(screen.getAllByText("New Project Prompt")).toHaveLength(2);
+    await act(async () => oldRequest.resolve({ prompts: [libraryPrompt("old-prompt", "Old Project Prompt")] }));
+    expect(screen.queryByText("Old Project Prompt")).not.toBeInTheDocument();
+  });
 
-    const secondCard = screen.getByText("Two").closest("article");
-    fireEvent.click(within(secondCard as HTMLElement).getByRole("button", { name: "Move up" }));
-    expect(callbacks.onChange).toHaveBeenLastCalledWith([second, first]);
-    fireEvent.click(within(secondCard as HTMLElement).getByRole("button", { name: "Remove" }));
-    expect(callbacks.onChange).toHaveBeenLastCalledWith([first]);
-
-    view.rerender(<PromptLibraryEditor api={api} projectId="project-1" prompts={[first]} {...callbacks} />);
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    expect(callbacks.onChange).toHaveBeenLastCalledWith([]);
-    expect(screen.getByRole("button", { name: "Add Prompt" })).toBeEnabled();
+  it("shows a specific missing-Project error and retries", async () => {
+    const listPrompts = vi.fn<BatchcraftApi["listPrompts"]>()
+      .mockRejectedValueOnce(new ApiError("missing", "project_not_found", 404))
+      .mockResolvedValueOnce({ prompts: [] });
+    render(<PromptLibraryEditor api={makeApi({ listPrompts })} projectId="missing" prompts={[]} {...callbackProps()} />);
+    expect(await screen.findByText(PROJECT_NOT_FOUND_MESSAGE)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/This Project has no active Prompts/)).toBeInTheDocument();
   });
 
   it("reconnects an exact detached snapshot through metadata", async () => {
-    const detached = formPrompt({
-      libraryProjectId: null,
-      promptId: null,
-      promptName: "Saved name",
-      snapshotName: "Saved name",
-      text: "saved text",
-    });
+    const detached = formPrompt({ libraryProjectId: null, promptId: null, promptName: "Saved name" });
     const callbacks = callbackProps();
     const api = makeApi({
       listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Current name")] })),
-      getPromptVersion: vi.fn(async () => version({ name_snapshot: "Saved name", text: "saved text" })),
+      getPromptVersion: vi.fn(async () => version()),
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[detached]} {...callbacks} />);
-
     await waitFor(() => expect(callbacks.onMetadataChange).toHaveBeenCalledWith([{
       ...detached,
       libraryProjectId: "project-1",
@@ -451,7 +341,6 @@ describe("PromptLibraryEditor ordering and linkage", () => {
       getPromptVersion: vi.fn(async () => version({ archived_at: "2026-08-29T12:00:00Z" })),
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbacks} />);
-
     await waitFor(() => expect(callbacks.onMetadataChange).toHaveBeenCalledWith([{
       ...selected,
       libraryProjectId: null,
@@ -465,12 +354,9 @@ describe("PromptLibraryEditor ordering and linkage", () => {
     const callbacks = callbackProps();
     const api = makeApi({
       listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })),
-      getPromptVersion: vi.fn(async () => {
-        throw new ApiError("PromptVersion not found", "prompt_version_not_found", 404);
-      }),
+      getPromptVersion: vi.fn(async () => { throw new ApiError("missing", "prompt_version_not_found", 404); }),
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbacks} />);
-
     await waitFor(() => expect(callbacks.onMetadataChange).toHaveBeenCalledWith([{
       ...selected,
       libraryProjectId: null,
@@ -487,11 +373,12 @@ describe("PromptLibraryEditor ordering and linkage", () => {
       getPromptVersion: vi.fn(async () => version({ text: "different library text" })),
     });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[detached]} {...callbacks} />);
-
     expect(await screen.findByText("PromptVersion integrity check failed: stored content differs from the library.")).toBeInTheDocument();
     expect(callbacks.onMetadataChange).not.toHaveBeenCalled();
   });
 });
+
+const PROJECT_NOT_FOUND_MESSAGE = "Project was not found. Check the Project ID and try again.";
 
 function callbackProps() {
   return {
@@ -505,7 +392,7 @@ function formPrompt(overrides: Partial<PromptForm> = {}): PromptForm {
     key: 10,
     libraryProjectId: "project-1",
     promptId: "prompt-1",
-    promptName: "Current name",
+    promptName: "Portrait",
     versionId: "version-1",
     versionNumber: 1,
     snapshotName: "Saved name",
@@ -528,7 +415,7 @@ function version(overrides: Partial<LibraryPromptVersion> = {}): LibraryPromptVe
   };
 }
 
-function prompt(id = "prompt-1", name = "Current name"): Prompt {
+function prompt(id = "prompt-1", name = "Portrait"): Prompt {
   return {
     id,
     project_id: "project-1",
@@ -542,8 +429,8 @@ function prompt(id = "prompt-1", name = "Current name"): Prompt {
 
 function libraryPrompt(
   id = "prompt-1",
-  name = "Current name",
-  latest = version({ prompt_id: id }),
+  name = "Portrait",
+  latest = version({ prompt_id: id, name_snapshot: name }),
 ): ProjectPrompt {
   return { ...prompt(id, name), latest_active_version: latest };
 }
@@ -551,82 +438,44 @@ function libraryPrompt(
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
     getComfyUIStatus: vi.fn(async () => ({ reachable: true, version: null, devices: [], diagnostic: null })),
-    listProjects: vi.fn(async () => ({ projects: [] })),
-    createProject: vi.fn(),
-    getProject: vi.fn(),
-    updateProject: vi.fn(),
-    adoptProject: vi.fn(),
-    listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
-    listSavedBatches: vi.fn(async () => ({ batches: [] })),
-    createSavedBatch: vi.fn(),
-    getSavedBatch: vi.fn(),
-    updateSavedBatch: vi.fn(),
-    archiveSavedBatch: vi.fn(),
-    listAdoptableSavedBatches: vi.fn(async () => ({ batches: [] })),
-    adoptSavedBatch: vi.fn(),
-    listProjectAssets: vi.fn(async () => ({ assets: [] })),
-    uploadProjectAssets: vi.fn(async () => ({ assets: [] })),
-    listPrompts: vi.fn(async () => ({ prompts: [] })),
-    createPrompt: vi.fn(async () => ({ prompt: prompt(), version: version() })),
-    getPrompt: vi.fn(async () => prompt()),
-    updatePrompt: vi.fn(async () => prompt()),
-    listPromptVersions: vi.fn(async () => ({ prompt_versions: [] })),
-    createPromptVersion: vi.fn(async () => version()),
-    getPromptVersion: vi.fn(async () => version()),
-    listWorkflows: vi.fn(async () => ({ workflows: [] })),
-    createWorkflow: vi.fn(),
-    getWorkflow: vi.fn(),
-    updateWorkflow: vi.fn(),
-    archiveWorkflow: vi.fn(),
-    listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [] })),
-    createWorkflowVersion: vi.fn(),
-    getWorkflowVersion: vi.fn(),
-    archiveWorkflowVersion: vi.fn(),
-    listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })),
-    createWorkflowProfile: vi.fn(),
-    getWorkflowProfile: vi.fn(),
-    updateWorkflowProfile: vi.fn(),
-    archiveWorkflowProfile: vi.fn(),
-    listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [] })),
-    createWorkflowProfileVersion: vi.fn(),
-    getWorkflowProfileVersion: vi.fn(),
-    archiveWorkflowProfileVersion: vi.fn(),
-    previewBatch: vi.fn(async () => ({ job_count: 0, warnings: [], jobs: [] })),
-    createRun: vi.fn(async () => ({
-      run_id: "run-1",
-      run_number: 1,
-      run_name: null,
-      run_description: null,
-      filesystem_key: "001-run",
-      project_id: "project-1",
-      project_name: "Project",
-      batch_id: "batch-1",
-      batch_name: "Batch",
-      job_count: 0,
-      durable_status: "created",
-    })),
-    getRun: vi.fn(async () => { throw new Error("unused"); }),
-    startRun: vi.fn(async () => ({ run_id: "run-1", status: "accepted" })),
-    getExecution: vi.fn(async () => { throw new Error("unused"); }),
-    getResults: vi.fn(async () => ({ run_id: "run-1", results: [] })),
-    resultUrl: (url) => url,
-    assetUrl: (url) => url,
+    listProjects: vi.fn(async () => ({ projects: [] })), createProject: vi.fn(), getProject: vi.fn(), updateProject: vi.fn(), adoptProject: vi.fn(), listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
+    listSavedBatches: vi.fn(async () => ({ batches: [] })), createSavedBatch: vi.fn(), getSavedBatch: vi.fn(), updateSavedBatch: vi.fn(), archiveSavedBatch: vi.fn(), listAdoptableSavedBatches: vi.fn(async () => ({ batches: [] })), adoptSavedBatch: vi.fn(),
+    listProjectAssets: vi.fn(async () => ({ assets: [] })), uploadProjectAssets: vi.fn(async () => ({ assets: [] })),
+    listPrompts: vi.fn(async () => ({ prompts: [] })), createPrompt: vi.fn(async () => ({ prompt: prompt(), version: version() })), getPrompt: vi.fn(async () => prompt()), updatePrompt: vi.fn(async () => prompt()), listPromptVersions: vi.fn(async () => ({ prompt_versions: [] })), createPromptVersion: vi.fn(async () => version()), getPromptVersion: vi.fn(async () => version()),
+    listWorkflows: vi.fn(async () => ({ workflows: [] })), createWorkflow: vi.fn(), getWorkflow: vi.fn(), updateWorkflow: vi.fn(), archiveWorkflow: vi.fn(), listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [] })), createWorkflowVersion: vi.fn(), getWorkflowVersion: vi.fn(), archiveWorkflowVersion: vi.fn(),
+    listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })), createWorkflowProfile: vi.fn(), getWorkflowProfile: vi.fn(), updateWorkflowProfile: vi.fn(), archiveWorkflowProfile: vi.fn(), listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [] })), createWorkflowProfileVersion: vi.fn(), getWorkflowProfileVersion: vi.fn(), archiveWorkflowProfileVersion: vi.fn(),
+    previewBatch: vi.fn(async () => ({ job_count: 0, warnings: [], jobs: [] })), createRun: vi.fn(), getRun: vi.fn(), startRun: vi.fn(), getExecution: vi.fn(), getResults: vi.fn(async () => ({ run_id: "run-1", results: [] })), resultUrl: (url) => url, assetUrl: (url) => url,
     ...overrides,
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+async function openLibrary(): Promise<HTMLButtonElement> {
+  await waitFor(() => expect(screen.queryByText("Loading Prompt library...")).not.toBeInTheDocument());
+  const section = screen.getByRole("group", { name: "Prompts" });
+  const edit = within(section).queryByRole("button", { name: "Edit" });
+  if (edit) fireEvent.click(edit);
+  const trigger = await within(section).findByRole("button", { name: "Add Prompt" });
+  await waitFor(() => expect(trigger).toBeEnabled());
+  fireEvent.click(trigger);
+  await screen.findByRole("dialog", { name: "Prompts" });
+  return trigger as HTMLButtonElement;
 }
 
-async function expandPromptEditor() {
-  const section = screen.getByRole("group", { name: "Prompt Versions" });
-  const edit = await within(section).findByRole("button", { name: "Edit" });
-  fireEvent.click(edit);
+async function expandPrompts() {
+  await waitFor(() => expect(screen.queryByText("Loading Prompt library...")).not.toBeInTheDocument());
+  const section = screen.getByRole("group", { name: "Prompts" });
+  const edit = within(section).queryByRole("button", { name: "Edit" });
+  if (edit) fireEvent.click(edit);
+}
+
+function fillPromptForm(name: string, text: string, description: string) {
+  fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: name } });
+  fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: text } });
+  fireEvent.change(screen.getByLabelText("Description (optional)"), { target: { value: description } });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
