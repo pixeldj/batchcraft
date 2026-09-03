@@ -73,6 +73,14 @@ BC-007 Project-wide Run/Result browser
 BC-009 /object_info integration
     ├── improves BC-008 video/file input mapping
     └── improves BC-010 Base-workflow preflight
+
+BC-018 V1 filesystem recovery audit and contract
+    └── BC-019 V1 format consolidation
+            └── BC-020 Project import and historical reindex
+                    └── BC-021 Load Run as Batch and cross-instance acceptance
+
+BC-020 coordinates with BC-007 Project-wide Run/Result browser
+BC-021 implements the portability-specific Load Run as Batch slice of BC-006
 ```
 
 ## Fields
@@ -815,6 +823,91 @@ Future BC-007 indexing should support:
 - showing the Run name alongside Run number/status.
 
 Do not use mutable display names as filesystem identity.
+
+### BC-018: V1 filesystem recovery audit and contract
+
+| Field | Value |
+| --- | --- |
+| ID | BC-018 |
+| Priority | P1 |
+| Status | Done |
+| Area | Persistence / Recovery |
+| Summary | Audit current Project filesystem records and define the v1 portability contract and release test before schemas freeze. |
+| Dependencies / Notes | V1-001. ADR 0012 remains Proposed. The audit is in `docs/V1_RECOVERY_AUDIT.md`; the release test is in `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. This item changes contracts and planning only, not persisted formats or import behavior. |
+
+Completion evidence: the audit and acceptance contract agree with current code and documentation.
+Filesystem persistence tests, Project adoption tests, and browser working-session recovery tests pass.
+The remaining release gaps are assigned to BC-019, BC-020, and BC-021.
+
+Acceptance requires:
+
+- an inventory of current Project artifacts, authorities, versions, and validators;
+- a finding on whether modern Runs preserve editable intent and concrete provenance;
+- explicit record-level and workflow-level recovery gaps;
+- allocation of remaining work to BC-019, BC-020, and BC-021;
+- one cross-instance acceptance contract that does not depend on SQLite or browser recovery state.
+
+### BC-019: V1 format consolidation
+
+| Field | Value |
+| --- | --- |
+| ID | BC-019 |
+| Priority | P1 |
+| Status | Planned |
+| Area | Persistence / File formats |
+| Summary | Replace prerelease Project record schemas with explicit, independently versioned v1 formats that satisfy the recovery audit. |
+| Dependencies / Notes | V1-002. Depends on BC-018 and ADR 0012. Follow the prerelease reset policy in ADR 0004. Do not add compatibility readers for unsupported development data unless separately required. |
+
+Acceptance requires:
+
+- explicit format identity and `format_version: 1` for every canonical durable Project JSON record;
+- producer batchcraft version metadata where the audit requires it;
+- a deliberate contract for frozen workflow files and the secondary CSV;
+- resolution of missing fields identified by BC-018, including output intent documentation;
+- strict round-trip, unsupported-version, hash, path, owner-chain, and fixture tests;
+- updated `FILE_FORMAT.md`, developer policy, and format examples that match emitted bytes.
+
+### BC-020: Project import and historical reindex
+
+| Field | Value |
+| --- | --- |
+| ID | BC-020 |
+| Priority | P1 |
+| Status | Planned |
+| Area | Persistence / Import / Indexing |
+| Summary | Import a copied v1 Project into an empty database, discover its historical Runs, and rebuild disposable historical indexes from filesystem truth. |
+| Dependencies / Notes | V1-003. Depends on BC-019. This is the portability prerequisite for BC-007, not the complete Project-wide browser. Import must be identity-aware, non-destructive, idempotent, and honest about degraded content. |
+
+Acceptance requires:
+
+- complete Project, Batch, Run, execution, Asset, and Result discovery without supplied Run IDs;
+- Project-level validation with conflicting ownership rejected and bad Runs isolated where safe;
+- rebuildable Run, Job, Result, parameter, Image Input, and Asset-use projections;
+- repeated import/reindex with no duplicate trusted records or historical file rewrites;
+- APIs that let the frontend browse imported history without browser `localStorage` IDs;
+- degraded-state reporting for unsupported formats, missing Assets, corrupt Results, and duplicate IDs.
+
+### BC-021: Load Run as Batch and cross-instance acceptance
+
+| Field | Value |
+| --- | --- |
+| ID | BC-021 |
+| Priority | P1 |
+| Status | Planned |
+| Area | Runs / Recovery / Historical reuse |
+| Summary | Reconstruct editable Batch intent from a modern historical Run with detached resources, then pass the clean-instance portability release gate. |
+| Dependencies / Notes | V1-004. Depends on BC-020. Implements the portability-specific `Load Run as Batch` part of BC-006; `Recreate Result` and `Exact Rerun` remain in BC-006. Follow `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. |
+
+Acceptance requires:
+
+- reconstruction of Prompt, Variable Binding, Image Input, Parameter Values/Range, Linked Parameter Set,
+  seed, Workflow, and Workflow Profile intent from the frozen Batch snapshot;
+- detached historical resources that support inspection and Preview without manufacturing library rows;
+- exact-content relinking, explicit detached import, and hard conflicts for identity/content mismatch;
+- a new Preview before creating a new immutable Run;
+- automated cross-instance import, inspection, reconstruction, relinking, and degraded-content tests;
+- one separate live ComfyUI smoke test proving successful execution of the reconstructed Batch;
+- unchanged hashes for every original historical Run file.
 
 ## Maintenance rules
 
