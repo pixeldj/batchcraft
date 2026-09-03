@@ -50,7 +50,7 @@ export function ResultGallery({
   const imageItems = useMemo<LightboxItem[]>(() => {
     return ordered.flatMap((result) => {
       const key = itemKey(result);
-      if (!isImage(result) || failedKeys.has(key)) {
+      if (!isImage(result) || result.integrity_status !== "verified" || failedKeys.has(key)) {
         return [];
       }
       const multi =
@@ -95,7 +95,12 @@ export function ResultGallery({
           const failed = failedKeys.has(key);
           return (
             <article className="result-card" key={key}>
-              {isImage(result) ? (
+              {result.integrity_status !== "verified" ? (
+                <div className="artifact-placeholder result-integrity-unavailable">
+                  <span>{result.integrity_status.toUpperCase()}</span>
+                  <strong>Artifact unavailable</strong>
+                </div>
+              ) : isImage(result) ? (
                 <button
                   className="result-image-button"
                   type="button"
@@ -135,6 +140,9 @@ export function ResultGallery({
                 </a>
               )}
               <span className="result-label">{itemLabel(result, multi)}</span>
+              <span className={`result-integrity-badge ${result.integrity_status}`}>
+                {result.integrity_status}
+              </span>
               {runId ? (
                 <button
                   className="result-info-button"

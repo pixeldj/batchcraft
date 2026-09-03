@@ -6,8 +6,26 @@ This is the executable release gate for ADR 0012. It proves that a Project direc
 historical experiment archive and that a modern historical Run can become a new editable Batch without
 the original SQLite database or browser state.
 
-The scenario becomes runnable after BC-019, BC-020, and BC-021 are implemented. Until then it is the
-acceptance contract, not a statement of current behavior.
+BC-019 and BC-020 provide the durable records, owned-v1 import, rebuildable historical projections, and
+read-only Project history needed for the first half of this scenario. BC-021 remains Planned and must add
+editable reconstruction, detached-resource workflows, and the final clean-instance/live execution proof.
+The complete scenario is still an acceptance contract, not a passed release gate.
+
+## Current BC-020 evidence
+
+Automated tests currently prove:
+
+- import by safe immediate-child filesystem key into an empty file-backed SQLite database;
+- unchanged Project file inventories across scanning and repeated projection replacement;
+- atomic, idempotent replacement of Project historical rows and repair of a damaged projection;
+- Project ownership conflict rejection without partial trusted registration;
+- isolation of malformed/unsupported Runs, malformed Batch owners, unsafe paths, and duplicate Run IDs;
+- degraded Runs for missing Assets or missing/corrupt Results, with preserved metadata and refused bytes;
+- explicit unavailable execution and read-only frozen detail without mutable library rows;
+- frontend Project history without `localStorage` Run IDs, grouped Batch/Run display, diagnostics, frozen
+  Run Plan and Result Details, and no execution actions.
+
+These tests are BC-020 evidence, not final manual cross-instance acceptance.
 
 ## Test isolation
 
@@ -192,3 +210,8 @@ The release gate passes only when:
 
 Any required use of Instance A's SQLite database, browser state, mutable libraries, or manually supplied
 Run IDs fails the gate.
+
+Current gate status: BC-020 import, reindex, inspection, idempotency, and degraded-content coverage is
+implemented. BC-021 reconstruction, relinking, complete automated cross-instance coverage, repeat-fresh
+Instance B proof, and the live ComfyUI smoke test are incomplete. No final manual cross-instance
+acceptance is claimed.

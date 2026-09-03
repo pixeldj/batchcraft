@@ -881,7 +881,7 @@ tests, frontend typecheck/lint/build, and `git diff --check`. No live ComfyUI ho
 | --- | --- |
 | ID | BC-020 |
 | Priority | P1 |
-| Status | Planned |
+| Status | Done |
 | Area | Persistence / Import / Indexing |
 | Summary | Import a copied v1 Project into an empty database, discover its historical Runs, and rebuild disposable historical indexes from filesystem truth. |
 | Dependencies / Notes | V1-003. Depends on BC-019. This is the portability prerequisite for BC-007, not the complete Project-wide browser. Import must be identity-aware, non-destructive, idempotent, and honest about degraded content. |
@@ -894,6 +894,18 @@ Acceptance requires:
 - repeated import/reindex with no duplicate trusted records or historical file rewrites;
 - APIs that let the frontend browse imported history without browser `localStorage` IDs;
 - degraded-state reporting for unsupported formats, missing Assets, corrupt Results, and duplicate IDs.
+
+Implementation result: owned v1 Projects import by safe immediate-child filesystem key, while ownerless
+adoption remains a distinct explicit identity mutation. Read-only scanning preserves filesystem
+authority and atomically replaces rebuildable Project historical projections. Invalid records are
+isolated with diagnostics; valid Runs are verified or degraded; missing/invalid execution is explicitly
+unavailable; and Results report verified, missing, or corrupt integrity. The API and frontend expose
+Project history, reindex, frozen Run detail, and Result review without browser-held Run IDs. Strict
+mutation and download paths still require complete validated storage.
+
+Verification passed with 585 backend tests, Ruff check/format, mypy, and the Python package build, plus
+309 frontend tests, typecheck, lint, and the production build. `git diff --check` also passed. This is
+not a claim that BC-021's manual cross-instance acceptance has passed.
 
 ### BC-021: Load Run as Batch and cross-instance acceptance
 

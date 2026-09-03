@@ -477,7 +477,7 @@ function libraryPrompt(
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
     getComfyUIStatus: vi.fn(async () => ({ reachable: true, version: null, devices: [], diagnostic: null })),
-    listProjects: vi.fn(async () => ({ projects: [] })), createProject: vi.fn(), getProject: vi.fn(), updateProject: vi.fn(), adoptProject: vi.fn(), listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
+    listProjects: vi.fn(async () => ({ projects: [] })), createProject: vi.fn(), getProject: vi.fn(), updateProject: vi.fn(), adoptProject: vi.fn(), importProject: vi.fn(), reindexProject: vi.fn(), listProjectRuns: vi.fn(async () => ({ project_id: "", runs: [], diagnostics: [] })), listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
     listSavedBatches: vi.fn(async () => ({ batches: [] })), createSavedBatch: vi.fn(), getSavedBatch: vi.fn(), updateSavedBatch: vi.fn(), archiveSavedBatch: vi.fn(), listAdoptableSavedBatches: vi.fn(async () => ({ batches: [] })), adoptSavedBatch: vi.fn(),
     listProjectAssets: vi.fn(async () => ({ assets: [] })), uploadProjectAssets: vi.fn(async () => ({ assets: [] })),
     listPrompts: vi.fn(async () => ({ prompts: [] })), createPrompt: vi.fn(async () => ({ prompt: prompt(), version: version() })), getPrompt: vi.fn(async () => prompt()), updatePrompt: vi.fn(async () => prompt()), listPromptVersions: vi.fn(async () => ({ prompt_versions: [] })), createPromptVersion: vi.fn(async () => version()), getPromptVersion: vi.fn(async () => version()),

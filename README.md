@@ -10,7 +10,10 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 Early production development.
 
-The disposable remote ComfyUI spike, pure deterministic Batch compiler, Run filesystem store, production ComfyUI adapter, sequential Run executor, thin FastAPI application boundary, and first React workflow are complete.
+The disposable remote ComfyUI spike, deterministic Batch compiler, Run filesystem store, production
+ComfyUI adapter, sequential Run executor, FastAPI application boundary, and first React workflow are
+complete. Owned v1 Projects can be imported from the configured Projects root and their historical
+indexes rebuilt from filesystem truth.
 
 The browser now supports ComfyUI status, SQLite-backed Project selection with create and explicit
 filesystem adoption, Project image import and Profile-driven named Image Input binding,
@@ -19,11 +22,11 @@ SQLite-backed Saved Batches with the Saved Batch selector, visual Workflow Profi
 editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, frontend Random seed
 materialization, repeated Run creation, and a Batch Results gallery restored within the current tab
-session. The backend now includes the SQLite foundation, mutable Project metadata, explicit Project
-owner adoption, immutable-version Prompt, Workflow, and Workflow Profile libraries, and durable
-Saved Batch persistence. A
-Project-wide historical gallery, a global scheduler, and automatic backend recovery remain
-unimplemented.
+session. The frontend also provides Project history grouped by Batch, frozen Run Plan and Result detail,
+explicit unavailable execution state, and Result integrity status. The backend includes mutable Project
+metadata, distinct ownerless adoption, immutable-version libraries, durable Saved Batches, and
+rebuildable historical projections. Editable `Load Run as Batch`, broader Project-history filtering, a
+global scheduler, and automatic backend recovery remain unimplemented.
 
 ## Run The API
 
@@ -202,6 +205,7 @@ HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects, Pro
 Workflow Profiles, and Saved Batches, a thin FastAPI boundary under `backend/`, and the first browser
 workflow under `frontend/`.
 
-Later application slices will add filesystem-derived indexes, scheduler selection, and deeper Result review.
+Later application slices will add editable historical reconstruction, broader history filtering,
+scheduler selection, and deeper Result review.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.

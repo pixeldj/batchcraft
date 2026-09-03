@@ -45,6 +45,15 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "batch_linked_parameter_set_row",
             "batch_linked_parameter_set_value",
             "run_cancellation_request",
+            "historical_asset",
+            "historical_batch",
+            "historical_run",
+            "historical_job",
+            "historical_resolved_parameter",
+            "historical_image_input",
+            "historical_asset_use",
+            "historical_result",
+            "historical_diagnostic",
         }
         indexes = {
             row[0]
@@ -66,6 +75,9 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "batch_workflow_profile_idx",
             "batch_workflow_profile_version_idx",
             "batch_prompt_selection_version_idx",
+            "historical_run_project_idx",
+            "historical_asset_use_project_idx",
+            "historical_diagnostic_project_idx",
         }
         triggers = {
             row[0]
@@ -93,6 +105,18 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
         assert (
             connection.execute("PRAGMA foreign_key_list(run_cancellation_request)").fetchall() == []
         )
+        for table in (
+            "historical_asset",
+            "historical_batch",
+            "historical_run",
+            "historical_job",
+            "historical_resolved_parameter",
+            "historical_image_input",
+            "historical_asset_use",
+            "historical_result",
+            "historical_diagnostic",
+        ):
+            assert connection.execute(f"PRAGMA foreign_key_list({table})").fetchall() == []
 
         migration_path = (
             Path(__file__).parents[2]
@@ -102,6 +126,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             / "migrations"
             / "0001_initial.sql"
         )
+        migration_two_path = migration_path.with_name("0002_historical_projections.sql")
         assert connection.execute(
             "SELECT version, name, checksum, applied_at FROM schema_migration ORDER BY version"
         ).fetchall() == [
@@ -110,11 +135,17 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
                 "initial",
                 hashlib.sha256(migration_path.read_bytes()).hexdigest(),
                 "2026-08-28T12:30:00.000000Z",
-            )
+            ),
+            (
+                2,
+                "historical_projections",
+                hashlib.sha256(migration_two_path.read_bytes()).hexdigest(),
+                "2026-08-28T12:30:00.000000Z",
+            ),
         ]
 
         apply_migrations(connection, clock=lambda: pytest.fail("no migration should run"))
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (2,)
     finally:
         connection.close()
 
@@ -196,7 +227,10 @@ def test_future_contiguous_migration_preserves_existing_data(
         "future_migrations",
         {
             "0001_initial.sql": (migration_root / "0001_initial.sql").read_text(),
-            "0002_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
+            "0002_historical_projections.sql": (
+                migration_root / "0002_historical_projections.sql"
+            ).read_text(),
+            "0003_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -222,7 +256,7 @@ def test_future_contiguous_migration_preserves_existing_data(
         ).fetchone() == ("future_marker",)
         assert connection.execute(
             "SELECT version, name FROM schema_migration ORDER BY version"
-        ).fetchall() == [(1, "initial"), (2, "future")]
+        ).fetchall() == [(1, "initial"), (2, "historical_projections"), (3, "future")]
     finally:
         connection.close()
 
@@ -294,7 +328,7 @@ def test_concurrent_startup_serializes_migration_application(tmp_path: Path) -> 
 
     connection = open_connection(database_path)
     try:
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (2,)
     finally:
         connection.close()
 
@@ -304,7 +338,7 @@ def test_unknown_newer_database_and_history_gap_are_rejected(tmp_path: Path) -> 
     gap = open_connection(tmp_path / "gap.sqlite3")
     try:
         apply_migrations(newer)
-        newer.execute("INSERT INTO schema_migration VALUES (2, 'future', ?, 'now')", ("0" * 64,))
+        newer.execute("INSERT INTO schema_migration VALUES (3, 'future', ?, 'now')", ("0" * 64,))
         newer.commit()
         with pytest.raises(MigrationError, match="newer than application"):
             apply_migrations(newer)

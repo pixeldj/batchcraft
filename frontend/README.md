@@ -2,8 +2,9 @@
 
 The frontend is the first browser workflow for importing Reference Assets and binding them to named Image Inputs,
 selecting and configuring a saved or new Saved Batch, previewing its compiled Jobs, creating durable
-Runs, watching Job state, viewing the current Run's Results, and reviewing accumulated Batch Results
-from this browser working session. It communicates only with the batchcraft FastAPI application.
+Runs, watching Job state, viewing the current Run's Results, reviewing accumulated Batch Results from
+this browser working session, and browsing filesystem-indexed Project history. It communicates only
+with the batchcraft FastAPI application.
 
 The browser stores one strict working-session recovery v2 record under
 `batchcraft.working-session-recovery.v2` in `localStorage`. It contains editable Batch intent, selected
@@ -42,6 +43,10 @@ the gallery; changing Batch identity resets the gallery. Prompt, image, seed, an
 edits retain it.
 
 The Project selector lists active SQLite Projects and exposes compact create and adoption flows.
+An owned v1 Project already copied directly under the configured Projects root can be imported by its
+filesystem key. Ownerless-folder adoption remains a separate operation because it creates an owner
+identity. The Project History section reads rebuildable backend projections, groups Runs by Batch, and
+opens frozen Run Plan and Result Details without browser-held Run IDs or execution controls.
 Project IDs and filesystem keys are not editable after selection. A saved draft reconnects only when
 both values exactly match an active Project. Until that check succeeds, Prompt and Asset library
 requests remain unscoped. Switching Project is unavailable while a Run is active and requires
@@ -79,7 +84,8 @@ validated by the backend during Preview. ComfyUI remains the workflow editor.
 Closing a tab does not cancel or restart backend execution. On reopen, the current Run is fetched from
 FastAPI with its execution and Results. Running state resumes the same polling loop used after a new Run
 starts. The ordered stored Run IDs rebuild only the prior working-session gallery; they do not query or
-display Project-wide Run history.
+control Project history. Project history is loaded independently for the selected Project and works
+with empty browser storage.
 
 ## Requirements
 
@@ -128,9 +134,10 @@ Frontend tests mock the typed API client. They do not require FastAPI or ComfyUI
 - Browser working-session recovery is local to one browser profile and uses last-writer-wins behavior.
 - Working-session recovery is not a Saved Batch; Saved Batch persistence lives in SQLite through the
   Saved Batch selector.
-- Image import currently accepts PNG, JPEG, and WebP. Each Image Input currently has exactly one
-  one or more ordered alternatives: Base workflow and Project Assets.
+- Image import currently accepts PNG, JPEG, and WebP. Each Image Input has one or more ordered
+  alternatives: Base workflow and Project Assets.
 - Workflow snapshots can be edited as JSON. Workflow Profile mappings use the visual mapper. ComfyUI
   remains the workflow editor.
-- Batch Results are not a durable Project-wide gallery or Run-history browser.
-- The screen has no backend executor restart recovery, retry, rating, filtering, or Project-wide Run browser.
+- Batch Results remain a browser-session gallery; the separate Project History section provides the
+  durable Project-scoped view.
+- The screen has no backend executor restart recovery, retry, rating, or Project-history filtering.

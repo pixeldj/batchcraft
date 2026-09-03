@@ -17,12 +17,15 @@ from pydantic import (
 
 from batchcraft.application import (
     ComfyUIStatus,
+    ListedResult,
     RunCancellation,
     RunCancellationRequestResult,
     RunCreationInput,
 )
 from batchcraft.comfyui import workflow_profile_image_inputs, workflow_profile_parameters
 from batchcraft.db import (
+    HistoricalDiagnosticRecord,
+    HistoricalRunRecord,
     ProjectRecord,
     PromptListRecord,
     PromptRecord,
@@ -71,7 +74,7 @@ from batchcraft.domain import (
     validate_parameter_scalar,
     validate_stable_key,
 )
-from batchcraft.execution import ResultRecord, RunExecutionState
+from batchcraft.execution import RunExecutionState
 from batchcraft.files import (
     AdoptableBatch,
     AdoptableProject,
@@ -358,6 +361,84 @@ class ProjectAdoptRequest(ApiModel):
     project_id: str | None = Field(default=None, min_length=1)
     name: str | None = Field(default=None, min_length=1)
     description: str | None = None
+
+
+class ProjectImportRequest(ApiModel):
+    filesystem_key: str = Field(min_length=1)
+
+
+class HistoryDiagnosticResponse(ApiModel):
+    scope: str
+    filesystem_key: str | None
+    entity_id: str | None
+    code: str
+    message: str
+
+    @classmethod
+    def from_record(cls, item: HistoricalDiagnosticRecord) -> Self:
+        return cls(
+            scope=item.scope,
+            filesystem_key=item.filesystem_key,
+            entity_id=item.entity_id,
+            code=item.code,
+            message=item.message,
+        )
+
+
+class ProjectImportResponse(ApiModel):
+    project_id: str
+    filesystem_key: str
+    name: str
+    batch_count: int
+    asset_count: int
+    run_count: int
+    diagnostic_count: int
+
+
+class HistoricalRunResponse(ApiModel):
+    run_id: str
+    batch_id: str
+    batch_filesystem_key: str
+    batch_name: str
+    run_number: int
+    filesystem_key: str
+    run_name: str | None
+    run_description: str | None
+    created_at: str
+    job_count: int
+    execution_available: bool
+    execution_status: str | None
+    started_at: str | None
+    completed_at: str | None
+    integrity_status: str
+    replayable: bool
+
+    @classmethod
+    def from_record(cls, item: HistoricalRunRecord) -> Self:
+        return cls(
+            run_id=item.run_id,
+            batch_id=item.batch_id,
+            batch_filesystem_key=item.batch_filesystem_key,
+            batch_name=item.batch_name,
+            run_number=item.run_number,
+            filesystem_key=item.filesystem_key,
+            run_name=item.name,
+            run_description=item.description,
+            created_at=item.created_at,
+            job_count=item.job_count,
+            execution_available=item.execution_available,
+            execution_status=item.execution_status,
+            started_at=item.started_at,
+            completed_at=item.completed_at,
+            integrity_status=item.integrity_status,
+            replayable=item.replayable,
+        )
+
+
+class ProjectRunsResponse(ApiModel):
+    project_id: str
+    runs: list[HistoricalRunResponse]
+    diagnostics: list[HistoryDiagnosticResponse]
 
 
 class ProjectUpdateRequest(ApiModel):
@@ -1422,10 +1503,12 @@ class ResultResponse(ApiModel):
     content_type: str | None
     byte_size: int
     sha256: str
+    integrity_status: Literal["verified", "missing", "corrupt"]
     download_url: str
 
     @classmethod
-    def from_result(cls, run_id: str, result: ResultRecord) -> Self:
+    def from_result(cls, run_id: str, listed: ListedResult) -> Self:
+        result = listed.record
         return cls(
             job_ordinal=result.job_ordinal,
             artifact_ordinal=result.artifact_ordinal,
@@ -1435,6 +1518,7 @@ class ResultResponse(ApiModel):
             content_type=result.content_type,
             byte_size=result.byte_size,
             sha256=result.sha256,
+            integrity_status=listed.integrity_status,
             download_url=(
                 f"/api/runs/{run_id}/results/{result.job_ordinal}/{result.artifact_ordinal}"
             ),

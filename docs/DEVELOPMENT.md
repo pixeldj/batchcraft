@@ -35,20 +35,18 @@ Before substantial work, agents must read:
 
 Agents should plan before implementing non-trivial features and should avoid broad opportunistic refactors while completing a focused task.
 
-## Pre-release Persistence Policy
+## Persistence policy
 
-batchcraft has no released persistence compatibility contract yet. Unless a task explicitly requires
-one, support only the current SQLite schema, Run manifest and snapshot, execution state, API payload,
-and browser-session formats. Unsupported persisted data fails closed; an unsupported or malformed
-browser session starts from clean working state. The application must not silently delete or rewrite
-local databases or Run directories.
+Treat user SQLite databases and valid candidate-v1 Project files as durable local data. Keep applied SQL
+migration files byte-stable and make user-database schema changes only through the next contiguous
+forward migration. Unsupported migration history, durable record versions, and malformed data fail
+closed. The application must not silently delete, reset, or rewrite user databases or Project files.
 
-Keep explicit format identities and independently managed versions, the SQLite migration runner, and
-current-version rejection tests. BC-019 establishes candidate-v1 Project filesystem formats, but the
-released compatibility promise does not begin until ADR 0012's import and cross-instance gates pass.
-Until then, unsupported prerelease data still fails closed. After that gate, valid v1 data must not be
-invalidated by rewriting baselines or casually dropping readers. Add a compatibility path only for a
-concrete released-data or external-consumer requirement.
+Historical SQLite tables are non-authoritative projections and may be replaced atomically from
+filesystem truth. Temporary file-backed test databases remain disposable. Browser working-session
+recovery is versioned convenience state; unsupported or malformed records may reset to an empty session.
+ADR 0012 remains Proposed until BC-021 completes editable reconstruction and the full cross-instance
+release gate.
 
 ## Repository Shape
 
@@ -374,6 +372,24 @@ descriptors. Each Job freezes a generated output prefix bound to Run and Job ide
 fixture under `backend/tests/fixtures/v1_project/` locks the complete current record set. This phase does
 not add import, historical indexing, detached resources, or the cross-instance release gate.
 
+### Phase 2.14: Project import and historical reindex
+
+BC-020 is complete. The backend imports an owned v1 Project by path-safe immediate-child filesystem key,
+scans Project/Batch owners, Assets, Runs, execution, and Results without changing Project files, and
+atomically replaces one Project's rebuildable historical projection. Ownerless adoption remains a
+separate explicit identity mutation.
+
+Valid Runs are indexed as verified or degraded. Invalid Runs are isolated with diagnostics. Missing or
+invalid execution is explicit and unavailable; missing or corrupt Result bytes retain metadata and an
+integrity status but cannot be downloaded. Historical readers strictly validate metadata while
+tolerating unavailable output bytes; execution mutations and downloads keep full storage and byte
+validation. The frontend imports owned candidates, reindexes Projects, groups history by Batch, opens
+frozen Run Plans and Result Details,
+and displays execution availability and Result integrity without browser-held Run IDs.
+
+BC-021 remains Planned for editable `Load Run as Batch`, detached-resource relinking/import, automated
+end-to-end cross-instance reconstruction, and the live ComfyUI acceptance step.
+
 ## Python Conventions
 
 Use `uv` for Python environment and dependency management unless an ADR changes the decision.
@@ -411,19 +427,12 @@ uv run batchcraft-api
 
 The default bind address is `127.0.0.1:8000`; `BATCHCRAFT_SERVER_HOST` and `BATCHCRAFT_SERVER_PORT` override it. See `docs/API.md` for all application settings and endpoint behavior.
 
-SQL migrations live under `backend/src/batchcraft/db/migrations/`. The current pre-release schema is
-one consolidated `0001_initial.sql` baseline. Generic Workflow Parameters Pass 3A replaced the prior
-consolidated 0001 bytes and schema with normalized parameter binding storage; Pass 3B-1 replaced those
-bytes again to permit multiple positive parameter value positions; Pass 3B-2 replaced them again with
-Values/Range mode and decimal Range columns; the BC-003A backend pass replaced them again with the
-`run_cancellation_request` table; BC-001 replaced it again with normalized linked-set, member, row, and
-cell tables. Any database created from an earlier baseline has
-unsupported migration history and must be recreated manually. The application fails
-startup and never erases it. The migration runner, ordered discovery,
-checksums, and transactional application remain the forward-change mechanism. Once preserving a
-baseline is required, add only the next contiguous `NNNN_name.sql` file and do
-not change applied migration bytes. Test migration behavior against file-backed temporary databases
-rather than only `:memory:`.
+SQL migrations live under `backend/src/batchcraft/db/migrations/`. `0001_initial.sql` is now a preserved
+user-data baseline. BC-020 adds `0002_historical_projections.sql` as the first forward migration. Never
+change applied migration bytes. Add only the next contiguous `NNNN_name.sql`; ordered discovery,
+checksums, and transactional application reject gaps, changed history, and newer unknown databases.
+Test migration behavior and preservation of existing rows against file-backed temporary databases rather
+than only `:memory:`. Those test databases may be recreated; user databases may not.
 
 Cancellation changes require tests for durable and idempotent intent, both request/admission race
 orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and
@@ -582,6 +591,10 @@ High-value unit-test areas include:
 - separation of frozen Run provenance from mutable execution state;
 - filesystem publication before SQLite indexing;
 - re-indexing complete filesystem Runs;
+- atomic Project projection replacement and rebuild from filesystem truth;
+- verified/degraded/invalid history isolation and explicit unavailable execution;
+- read-only historical detail versus strict mutation and Result download;
+- Result integrity classification;
 - manifest round-tripping;
 - rerun creation;
 - Workflow Profile core and named Image Input mapping;
@@ -606,7 +619,7 @@ When changing a durable format:
 4. add current round-trip, exact-shape, unsupported-version, hash, path, and owner-chain tests;
 5. update the committed golden fixture and inspect its emitted bytes;
 6. state whether a compatibility path is explicitly required;
-7. document any manual reset or migration behavior.
+7. document compatibility and migration behavior.
 
 During pre-release development, old Run readability is not the default requirement. Unsupported data
 must fail closed without automatic deletion or rewriting. Do not infer durable format versions solely

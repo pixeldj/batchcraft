@@ -127,11 +127,21 @@ describe("ProjectSelector transitions", () => {
     expect(createProject.mock.calls[0][0]).not.toHaveProperty("id");
   });
 
-  it("adopts an owned directory with its stored ID omitted from the request", async () => {
-    const adopted = project("stored-id", "owned-key", "Current name");
-    const adoptProject = vi.fn(async () => adopted);
+  it("imports an owned directory and loads its registered Project", async () => {
+    const imported = project("stored-id", "owned-key", "Initial name");
+    const importProject = vi.fn<BatchcraftApi["importProject"]>(async () => ({
+      project_id: "stored-id",
+      filesystem_key: "owned-key",
+      name: "Initial name",
+      batch_count: 1,
+      asset_count: 2,
+      run_count: 3,
+      diagnostic_count: 0,
+    }));
+    const getProject = vi.fn(async () => imported);
     const api = makeApi({
-      adoptProject,
+      importProject,
+      getProject,
       listAdoptableProjects: vi.fn<BatchcraftApi["listAdoptableProjects"]>(async () => ({ projects: [{
         filesystem_key: "owned-key",
         owner_state: "owned",
@@ -145,16 +155,13 @@ describe("ProjectSelector transitions", () => {
 
     expect(await screen.findByLabelText("Stored Project ID")).toHaveValue("stored-id");
     expect(screen.getByLabelText("Initial label")).toHaveValue("Initial name");
-    expect(screen.getByLabelText("Current Project name")).toHaveValue("Initial name");
-    fireEvent.change(screen.getByLabelText("Current Project name"), { target: { value: "Current name" } });
+    expect(screen.queryByLabelText("Current Project name")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Import Project" }));
 
-    await waitFor(() => expect(callbacks.onSelect).toHaveBeenCalledWith(adopted));
-    expect(adoptProject).toHaveBeenCalledWith({
-      filesystem_key: "owned-key",
-      name: "Current name",
-      description: null,
-    });
+    await waitFor(() => expect(callbacks.onSelect).toHaveBeenCalledWith(imported));
+    expect(importProject).toHaveBeenCalledWith({ filesystem_key: "owned-key" });
+    expect(getProject).toHaveBeenCalledWith("stored-id");
+    expect(api.adoptProject).not.toHaveBeenCalled();
   });
 
   it("marks ownerless adoption as recovery and requires and sends an explicit ID", async () => {

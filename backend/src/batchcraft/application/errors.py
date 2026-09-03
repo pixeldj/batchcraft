@@ -42,6 +42,14 @@ class ProjectDiscoveryError(ApplicationError):
     pass
 
 
+class ProjectImportError(ApplicationError):
+    pass
+
+
+class ProjectImportConflictError(ProjectImportError):
+    pass
+
+
 class SavedBatchPublicationError(ApplicationError):
     pass
 
@@ -63,6 +71,10 @@ class SavedBatchRevisionConflictError(ApplicationError):
 
 
 class RunDataError(ApplicationError):
+    pass
+
+
+class ProjectHistoryNotFoundError(ApplicationError):
     pass
 
 

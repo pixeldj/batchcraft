@@ -5,9 +5,9 @@
 This document records the V1-001 audit of batchcraft's current persistence behavior. It compares the
 prerelease implementation with the proposed portability contract in ADR 0012.
 
-The audit is descriptive. BC-019 subsequently closed the record-level format gaps described here, but
-Project import, reconstruction, and cross-instance acceptance remain incomplete. ADR 0012 therefore
-remains Proposed until all release gates pass.
+The audit is descriptive. BC-019 closed the record-level format gaps, and BC-020 added owned-v1 Project
+import, historical reindex, and Project history inspection. Editable reconstruction and final
+cross-instance acceptance remain in BC-021. ADR 0012 therefore remains Proposed.
 
 ## Audit conclusion
 
@@ -15,9 +15,10 @@ A modern published Run contains enough immutable plan and provenance data to be 
 recompiled without its original SQLite library. The Project filesystem also retains referenced Asset
 bytes and detailed execution and Result state.
 
-That data is not yet exposed as a complete recovery workflow. A fresh instance can adopt a Project
-owner, but it cannot import and browse all historical Runs, rebuild historical indexes, or reconstruct
-editable Batch intent with missing library records represented as detached resources.
+That data is now exposed for owned-v1 import and historical inspection. A fresh instance can import by
+filesystem key, browse valid and degraded Runs, and rebuild historical indexes without browser state.
+It still cannot reconstruct editable Batch intent with missing library records represented as detached
+resources.
 
 The v1 contract is therefore feasible with the current authority split, but not yet satisfied.
 
@@ -70,7 +71,7 @@ being copied into every Run.
 | Detailed execution outcome and Results | `execution.json` and `outputs/` | Terminal execution facts and Result bytes survive SQLite loss. |
 | Cancellation and scheduler intent | SQLite | Intent that has not become an execution outcome is not historical filesystem truth. |
 | Browser working session | `localStorage` | It is a convenience cache and cannot be required for Project import. |
-| Historical Run/Job/Result search indexes | Not implemented | Future indexes must be disposable projections rebuilt from filesystem truth. |
+| Historical Project/Batch/Asset/Run/Job/Result projections | SQLite, derived from Project files | Non-authoritative rows are atomically replaceable from filesystem truth. |
 
 This split matches ADR 0003. Recovery must not turn historical snapshots into mutable library history
 without an explicit user operation.
@@ -90,37 +91,34 @@ without an explicit user operation.
 | `workflow.json` descriptor | `batchcraft.workflow-snapshot` | 1 | Identifies the raw, hash-bound ComfyUI API workflow payload. |
 | `workflow-profile.json` descriptor | `batchcraft.workflow-profile-snapshot` | 1 | Identifies the raw, hash-bound Profile payload validated with the workflow. |
 | Browser working session | 2 | Key names the format | Unsupported or malformed records reset to an empty session. |
-| SQLite baseline | Migration 0001 | Migration filename and history row | Checksum-validated, contiguous migration runner. |
+| SQLite schema | Migrations 0001 and 0002 | Migration filenames and history rows | Checksummed, contiguous, forward-only migration runner. |
 
-The current `0001_initial.sql` checksum is
+The preserved `0001_initial.sql` checksum is
 `8441adf452ba918a4dff1ce0f65e40ce62ad52ea9efe0304b4343bbfc5a27617`.
+The `0002_historical_projections.sql` checksum is
+`02a61fbddac14de0c8709c6ac71b7de93c85818d6a4b31f1f03ce6f9563ef26f`.
 
 Each Project format is independently versioned. Canonical standalone JSON records carry
 `created_by.batchcraft_version`; CSV rows carry `batchcraft_version`; the embedded Batch snapshot and raw
 payload descriptors inherit producer context from manifest v1. Producer version does not control parsing.
 All prerelease Project record shapes are unsupported and fail closed without rewriting persisted files.
 
-## Current adoption and discovery behavior
+## Current import, adoption, and discovery behavior
 
 Project discovery enumerates immediate, path-safe directories under the configured Projects root. It
 reports valid `project.json` owners and ownerless directories. It does not traverse Assets, Batches, or
 Runs.
 
-Project adoption reads or creates `project.json`, checks a supplied ID against the stored owner, and
-creates one Project row in SQLite. It does not:
+Owned-v1 import is distinct from adoption. Import accepts one path-safe filesystem key, requires an
+immediate non-symlink Project directory and valid existing `project.json`, and scans without changing
+filesystem bytes. Ownerless adoption separately requires a user-supplied Project ID and name and creates
+the owner binding before normal mutable Project use.
 
-- validate the complete Project tree;
-- adopt Batch owners;
-- import Saved Batch definitions;
-- enumerate or validate published Runs;
-- read execution state or Results;
-- create Run, Job, Result, parameter, or Asset usage indexes;
-- reconstruct Prompt, Workflow, or Workflow Profile libraries.
-
-The application can load a Run by known `run_id`. That lookup scans paths matching
-`*/batches/*/*-*`, reads each `run.json`, rejects duplicate IDs, and fully validates the one matching
-Run. This is a lookup mechanism, not Project history import. The frontend knows historical Run IDs only
-from the current browser working-session record.
+Import and reindex scan Assets, Batch owners, published Runs, execution records, and Results. They then
+atomically create or confirm Project registration and replace that Project's historical Batch, Asset,
+Run, Job, parameter, Image Input, Asset-use, Result, and diagnostic rows. The frontend browses these rows
+without browser-held Run IDs. Import does not create Saved Batches or mutable Prompt, Workflow, or
+Workflow Profile history.
 
 ## Run recovery coverage
 
@@ -155,11 +153,12 @@ loaders validate the referenced bytes.
 
 ### Missing or incomplete recovery data
 
-Remaining gaps in recovery workflow or public projections are:
+Remaining gaps in recovery workflow are:
 
-- no single Project-level catalog of published Runs, so recovery requires bounded filesystem scanning;
 - cancellation intent remains SQLite-only until it becomes an outcome in `execution.json`;
-- current HTTP and frontend views do not expose every stored diagnostic and provenance field uniformly.
+- `Load Run as Batch`, detached resource relinking/import, and final cross-instance execution acceptance
+  are not implemented;
+- Project history has no pagination or advanced filters.
 
 Output naming is not currently editable product behavior. BC-019 removed that stale conceptual Batch
 field and now freezes each generated `batchcraft/<run-id>/<job-id>/result` prefix as concrete Job
@@ -172,7 +171,7 @@ Current loaders already enforce much of the required trust boundary:
 - path-safe Project, Batch, and Run filesystem keys;
 - non-symlink owner and output paths at key boundaries;
 - Project, Batch, and Run identity consistency across path and records;
-- required Run files and output directory;
+- required immutable Run files; strict mutation/content loading also requires the output directory;
 - exact format identities, independently managed v1 versions, producer metadata, and strict shapes;
 - versioned workflow, Workflow Profile, and CSV descriptors;
 - frozen workflow and Workflow Profile SHA-256 values;
@@ -184,13 +183,18 @@ Current loaders already enforce much of the required trust boundary:
 - referenced Asset and Result path, size, and hash integrity.
 - exact per-Job output prefixes bound to Run and Job identity.
 
-The import contract still needs a Project-level validation coordinator. One bad Run should be reported
-as degraded without hiding unrelated valid Runs, except when Project or Batch ownership itself is
-ambiguous or unsafe.
+BC-020 adds the Project-level validation coordinator. It rejects unsafe or conflicting Project identity,
+isolates invalid Batch/Run records, retains degraded history where trusted metadata remains available,
+and keeps unrelated valid Runs visible.
 
-## Required degraded-state policy
+## Implemented history classification
 
-BC-020 must classify discovered content rather than silently skipping it:
+BC-020 classifies discovered content instead of silently trusting it:
+
+- valid content enters the trusted projection; a valid Run has API integrity `verified`;
+- degraded content retains trusted metadata with diagnostics and a Run integrity of `degraded`;
+- invalid content is rejected at the Project boundary or isolated from trusted rows at the Batch/Run
+  boundary.
 
 | Condition | Required v1 behavior |
 | --- | --- |
@@ -199,10 +203,10 @@ BC-020 must classify discovered content rather than silently skipping it:
 | Unsupported or malformed Run record | Isolate that Run and continue with other valid Runs. |
 | Missing or corrupt referenced Asset | Keep the Run discoverable as degraded; block replay that needs the Asset. |
 | Missing or corrupt Result file | Keep Run and Result metadata discoverable as degraded; do not serve unverified bytes. |
-| Missing `execution.json` | Treat the Run as created and unexecuted, using the existing initial-state rule. |
+| Missing or invalid `execution.json` | Keep valid frozen Run detail and report execution unavailable; read-only detail derives an initial view when the file is absent. |
 | Duplicate Run ID | Report an identity conflict; do not choose one silently. |
-| Missing mutable library record | Load the frozen resource as detached historical data. |
-| Same stable library identity with different immutable content | Report a relinking conflict; never link silently. |
+| Missing mutable library record | Historical inspection uses frozen data; editable detached-resource reconstruction remains BC-021. |
+| Same stable library identity with different immutable content | Historical inspection does not relink; conflict-aware relinking remains BC-021. |
 
 ## Gap allocation
 
@@ -231,12 +235,18 @@ The main implementation evidence is in:
 - `backend/src/batchcraft/application/library.py`;
 - `backend/src/batchcraft/application/service.py`;
 - `backend/src/batchcraft/db/migrations/`;
+- `backend/src/batchcraft/files/history.py`;
+- `backend/src/batchcraft/db/history.py`;
+- `backend/tests/files/test_history.py`;
+- `backend/tests/api/test_history_api.py`;
+- `frontend/src/features/project/ProjectHistory.tsx`;
+- `frontend/src/features/project/ProjectHistory.test.tsx`;
 - `frontend/src/features/session/workingSessionRecovery.ts`;
 - filesystem and API tests under `backend/tests/`;
 - frontend recovery, Run Plan, and Result Details tests under `frontend/src/`.
 
 ## Exit condition
 
-V1-001 is complete when this audit, ADR 0012, the cross-instance acceptance contract, and the mapped
-backlog gates agree. The v1 portability contract itself remains unproven until BC-019, BC-020, and
-BC-021 pass.
+V1-001 is complete. BC-019 and BC-020 now provide candidate-v1 records, owned Project import,
+rebuildable history, and degraded inspection. The v1 portability contract remains unproven until BC-021
+passes the complete cross-instance gate.

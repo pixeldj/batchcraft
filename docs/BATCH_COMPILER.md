@@ -263,17 +263,17 @@ Creating a Run should conceptually:
 6. assign deterministic Job ordinals;
 7. determine output naming;
 8. publish the initial Run/manifest artifacts;
-9. persist Run and Job index state;
-10. mark the Run ready for scheduling.
+9. refresh rebuildable historical projections;
+10. admit the published Run for scheduling.
 
 A partially compiled Run should not be presented as a valid executable Run.
 
 Run and Job IDs belong to later execution identity, not logical compilation.
 
-Successful Run creation currently completes after the filesystem Run has been published. At that
-point the plan and provenance freeze, before scheduling begins. A future SQLite Run index must be
-written only after filesystem publication and before scheduling. Execution status, timestamps,
-ComfyUI IDs, errors, and Results may then advance separately.
+Successful Run creation completes after the filesystem Run has been published. At that point the plan
+and provenance freeze, before scheduling begins. SQLite historical projections are written only after
+filesystem publication. They are rebuildable and a refresh failure cannot make the published Run
+invalid. Execution status, timestamps, ComfyUI IDs, errors, and Results may then advance separately.
 
 ## Reproducibility
 

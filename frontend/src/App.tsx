@@ -36,6 +36,7 @@ import {
   savedBatchToForm,
 } from "./features/batch/savedBatch";
 import type { SavedBatchCreateInput } from "./features/batch/SavedBatchSelector";
+import { ProjectHistory } from "./features/project/ProjectHistory";
 import {
   BatchResultsGallery,
   type BatchGalleryRun,
@@ -1113,6 +1114,12 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           api={api}
           runIds={sessionRunIds}
           runsById={galleryRunsById}
+          getCachedRun={getCachedFrozenRun}
+          loadRun={loadFrozenRun}
+        />
+        <ProjectHistory
+          api={api}
+          projectId={projectVerified ? selectedProjectId : null}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
         />

@@ -176,6 +176,53 @@ export interface ProjectAdoptRequest {
   description?: string | null;
 }
 
+export interface ProjectImportRequest {
+  filesystem_key: string;
+}
+
+export interface ProjectImportResponse {
+  project_id: string;
+  filesystem_key: string;
+  name: string;
+  batch_count: number;
+  asset_count: number;
+  run_count: number;
+  diagnostic_count: number;
+}
+
+export interface HistoryDiagnosticResponse {
+  scope: string;
+  filesystem_key: string | null;
+  entity_id: string | null;
+  code: string;
+  message: string;
+}
+
+export interface HistoricalRunResponse {
+  run_id: string;
+  batch_id: string;
+  batch_filesystem_key: string;
+  batch_name: string;
+  run_number: number;
+  filesystem_key: string;
+  run_name: string | null;
+  run_description: string | null;
+  created_at: string;
+  job_count: number;
+  execution_available: boolean;
+  execution_status: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  integrity_status: "verified" | "degraded";
+  replayable: boolean;
+}
+
+export interface ProjectRunsResponse {
+  project_id: string;
+  runs: HistoricalRunResponse[];
+  diagnostics: HistoryDiagnosticResponse[];
+}
+
 export interface AdoptableProject {
   filesystem_key: string;
   owner_state: "owned" | "ownerless";
@@ -630,6 +677,7 @@ export interface ResultResponse {
   content_type: string | null;
   byte_size: number;
   sha256: string;
+  integrity_status: "verified" | "missing" | "corrupt";
   download_url: string;
 }
 

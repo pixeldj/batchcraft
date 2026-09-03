@@ -118,7 +118,17 @@ class ExecutionStateStore:
     def read_for_query(self, run: PublishedRun) -> RunExecutionState:
         return self._load(run, verify_result_files=False)
 
-    def _load(self, run: PublishedRun, *, verify_result_files: bool) -> RunExecutionState:
+    def read_historical(self, run: PublishedRun) -> RunExecutionState:
+        """Read valid execution metadata without requiring Result storage."""
+        return self._load(run, verify_result_files=False, require_outputs=False)
+
+    def _load(
+        self,
+        run: PublishedRun,
+        *,
+        verify_result_files: bool,
+        require_outputs: bool = True,
+    ) -> RunExecutionState:
         if self.state_path.is_symlink() or not self.state_path.is_file():
             raise ExecutionStateError("execution state path must be a regular file")
         try:
@@ -127,7 +137,12 @@ class ExecutionStateStore:
             if isinstance(error, ExecutionStateError):
                 raise
             raise ExecutionStateError(f"invalid execution state: {error}") from error
-        self._validate_against_run(run, state, verify_result_files=verify_result_files)
+        self._validate_against_run(
+            run,
+            state,
+            verify_result_files=verify_result_files,
+            require_outputs=require_outputs,
+        )
         return state
 
     def save(self, run: PublishedRun, state: RunExecutionState) -> None:
@@ -228,6 +243,7 @@ class ExecutionStateStore:
         state: RunExecutionState,
         *,
         verify_result_files: bool = True,
+        require_outputs: bool = True,
     ) -> None:
         if self.run_path != run.path:
             raise ExecutionStateError("execution state store path does not match the Run path")
@@ -238,7 +254,8 @@ class ExecutionStateStore:
         if actual_jobs != expected_jobs:
             raise ExecutionStateError("execution state Jobs do not match the published Run")
         _validate_state(state)
-        self._validate_outputs_directory()
+        if require_outputs:
+            self._validate_outputs_directory()
         if verify_result_files:
             _verify_result_files(
                 self.run_path,

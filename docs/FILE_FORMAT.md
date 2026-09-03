@@ -390,29 +390,31 @@ After a Run reaches a terminal state, its provenance must not be rewritten silen
 
 Human review metadata such as ratings and notes may be stored separately or in explicitly mutable review files/database records.
 
-## Import and Rerun
+## Import and historical inspection
 
-BC-020 will add importing the current manifest v1 for exact replay. A future CSV import may provide a
-convenient best-effort workflow, but CSV alone does not guarantee exact replay.
+Owned-v1 Project import accepts a path-safe filesystem key for an immediate, non-symlink directory under
+the configured Projects root. The existing `project.json` supplies identity. Import scans without
+rewriting Project files and atomically replaces rebuildable SQLite historical projections. Ownerless
+directories use the distinct explicit adoption workflow before they can become owned v1 Projects.
 
-The application should recognize enough metadata to:
+The scanner classifies content as valid, degraded, or invalid. A valid Run is indexed with
+`integrity_status: "verified"`; a degraded Run retains trusted metadata and diagnostics; an invalid Run is
+isolated and reported rather than entered as trusted history. Missing or invalid `execution.json`
+produces explicit unavailable execution. Missing or corrupt Result bytes retain Result metadata with
+`missing` or `corrupt` integrity, but the download path refuses those bytes.
 
-- identify the prior Batch/Run if present locally;
-- reconstruct the Job plan from authoritative JSON;
-- validate required workflow snapshots and selected Image Input assets;
-- create a **new** Run;
-- preserve the original Run unchanged.
-
-Exact replay preserves generation inputs, the base workflow, Workflow Profile mappings and named Image
-Input metadata, selected Reference Assets, variables, parameters, seeds, and Job ordering. The new Run
-receives new Run and Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
-
-Modified reruns can be added later.
+Historical Run, execution, and Result-detail reads use strict read-only loaders that can preserve frozen
+provenance and recorded metadata when `outputs/` or individual Result files are absent. Execution,
+cancellation, discard, and Result download use strict mutation/content loaders and require all relevant
+paths and bytes to validate. BC-021 will add editable `Load Run as Batch` and the final cross-instance
+acceptance proof. A future CSV import may be convenient, but CSV alone cannot guarantee exact replay.
 
 ## Loading and Validation
 
-Loading a published Run requires `run.json`, canonical manifest v1, both raw snapshot files, and
-`outputs/`. The secondary `manifest.csv` is not required. Manifest v1 requires a Batch snapshot v1, a non-empty
+Strict execution and Result download loading requires `run.json`, canonical manifest v1, both raw
+snapshot files, valid referenced Project Assets, and `outputs/`. Historical detail loading requires the
+same immutable plan and snapshot records but may tolerate a missing `outputs/` directory and defer
+Project Asset byte validation. The secondary `manifest.csv` is not required. Manifest v1 requires a Batch snapshot v1, a non-empty
 ordered PromptVersion collection, unique PromptVersion IDs, required names, and every Job's
 association with a known PromptVersion. The loader validates ordered, unique Profile slot metadata and
 requires every Job to contain the same ordered slot keys. Each resolved slot must contain either a
@@ -455,12 +457,14 @@ fixture is `backend/tests/fixtures/v1_project/`.
 ## Filesystem Publication and SQLite Indexing
 
 Run creation writes and validates a sibling directory under the Batch's `.staging/`, then renames the
-complete directory to its immutable `NNN-<slug>` filesystem key on the same filesystem before future
-SQLite indexing. Here, complete means that every required plan and provenance file exists and validates;
-execution need not have started or reached a terminal state. A Run is not ready for scheduling until
-both publication and future indexing succeed.
+complete directory to its immutable `NNN-<slug>` filesystem key on the same filesystem before SQLite
+historical projection. Here, complete means that every required plan and provenance file exists and
+validates; execution need not have started or reached a terminal state. Filesystem publication is the
+authority boundary. Projection refresh is best effort and can be repaired by reindex.
 
-Filesystem publication must be atomic within the destination filesystem. An incomplete staging directory is not a Run. If SQLite state is missing or incomplete, batchcraft can discover complete published Runs and rebuild their index records from the versioned files.
+Filesystem publication must be atomic within the destination filesystem. An incomplete staging directory
+is not a Run. Import and reindex rebuild one Project's non-authoritative historical rows in a single
+SQLite transaction. A failed replacement leaves the prior projection intact.
 
 ## Reproducibility Scope
 

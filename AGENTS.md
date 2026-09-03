@@ -92,9 +92,13 @@ Treat this as the current architecture unless an ADR explicitly changes it.
 - Avoid premature plugin systems, generic workflow engines, distributed queues, authentication systems, or multi-user architecture.
 - Do not implement speculative roadmap features while completing a narrower task.
 
-## Pre-release Persistence Policy
+## Persistence Policy
 
-For pre-release persistence changes, follow `docs/DEVELOPMENT.md`'s Pre-release Persistence Policy. Unless explicitly requested, support only the current database, Run, execution, and browser-session formats. Retain explicit versioning and migration machinery, fail closed on unsupported data, and never delete local data automatically.
+Follow `docs/DEVELOPMENT.md`'s persistence policy. Treat user SQLite databases and valid v1 Project
+files as durable data: preserve applied migration bytes and add only contiguous forward migrations.
+Historical filesystem indexes are non-authoritative and rebuildable. Temporary test databases and
+versioned browser working-session recovery remain disposable. Retain explicit versions, fail closed on
+unsupported data, and never delete or rewrite local user data automatically.
 
 ## Testing Expectations
 
@@ -174,12 +178,15 @@ The sequential Run executor is implemented under `backend/`, including versioned
 The first FastAPI application boundary is implemented under `backend/`. It exposes SQLite-backed
 Project, Prompt, Workflow, Workflow Profile, and Saved Batch operations; Project Asset import; ComfyUI
 status; Batch preview; durable Run creation and filesystem lookup; in-process background execution;
-execution polling; and safe Result retrieval through narrow application services.
+execution polling; owned-v1 Project import and atomic historical reindex; Project Run history; and safe
+Result retrieval through narrow application services.
 
 The first React frontend is implemented under `frontend/`. It provides one browser screen for ComfyUI
 status, Project and library management, Saved Batch editing, Workflow Profile building, Profile-driven
 named Image Input binding, deterministic Job preview, durable Run creation, execution polling, and
-Result rendering. It uses the FastAPI application as its only backend boundary.
+Result rendering. It also imports owned v1 Projects, groups filesystem-indexed history by Batch, and
+shows Run, execution-availability, and Result-integrity status. It uses the FastAPI application as its
+only backend boundary.
 
 Generic Workflow Parameters Pass 3B-2 is implemented end to end. ProfileVersions store ordered typed
 `{key,label,node_id,input_name,value_type}` parameter definitions beside core mappings and Image Input
@@ -189,10 +196,11 @@ scaled-integer materializer resolves Range intent to explicit values before the 
 Unlinked parameters remain independent Cartesian dimensions; Batch-owned Linked Parameter Sets may
 replace two or more parameters with one ordered row dimension at the earliest member's Profile position.
 Every Job and Result provenance record still carries one resolved scalar or Base state per Profile
-parameter. Manifest v9, Batch snapshot v6, browser working-session recovery v2, and the replacement
-consolidated SQLite 0001 baseline are current. Recovery v2 stores editable intent and stable backend
+parameter. Candidate-v1 filesystem formats, browser working-session recovery v2, and forward SQLite
+migrations `0001_initial` and `0002_historical_projections` are current. Recovery v2 stores editable intent and stable backend
 identity pointers in localStorage, always invalidates Preview on cold load, and reconstructs execution
-and Results from FastAPI. Enums, `/object_info`, LoRA discovery, random parameter values, linked Image
-Inputs, Project-wide Run history, and backend executor restart recovery remain deferred. Keep
+and Results from FastAPI. Historical projections are rebuildable from filesystem authority. Enums,
+`/object_info`, LoRA discovery, random parameter values, linked Image Inputs, editable `Load Run as
+Batch`, broader Project-history filtering, and backend executor restart recovery remain deferred. Keep
 frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and
 persistence rules.

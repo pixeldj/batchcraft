@@ -4,11 +4,12 @@ import os
 import re
 import stat
 from collections.abc import Callable, Coroutine, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from batchcraft.comfyui import (
     ComfyUIError,
@@ -17,6 +18,13 @@ from batchcraft.comfyui import (
     prepare_workflow,
 )
 from batchcraft.db import (
+    HistoricalDiagnosticRecord,
+    HistoricalProjectConflictError,
+    HistoricalProjectionError,
+    HistoricalProjectionStore,
+    HistoricalRunRecord,
+    ProjectNotFoundError,
+    ProjectStore,
     RunCancellationMode,
     RunCancellationRequestRecord,
     RunCancellationRequestStore,
@@ -51,6 +59,11 @@ from batchcraft.files import (
     RunStoreError,
     is_safe_filesystem_key,
 )
+from batchcraft.files.history import (
+    ProjectHistoryScan,
+    ProjectHistoryScanError,
+    ProjectHistoryScanner,
+)
 
 from .cancellation import ActiveRunCancellationControl
 from .errors import (
@@ -60,6 +73,9 @@ from .errors import (
     AssetUploadError,
     ExecutionNotEligibleError,
     InvalidProjectKeyError,
+    ProjectHistoryNotFoundError,
+    ProjectImportConflictError,
+    ProjectImportError,
     ResultNotFoundError,
     RunCancellationNotEligibleError,
     RunCancellationStoreError,
@@ -116,6 +132,12 @@ class AssetImportInput:
 
 
 @dataclass(frozen=True, slots=True)
+class ListedResult:
+    record: ResultRecord
+    integrity_status: Literal["verified", "missing", "corrupt"]
+
+
+@dataclass(frozen=True, slots=True)
 class ComfyUIStatus:
     reachable: bool
     version: str | None
@@ -155,6 +177,7 @@ class BatchcraftService:
         cancellation_store: RunCancellationRequestStore,
         execution_config: ExecutionConfig,
         run_store: RunFilesystemStore | None = None,
+        history_store: HistoricalProjectionStore | None = None,
         executor: RunExecutor = execute_run,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -164,6 +187,10 @@ class BatchcraftService:
         self.cancellation_store = cancellation_store
         self.execution_config = execution_config
         self.run_store = run_store or RunFilesystemStore(projects_root)
+        self.history_store = history_store or HistoricalProjectionStore(
+            cancellation_store.database_path
+        )
+        self.history_scanner = ProjectHistoryScanner(projects_root)
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -238,7 +265,7 @@ class BatchcraftService:
 
         assets = self._resolve_assets(creation.project.filesystem_key, plan)
         try:
-            return self.run_store.create_run(
+            run = self.run_store.create_run(
                 project=creation.project,
                 batch=creation.batch,
                 batch_snapshot=creation.batch_snapshot,
@@ -249,6 +276,10 @@ class BatchcraftService:
                 name=creation.name,
                 description=creation.description,
             )
+            # The filesystem Run is authoritative; projection repair is available via reindex.
+            with suppress(ProjectImportError):
+                self.import_project(creation.project.filesystem_key)
+            return run
         except OSError as error:
             raise RunPublicationError("Run publication failed") from error
         except RunStoreError as error:
@@ -283,6 +314,12 @@ class BatchcraftService:
         return plan
 
     def get_run(self, run_id: str) -> PublishedRun:
+        return self._get_run(run_id, historical=False)
+
+    def get_historical_run(self, run_id: str) -> PublishedRun:
+        return self._get_run(run_id, historical=True)
+
+    def _get_run(self, run_id: str, *, historical: bool) -> PublishedRun:
         matches: list[Path] = []
         for candidate in self._run_candidates():
             try:
@@ -296,7 +333,11 @@ class BatchcraftService:
         if len(matches) > 1:
             raise RunDataError(f"duplicate published Run ID: {run_id}")
         try:
-            run = self.run_store.load_run(matches[0])
+            run = (
+                self.run_store.load_historical_run(matches[0])
+                if historical
+                else self.run_store.load_run(matches[0])
+            )
         except (AssetStoreError, RunStoreError, OSError, ValueError) as error:
             raise RunDataError(f"published Run data is invalid: {matches[0]}") from error
         if run.run_id != run_id:
@@ -309,6 +350,15 @@ class BatchcraftService:
             return initial_execution_state(run)
         try:
             return store.read_for_query(run)
+        except ExecutionStateError as error:
+            raise RunDataError(f"execution state is invalid for Run {run.run_id!r}") from error
+
+    def get_historical_execution_state(self, run: PublishedRun) -> RunExecutionState:
+        store = ExecutionStateStore(run.path)
+        if not store.state_path.exists():
+            return initial_execution_state(run)
+        try:
+            return store.read_historical(run)
         except ExecutionStateError as error:
             raise RunDataError(f"execution state is invalid for Run {run.run_id!r}") from error
 
@@ -476,9 +526,22 @@ class BatchcraftService:
 
         return await self.task_registry.discard(run_id, discard)
 
-    def list_results(self, run: PublishedRun) -> tuple[ResultRecord, ...]:
-        state = self.get_execution_state(run)
-        return tuple(result for job in state.jobs for result in job.results)
+    def list_results(self, run: PublishedRun) -> tuple[ListedResult, ...]:
+        state = self.get_historical_execution_state(run)
+        listed: list[ListedResult] = []
+        for job in state.jobs:
+            for result in job.results:
+                try:
+                    _read_result(run.path / result.local_path, result)
+                except RunDataError:
+                    path = run.path / result.local_path
+                    integrity: Literal["verified", "missing", "corrupt"] = (
+                        "missing" if path.is_symlink() or not path.exists() else "corrupt"
+                    )
+                else:
+                    integrity = "verified"
+                listed.append(ListedResult(record=result, integrity_status=integrity))
+        return tuple(listed)
 
     def _get_cancellation_intent(
         self,
@@ -493,7 +556,8 @@ class BatchcraftService:
     def get_result(
         self, run: PublishedRun, job_ordinal: int, artifact_ordinal: int
     ) -> tuple[ResultRecord, bytes]:
-        for result in self.list_results(run):
+        state = self.get_execution_state(run)
+        for result in (result for job in state.jobs for result in job.results):
             if (result.job_ordinal, result.artifact_ordinal) == (
                 job_ordinal,
                 artifact_ordinal,
@@ -505,6 +569,33 @@ class BatchcraftService:
         raise ResultNotFoundError(
             f"Result {job_ordinal}/{artifact_ordinal} was not found for Run {run.run_id!r}"
         )
+
+    def import_project(self, filesystem_key: str) -> ProjectHistoryScan:
+        try:
+            scan = self.history_scanner.scan(filesystem_key)
+            self.history_store.replace_project(scan)
+            return scan
+        except HistoricalProjectConflictError as error:
+            raise ProjectImportConflictError(str(error)) from error
+        except (ProjectHistoryScanError, HistoricalProjectionError, OSError, ValueError) as error:
+            raise ProjectImportError(str(error)) from error
+
+    def reindex_project(self, project_id: str) -> ProjectHistoryScan:
+        return self.import_project(self._registered_project_key(project_id))
+
+    def list_project_runs(self, project_id: str) -> tuple[HistoricalRunRecord, ...]:
+        self._registered_project_key(project_id)
+        return self.history_store.list_runs(project_id)
+
+    def list_project_diagnostics(self, project_id: str) -> tuple[HistoricalDiagnosticRecord, ...]:
+        self._registered_project_key(project_id)
+        return self.history_store.list_diagnostics(project_id)
+
+    def _registered_project_key(self, project_id: str) -> str:
+        try:
+            return ProjectStore(self.history_store.database_path).get(project_id).filesystem_key
+        except ProjectNotFoundError as error:
+            raise ProjectHistoryNotFoundError(f"Project {project_id!r} was not found") from error
 
     async def get_comfyui_status(self) -> ComfyUIStatus:
         try:

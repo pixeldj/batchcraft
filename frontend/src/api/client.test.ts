@@ -254,6 +254,27 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("imports, reindexes, and lists Project history with exact routes", async () => {
+    const fetchMock = repeatedSuccessfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient("http://api.test");
+    const signal = new AbortController().signal;
+
+    await client.importProject({ filesystem_key: "project folder" });
+    await client.reindexProject("project/one", signal);
+    await client.listProjectRuns("project/one", signal);
+
+    expect(fetchMock.mock.calls).toEqual([
+      ["http://api.test/api/projects/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filesystem_key: "project folder" }),
+      }],
+      ["http://api.test/api/projects/project%2Fone/reindex", { method: "POST", signal }],
+      ["http://api.test/api/projects/project%2Fone/runs", { signal }],
+    ]);
+  });
+
   it("lists adoptable Projects with an AbortSignal", async () => {
     const fetchMock = successfulFetch({ projects: [] });
     vi.stubGlobal("fetch", fetchMock);

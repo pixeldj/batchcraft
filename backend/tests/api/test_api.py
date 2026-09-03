@@ -43,6 +43,8 @@ from batchcraft.comfyui import (
     UploadedInput,
 )
 from batchcraft.db import (
+    HistoricalProjectionError,
+    HistoricalProjectionStore,
     RunCancellationMode,
     RunCancellationRequestStore,
     RunCancellationStoreError,
@@ -2834,13 +2836,13 @@ def test_run_lookup_ignores_corrupt_unrelated_run_and_only_loads_target(
         target_path, unrelated_path = sorted(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         (unrelated_path / "workflow.json").write_bytes(b"{}")
         loaded_paths: list[Path] = []
-        real_load_run = RunFilesystemStore.load_run
+        real_load_run = RunFilesystemStore.load_historical_run
 
         def counting_load_run(store: RunFilesystemStore, path: Path) -> PublishedRun:
             loaded_paths.append(path)
             return real_load_run(store, path)
 
-        monkeypatch.setattr(RunFilesystemStore, "load_run", counting_load_run)
+        monkeypatch.setattr(RunFilesystemStore, "load_historical_run", counting_load_run)
 
         response = http.get(f"/api/runs/{target_run_id}")
 
@@ -2998,6 +3000,27 @@ def test_run_publication_io_failure_is_a_stable_server_error(
         "error": {"code": "run_publication_failed", "message": "Run could not be published"}
     }
     assert "disk path details" not in response.text
+
+
+def test_run_creation_succeeds_when_historical_projection_refresh_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    asset_id = _import_asset(settings, tmp_path)
+
+    def fail_projection(*_args: object, **_kwargs: object) -> NoReturn:
+        raise HistoricalProjectionError("projection unavailable")
+
+    monkeypatch.setattr(HistoricalProjectionStore, "replace_project", fail_projection)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        response = http.post("/api/runs", json=_batch_request((asset_id,)))
+
+    assert response.status_code == 201
+    assert response.json()["run_id"]
+    assert len(tuple(settings.projects_root.glob("*/batches/*/[0-9]*-*"))) == 1
 
 
 def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path) -> None:

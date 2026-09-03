@@ -26,6 +26,9 @@ from batchcraft.application import (
     LibraryService,
     ProjectAdoptionError,
     ProjectDiscoveryError,
+    ProjectHistoryNotFoundError,
+    ProjectImportConflictError,
+    ProjectImportError,
     ProjectPublicationError,
     ResultNotFoundError,
     RunCancellationNotEligibleError,
@@ -101,11 +104,16 @@ from .schemas import (
     ExecutionResponse,
     ExecutionStartedResponse,
     HealthResponse,
+    HistoricalRunResponse,
+    HistoryDiagnosticResponse,
     LibraryPromptVersionResponse,
     PreviewResponse,
     ProjectAdoptRequest,
     ProjectCreateRequest,
+    ProjectImportRequest,
+    ProjectImportResponse,
     ProjectResponse,
+    ProjectRunsResponse,
     ProjectsResponse,
     ProjectUpdateRequest,
     PromptCreatedResponse,
@@ -270,6 +278,25 @@ def create_app(
         )
         return ProjectResponse.from_record(project)
 
+    @app.post(
+        "/api/projects/import",
+        response_model=ProjectImportResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_project(
+        request: ProjectImportRequest, service: ServiceDependency
+    ) -> ProjectImportResponse:
+        scan = await asyncio.to_thread(service.import_project, request.filesystem_key)
+        return ProjectImportResponse(
+            project_id=scan.project.id,
+            filesystem_key=scan.project.filesystem_key,
+            name=scan.project.name,
+            batch_count=len(scan.batches),
+            asset_count=len(scan.assets),
+            run_count=len(scan.runs),
+            diagnostic_count=len(scan.diagnostics),
+        )
+
     @app.get("/api/projects/adoptable", response_model=AdoptableProjectsResponse)
     async def list_adoptable_projects(
         library: LibraryDependency,
@@ -282,6 +309,34 @@ def create_app(
     @app.get("/api/projects/{project_id}", response_model=ProjectResponse)
     async def get_project(project_id: str, library: LibraryDependency) -> ProjectResponse:
         return ProjectResponse.from_record(await asyncio.to_thread(library.get_project, project_id))
+
+    @app.post(
+        "/api/projects/{project_id}/reindex",
+        response_model=ProjectImportResponse,
+    )
+    async def reindex_project(project_id: str, service: ServiceDependency) -> ProjectImportResponse:
+        scan = await asyncio.to_thread(service.reindex_project, project_id)
+        return ProjectImportResponse(
+            project_id=scan.project.id,
+            filesystem_key=scan.project.filesystem_key,
+            name=scan.project.name,
+            batch_count=len(scan.batches),
+            asset_count=len(scan.assets),
+            run_count=len(scan.runs),
+            diagnostic_count=len(scan.diagnostics),
+        )
+
+    @app.get("/api/projects/{project_id}/runs", response_model=ProjectRunsResponse)
+    async def list_project_runs(project_id: str, service: ServiceDependency) -> ProjectRunsResponse:
+        runs, diagnostics = await asyncio.gather(
+            asyncio.to_thread(service.list_project_runs, project_id),
+            asyncio.to_thread(service.list_project_diagnostics, project_id),
+        )
+        return ProjectRunsResponse(
+            project_id=project_id,
+            runs=[HistoricalRunResponse.from_record(item) for item in runs],
+            diagnostics=[HistoryDiagnosticResponse.from_record(item) for item in diagnostics],
+        )
 
     @app.patch("/api/projects/{project_id}", response_model=ProjectResponse)
     async def update_project(
@@ -840,8 +895,8 @@ def create_app(
         run_id: str,
         service: ServiceDependency,
     ) -> RunResponse:
-        run = service.get_run(run_id)
-        state = service.get_execution_state(run)
+        run = service.get_historical_run(run_id)
+        state = service.get_historical_execution_state(run)
         cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
         return RunResponse.from_run_and_state(
             run,
@@ -867,8 +922,8 @@ def create_app(
         run_id: str,
         service: ServiceDependency,
     ) -> ExecutionResponse:
-        run = service.get_run(run_id)
-        state = service.get_execution_state(run)
+        run = service.get_historical_run(run_id)
+        state = service.get_historical_execution_state(run)
         cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
         return ExecutionResponse.from_state(
             state,
@@ -908,7 +963,7 @@ def create_app(
         run_id: str,
         service: ServiceDependency,
     ) -> ResultsResponse:
-        run = service.get_run(run_id)
+        run = service.get_historical_run(run_id)
         return ResultsResponse(
             run_id=run_id,
             results=[
@@ -1091,6 +1146,22 @@ def _register_error_handlers(app: FastAPI) -> None:
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "project_discovery_failed",
             "Projects could not be discovered",
+        )
+
+    @app.exception_handler(ProjectHistoryNotFoundError)
+    async def missing_project_history(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_404_NOT_FOUND, "project_not_found", "Project was not found"
+        )
+
+    @app.exception_handler(ProjectImportConflictError)
+    async def project_import_conflict(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(status.HTTP_409_CONFLICT, "project_import_conflict", str(error))
+
+    @app.exception_handler(ProjectImportError)
+    async def project_import_failed(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "project_import_failed", str(error)
         )
 
     @app.exception_handler(SavedBatchDiscoveryError)

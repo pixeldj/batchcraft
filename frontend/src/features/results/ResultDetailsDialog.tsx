@@ -227,6 +227,7 @@ function TechnicalDetails({
         <Detail label="Content type" value={result.content_type ?? "Unknown"} />
         <Detail label="Byte size" value={formatBytes(result.byte_size)} />
         <Detail label="SHA-256" value={result.sha256} code={result.sha256} />
+        <Detail label="Integrity" value={result.integrity_status} />
       </dl>
     </details>
   );

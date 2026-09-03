@@ -4,6 +4,14 @@ from batchcraft.db.cancellations import (
     RunCancellationValidationError,
 )
 from batchcraft.db.connection import connect_database, open_connection
+from batchcraft.db.history import (
+    HistoricalDiagnosticRecord,
+    HistoricalProjectConflictError,
+    HistoricalProjectionError,
+    HistoricalProjectionStore,
+    HistoricalResultRecord,
+    HistoricalRunRecord,
+)
 from batchcraft.db.migrations import (
     Migration,
     MigrationError,
@@ -94,6 +102,12 @@ from batchcraft.db.workflows import (
 __all__ = [
     "Migration",
     "MigrationError",
+    "HistoricalDiagnosticRecord",
+    "HistoricalProjectConflictError",
+    "HistoricalProjectionError",
+    "HistoricalProjectionStore",
+    "HistoricalResultRecord",
+    "HistoricalRunRecord",
     "ProjectConflictError",
     "ProjectFilesystemKeyConflictError",
     "ProjectIdConflictError",

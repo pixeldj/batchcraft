@@ -34,6 +34,7 @@ type OpenDialog = "create" | "adopt" | null;
 type PendingTransition =
   | { kind: "select"; project: ProjectResponse }
   | { kind: "create"; body: ProjectCreateRequest }
+  | { kind: "import"; filesystemKey: string }
   | { kind: "adopt"; body: ProjectAdoptRequest; projectId: string };
 
 const emptyCreateDraft = {
@@ -185,6 +186,8 @@ export function ProjectSelector({
   function requestTransition(next: PendingTransition) {
     const targetId = next.kind === "select"
       ? next.project.id
+      : next.kind === "import"
+        ? adoptables.find((item) => item.filesystem_key === next.filesystemKey)?.project_id ?? undefined
       : next.kind === "adopt"
         ? next.projectId
         : undefined;
@@ -192,7 +195,11 @@ export function ProjectSelector({
       targetId &&
       targetId === draftIdentity.id.trim() &&
       next.kind !== "create" &&
-      (next.kind === "select" || next.body.filesystem_key === draftIdentity.filesystemKey.trim()),
+      (next.kind === "select" || (
+        next.kind === "import"
+          ? next.filesystemKey === draftIdentity.filesystemKey.trim()
+          : next.body.filesystem_key === draftIdentity.filesystemKey.trim()
+      )),
     );
     if (hasProjectScopedSelections && !isCurrent) {
       setPending(next);
@@ -223,6 +230,22 @@ export function ProjectSelector({
       } catch (caught) {
         if (tag !== mutationTag.current || version !== contextVersion.current) return;
         setCreateDraft((current) => ({ ...current, saving: false, error: errorMessage(caught) }));
+      }
+      return;
+    }
+    if (next.kind === "import") {
+      setAdoptDraft((current) => ({ ...current, saving: true, error: null }));
+      try {
+        const imported = await api.importProject({ filesystem_key: next.filesystemKey });
+        const project = await api.getProject(imported.project_id);
+        if (tag !== mutationTag.current || version !== contextVersion.current) return;
+        setAdoptDraft(emptyAdoptDraft);
+        setOpenDialog(null);
+        onSelect(project);
+        setListRetry((current) => current + 1);
+      } catch (caught) {
+        if (tag !== mutationTag.current || version !== contextVersion.current) return;
+        setAdoptDraft((current) => ({ ...current, saving: false, error: errorMessage(caught) }));
       }
       return;
     }
@@ -266,7 +289,12 @@ export function ProjectSelector({
   function submitAdopt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const candidate = adoptables.find((item) => item.filesystem_key === adoptDraft.filesystemKey);
-    if (!candidate || !adoptDraft.name.trim()) return;
+    if (!candidate) return;
+    if (candidate.owner_state === "owned") {
+      requestTransition({ kind: "import", filesystemKey: candidate.filesystem_key });
+      return;
+    }
+    if (!adoptDraft.name.trim()) return;
     if (candidate.owner_state === "ownerless" && !adoptDraft.projectId.trim()) return;
     const body: ProjectAdoptRequest = {
       filesystem_key: candidate.filesystem_key,
@@ -449,6 +477,7 @@ export function ProjectSelector({
                     <span className="field-label">Initial label</span>
                     <input readOnly value={selectedAdoptable.initial_name ?? ""} />
                   </label>
+                  <p className="section-note">Imports durable Project history and keeps its stored identity.</p>
                 </>
               ) : (
                 <div className="blocked-note">
@@ -460,14 +489,18 @@ export function ProjectSelector({
                   </label>
                 </div>
               )}
-              <label className="field">
-                <span className="field-label">Current Project name</span>
-                <input required value={adoptDraft.name} onChange={(event) => setAdoptDraft((current) => ({ ...current, name: event.target.value }))} />
-              </label>
-              <label className="field">
-                <span className="field-label">Description (optional)</span>
-                <textarea value={adoptDraft.description} onChange={(event) => setAdoptDraft((current) => ({ ...current, description: event.target.value }))} />
-              </label>
+              {selectedAdoptable.owner_state === "ownerless" ? (
+                <>
+                  <label className="field">
+                    <span className="field-label">Current Project name</span>
+                    <input required value={adoptDraft.name} onChange={(event) => setAdoptDraft((current) => ({ ...current, name: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Description (optional)</span>
+                    <textarea value={adoptDraft.description} onChange={(event) => setAdoptDraft((current) => ({ ...current, description: event.target.value }))} />
+                  </label>
+                </>
+              ) : null}
               {adoptDraft.error ? <p className="operation-error" role="alert">{adoptDraft.error}</p> : null}
               <button className="button-primary" type="submit" disabled={adoptDraft.saving}>{adoptDraft.saving ? "Importing..." : "Import Project"}</button>
             </form>

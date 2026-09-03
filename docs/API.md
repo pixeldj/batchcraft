@@ -6,7 +6,9 @@ The first application boundary exposes the production compiler, Run filesystem s
 
 The API is a local single-user development boundary. The first React frontend consumes it, and the
 browser never communicates directly with ComfyUI. SQLite owns current Project metadata, Prompt,
-Workflow, and Workflow Profile libraries, Saved Batches, and durable Run cancellation intent.
+Workflow, and Workflow Profile libraries, Saved Batches, durable Run cancellation intent, and rebuildable
+historical projections. Project filesystem records remain authoritative for historical provenance,
+execution outcomes, Assets, and Results.
 Authentication, a global scheduler, executor restart recovery, force-stopping local waiting, and remote
 ComfyUI interruption remain deferred. Stop-after-current cancellation is available at the backend boundary.
 
@@ -55,8 +57,11 @@ GET  /api/comfyui/status
 GET  /api/projects
 POST /api/projects
 POST /api/projects/adopt
+POST /api/projects/import
 GET  /api/projects/adoptable
 GET  /api/projects/{project_id}
+POST /api/projects/{project_id}/reindex
+GET  /api/projects/{project_id}/runs
 PATCH /api/projects/{project_id}
 POST /api/projects/{project_id}/archive
 GET  /api/projects/{project_id}/prompts
@@ -108,14 +113,13 @@ GET  /api/runs/{run_id}/results
 GET  /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}
 ```
 
-The API applies the current baseline SQL migration and any future contiguous migrations before
+The API applies the current SQL migrations and any future contiguous migrations before
 accepting requests. Startup fails on migration errors, unsupported migration history, gaps, or changed
 checksums. It never deletes or rewrites an unsupported database automatically. Request handlers run
 each synchronous SQLite store operation through a worker thread rather than blocking the event loop.
-The current consolidated `0001_initial.sql` baseline includes `run_cancellation_request` plus normalized
-Linked Parameter Set, member, row, and value tables. A database created from any preceding development
-baseline has a different applied checksum and fails startup. After inspection, recreate that database
-manually; batchcraft does not delete, rewrite, or automatically migrate it.
+`0001_initial.sql` is the preserved user-data baseline. `0002_historical_projections.sql` adds rebuildable
+historical tables without replacing existing user data. Applied migration bytes are immutable; future
+user-database changes add the next contiguous migration. Temporary test databases may be recreated.
 
 ## Projects And Prompts
 
@@ -127,6 +131,13 @@ not infer or generate that identity from the directory, assets, or history. Only
 its stable owner binding. Normal creation refuses to claim a pre-existing ownerless directory.
 Project rename and description changes update SQLite without rewriting the owner file or historical
 Runs.
+
+`POST /api/projects/import` is distinct from adoption. It accepts only `{ "filesystem_key": "..." }`,
+requires an existing valid `batchcraft.project` v1 owner in an immediate non-symlink directory under the
+configured Projects root, and uses that owner ID and initial name. It never infers or creates identity.
+The response reports Project ID/key/name plus discovered Batch, Asset, Run, and diagnostic counts.
+Identity conflicts return `409 project_import_conflict`; unsafe, missing, malformed, or ownerless Projects
+return `422 project_import_failed` without partial projection replacement.
 
 `GET /api/projects/adoptable` performs a read-only scan of immediate directories under the configured
 Projects root. It returns valid owner bindings with their Project ID and initial name, plus ownerless
@@ -297,15 +308,32 @@ slots and precede seeds, so seeds vary fastest.
 Random seed intent stores `mode` and `count` in the `batch_snapshot`; the frontend materializes the
 concrete ordered seed list before Preview or Run creation.
 
-## Run Lookup
+## Project history and Run lookup
 
-There is no SQLite Run index yet. The application service scans only the documented hierarchy:
+`POST /api/projects/{project_id}/reindex` resolves the registered filesystem key, rescans filesystem
+truth, and atomically replaces that Project's historical projection. Repeated import/reindex is
+idempotent. A failed scan or transaction leaves the prior projection intact.
+
+`GET /api/projects/{project_id}/runs` returns Runs grouped by their recorded Batch identity in the UI,
+plus Project diagnostics. A Run is `verified` or `degraded`; structurally invalid Runs are excluded and
+reported by diagnostic. `execution_available: false` and null execution fields explicitly represent a
+missing or invalid execution record. This endpoint needs neither browser `localStorage` Run IDs nor
+mutable Prompt, Workflow, Profile, or Saved Batch rows.
+
+Direct Run lookup scans the documented hierarchy:
 
 ```text
 <projects-root>/*/batches/*/*-*
 ```
 
-Candidates are constrained to the configured root. The filesystem layer reads only the stable Run ID from safe `run.json` identity metadata during discovery, and only matching candidate paths receive full `RunFilesystemStore.load_run()` validation. Corrupt unrelated Runs therefore do not block lookup. This narrow scan is temporary application glue, not a generic repository abstraction.
+Candidates are constrained to the configured root. Read-only `GET /api/runs/{run_id}`,
+`GET /api/runs/{run_id}/execution`, and `GET /api/runs/{run_id}/results` use historical loaders so a valid
+frozen plan and recorded Result metadata remain inspectable when output bytes are unavailable. They still
+reject malformed immutable provenance or execution records.
+
+Mutation endpoints and Result download use strict loading. Execute, cancel, and discard require strict
+Run/execution storage; `GET /api/runs/{run_id}/results/{job_ordinal}/{artifact_ordinal}` also verifies the
+selected regular file's path, size, and SHA-256 before serving it.
 
 ## Execution Tasks
 
@@ -366,7 +394,12 @@ reconnection and release of stale control, not backend execution recovery.
 
 ## Results
 
-Result listing follows persisted Job and artifact order. Application queries validate execution-state schema, identities, invariants, Result metadata paths, and output-directory safety without hashing every Result file. File retrieval accepts integer Job and artifact ordinals, resolves only a matching `ResultRecord`, and validates that selected file's regular-file status, size, and SHA-256 before returning it. Arbitrary filesystem paths are never accepted.
+Result listing follows persisted Job and artifact order and returns `integrity_status` as `verified`,
+`missing`, or `corrupt`. Listing hashes each recorded Result when classifying it but preserves metadata for
+unavailable bytes. The frontend renders only verified artifacts and shows an unavailable placeholder for
+missing or corrupt Results. File retrieval accepts integer Job and artifact ordinals, resolves only a
+matching `ResultRecord`, and validates the selected regular file's path, size, and SHA-256 before returning
+it. Arbitrary filesystem paths are never accepted.
 
 ## Errors
 

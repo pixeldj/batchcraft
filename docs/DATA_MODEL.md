@@ -411,6 +411,26 @@ The `batchcraft.execution` v1 filesystem representation stores this mutable data
 
 SQLite stores durable Run cancellation intent as `(run_id, mode, requested_at)`, with current modes `after_current_job` and `detach`. Both intents may coexist. `detach` takes precedence in the active read model because it ends local waiting immediately, while preserving the earlier soft-stop request as durable history. Intent is not copied into `execution.json`: SQLite is authoritative for the request, while execution v1 is authoritative for the resulting Run and Job outcomes. Losing SQLite request metadata does not prevent reconstructing the detached blocked shape or a completed cancellation outcome from the Run filesystem.
 
+### Historical projection
+
+SQLite historical tables are a non-authoritative read projection of an owned v1 Project directory. A
+scan rebuilds Project Asset, Batch, Run, Job, resolved parameter, Image Input, Asset-use, Result, and
+diagnostic rows from filesystem records. Import creates or confirms the Project registration and replaces
+that Project's projection atomically. Reindex uses the registered Project filesystem key and performs the
+same replacement. Neither operation rewrites Project files.
+
+A trusted Run projection has integrity `verified` or `degraded`. `verified` means the scanner found no
+Run-scoped diagnostic. `degraded` preserves valid plan and metadata while recording problems such as a
+missing referenced Asset, invalid execution record, or missing/corrupt Result. A structurally invalid Run
+has no trusted Run row and appears only through a diagnostic. Duplicate Run IDs remove every ambiguous
+candidate from the trusted projection.
+
+Execution availability is independent of Run integrity. Missing or invalid `execution.json` produces
+`execution_available: false` with no invented execution status. Historical detail readers may inspect a
+valid frozen plan and recorded Result metadata without requiring output bytes. Mutation and Result-byte
+retrieval continue through strict loaders and fail when required Assets, outputs, state, paths, sizes, or
+hashes do not validate.
+
 ## Job
 
 One completely resolved ComfyUI execution.

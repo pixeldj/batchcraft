@@ -61,6 +61,50 @@ describe("ComfyUI status", () => {
 });
 
 describe("Project selection", () => {
+  it("loads imported Project history with empty localStorage", async () => {
+    localStorage.clear();
+    const imported = projectResponse();
+    const api = makeApi({
+      listProjects: vi.fn(async () => ({ projects: [imported] })),
+      listProjectRuns: vi.fn(async (projectId: string) => ({
+        project_id: projectId,
+        runs: [{
+          run_id: "imported-run",
+          batch_id: "imported-batch",
+          batch_filesystem_key: "imported_batch",
+          batch_name: "Imported Batch",
+          run_number: 12,
+          filesystem_key: "012-imported",
+          run_name: "Imported baseline",
+          run_description: null,
+          created_at: "2026-08-20T12:00:00Z",
+          job_count: 2,
+          execution_available: false,
+          execution_status: null,
+          started_at: null,
+          completed_at: null,
+          integrity_status: "verified" as const,
+          replayable: true,
+        }],
+        diagnostics: [],
+      })),
+      getResults: vi.fn(async () => ({ run_id: "imported-run", results: [] })),
+    });
+    render(<App api={api} />);
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Active Project" }), {
+      target: { value: imported.id },
+    });
+
+    const history = screen.getByRole("heading", { name: "Project History" }).closest("section");
+    expect(history).not.toBeNull();
+    expect(await within(history as HTMLElement).findByText("Imported baseline")).toBeInTheDocument();
+    expect(within(history as HTMLElement).getByText("Execution unavailable")).toBeInTheDocument();
+    expect(api.listProjectRuns).toHaveBeenCalledWith("project-1", expect.any(AbortSignal));
+    expect(loadWorkingSession().sessionRunIds).toEqual([]);
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
   it("starts unscoped and does not load Prompt or Asset libraries before selection", async () => {
     localStorage.clear();
     const api = makeApi({ listProjects: vi.fn(async () => ({ projects: [] })) });
@@ -3257,6 +3301,29 @@ function makeApi(
     getProject: vi.fn(async () => projectResponse()),
     updateProject: vi.fn(async () => projectResponse()),
     adoptProject: vi.fn(async () => projectResponse()),
+    importProject: vi.fn(async () => ({
+      project_id: "project-1",
+      filesystem_key: "project_1",
+      name: "My Project",
+      batch_count: 0,
+      asset_count: 0,
+      run_count: 0,
+      diagnostic_count: 0,
+    })),
+    reindexProject: vi.fn(async () => ({
+      project_id: "project-1",
+      filesystem_key: "project_1",
+      name: "My Project",
+      batch_count: 0,
+      asset_count: 0,
+      run_count: 0,
+      diagnostic_count: 0,
+    })),
+    listProjectRuns: vi.fn(async (projectId: string) => ({
+      project_id: projectId,
+      runs: [],
+      diagnostics: [],
+    })),
     listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
     listSavedBatches: vi.fn(async () => ({ batches: [] })),
     createSavedBatch: vi.fn(),
@@ -3597,6 +3664,7 @@ function result(
     content_type: contentType,
     byte_size: byteSize,
     sha256: "abc123",
+    integrity_status: "verified",
     download_url: `/api/result/${jobOrdinal}/${artifactOrdinal}`,
   };
 }

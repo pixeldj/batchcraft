@@ -21,7 +21,10 @@ import type {
   PreviewResponse,
   ProjectAdoptRequest,
   ProjectCreateRequest,
+  ProjectImportRequest,
+  ProjectImportResponse,
   ProjectResponse,
+  ProjectRunsResponse,
   ProjectsResponse,
   ProjectUpdateRequest,
   Prompt,
@@ -70,6 +73,9 @@ export interface BatchcraftApi {
   getProject(projectId: string, signal?: AbortSignal): Promise<ProjectResponse>;
   updateProject(projectId: string, body: ProjectUpdateRequest): Promise<ProjectResponse>;
   adoptProject(body: ProjectAdoptRequest): Promise<ProjectResponse>;
+  importProject(body: ProjectImportRequest): Promise<ProjectImportResponse>;
+  reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse>;
+  listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse>;
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse>;
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse>;
   listSavedBatches(projectId: string, includeArchived?: boolean, signal?: AbortSignal): Promise<SavedBatchesResponse>;
@@ -168,6 +174,21 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   adoptProject(body: ProjectAdoptRequest): Promise<ProjectResponse> {
     return this.request("/api/projects/adopt", this.jsonRequest(body, "POST"));
+  }
+
+  importProject(body: ProjectImportRequest): Promise<ProjectImportResponse> {
+    return this.request("/api/projects/import", this.jsonRequest(body, "POST"));
+  }
+
+  reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/reindex`, {
+      method: "POST",
+      signal,
+    });
+  }
+
+  listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/runs`, { signal });
   }
 
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse> {

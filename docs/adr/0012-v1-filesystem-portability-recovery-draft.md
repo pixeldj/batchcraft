@@ -27,6 +27,9 @@ not yet satisfy it.
 
 ### Current implementation findings
 
+This subsection records the implementation state when the ADR was proposed. The BC-020 progress note
+below records later work without rewriting that historical statement.
+
 The prerelease implementation already provides a strong historical Run record:
 
 - Project, Batch, Asset, Run, manifest, Batch snapshot, and execution records are versioned;
@@ -58,6 +61,21 @@ The implementation still does not provide the complete v1 recovery workflow:
 - no automated cross-instance acceptance test proves recovery from a copied Project directory.
 
 These are release gaps, not exceptions to the proposed contract.
+
+### BC-020 implementation progress
+
+BC-020 now imports an owned v1 Project by safe immediate-child filesystem key, keeps ownerless adoption
+as a separate explicit identity mutation, scans filesystem history without rewriting it, and atomically
+replaces rebuildable Project history projections in SQLite. The API and frontend browse imported Runs
+without browser-held Run IDs. They expose verified/degraded Run classification, explicit unavailable
+execution, diagnostics, and verified/missing/corrupt Result integrity.
+
+Historical detail uses strict read-only loaders that tolerate unavailable output bytes while preserving
+recorded metadata. Execution mutations and Result download retain strict storage and byte validation.
+Applied SQLite migration bytes are now preserved and BC-020 adds forward migration
+`0002_historical_projections.sql`; temporary test databases and versioned browser recovery remain
+disposable. BC-021 still owns editable `Load Run as Batch`, detached-resource workflows, and the full
+cross-instance release gate. This ADR remains Proposed.
 
 ## Decision
 

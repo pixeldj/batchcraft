@@ -49,6 +49,7 @@ The frontend is responsible for:
 - materializing Random seed intent into explicit values before Preview;
 - compiled-job preview;
 - Run progress visualization;
+- Project history browsing and explicit reindex requests;
 - Results Viewer;
 - user actions such as rerun, pause, cancel, and selection.
 
@@ -68,7 +69,8 @@ The backend owns:
 - file upload/download;
 - Run manifests;
 - result ingestion;
-- filesystem integrity.
+- filesystem integrity;
+- owned-v1 Project import and rebuildable historical projections.
 
 The backend is the authoritative application API.
 
@@ -131,13 +133,15 @@ Batch intent plus stable Project, Saved Batch, current Run, and ordered session 
 It contains no Preview, execution, Job, Result, or frozen Run response. Linked Workflow/Profile JSON is
 reconstructed by version ID; detached JSON remains editable draft state. Every cold load requires a new
 Preview. Stored Run identities rebuild a Batch-scoped working-session Results gallery from
-backend-authoritative Run and Result data; they are not a Project-wide history index. Preview and Run creation use the same complete
+backend-authoritative Run and Result data. Separately, the Project history UI reads rebuildable SQLite
+projections derived from the Project filesystem and does not require browser-held Run IDs. Preview and Run creation use the same complete
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into `batchcraft.manifest` v1 with Batch snapshot v1. SQLite now owns current Project metadata, the immutable-version Prompt,
-Workflow, and Workflow Profile libraries, mutable Saved Batches, and durable Run cancellation intent; searchable filesystem-derived
-indexes remain a later slice.
+provenance into `batchcraft.manifest` v1 with Batch snapshot v1. SQLite owns current Project metadata, the immutable-version Prompt,
+Workflow, and Workflow Profile libraries, mutable Saved Batches, durable Run cancellation intent, and
+non-authoritative historical projections. The Project filesystem remains authoritative for historical
+provenance, execution outcomes, Asset bytes, and Result bytes.
 
 ## Application Queue
 
@@ -318,15 +322,14 @@ SQLite currently stores:
 - logical Workflow Profiles and immutable ProfileVersions tied to exact WorkflowVersions;
 - mutable Saved Batches with ordered prompt, variable, named image, independent parameter bindings, and
   Linked Parameter Set rows;
-- durable Run cancellation requests keyed by Run ID and mode: `after_current_job` and `detach`.
+- durable Run cancellation requests keyed by Run ID and mode: `after_current_job` and `detach`;
+- rebuildable Project, Batch, Asset, Run, Job, parameter, Image Input, Asset-use, Result, and diagnostic
+  historical projections.
 
 Later migrations may add:
 
 - Variable Lists;
 - reference metadata;
-- Run index/status;
-- Job index/status;
-- Result index;
 - ratings and UI metadata.
 
 ### Filesystem
@@ -343,15 +346,33 @@ The filesystem stores durable Run artifacts and binaries:
 - immutable Project asset identities and hashes;
 - downloaded outputs.
 
-For completed Runs, the filesystem artifacts must contain enough information to reconstruct meaningful history and rebuild the SQLite index. Exact replay also requires the referenced immutable Project assets unless a self-contained export has copied them.
+For published Runs, the filesystem artifacts contain enough information to reconstruct meaningful
+history and rebuild SQLite historical projections. Exact replay also requires the referenced immutable
+Project assets unless a self-contained export has copied them.
+
+### Import and historical reads
+
+Owned-v1 import accepts only a path-safe filesystem key naming an immediate, non-symlink Project
+directory under the configured Projects root. It reads the existing `project.json` identity and does not
+infer identity from a folder name. Ownerless adoption is a separate explicit mutation that requires a
+user-supplied Project ID and name before it writes `project.json`.
+
+The scanner classifies a structurally valid Run as `verified` or `degraded`; an invalid Run is omitted
+from trusted projections and reported as a diagnostic. Missing or invalid `execution.json` is reported
+as execution unavailable rather than fabricated as a durable outcome. Historical read-only loaders
+strictly validate metadata while preserving it when output bytes are missing. Execution, cancellation,
+discard, and Result download use strict content loaders and reject missing, corrupt, or unsafe required
+content.
 
 ### Publication order
 
-Run creation currently publishes a complete filesystem Run before execution; Phase 1 does not add a
-SQLite Run index. When that derived index is implemented, indexing must follow filesystem publication,
-and the scheduler must not submit Jobs until both steps succeed.
+Run creation publishes a complete filesystem Run before execution, then best-effort refreshes the
+Project's historical projection. Projection failure does not invalidate the authoritative published Run;
+an explicit reindex repairs the projection.
 
-If SQLite state is lost or incomplete, batchcraft can scan complete filesystem Runs and re-index them. Incomplete staging data is not a valid Run and must not be scheduled or presented as one.
+Import and reindex scan filesystem truth, then atomically replace one Project's complete historical
+projection. A failed scan or transaction leaves the prior projection intact. Incomplete staging data is
+not a valid Run and must not be scheduled or presented as one.
 
 ## Identity and Display Names
 

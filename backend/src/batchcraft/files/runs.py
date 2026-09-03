@@ -311,6 +311,27 @@ class RunFilesystemStore:
                 reservation_path.rmdir()
 
     def load_run(self, run_path: Path) -> PublishedRun:
+        return self._load_published_run(
+            run_path,
+            validate_assets=True,
+            require_outputs=True,
+        )
+
+    def load_historical_run(self, run_path: Path) -> PublishedRun:
+        """Load frozen Run history without requiring mutable external content."""
+        return self._load_published_run(
+            run_path,
+            validate_assets=False,
+            require_outputs=False,
+        )
+
+    def _load_published_run(
+        self,
+        run_path: Path,
+        *,
+        validate_assets: bool,
+        require_outputs: bool,
+    ) -> PublishedRun:
         if run_path.is_symlink() or not run_path.is_dir():
             raise RunStoreError(f"Run path is missing or unsafe: {run_path}")
         if not run_path.resolve().is_relative_to(self.projects_path.resolve()):
@@ -321,7 +342,13 @@ class RunFilesystemStore:
             raise RunStoreError(
                 f"Run path is not inside a Project Batch path: {run_path}"
             ) from error
-        published_run = self._load_run(run_path, project_path, validate_csv=False)
+        published_run = self._load_run(
+            run_path,
+            project_path,
+            validate_csv=False,
+            validate_assets=validate_assets,
+            require_outputs=require_outputs,
+        )
         if run_path.name != published_run.filesystem_key:
             raise RunStoreError(
                 f"Run directory name {run_path.name!r} does not match its recorded filesystem key"
@@ -347,7 +374,15 @@ class RunFilesystemStore:
                 raise
             raise RunStoreError(f"invalid Run identity metadata in {run_path}: {error}") from error
 
-    def _load_run(self, run_path: Path, project_path: Path, *, validate_csv: bool) -> PublishedRun:
+    def _load_run(
+        self,
+        run_path: Path,
+        project_path: Path,
+        *,
+        validate_csv: bool,
+        validate_assets: bool = True,
+        require_outputs: bool = True,
+    ) -> PublishedRun:
         required_files = (
             "run.json",
             "manifest.json",
@@ -361,7 +396,9 @@ class RunFilesystemStore:
         )
         if missing:
             raise RunStoreError(f"Run is missing required files: {', '.join(missing)}")
-        if (run_path / "outputs").is_symlink() or not (run_path / "outputs").is_dir():
+        if require_outputs and (
+            (run_path / "outputs").is_symlink() or not (run_path / "outputs").is_dir()
+        ):
             raise RunStoreError("Run is missing its outputs directory")
 
         try:
@@ -415,26 +452,27 @@ class RunFilesystemStore:
         ):
             raise RunStoreError("Run Batch identity does not match batch.json")
 
-        asset_store = ProjectAssetStore(project_path)
-        validated_assets: dict[str, AssetRecord] = {}
-        for job in loaded.jobs:
-            for image_input in job.image_inputs:
-                asset = image_input.asset
-                if asset is None:
-                    continue
-                validated = validated_assets.get(asset.asset_id)
-                if validated is not None:
-                    if validated != asset:
+        if validate_assets:
+            asset_store = ProjectAssetStore(project_path)
+            validated_assets: dict[str, AssetRecord] = {}
+            for job in loaded.jobs:
+                for image_input in job.image_inputs:
+                    asset = image_input.asset
+                    if asset is None:
+                        continue
+                    validated = validated_assets.get(asset.asset_id)
+                    if validated is not None:
+                        if validated != asset:
+                            raise RunStoreError(
+                                f"Jobs reference inconsistent metadata for asset ID {asset.asset_id!r}"
+                            )
+                        continue
+                    try:
+                        validated_assets[asset.asset_id] = asset_store.validate_record(asset)
+                    except AssetStoreError as error:
                         raise RunStoreError(
-                            f"Jobs reference inconsistent metadata for asset ID {asset.asset_id!r}"
-                        )
-                    continue
-                try:
-                    validated_assets[asset.asset_id] = asset_store.validate_record(asset)
-                except AssetStoreError as error:
-                    raise RunStoreError(
-                        f"Job {job.compiled_job.ordinal} references an invalid Project asset: {error}"
-                    ) from error
+                            f"Job {job.compiled_job.ordinal} references an invalid Project asset: {error}"
+                        ) from error
 
         if validate_csv:
             if (run_path / "manifest.csv").is_symlink() or not (
