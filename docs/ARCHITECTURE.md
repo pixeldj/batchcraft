@@ -173,6 +173,11 @@ FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immedia
 
 Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` or `detach` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. After persisting `detach`, the registry targets only the owned local `asyncio.Task` with cancellation to wake an in-flight await. The executor recognizes that wake-up only when the same control reports durable detach intent, writes an honest blocked state, and leaves ordinary task cancellation to propagate. It preserves known submission evidence and Results, leaves later Jobs pending, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while execution format v3 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. Execution formats v1 and v2 are intentionally unsupported.
 
+Execution API read models expose whether the current process still owns a live task. This ephemeral fact
+is separate from durable Run status and remote ComfyUI state. A browser may use loss of local ownership
+to stop stale polling and release workspace controls, but must not rewrite the Run, claim remote
+cancellation, retry, or resubmit its Jobs.
+
 Benefits:
 
 - pause future submissions;

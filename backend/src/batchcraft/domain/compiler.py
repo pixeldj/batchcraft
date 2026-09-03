@@ -34,7 +34,7 @@ class CompilationError(ValueError):
     """The Batch cannot produce a valid execution plan."""
 
 
-def _placeholder_names(template: str) -> tuple[str, ...]:
+def extract_placeholder_names(template: str) -> tuple[str, ...]:
     names: list[str] = []
     previous_end = 0
 
@@ -102,7 +102,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
         if prompt_version.id in prompt_ids:
             raise CompilationError(f"duplicate PromptVersion ID: {prompt_version.id!r}")
         prompt_ids.add(prompt_version.id)
-        prompt_placeholders.append(_placeholder_names(prompt_version.text))
+        prompt_placeholders.append(extract_placeholder_names(prompt_version.text))
 
     bindings_by_name: dict[str, VariableBinding] = {}
     binding_values: dict[str, tuple[str, ...]] = {}
@@ -350,7 +350,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
         for variable_values in product(*value_axes):
             assignments = dict(zip(placeholder_names, variable_values, strict=True))
             resolved_prompt = _resolve_prompt(prompt_version.text, assignments)
-            unresolved = _placeholder_names(resolved_prompt)
+            unresolved = extract_placeholder_names(resolved_prompt)
             if unresolved:
                 names = ", ".join(repr(name) for name in unresolved)
                 raise CompilationError(f"resolved prompt still contains placeholders: {names}")

@@ -7,12 +7,57 @@ import {
   generateRandomSeeds,
   initialBatchForm,
   MAX_RANDOM_SEED_COUNT,
+  missingPromptPlaceholders,
   newPrompt,
+  newVariableBinding,
   reconcileParameterBindings,
   reconcileParameterState,
   reconcileImageBindings,
   parameterRangeCount,
+  requiredPromptPlaceholders,
 } from "./form";
+
+describe("Prompt placeholder requirements", () => {
+  const prompts = [
+    { ...newPrompt(1), placeholders: ["subject", "outfit"] },
+    { ...newPrompt(2), placeholders: ["lighting", "subject", "Subject"] },
+  ];
+
+  it("preserves selected PromptVersion order and globally de-duplicates exact names", () => {
+    expect(requiredPromptPlaceholders(prompts)).toEqual([
+      "subject",
+      "outfit",
+      "lighting",
+      "Subject",
+    ]);
+  });
+
+  it("finds all, some, and no missing bindings without treating unused bindings specially", () => {
+    expect(missingPromptPlaceholders(prompts, [])).toEqual([
+      "subject",
+      "outfit",
+      "lighting",
+      "Subject",
+    ]);
+    expect(missingPromptPlaceholders(prompts, [
+      newVariableBinding("subject", []),
+      newVariableBinding("unused", ["kept"]),
+    ])).toEqual(["outfit", "lighting", "Subject"]);
+    expect(missingPromptPlaceholders(prompts, [
+      newVariableBinding("subject", []),
+      newVariableBinding("outfit", [""]),
+      newVariableBinding("lighting", ["studio"]),
+      newVariableBinding("Subject", ["person"]),
+    ])).toEqual([]);
+  });
+
+  it("uses exact case-sensitive binding names", () => {
+    expect(missingPromptPlaceholders(
+      [{ ...newPrompt(), placeholders: ["subject"] }],
+      [newVariableBinding("Subject", ["person"])],
+    )).toEqual(["subject"]);
+  });
+});
 
 describe("buildBatchRequest", () => {
   it("starts without a Project or selected PromptVersions", () => {
@@ -331,6 +376,7 @@ describe("buildBatchRequest", () => {
         versionNumber: 4,
         snapshotName: "Second",
         text: "Second prompt",
+        placeholders: [],
       },
       {
         key: 11,
@@ -341,6 +387,7 @@ describe("buildBatchRequest", () => {
         versionNumber: null,
         snapshotName: "First",
         text: "First prompt",
+        placeholders: [],
       },
     ];
 

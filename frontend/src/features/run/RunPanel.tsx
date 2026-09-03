@@ -16,6 +16,7 @@ interface Props {
   polling: boolean;
   error: string | null;
   createdUnavailable: boolean;
+  executionControlUnavailable: boolean;
   batchDiverged: boolean;
   onStart(): void;
   onDiscard(): void;
@@ -35,6 +36,7 @@ export function RunPanel({
   polling,
   error,
   createdUnavailable,
+  executionControlUnavailable,
   batchDiverged,
   onStart,
   onDiscard,
@@ -71,7 +73,7 @@ export function RunPanel({
   const detaching = status === "running" && execution?.cancellation?.mode === "detach";
   const detached = status === "blocked" && execution?.cancellation?.state === "detached";
   const currentJob = execution?.jobs.find((job) => job.ordinal === current);
-  const detachEligible = status === "running" && currentJob !== undefined && [
+  const detachEligible = status === "running" && !executionControlUnavailable && currentJob !== undefined && [
     "preparing",
     "submitting",
     "submission_unknown",
@@ -84,13 +86,19 @@ export function RunPanel({
       ? current
         ? `Stopping after current Job · Job ${current} of ${run.job_count}`
         : "Stopping after current Job"
-      : status === "running" && current
-      ? `Running · Job ${current} of ${run.job_count}`
-      : status === "created"
-        ? createdUnavailable ? "Created · Not executable" : "Created · Ready to start"
-        : detached
-          ? "Blocked: Remote outcome unknown"
-          : status.charAt(0).toUpperCase() + status.slice(1);
+      : status === "running" && executionControlUnavailable
+        ? "Running · Control unavailable"
+        : status === "running" && current
+          ? `Running · Job ${current} of ${run.job_count}`
+          : status === "created"
+            ? createdUnavailable
+              ? "Created · Not executable"
+              : execution?.execution_task_active
+                ? "Created · Starting execution"
+                : "Created · Ready to start"
+            : detached
+              ? "Blocked: Remote outcome unknown"
+              : status.charAt(0).toUpperCase() + status.slice(1);
 
   return (
     <section className={`section-card run-card status-${status}`} aria-labelledby="run-heading">
@@ -155,6 +163,13 @@ export function RunPanel({
                 : "Automatic execution stopped. This Run requires explicit reconciliation; no retry is available in this version."}
             </p>
           ) : null}
+          {status === "running" && executionControlUnavailable ? (
+            <p className="blocked-note" role="alert">
+              This Run's persisted state is still running, but this backend process no longer controls
+              it and cannot resume it automatically. A remote ComfyUI Job may still be running. Preview
+              the current Batch to create another immutable Run.
+            </p>
+          ) : null}
           {stopping ? (
             <p className="stopping-note" role="status" aria-live="polite">
               {execution.cancellation?.state === "stop_requested"
@@ -216,7 +231,7 @@ export function RunPanel({
           ) : null}
         </>
       ) : null}
-      {status === "running" && !execution?.cancellation ? (
+      {status === "running" && !executionControlUnavailable && !execution?.cancellation ? (
         <div className="action-row run-stop-action">
           {confirmingStop ? (
             <div className="stop-confirmation" role="group" aria-label="Confirm stop after current Job">

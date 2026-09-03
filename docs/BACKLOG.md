@@ -160,7 +160,7 @@ Non-goals:
 | --- | --- |
 | ID | BC-003B |
 | Priority | P1 |
-| Status | Done |
+| Status | In Progress |
 | Area | Execution / Cancellation |
 | Summary | Let the user regain control when ComfyUI observation or history reconciliation appears hung. |
 | Dependencies / Notes | Coordinate with BC-003A's durable cancellation state. Preserve ADR 0001 and ADR 0003 rules for ambiguous remote outcomes and unsafe resubmission. This is a local-control escape hatch, not proof of remote cancellation. |
@@ -169,7 +169,10 @@ Implementation progress: durable `detach` intent, executor-owned local task wake
 finalization, API/read-model support, and the confirmed frontend `Stop waiting` action are implemented.
 Known submission evidence and already durable Results are preserved, later Jobs remain pending, refresh
 restores the blocked outcome, and no ComfyUI interrupt or queue-clear operation is used. Automated
-coverage and owner acceptance are complete.
+coverage and owner acceptance for the original implementation are complete. A follow-up correctness fix
+is in progress for restored `running` state after API process loss: expose ephemeral local task ownership,
+stop stale polling, preserve the unresolved Run honestly, and release replacement-Run and Batch-save
+controls without claiming remote cancellation.
 
 Expected behavior:
 
@@ -302,6 +305,10 @@ Initial non-goals:
 | Area | Prompt Library / UX |
 | Summary | Improve Prompt selection, creation, and duplication while keeping immutable version history available when needed. |
 | Dependencies / Notes | The modal Prompt Library workspace, exact-revision duplication, collision-safe copy naming, lazy history selection, direct Prompt creation, and ordered Batch-selection controls are implemented. Automatic placeholder binding assistance remains tracked separately in BC-014. |
+
+The first-Prompt transition now keeps the Prompt section explicitly expanded while its modal workspace
+is open, so conditional section collapse cannot orphan the body scroll lock. Focus restoration and the
+subsequent missing-binding flow have regression coverage.
 
 Improve the normal flow to:
 
@@ -625,7 +632,7 @@ The format may be TOML, JSON, or another simple local format; choose based on th
 | --- | --- |
 | ID | BC-014 |
 | Priority | P2 |
-| Status | Planned |
+| Status | Done |
 | Area | Prompts / Variable Bindings |
 | Summary | Detect placeholders across selected PromptVersions and create missing Variable Bindings with one action. |
 | Dependencies / Notes | Use the authoritative backend/domain placeholder parser rather than a second frontend-only regex. Builds on the simplified binding model where a binding owns one ordered values list and `""` is a valid intentional value. |

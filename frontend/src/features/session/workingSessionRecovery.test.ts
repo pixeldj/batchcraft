@@ -21,6 +21,7 @@ describe("durable browser working-session recovery", () => {
       versionNumber: null,
       snapshotName: "Second Prompt",
       text: "Second {{subject}}",
+      placeholders: ["subject"],
     });
 
     saveWorkingSession(
@@ -72,6 +73,7 @@ describe("durable browser working-session recovery", () => {
     ]);
     expect(stored.draft).toMatchObject({ workflowJson: null, workflowProfileJson: null });
     expect(restored.form).toMatchObject({ workflowJson: "{}", workflowProfileJson: "{}" });
+    expect(restored.form.prompts.map((prompt) => prompt.placeholders)).toEqual([[], []]);
     expect(restored).toMatchObject({
       currentRunId: "run-42",
       sessionRunIds: ["run-40", "run-42"],
@@ -404,6 +406,7 @@ function populatedForm(): BatchFormState {
     versionNumber: 7,
     snapshotName: "Restored Prompt",
     text: "Restored {{subject}}",
+    placeholders: ["subject"],
   }];
   form.variableBindings[0].values = ["wolf", "fox"];
   form.imageBindings = [

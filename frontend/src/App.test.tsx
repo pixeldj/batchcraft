@@ -21,6 +21,7 @@ import type {
   SavedBatchDetail,
 } from "./api/types";
 import { initialBatchForm, newPrompt } from "./features/batch/form";
+import { savedBatchToForm } from "./features/batch/savedBatch";
 import {
   loadWorkingSessionRecovery as loadWorkingSession,
   saveWorkingSessionRecovery as saveWorkingSession,
@@ -314,6 +315,132 @@ describe("Batch preview", () => {
       "",
       "wolf",
     ]));
+  });
+
+  it("creates every missing Prompt binding as an empty row and invalidates Preview", async () => {
+    const exactVersion = promptVersion({ placeholders: ["subject", "style", "location"] });
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [projectPrompt("prompt-1", "Portrait", exactVersion)] })),
+      getPromptVersion: vi.fn(async () => exactVersion),
+    });
+    render(<App api={api} />);
+
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    const create = await within(bindings).findByRole("button", { name: "Create missing bindings" });
+    expect(bindings).toHaveTextContent("1 configured · 2 missing");
+    await reachPreview();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+
+    fireEvent.click(create);
+
+    expect(within(bindings).getAllByLabelText("Placeholder").map((input) => (input as HTMLInputElement).value))
+      .toEqual(["subject", "style", "location"]);
+    expect(within(bindings).getAllByLabelText("Values").map((input) => (input as HTMLTextAreaElement).value))
+      .toEqual(["cat\ndog", "", ""]);
+    expect(within(bindings).getAllByRole("checkbox", { name: "Include empty value" })
+      .every((checkbox) => !(checkbox as HTMLInputElement).checked)).toBe(true);
+    expect(within(bindings).getByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings.map((binding) => ({
+      placeholder: binding.placeholder,
+      values: binding.values,
+    }))).toEqual([
+      { placeholder: "subject", values: ["cat", "dog"] },
+      { placeholder: "style", values: [] },
+      { placeholder: "location", values: [] },
+    ]));
+  });
+
+  it("restores page scrolling after selecting the first Prompt and creating its missing binding", async () => {
+    const form = populatedBatchForm();
+    form.prompts = [];
+    saveWorkingSession(form, null, [], "project-1");
+    const exactVersion = promptVersion({
+      text: "Portrait in {{style}}",
+      placeholders: ["style"],
+    });
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({
+        prompts: [projectPrompt("prompt-1", "Portrait", exactVersion)],
+      })),
+    });
+    render(<App api={api} />);
+
+    const dialog = await openPromptLibrary();
+    expect(document.body.style.overflow).toBe("hidden");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add to Batch" }));
+    expect(screen.getByRole("dialog", { name: "Prompts" })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(document.body.style.overflow).toBe("");
+
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    fireEvent.click(await within(bindings).findByRole("button", { name: "Create missing bindings" }));
+    expect(within(bindings).getAllByLabelText("Placeholder").map((input) => (
+      input as HTMLInputElement
+    ).value)).toEqual(["subject", "style"]);
+    expect(document.body.style.overflow).toBe("");
+  });
+
+  it("recomputes missing bindings for Prompt additions while browsing remains presentation-only", async () => {
+    const portrait = promptVersion({ placeholders: ["subject"] });
+    const editorial = promptVersion({
+      id: "editorial-v1",
+      prompt_id: "editorial",
+      name_snapshot: "Editorial",
+      text: "{{subject}} in {{location}}",
+      placeholders: ["subject", "location"],
+    });
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({
+        prompts: [projectPrompt("prompt-1", "Portrait", portrait), projectPrompt("editorial", "Editorial", editorial)],
+      })),
+      getPromptVersion: vi.fn(async (versionId) => versionId === editorial.id ? editorial : portrait),
+    });
+    render(<App api={api} />);
+
+    const dialog = await openPromptLibrary();
+    fireEvent.click(within(dialog).getByText("Editorial", { selector: ".prompt-library-item strong" }).closest("button")!);
+    expect(screen.queryByRole("button", { name: "Create missing bindings" })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add to Batch" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    expect(await within(bindings).findByRole("button", { name: "Create missing bindings" })).toBeInTheDocument();
+    expect(bindings).toHaveTextContent("1 configured · 1 missing");
+    fireEvent.click(within(bindings).getByRole("button", { name: "Create missing bindings" }));
+    const cards = promptCards();
+    fireEvent.click(within(cards[1]).getByRole("button", { name: "Remove" }));
+    expect(within(bindings).getAllByLabelText("Placeholder").map((input) => (input as HTMLInputElement).value))
+      .toEqual(["subject", "location"]);
+    expect(within(bindings).queryByRole("button", { name: "Create missing bindings" })).not.toBeInTheDocument();
+  });
+
+  it("uses placeholder metadata from an exact older Prompt revision", async () => {
+    const selected = promptVersion({ placeholders: ["subject"] });
+    const current = promptVersion({ id: "prompt-v3", version_number: 3, placeholders: ["subject"] });
+    const older = promptVersion({
+      id: "prompt-v2",
+      version_number: 2,
+      text: "A {{vintage}} portrait",
+      placeholders: ["vintage"],
+    });
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [projectPrompt("prompt-1", "Portrait", current)] })),
+      listPromptVersions: vi.fn(async () => ({ prompt_versions: [current, older, selected] })),
+      getPromptVersion: vi.fn(async () => selected),
+    });
+    render(<App api={api} />);
+
+    const dialog = await openPromptLibrary();
+    fireEvent.click(within(dialog).getByRole("button", { name: "History" }));
+    const oldCard = (await screen.findByText("A {{vintage}} portrait")).closest("article")!;
+    fireEvent.click(within(oldCard).getByRole("button", { name: "Add this revision" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    expect(await within(bindings).findByRole("button", { name: "Create missing bindings" })).toBeInTheDocument();
+    fireEvent.click(within(bindings).getByRole("button", { name: "Edit" }));
+    expect(within(bindings).getByText(/Missing from selected prompts:/).parentElement).toHaveTextContent("vintage");
   });
 
   it("renders Batch configuration sections in dependency order", () => {
@@ -792,7 +919,8 @@ describe("PromptVersion editor", () => {
     const nextVersion = promptVersion({
       id: "prompt-v2",
       version_number: 2,
-      text: "Changed {{subject}}",
+      text: "Changed {{subject}} in {{style}}",
+      placeholders: ["subject", "style"],
     });
     const api = makeApi({ createPromptVersion: vi.fn(async () => nextVersion) });
     render(<App api={api} />);
@@ -803,17 +931,19 @@ describe("PromptVersion editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit Prompt" }));
     fireEvent.change(screen.getByLabelText("Prompt template"), {
-      target: { value: "Changed {{subject}}" },
+      target: { value: "Changed {{subject}} in {{style}}" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
 
     expect(await screen.findByRole("button", { name: "Add to Batch" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
     expect(api.createPromptVersion).toHaveBeenCalledWith("prompt-1", {
-      text: "Changed {{subject}}",
+      text: "Changed {{subject}} in {{style}}",
       note: null,
     });
+    expect(screen.queryByRole("button", { name: "Create missing bindings" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add to Batch" }));
+    expect(await screen.findByRole("button", { name: "Create missing bindings" })).toBeInTheDocument();
     expect(await screen.findByText(/Preview required/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
   });
@@ -837,6 +967,56 @@ describe("PromptVersion editor", () => {
 });
 
 describe("Browser working-session restoration", () => {
+  it("recomputes missing bindings after Saved Batch recovery without silently dirtying it", async () => {
+    const detail = savedBatchDetail({
+      prompt_selections: [{
+        prompt_version_id: "prompt-v1",
+        name_snapshot: "Portrait",
+        text: "A studio portrait of {{subject}} and {{style}}.",
+        prompt_id: "prompt-1",
+        prompt_name: "Portrait",
+        version_number: 1,
+        prompt_archived_at: null,
+        version_archived_at: null,
+      }],
+      variable_bindings: [{ placeholder: "subject", values: ["wolf"] }],
+    });
+    const recovered = savedBatchToForm(detail, projectResponse());
+    saveWorkingSession(recovered, null, [], "project-1", undefined, detail.id, detail.revision);
+    const exactVersion = promptVersion({
+      text: "A studio portrait of {{subject}} and {{style}}.",
+      placeholders: ["subject", "style"],
+    });
+    const api = makeApi({
+      getSavedBatch: vi.fn(async () => detail),
+      listSavedBatches: vi.fn(async () => ({ batches: [detail] })),
+      listPrompts: vi.fn(async () => ({ prompts: [projectPrompt("prompt-1", "Portrait", exactVersion)] })),
+      getPromptVersion: vi.fn(async () => exactVersion),
+    });
+
+    render(<App api={api} />);
+
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    const bindings = screen.getByRole("group", { name: "Variable bindings" });
+    expect(await within(bindings).findByRole("button", { name: "Create missing bindings" })).toBeInTheDocument();
+    expect(loadWorkingSession().form.variableBindings.map((binding) => ({
+      placeholder: binding.placeholder,
+      values: binding.values,
+    }))).toEqual([{ placeholder: "subject", values: ["wolf"] }]);
+    expect(screen.getByText(/Preview required/)).toBeInTheDocument();
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+
+    fireEvent.click(within(bindings).getByRole("button", { name: "Create missing bindings" }));
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().form.variableBindings.map((binding) => ({
+      placeholder: binding.placeholder,
+      values: binding.values,
+    }))).toEqual([
+      { placeholder: "subject", values: ["wolf"] },
+      { placeholder: "style", values: [] },
+    ]));
+  });
+
   it("restores ordered named Image Inputs after remount but requires a new Preview", async () => {
     const assets = [asset("asset-a", "a.png"), asset("asset-b", "b.png")];
     const api = makeApi({ listProjectAssets: vi.fn(async () => ({ assets })) });
@@ -1845,6 +2025,66 @@ describe("Stop waiting", () => {
     expect(screen.getByRole("button", { name: "Stop waiting" })).toBeEnabled();
   });
 
+  it("reconciles an ineligible detach to an uncontrolled Run without a transient error", async () => {
+    const uncontrolled = execution("running");
+    uncontrolled.execution_task_active = false;
+    const api = makeApi({
+      detachRun: vi.fn(async () => {
+        throw new ApiError(
+          "Run is not eligible for cancellation",
+          "run_cancellation_not_eligible",
+          409,
+        );
+      }),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockResolvedValueOnce(uncontrolled),
+    });
+    render(<App api={api} pollIntervalMs={10_000} />);
+    await createRunAndStart();
+    await screen.findByText("Running · Job 1 of 2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+
+    expect(await screen.findByText("Running · Control unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/this backend process no longer controls it/)).toBeInTheDocument();
+    expect(screen.queryByText("Run is not eligible for cancellation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop waiting" })).not.toBeInTheDocument();
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Create Another Run" }),
+    ).toBeEnabled());
+  });
+
+  it("reconciles an ineligible detach to a terminal outcome immediately", async () => {
+    const api = makeApi({
+      detachRun: vi.fn(async () => {
+        throw new ApiError(
+          "Run is not eligible for cancellation",
+          "run_cancellation_not_eligible",
+          409,
+        );
+      }),
+      getExecution: vi
+        .fn<BatchcraftApi["getExecution"]>()
+        .mockResolvedValueOnce(execution("running"))
+        .mockResolvedValueOnce(execution("succeeded")),
+    });
+    render(<App api={api} pollIntervalMs={10_000} />);
+    await createRunAndStart();
+    await screen.findByText("Running · Job 1 of 2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    expect(screen.queryByText("Run is not eligible for cancellation")).not.toBeInTheDocument();
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Create Another Run" }),
+    ).toBeEnabled());
+  });
+
   it.each([
     ["failed", "Failed"],
     ["succeeded", "Succeeded"],
@@ -1946,6 +2186,13 @@ describe("Repeated Runs", () => {
     expect(await screen.findByText("Running · Job 1 of 2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Another Run" })).toBeDisabled();
     expect(await screen.findByText("The current Run is still running.")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Saved Batch" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "New" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save As" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("dialog", { name: "Save Batch" })).toBeInTheDocument();
     expect(api.createRun).toHaveBeenCalledOnce();
   });
 
@@ -1993,6 +2240,37 @@ describe("Current Run restoration", () => {
     expect(api.startRun).not.toHaveBeenCalled();
     nextPoll.resolve(execution("succeeded", "run-running"));
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+  });
+
+  it("restores an uncontrolled running Run without polling and permits replacement", async () => {
+    seedWorkingSession("run-uncontrolled");
+    const uncontrolled = execution("running", "run-uncontrolled");
+    uncontrolled.execution_task_active = false;
+    const api = makeApi({
+      createRun: vi.fn(async () => runResponse("run-replacement", 12)),
+      getRun: vi.fn(async () => runLookupResponse("running", "run-uncontrolled", 11)),
+      getExecution: vi.fn(async () => uncontrolled),
+      getResults: vi.fn(async (runId) => ({ run_id: runId, results: [] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+
+    expect(await screen.findByText("Running · Control unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/cannot resume it automatically/)).toBeInTheDocument();
+    expect(screen.queryByText("Watching execution state...")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop waiting" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    await pause(20);
+    expect(api.getExecution).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    const createAnother = await screen.findByRole("button", { name: "Create Another Run" });
+    expect(createAnother).toBeEnabled();
+    fireEvent.click(createAnother);
+
+    expect(await screen.findByRole("heading", { name: "Run 12" })).toBeInTheDocument();
+    expect(api.createRun).toHaveBeenCalledOnce();
+    expect(loadWorkingSession().currentRunId).toBe("run-replacement");
   });
 
   it("restores a created Run with Start available and does not start automatically", async () => {
@@ -2963,6 +3241,7 @@ function makeApi(
     note: null,
     created_at: "2026-08-27T12:00:00Z",
     archived_at: null,
+    placeholders: ["subject"],
   };
   return {
     getComfyUIStatus: vi.fn(async () => ({
@@ -3166,6 +3445,7 @@ function execution(status: ExecutionResponse["status"], runId = "run-123"): Exec
     return {
       run_id: runId,
       status,
+      execution_task_active: false,
       started_at: null,
       completed_at: status === "cancelled" ? "2026-08-27T12:01:00Z" : null,
       current_job_ordinal: null,
@@ -3187,6 +3467,7 @@ function execution(status: ExecutionResponse["status"], runId = "run-123"): Exec
   return {
     run_id: runId,
     status,
+    execution_task_active: status === "running",
     started_at: "2026-08-27T12:00:00Z",
     completed_at: terminal ? "2026-08-27T12:01:00Z" : null,
     current_job_ordinal: status === "running" ? 1 : null,
@@ -3221,6 +3502,7 @@ function stoppedExecution(runId = "run-123"): ExecutionResponse {
   return {
     run_id: runId,
     status: "cancelled",
+    execution_task_active: false,
     started_at: "2026-09-01T11:59:00Z",
     completed_at: "2026-09-01T12:01:00Z",
     current_job_ordinal: null,
@@ -3260,6 +3542,7 @@ function detachedExecution(runId = "run-123"): ExecutionResponse {
   return {
     run_id: runId,
     status: "blocked",
+    execution_task_active: false,
     started_at: "2026-09-01T11:59:00Z",
     completed_at: null,
     current_job_ordinal: 1,
@@ -3433,6 +3716,7 @@ function promptVersion(
     note: null,
     created_at: "2026-08-27T12:00:00Z",
     archived_at: null,
+    placeholders: ["subject"],
     ...overrides,
   };
 }
@@ -3455,6 +3739,16 @@ function projectPrompt(
 }
 
 async function addExistingPrompt(name: string) {
+  const dialog = await openPromptLibrary();
+  const nameNode = within(dialog).getByText(name, { selector: ".prompt-library-item strong" });
+  const item = nameNode.closest("button");
+  if (!item) throw new Error(`Prompt item was not rendered for ${name}`);
+  fireEvent.click(item);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add to Batch" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+}
+
+async function openPromptLibrary(): Promise<HTMLElement> {
   await pause(0);
   await waitFor(() => expect(
     within(screen.getByRole("group", { name: "Prompts" }))
@@ -3476,12 +3770,7 @@ async function addExistingPrompt(name: string) {
     throw new Error("Prompt section is not ready");
   });
   const dialog = screen.getByRole("dialog", { name: "Prompts" });
-  const nameNode = within(dialog).getByText(name, { selector: ".prompt-library-item strong" });
-  const item = nameNode.closest("button");
-  if (!item) throw new Error(`Prompt item was not rendered for ${name}`);
-  fireEvent.click(item);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Add to Batch" }));
-  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  return dialog;
 }
 
 async function expandConfiguration(title: string, action = "Edit") {

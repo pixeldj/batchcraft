@@ -49,6 +49,7 @@ from batchcraft.db import (
 )
 from batchcraft.domain import (
     BatchDefinition,
+    CompilationError,
     CompilationWarning,
     CompiledJob,
     CompiledRunPlan,
@@ -64,6 +65,7 @@ from batchcraft.domain import (
     SeedMode,
     VariableBinding,
     WorkflowParameter,
+    extract_placeholder_names,
     materialize_parameter_bindings,
     validate_parameter_alternatives,
     validate_parameter_scalar,
@@ -765,6 +767,7 @@ class LibraryPromptVersionResponse(ApiModel):
     note: str | None
     created_at: datetime
     archived_at: datetime | None
+    placeholders: list[str]
 
     @classmethod
     def from_record(cls, version: PromptVersionRecord) -> Self:
@@ -777,7 +780,15 @@ class LibraryPromptVersionResponse(ApiModel):
             note=version.note,
             created_at=version.created_at,
             archived_at=version.archived_at,
+            placeholders=_prompt_placeholders(version.text),
         )
+
+
+def _prompt_placeholders(text: str) -> list[str]:
+    try:
+        return list(extract_placeholder_names(text))
+    except CompilationError:
+        return []
 
 
 class PromptListResponse(PromptResponse):
@@ -1223,6 +1234,7 @@ class RunCancellationRequestedResponse(RunCancellationResponse):
 class ExecutionResponse(ApiModel):
     run_id: str
     status: str
+    execution_task_active: bool
     started_at: str | None
     completed_at: str | None
     current_job_ordinal: int | None
@@ -1233,11 +1245,16 @@ class ExecutionResponse(ApiModel):
 
     @classmethod
     def from_state(
-        cls, state: RunExecutionState, cancellation: RunCancellation | None = None
+        cls,
+        state: RunExecutionState,
+        cancellation: RunCancellation | None = None,
+        *,
+        execution_task_active: bool,
     ) -> Self:
         return cls(
             run_id=state.run_id,
             status=state.status.value,
+            execution_task_active=execution_task_active,
             started_at=state.started_at,
             completed_at=state.completed_at,
             current_job_ordinal=state.current_job_ordinal,
@@ -1363,6 +1380,8 @@ class RunResponse(RunCreatedResponse):
         run: PublishedRun,
         state: RunExecutionState,
         cancellation: RunCancellation | None = None,
+        *,
+        execution_task_active: bool,
     ) -> Self:
         created = RunCreatedResponse.from_run(run)
         return cls(
@@ -1381,7 +1400,11 @@ class RunResponse(RunCreatedResponse):
             ],
             plan=RunPlanResponse.from_run(run),
             batch_snapshot=BatchSnapshotV6.model_validate(run.batch_snapshot),
-            execution=ExecutionResponse.from_state(state, cancellation),
+            execution=ExecutionResponse.from_state(
+                state,
+                cancellation,
+                execution_task_active=execution_task_active,
+            ),
         )
 
 

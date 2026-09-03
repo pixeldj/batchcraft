@@ -13,7 +13,7 @@ export const WORKING_SESSION_RECOVERY_KEY = "batchcraft.working-session-recovery
 const WORKING_SESSION_RECOVERY_VERSION = 2;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
-type StoredPrompt = Omit<PromptForm, "key">;
+type StoredPrompt = Omit<PromptForm, "key" | "placeholders">;
 
 interface StoredBatchForm extends Omit<
   BatchFormState,
@@ -147,6 +147,7 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
     prompts: form.prompts.map((prompt) => ({
       ...prompt,
       key: newPrompt().key,
+      placeholders: [],
     })),
     variableBindings: form.variableBindings.map((binding) => ({
       ...binding,

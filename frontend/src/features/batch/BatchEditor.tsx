@@ -11,6 +11,7 @@ import {
   MAX_RANDOM_SEED_COUNT,
   buildParameterBindings,
   buildLinkedParameterSets,
+  missingPromptPlaceholders,
   parameterRangeCount,
   newVariableBinding,
   normalizedBindingValues,
@@ -85,6 +86,7 @@ export function BatchEditor({
   const [seedsExpanded, setSeedsExpanded] = useState(false);
   const [parametersExpanded, setParametersExpanded] = useState(false);
   const parameters = safeProfileParameters(form.workflowProfileJson);
+  const missingPlaceholders = missingPromptPlaceholders(form.prompts, form.variableBindings);
   const workflowSelectionIncomplete = Boolean(form.workflowLibraryProjectId) && (
     !form.workflowId ||
     !form.workflowVersionId ||
@@ -114,6 +116,15 @@ export function BatchEditor({
         binding.key === key ? { ...binding, ...patch } : binding,
       ),
     );
+  }
+
+  function createMissingBindings() {
+    if (missingPlaceholders.length === 0) return;
+    setVariablesExpanded(true);
+    update("variableBindings", [
+      ...form.variableBindings,
+      ...missingPlaceholders.map((placeholder) => newVariableBinding(placeholder, [])),
+    ]);
   }
 
   return (
@@ -204,10 +215,15 @@ export function BatchEditor({
 
       <ConfigurationSection
         title="Variable bindings"
-        summary={variableSummary(form.variableBindings)}
+        summary={variableSummary(form.variableBindings, missingPlaceholders.length)}
         expanded={variablesExpanded}
         collapsible={variablesComplete}
         controlsId="variable-binding-controls"
+        summaryAction={missingPlaceholders.length ? (
+          <button className="button-primary compact" type="button" onClick={createMissingBindings}>
+            Create missing bindings
+          </button>
+        ) : null}
         action={(
           <button
             className="button-secondary compact"
@@ -219,6 +235,14 @@ export function BatchEditor({
         )}
         onExpandedChange={setVariablesExpanded}
       >
+        {missingPlaceholders.length ? (
+          <div className="missing-bindings-assistance">
+            <p><strong>Missing from selected prompts:</strong> {missingPlaceholders.join(", ")}</p>
+            <button className="button-primary compact" type="button" onClick={createMissingBindings}>
+              Create missing bindings
+            </button>
+          </div>
+        ) : null}
         {form.variableBindings.length === 0 ? (
           <p className="empty-note">No bindings. Prompts without placeholders need none.</p>
         ) : null}
@@ -368,7 +392,10 @@ function safeProfileParameters(profileJson: string) {
   }
 }
 
-function variableSummary(bindings: VariableBindingForm[]) {
+function variableSummary(bindings: VariableBindingForm[], missingCount: number) {
+  if (missingCount > 0) {
+    return <span>{bindings.length} configured · {missingCount} missing</span>;
+  }
   if (bindings.length === 0) return <span>No bindings</span>;
   return (
     <div className="configuration-summary-list">

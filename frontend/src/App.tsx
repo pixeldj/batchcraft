@@ -114,6 +114,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [createdUnavailableRunId, setCreatedUnavailableRunId] = useState<string | null>(null);
+  const [executionControlUnavailableRunId, setExecutionControlUnavailableRunId] =
+    useState<string | null>(null);
   const [runSnapshotIdentity, setRunSnapshotIdentity] = useState<RunSnapshotIdentity | null>(null);
   const [restoredRunSeed, setRestoredRunSeed] = useState<RestoredRunSeed | null>(null);
   const [previewRunAssociation, setPreviewRunAssociation] =
@@ -174,6 +176,12 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
   const changeCreatedUnavailable = useCallback((runId: string, unavailable: boolean) => {
     setCreatedUnavailableRunId((current) => unavailable
+      ? runId
+      : current === runId ? null : current);
+  }, []);
+
+  const changeExecutionControlUnavailable = useCallback((runId: string, unavailable: boolean) => {
+    setExecutionControlUnavailableRunId((current) => unavailable
       ? runId
       : current === runId ? null : current);
   }, []);
@@ -813,6 +821,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     const snapshot = previewSnapshot;
     const requestedBatchIdentity = snapshot ? batchRequestIdentity(snapshot.request) : null;
     const currentRunAllowsReplacement = run?.run_id === createdUnavailableRunId
+      || run?.run_id === executionControlUnavailableRunId
       || (runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus));
     if (
       !snapshot ||
@@ -910,7 +919,9 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }
 
   const currentRunCreatedUnavailable = run?.run_id === createdUnavailableRunId;
-  const currentRunIsTerminal = currentRunCreatedUnavailable
+  const currentRunExecutionControlUnavailable = run?.run_id === executionControlUnavailableRunId;
+  const currentRunAllowsReplacement = currentRunCreatedUnavailable
+    || currentRunExecutionControlUnavailable
     || (runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus));
   const currentIntent = canonicalBatchIntent(form);
   const pristineIntent = useRef(canonicalBatchIntent(initialBatchForm()));
@@ -923,18 +934,20 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     runRestoreUnresolved ||
     savingBatch ||
     (runStatus === "created" && !currentRunCreatedUnavailable) ||
-    runStatus === "running";
+    (runStatus === "running" && !currentRunExecutionControlUnavailable);
   const canCreateRun =
     previewSnapshot !== null &&
     !restoringRun &&
     !runRestoreUnresolved &&
-    (run === null || currentRunIsTerminal);
+    (run === null || currentRunAllowsReplacement);
   const creationBlockedMessage = restoringRun
     ? "Restoring the previous Run before another Run can be created."
     : runRestoreUnresolved
       ? "The previous Run state is unknown. Refresh after the backend is available before creating another Run."
       : currentRunCreatedUnavailable
         ? "The current Run cannot be started or discarded. Create another immutable Run from this Preview."
+      : currentRunExecutionControlUnavailable
+        ? "This backend no longer controls the current Run. Create another immutable Run from this Preview."
       : runStatus === "created"
         ? "Start the current Run before creating another one."
         : runStatus === "running"
@@ -1090,6 +1103,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           initialResultsError={matchingRestoredRunSeed?.resultsError ?? null}
           onStatusChange={setRunStatus}
           onCreatedUnavailableChange={changeCreatedUnavailable}
+          onExecutionControlUnavailableChange={changeExecutionControlUnavailable}
           onResultsChange={updateCurrentRunGalleryResults}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}

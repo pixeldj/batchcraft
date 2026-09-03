@@ -26,6 +26,7 @@ export interface PromptForm {
   versionNumber: number | null;
   snapshotName: string;
   text: string;
+  placeholders: string[];
 }
 
 export interface ParameterBindingForm {
@@ -103,11 +104,14 @@ const SIMPLE_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
 let nextVariableBindingKey = 1;
 let nextPromptKey = 1;
 
-export function newVariableBinding(): VariableBindingForm {
+export function newVariableBinding(
+  placeholder = "variable",
+  values: string[] = ["value one", "value two"],
+): VariableBindingForm {
   return {
     key: nextVariableBindingKey++,
-    placeholder: "variable",
-    values: ["value one", "value two"],
+    placeholder,
+    values,
   };
 }
 
@@ -122,7 +126,29 @@ export function newPrompt(promptNumber = 1): PromptForm {
     versionNumber: null,
     snapshotName: `Prompt ${promptNumber}`,
     text: "",
+    placeholders: [],
   };
+}
+
+export function requiredPromptPlaceholders(prompts: PromptForm[]): string[] {
+  const seen = new Set<string>();
+  const required: string[] = [];
+  for (const prompt of prompts) {
+    for (const placeholder of prompt.placeholders) {
+      if (seen.has(placeholder)) continue;
+      seen.add(placeholder);
+      required.push(placeholder);
+    }
+  }
+  return required;
+}
+
+export function missingPromptPlaceholders(
+  prompts: PromptForm[],
+  bindings: VariableBindingForm[],
+): string[] {
+  const existing = new Set(bindings.map((binding) => binding.placeholder.trim()));
+  return requiredPromptPlaceholders(prompts).filter((placeholder) => !existing.has(placeholder));
 }
 
 export function initialBatchForm(): BatchFormState {

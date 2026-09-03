@@ -843,7 +843,12 @@ def create_app(
         run = service.get_run(run_id)
         state = service.get_execution_state(run)
         cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
-        return RunResponse.from_run_and_state(run, state, cancellation)
+        return RunResponse.from_run_and_state(
+            run,
+            state,
+            cancellation,
+            execution_task_active=service.execution_task_active(run_id),
+        )
 
     @app.post(
         "/api/runs/{run_id}/execute",
@@ -865,7 +870,11 @@ def create_app(
         run = service.get_run(run_id)
         state = service.get_execution_state(run)
         cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
-        return ExecutionResponse.from_state(state, cancellation)
+        return ExecutionResponse.from_state(
+            state,
+            cancellation,
+            execution_task_active=service.execution_task_active(run_id),
+        )
 
     @app.post(
         "/api/runs/{run_id}/cancel",
@@ -888,7 +897,11 @@ def create_app(
     ) -> ExecutionResponse:
         state = await service.discard_run(run_id)
         cancellation = await asyncio.to_thread(service.get_run_cancellation, state)
-        return ExecutionResponse.from_state(state, cancellation)
+        return ExecutionResponse.from_state(
+            state,
+            cancellation,
+            execution_task_active=service.execution_task_active(run_id),
+        )
 
     @app.get("/api/runs/{run_id}/results", response_model=ResultsResponse)
     async def list_results(

@@ -195,6 +195,12 @@ preventing otherwise valid Jobs.
 The empty string is not the same as zero values. It resolves the placeholder to no text and still
 contributes one variant.
 
+The Batch editor derives required names from the exact selected PromptVersions using the compiler's
+ordered placeholder metadata. It reports missing bindings without changing the Batch. The explicit
+`Create missing bindings` action appends one zero-value binding per missing name in PromptVersion and
+first-occurrence order. Existing bindings, including zero-value and intentional empty-string bindings,
+remain unchanged and keep their order.
+
 ### Duplicate values
 
 Every binding must contain unique exact string values. Preview, Run creation, and current Saved Batch

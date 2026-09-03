@@ -905,6 +905,7 @@ def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
         version_one = created["version"]
         assert version_one["version_number"] == 1
         assert version_one["name_snapshot"] == "Studio portrait"
+        assert version_one["placeholders"] == ["subject"]
 
         update_prompt_response = http.patch(
             f"/api/prompts/{prompt_id}",
@@ -928,6 +929,7 @@ def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
         version_two = version_two_response.json()
         assert version_two["version_number"] == 2
         assert version_two["name_snapshot"] == "Editorial portrait"
+        assert version_two["placeholders"] == ["subject"]
 
         archive_version_response = http.post(f"/api/prompt-versions/{version_one['id']}/archive")
         assert archive_version_response.status_code == 200
@@ -957,6 +959,24 @@ def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
         assert http.get("/api/projects").json() == {"projects": []}
         all_projects = http.get("/api/projects", params={"include_archived": True})
         assert len(all_projects.json()["projects"]) == 1
+
+
+def test_prompt_response_defers_malformed_placeholder_validation(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as http:
+        project = http.post(
+            "/api/projects", json={"name": "Project", "filesystem_key": "project"}
+        ).json()
+        malformed = http.post(
+            f"/api/projects/{project['id']}/prompts",
+            json={"name": "Malformed", "text": "portrait of {{subject"},
+        )
+
+        assert malformed.status_code == 201
+        assert malformed.json()["version"]["placeholders"] == []
 
 
 def test_prompt_list_returns_latest_active_version_and_preserves_prompt_filter(
@@ -2512,6 +2532,7 @@ def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
     expected: dict[str, object] = {
         "run_id": run_id,
         "status": "cancelled",
+        "execution_task_active": False,
         "started_at": None,
         "completed_at": "2026-08-31T12:30:00Z",
         "current_job_ordinal": None,
@@ -3129,6 +3150,7 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         other_run_id = _create_run(http, _batch_request((asset_id,)))
         other_run = http.post(f"/api/runs/{other_run_id}/execute")
         execution = http.get(f"/api/runs/{run_id}/execution")
+        run_response = http.get(f"/api/runs/{run_id}")
 
         assert second.status_code == 409
         assert second.json()["error"]["code"] == "execution_already_active"
@@ -3137,11 +3159,23 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         assert other_run.status_code == 409
         assert other_run.json()["error"]["code"] == "execution_already_active"
         assert execution.json()["status"] == "running"
+        assert execution.json()["execution_task_active"] is True
+        assert run_response.json()["execution"]["execution_task_active"] is True
 
     assert cancelled.is_set()
     assert client.closed
     published = RunFilesystemStore(settings.projects_root).load_run(run_path)
     assert ExecutionStateStore(run_path).load(published).status is RunExecutionStatus.RUNNING
+
+    with TestClient(
+        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+    ) as restarted_http:
+        restored_execution = restarted_http.get(f"/api/runs/{run_id}/execution")
+        restored_run = restarted_http.get(f"/api/runs/{run_id}")
+
+    assert restored_execution.json()["status"] == "running"
+    assert restored_execution.json()["execution_task_active"] is False
+    assert restored_run.json()["execution"]["execution_task_active"] is False
 
 
 def test_execution_start_and_discard_race_has_exactly_one_winner(tmp_path: Path) -> None:

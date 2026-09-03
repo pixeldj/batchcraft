@@ -143,6 +143,11 @@ restoring an older version creates a new version with the current Prompt name sn
 `include_archived=true` to Project, Prompt, or PromptVersion list requests when archived records are
 needed.
 
+Every Prompt library version response includes `placeholders`, an ordered list derived from immutable
+template text by the compiler's authoritative parser. Names preserve first occurrence, exact case, and
+omit repeats. Malformed templates return an empty assistance list; Preview and Run compilation remain
+the final validation authority and report the malformed syntax.
+
 `GET /api/projects/{project_id}/prompts` returns each Prompt with `latest_active_version`. This field
 contains the complete highest-numbered non-archived PromptVersion, including its `name_snapshot`, or
 `null` when every version is archived. The Prompt's `include_archived` filter is independent: an
@@ -346,11 +351,17 @@ nullable `requested_at`, and one projection state: `stop_requested` before admis
 outcome, or `finished` when the request exists but execution honestly reached `succeeded`, `failed`, or
 `blocked`. A discarded Run projects `cancelled` with `requested_at: null`.
 
-An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the discarded Run.
+Every execution response also includes ephemeral `execution_task_active`. This is `true` only while
+the current API process owns a live execution task for that Run. It is not persisted and is not evidence
+about whether a previously submitted remote ComfyUI Job is still running.
+
+An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the earlier Run.
 
 A refreshed browser may reconnect to a Run already executing in the same backend process. It reads
-the existing state and resumes polling without calling the execution-start endpoint. This is UI
-reconnection, not backend execution recovery.
+the existing state and resumes polling without calling the execution-start endpoint. If persisted state
+is `running` but `execution_task_active` is false, the browser stops polling, reports that local control
+is unavailable, and permits another immutable Run without rewriting the earlier Run. This is UI
+reconnection and release of stale control, not backend execution recovery.
 
 ## Results
 

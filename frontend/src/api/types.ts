@@ -323,6 +323,7 @@ export interface LibraryPromptVersion {
   note: string | null;
   created_at: string;
   archived_at: string | null;
+  placeholders: string[];
 }
 
 export interface ProjectPrompt extends Prompt {
@@ -604,6 +605,7 @@ export interface RunCancellationRequestedResponse extends RunCancellationRespons
 export interface ExecutionResponse {
   run_id: string;
   status: RunStatus;
+  execution_task_active: boolean;
   started_at: string | null;
   completed_at: string | null;
   current_job_ordinal: number | null;

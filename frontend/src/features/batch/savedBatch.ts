@@ -173,6 +173,7 @@ export function savedBatchToForm(
       versionNumber: selection.version_number,
       snapshotName: selection.name_snapshot,
       text: selection.text,
+      placeholders: [],
     })),
     variableBindings: detail.variable_bindings.map((binding) => ({
       key: newVariableBinding().key,

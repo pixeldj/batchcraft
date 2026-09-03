@@ -175,6 +175,12 @@ library reconciliation does not. The browser session restoration stores library 
 immutable snapshots without UI keys. Named Image Input binding and browser session v10 supersede the
 original picker and session shape in Phase 2.4.
 
+PromptVersion API responses derive ordered placeholder names with the same parser used by compilation.
+The frontend combines those lists in selected PromptVersion order and offers one explicit action for
+missing Variable Bindings. Derived placeholder metadata is neither SQLite state nor browser-session
+authority. Saved Batch loads and recovered drafts remain unchanged until the user creates the missing
+zero-value bindings.
+
 This phase does not add durable editable Batch persistence, Reference Collections, asset deletion,
 Run history, recovery, cancellation, retries, ratings, advanced filtering, or visual Workflow
 Profile mapping.
@@ -433,6 +439,12 @@ Batch IDs plus filesystem keys. Require a fresh compiler Preview after every col
 Project starts a fresh Batch identity and clears Project-scoped Prompt, Workflow/Profile, Image Input,
 Parameter, Run, and gallery state. Changing Batch identity resets the gallery; semantic edits within the
 same Batch retain it and invalidate Preview. Presentation-only collapse changes do neither.
+
+Execution responses distinguish durable status from the ephemeral active-task ownership of the current
+API process. A restored `running` Run without an active task remains historically unchanged, but the UI
+stops polling it, hides impossible cancellation actions, and permits a fresh Preview and replacement
+Run. Saving mutable Batch intent remains available during active execution because the current Run is
+already frozen; Project and Batch navigation remain locked only while local execution control is active.
 
 The selected Profile drives the named Image Input editor. It renders slots in Profile order and lets
 each choose ordered Project Asset alternatives plus an independent Base workflow alternative. Profile

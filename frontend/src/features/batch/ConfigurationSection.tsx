@@ -7,6 +7,7 @@ interface Props {
   collapsible: boolean;
   controlsId: string;
   action?: ReactNode;
+  summaryAction?: ReactNode;
   actionLabel?: string;
   className?: string;
   onExpandedChange(expanded: boolean): void;
@@ -20,6 +21,7 @@ export function ConfigurationSection({
   collapsible,
   controlsId,
   action,
+  summaryAction,
   actionLabel = "Edit",
   className = "",
   onExpandedChange,
@@ -53,6 +55,7 @@ export function ConfigurationSection({
         </div>
         {!showContent && collapsible ? (
           <div className="section-summary-actions">
+            {summaryAction}
             {toggleButton}
           </div>
         ) : null}

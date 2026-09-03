@@ -129,7 +129,8 @@ export function SavedBatchSelector({
       .filter((name, index, names) => names.indexOf(name) !== index),
   );
 
-  const busy = disabled || saving || switching || archiving;
+  const busy = saving || switching || archiving;
+  const navigationBlocked = disabled || busy;
   const statusLabel = selectedBatchId
     ? dirty
       ? "Unsaved changes"
@@ -238,7 +239,7 @@ export function SavedBatchSelector({
             <select
               aria-label="Saved Batch"
               value={selectedBatchId ?? ""}
-              disabled={busy}
+              disabled={navigationBlocked}
               onChange={(event) => requestSelect(event.target.value)}
             >
               <option value="">Unsaved draft</option>
@@ -268,7 +269,12 @@ export function SavedBatchSelector({
       )}
 
       <div className="action-row">
-        <button className="button-secondary compact" type="button" disabled={busy || !projectId} onClick={requestNew}>
+        <button
+          className="button-secondary compact"
+          type="button"
+          disabled={navigationBlocked || !projectId}
+          onClick={requestNew}
+        >
           New
         </button>
         {selectedBatchId ? (
@@ -302,7 +308,7 @@ export function SavedBatchSelector({
           <button
             className="button-link"
             type="button"
-            disabled={busy}
+            disabled={navigationBlocked}
             onClick={() => setConfirmArchive(true)}
           >
             Archive

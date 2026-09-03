@@ -21,6 +21,7 @@ interface Props {
   initialResultsError: string | null;
   onStatusChange(status: RunStatus | null): void;
   onCreatedUnavailableChange(runId: string, unavailable: boolean): void;
+  onExecutionControlUnavailableChange(runId: string, unavailable: boolean): void;
   onResultsChange(
     runId: string,
     execution: ExecutionResponse | null,
@@ -41,6 +42,7 @@ export function RunWorkspace({
   initialResultsError,
   onStatusChange,
   onCreatedUnavailableChange,
+  onExecutionControlUnavailableChange,
   onResultsChange,
   getCachedRun,
   loadRun,
@@ -73,6 +75,12 @@ export function RunWorkspace({
     }
   }, [execution.createdUnavailable, onCreatedUnavailableChange, run]);
 
+  useEffect(() => {
+    if (run) {
+      onExecutionControlUnavailableChange(run.run_id, execution.executionControlUnavailable);
+    }
+  }, [execution.executionControlUnavailable, onExecutionControlUnavailableChange, run]);
+
   return (
     <>
       <RunPanel
@@ -87,6 +95,7 @@ export function RunWorkspace({
         polling={execution.polling}
         error={execution.error}
         createdUnavailable={execution.createdUnavailable}
+        executionControlUnavailable={execution.executionControlUnavailable}
         batchDiverged={batchDiverged}
         onStart={execution.start}
         onDiscard={execution.discard}

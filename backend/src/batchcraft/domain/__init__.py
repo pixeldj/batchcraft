@@ -1,4 +1,9 @@
-from batchcraft.domain.compiler import CompilationError, compile_batch, preview_batch
+from batchcraft.domain.compiler import (
+    CompilationError,
+    compile_batch,
+    extract_placeholder_names,
+    preview_batch,
+)
 from batchcraft.domain.image_slots import (
     IMAGE_INPUT_SLOT_KEY_PATTERN,
     is_valid_image_input_slot_key,
@@ -49,6 +54,7 @@ __all__ = [
     "CompilationWarningCode",
     "CompiledJob",
     "CompiledRunPlan",
+    "extract_placeholder_names",
     "PromptVersion",
     "ImageBinding",
     "ImageInputSlot",

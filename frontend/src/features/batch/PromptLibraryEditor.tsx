@@ -90,7 +90,7 @@ export function PromptLibraryEditor({
   const checkedDetached = useRef(new Set<string>());
   const reconnectPatches = useRef(new Map<number, Partial<Pick<
     PromptForm,
-    "libraryProjectId" | "promptId" | "promptName" | "versionNumber"
+    "libraryProjectId" | "promptId" | "promptName" | "versionNumber" | "placeholders"
   >>>());
   const notifyMetadataChange = useEffectEvent(onMetadataChange);
   const getCurrentPrompts = useEffectEvent(() => prompts);
@@ -224,11 +224,16 @@ export function PromptLibraryEditor({
               promptId: logicalPrompt.id,
               promptName: logicalPrompt.name,
               versionNumber: version.version_number,
+              placeholders: version.placeholders,
             });
             applyReconnectPatches();
             setDetachedState((current) => omitKey(current, prompt.key));
           } else if (exact && (!logicalPrompt || version.archived_at)) {
-            reconnectPatches.current.set(prompt.key, { libraryProjectId: null, promptId: null });
+            reconnectPatches.current.set(prompt.key, {
+              libraryProjectId: null,
+              promptId: null,
+              placeholders: version.placeholders,
+            });
             applyReconnectPatches();
             setDetachedState((current) => omitKey(current, prompt.key));
           } else if (version.id === prompt.versionId && !exact) {
@@ -306,6 +311,7 @@ export function PromptLibraryEditor({
 
   function openWorkspace(trigger: HTMLButtonElement) {
     workspaceTrigger.current = trigger;
+    setExpanded(true);
     const initial = activeLibrary.prompts.find((logicalPrompt) =>
       logicalPrompt.id === inspectedPromptId,
     ) ?? activeLibrary.prompts[0] ?? null;
@@ -877,6 +883,7 @@ function promptForm(
     versionNumber: version.version_number,
     snapshotName: version.name_snapshot,
     text: version.text,
+    placeholders: version.placeholders,
   };
 }
 

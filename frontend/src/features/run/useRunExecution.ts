@@ -33,7 +33,7 @@ export function useRunExecution(
   const [reconcilingStop, setReconcilingStop] = useState(false);
   const [requestingDetach, setRequestingDetach] = useState(false);
   const [reconcilingDetach, setReconcilingDetach] = useState(false);
-  const [polling, setPolling] = useState(initialExecution?.status === "running");
+  const [polling, setPolling] = useState(initialExecution?.execution_task_active ?? false);
   const [refreshingResults, setRefreshingResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultsError, setResultsError] = useState<string | null>(initialResultsError);
@@ -144,7 +144,10 @@ export function useRunExecution(
           }
         }
 
-        if (TERMINAL_STATUSES.has(nextExecution.status)) {
+        if (
+          TERMINAL_STATUSES.has(nextExecution.status) ||
+          (nextExecution.status === "running" && !nextExecution.execution_task_active)
+        ) {
           setPolling(false);
           return;
         }
@@ -191,9 +194,15 @@ export function useRunExecution(
         try {
           const nextExecution = await api.getExecution(run.run_id);
           setExecution(nextExecution);
-          setCreatedUnavailable(nextExecution.status === "created");
-          setPolling(nextExecution.status === "running");
-          setError(nextExecution.status === "created" ? message : null);
+          setCreatedUnavailable(
+            nextExecution.status === "created" && !nextExecution.execution_task_active,
+          );
+          setPolling(nextExecution.execution_task_active);
+          setError(
+            nextExecution.status === "created" && !nextExecution.execution_task_active
+              ? message
+              : null,
+          );
         } catch {
           setError(message);
         }
@@ -232,7 +241,7 @@ export function useRunExecution(
           setError(`${message}. Checking durable state.`);
         } else {
           setCreatedUnavailable(false);
-          setPolling(nextExecution.status === "running");
+          setPolling(nextExecution.execution_task_active);
           setError(nextExecution.status === "created" ? message : null);
         }
       } catch {
@@ -276,6 +285,8 @@ export function useRunExecution(
         setReconcilingStop(true);
         setError(`${message}. The Stop response was ambiguous; checking durable state.`);
         setPolling(true);
+      } else if (caught instanceof ApiError && caught.code === "run_cancellation_not_eligible") {
+        await reconcileCancellationRejection(message);
       } else {
         setError(message);
       }
@@ -317,6 +328,8 @@ export function useRunExecution(
         setReconcilingDetach(true);
         setError(`${message}. The Stop waiting response was ambiguous; checking durable state.`);
         setPolling(true);
+      } else if (caught instanceof ApiError && caught.code === "run_cancellation_not_eligible") {
+        await reconcileCancellationRejection(message);
       } else {
         setError(message);
       }
@@ -341,6 +354,30 @@ export function useRunExecution(
     }
   }
 
+  async function reconcileCancellationRejection(message: string) {
+    if (!run) return;
+    try {
+      const nextExecution = await api.getExecution(run.run_id);
+      setExecution(nextExecution);
+      const unavailable = nextExecution.status === "running" && !nextExecution.execution_task_active;
+      setPolling(nextExecution.status === "running" && nextExecution.execution_task_active);
+      setError(unavailable || TERMINAL_STATUSES.has(nextExecution.status) ? null : message);
+      try {
+        const nextResults = await api.getResults(run.run_id);
+        setResults(nextResults.results);
+        setResultsError(null);
+      } catch (caught) {
+        setResultsError(errorMessage(caught));
+      }
+    } catch {
+      setError(message);
+    }
+  }
+
+  const executionControlUnavailable = (
+    execution?.status === "running" && !execution.execution_task_active
+  );
+
   return {
     execution,
     results,
@@ -355,6 +392,7 @@ export function useRunExecution(
     error,
     resultsError,
     createdUnavailable,
+    executionControlUnavailable,
     start,
     discard,
     stopAfterCurrentJob,

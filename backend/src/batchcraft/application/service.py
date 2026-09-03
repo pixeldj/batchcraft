@@ -312,6 +312,9 @@ class BatchcraftService:
         except ExecutionStateError as error:
             raise RunDataError(f"execution state is invalid for Run {run.run_id!r}") from error
 
+    def execution_task_active(self, run_id: str) -> bool:
+        return self.task_registry.is_active(run_id)
+
     def get_run_cancellation(self, state: RunExecutionState) -> RunCancellation | None:
         intent = self._get_cancellation_intent(
             state.run_id, RunCancellationMode.DETACH

@@ -36,6 +36,32 @@ describe("PromptLibraryEditor workspace", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("keeps the workspace mounted when adding the first Prompt and releases its scroll lock", async () => {
+    const latest = version({ text: "Portrait of {{subject}}", placeholders: ["subject"] });
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Portrait", latest)] })),
+    });
+    const callbacks = callbackProps();
+    const view = render(
+      <PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />,
+    );
+
+    const trigger = await openLibrary();
+    const dialog = screen.getByRole("dialog", { name: "Prompts" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add to Batch" }));
+    const selected = callbacks.onChange.mock.calls[0][0];
+    view.rerender(
+      <PromptLibraryEditor api={api} projectId="project-1" prompts={selected} {...callbacks} />,
+    );
+
+    expect(screen.getByRole("dialog", { name: "Prompts" })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("hidden");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Prompts" })).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
+    expect(trigger).toHaveFocus();
+  });
+
   it("keeps sidebar inspection and search separate from Batch selection", async () => {
     const portrait = {
       ...libraryPrompt("portrait", "Portrait", version({
@@ -262,7 +288,13 @@ describe("PromptLibraryEditor creation and revisions", () => {
 
   it("loads and caches History lazily and can add an exact active historical revision", async () => {
     const current = version({ id: "v2", version_number: 2, text: "current" });
-    const older = version({ id: "v1", version_number: 1, text: "older", note: "Original" });
+    const older = version({
+      id: "v1",
+      version_number: 1,
+      text: "older {{vintage}}",
+      note: "Original",
+      placeholders: ["vintage"],
+    });
     const listPromptVersions = vi.fn(async () => ({ prompt_versions: [current, older] }));
     const callbacks = callbackProps();
     const api = makeApi({
@@ -273,13 +305,18 @@ describe("PromptLibraryEditor creation and revisions", () => {
 
     await openLibrary();
     fireEvent.click(screen.getByRole("button", { name: "History" }));
-    const olderCard = (await screen.findByText("older")).closest("article")!;
+    const olderCard = (await screen.findByText("older {{vintage}}")).closest("article")!;
     expect(within(olderCard).getByText("Original")).toBeInTheDocument();
     fireEvent.click(within(olderCard).getByRole("button", { name: "Inspect revision 1" }));
     expect(olderCard).toHaveClass("viewed");
     fireEvent.click(within(olderCard).getByRole("button", { name: "Add this revision" }));
     expect(callbacks.onChange).toHaveBeenCalledWith([
-      expect.objectContaining({ versionId: "v1", versionNumber: 1, text: "older" }),
+      expect.objectContaining({
+        versionId: "v1",
+        versionNumber: 1,
+        text: "older {{vintage}}",
+        placeholders: ["vintage"],
+      }),
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Back to Prompt" }));
     fireEvent.click(screen.getByRole("button", { name: "History" }));
@@ -397,6 +434,7 @@ function formPrompt(overrides: Partial<PromptForm> = {}): PromptForm {
     versionNumber: 1,
     snapshotName: "Saved name",
     text: "saved text",
+    placeholders: [],
     ...overrides,
   };
 }
@@ -411,6 +449,7 @@ function version(overrides: Partial<LibraryPromptVersion> = {}): LibraryPromptVe
     note: null,
     created_at: "2026-08-28T12:00:00Z",
     archived_at: null,
+    placeholders: [],
     ...overrides,
   };
 }

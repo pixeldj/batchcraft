@@ -19,12 +19,29 @@ from batchcraft.domain import (
     VariableBinding,
     WorkflowParameter,
     compile_batch,
+    extract_placeholder_names,
     preview_batch,
 )
 
 
 def binding(placeholder: str, *values: str) -> VariableBinding:
     return VariableBinding(placeholder=placeholder, values=values)
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        ("A {{subject}}.", ("subject",)),
+        ("{{subject}} in {{location}}", ("subject", "location")),
+        ("{{subject}} and {{subject}}", ("subject",)),
+        ("{{style}} {{subject}} {{style}} {{location}}", ("style", "subject", "location")),
+        ("{{subject}} {{Subject}}", ("subject", "Subject")),
+    ],
+)
+def test_extract_placeholder_names_preserves_compiler_semantics(
+    template: str, expected: tuple[str, ...]
+) -> None:
+    assert extract_placeholder_names(template) == expected
 
 
 def batch_definition(
