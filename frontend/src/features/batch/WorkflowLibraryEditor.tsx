@@ -1,7 +1,8 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 
-import { ApiError, type BatchcraftApi } from "../../api/client";
+import type { BatchcraftApi } from "../../api/client";
 import type {
+  CreateWorkflowResponse,
   JsonObject,
   LibraryWorkflowProfileVersion,
   LibraryWorkflowVersion,
@@ -19,7 +20,9 @@ interface Props {
   api: BatchcraftApi;
   projectId: string;
   form: BatchFormState;
+  sourceRunId?: string | null;
   onChange(form: BatchFormState): void;
+  onHistoricalImport?(form: BatchFormState): void;
   onMetadataChange(form: BatchFormState): void;
 }
 
@@ -62,13 +65,19 @@ const EMPTY_DETAIL: DetailState = {
   error: null,
 };
 
-export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetadataChange }: Props) {
+export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
   const [library, setLibrary] = useState<LibraryState>({ projectId: "", workflows: [], loading: false, error: null });
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [linkStatus, setLinkStatus] = useState<LinkStatus>(linkedStatus(form));
   const [expanded, setExpanded] = useState(false);
+  const [historicalImport, setHistoricalImport] = useState<{
+    sourceRunId: string | null;
+    workflow: CreateWorkflowResponse | null;
+    saving: boolean;
+    error: string | null;
+  }>({ sourceRunId, workflow: null, saving: false, error: null });
   const loadTag = useRef(0);
   const detailTag = useRef(0);
   const integrityTag = useRef(0);
@@ -78,7 +87,16 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
   const metadataChange = useEffectEvent(onMetadataChange);
   const normalizedProjectId = projectId.trim();
   formRef.current = form;
-  const mutationKey = [normalizedProjectId, form.workflowId, form.workflowVersionId, form.workflowProfileId].join("\0");
+  const mutationKey = [
+    sourceRunId,
+    normalizedProjectId,
+    form.workflowId,
+    form.workflowVersionId,
+    form.workflowJson,
+    form.workflowProfileId,
+    form.workflowProfileVersionId,
+    form.workflowProfileJson,
+  ].join("\0");
   if (mutationContext.current.key !== mutationKey) {
     mutationContext.current = { key: mutationKey, tag: mutationContext.current.tag + 1 };
   }
@@ -135,9 +153,17 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
   }, [api, loadAttempt, normalizedProjectId]);
 
   useEffect(() => {
+    setHistoricalImport({ sourceRunId, workflow: null, saving: false, error: null });
+  }, [sourceRunId]);
+
+  useEffect(() => {
     const workflowId = form.workflowId;
     const workflowVersionId = form.workflowVersionId;
-    if (!workflowId || !normalizedProjectId) {
+    if (!workflowId || !normalizedProjectId || activeLibrary.loading) {
+      if (!workflowId || !normalizedProjectId) setDetail(EMPTY_DETAIL);
+      return;
+    }
+    if (!selectedWorkflow) {
       setDetail(EMPTY_DETAIL);
       return;
     }
@@ -175,7 +201,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       setDetail({ ...EMPTY_DETAIL, workflowId, error: errorMessage(caught) });
     });
     return () => controller.abort();
-  }, [api, form.workflowId, form.workflowVersionId, normalizedProjectId]);
+  }, [activeLibrary.loading, api, form.workflowId, form.workflowVersionId, normalizedProjectId, selectedWorkflow]);
 
   useEffect(() => {
     const profileId = form.workflowProfileId;
@@ -213,7 +239,27 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       setLinkStatus(linkedStatus(snapshot));
       return;
     }
-    if (activeLibrary.loading || activeLibrary.error || activeDetail.workflowId !== snapshot.workflowId || activeDetail.loading || activeDetail.error) {
+    const referencesHistoricalWorkflow = Boolean(snapshot.historicalWorkflowResourceStatus)
+      && workflowVersionId === snapshot.historicalWorkflowVersionId;
+    const referencesHistoricalProfile = Boolean(snapshot.historicalProfileResourceStatus)
+      && profileVersionId === snapshot.historicalProfileVersionId;
+    if (referencesHistoricalWorkflow || referencesHistoricalProfile) {
+      setLinkStatus(
+        snapshot.historicalWorkflowResourceStatus === "conflict"
+          || snapshot.historicalProfileResourceStatus === "conflict"
+          ? "integrity"
+          : snapshot.historicalWorkflowResourceStatus === "detached"
+            || snapshot.historicalProfileResourceStatus === "detached"
+            ? "detached"
+            : linkedStatus(snapshot),
+      );
+      return;
+    }
+    if (activeLibrary.loading || activeLibrary.error) {
+      return;
+    }
+    const listedWorkflow = activeLibrary.workflows.find((item) => item.id === snapshot.workflowId);
+    if (listedWorkflow && (activeDetail.workflowId !== snapshot.workflowId || activeDetail.loading)) {
       return;
     }
     const tag = ++integrityTag.current;
@@ -242,7 +288,6 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       const workflow = activeLibrary.workflows.find((item) => item.id === workflowVersion.workflow_id);
       const profile = activeDetail.profiles.find((item) => item.id === profileVersion.workflow_profile_id);
       if (!workflow || !profile || workflow.archived_at || profile.archived_at || workflowVersion.archived_at || profileVersion.archived_at) {
-        metadataChange(detach(latestForm));
         setLinkStatus("detached");
         return;
       }
@@ -262,13 +307,153 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       setLinkStatus("linked");
     }).catch((caught: unknown) => {
       if (tag !== integrityTag.current || isAbort(caught)) return;
-      if (caught instanceof ApiError && (caught.code === "workflow_version_not_found" || caught.code === "workflow_profile_version_not_found")) {
-        metadataChange(detach(currentForm()));
-      }
       setLinkStatus("detached");
     });
     return () => controller.abort();
-  }, [activeDetail.error, activeDetail.loading, activeDetail.profiles, activeDetail.workflowId, activeLibrary.error, activeLibrary.loading, activeLibrary.workflows, api, form.workflowProfileVersionId, form.workflowVersionId, normalizedProjectId]);
+  }, [activeDetail.error, activeDetail.loading, activeDetail.profiles, activeDetail.workflowId, activeLibrary.error, activeLibrary.loading, activeLibrary.workflows, api, form.historicalProfileResourceReason, form.historicalProfileResourceStatus, form.historicalProfileVersionId, form.historicalWorkflowResourceReason, form.historicalWorkflowResourceStatus, form.historicalWorkflowVersionId, form.workflowId, form.workflowJson, form.workflowProfileId, form.workflowProfileJson, form.workflowProfileVersionId, form.workflowVersionId, normalizedProjectId, sourceRunId]);
+
+  async function importHistoricalSnapshots() {
+    if (!sourceRunId || historicalImport.saving) return;
+    const requestedRunId = sourceRunId;
+    const requestedMutationTag = mutationContext.current.tag;
+    const contextIsCurrent = () => (
+      mutationContext.current.tag === requestedMutationTag
+      && sourceRunId === requestedRunId
+    );
+    setHistoricalImport((current) => ({ ...current, sourceRunId: requestedRunId, saving: true, error: null }));
+    let createdWorkflow = historicalImport.sourceRunId === requestedRunId
+      ? historicalImport.workflow
+      : null;
+    let workflowCopyResolution = formRef.current.historicalImportCopyResolutions.workflowVersion;
+    let targetWorkflowVersionId = createdWorkflow?.version.id
+      ?? workflowCopyResolution?.copiedVersionId
+      ?? null;
+    if (!targetWorkflowVersionId && formRef.current.historicalWorkflowResourceStatus === "linked") {
+      targetWorkflowVersionId = formRef.current.workflowVersionId;
+    }
+    try {
+      if (!createdWorkflow && !targetWorkflowVersionId) {
+        createdWorkflow = await api.importRunWorkflowVersion(requestedRunId, {
+          import_request_id: `workflow:${formRef.current.historicalWorkflowVersionId ?? formRef.current.workflowVersionId}`,
+          name: formRef.current.workflowName || "Workflow",
+          description: null,
+          note: null,
+        });
+        if (!contextIsCurrent()) {
+          setHistoricalImport((current) => current.sourceRunId === requestedRunId
+            ? { ...current, saving: false }
+            : current);
+          return;
+        }
+        targetWorkflowVersionId = createdWorkflow.version.id;
+        workflowCopyResolution = {
+          historicalVersionId: formRef.current.historicalWorkflowVersionId
+            ?? formRef.current.workflowVersionId
+            ?? "",
+          copiedVersionId: createdWorkflow.version.id,
+        };
+        const progress = {
+          ...formRef.current,
+          historicalImportCopyResolutions: {
+            ...formRef.current.historicalImportCopyResolutions,
+            workflowVersion: workflowCopyResolution,
+          },
+        };
+        formRef.current = progress;
+        onHistoricalImport(progress);
+        setHistoricalImport({ sourceRunId: requestedRunId, workflow: createdWorkflow, saving: true, error: null });
+      }
+      if (!targetWorkflowVersionId) throw new Error("A WorkflowVersion is required for Profile import.");
+      const createdProfile = await api.importRunWorkflowProfileVersion(requestedRunId, {
+        import_request_id: `workflow-profile:${formRef.current.historicalProfileVersionId ?? formRef.current.workflowProfileVersionId}`,
+        name: formRef.current.workflowProfileName || "Workflow Profile",
+        description: null,
+        note: null,
+        workflow_version_id: targetWorkflowVersionId,
+      });
+      if (!contextIsCurrent()) {
+        setHistoricalImport((current) => current.sourceRunId === requestedRunId
+          ? { ...current, saving: false }
+          : current);
+        return;
+      }
+      const targetVersion = createdWorkflow?.version
+        ?? await api.getWorkflowVersion(targetWorkflowVersionId);
+      if (!contextIsCurrent()) {
+        setHistoricalImport((current) => current.sourceRunId === requestedRunId
+          ? { ...current, saving: false }
+          : current);
+        return;
+      }
+      const targetWorkflow = createdWorkflow?.workflow
+        ?? activeLibrary.workflows.find((item) => item.id === targetVersion.workflow_id);
+      if (!targetWorkflow) {
+        throw new Error("The imported Workflow is not available in the current Project library.");
+      }
+      const workflow: ProjectWorkflow = {
+        ...targetWorkflow,
+        latest_active_version: targetVersion,
+      };
+      const profile: ProjectWorkflowProfile = {
+        ...createdProfile.workflow_profile,
+        latest_compatible_version: createdProfile.version,
+      };
+      setLibrary((current) => current.projectId === normalizedProjectId
+        ? { ...current, workflows: [...current.workflows, workflow] }
+        : current);
+      setDetail({
+        workflowId: workflow.id,
+        versions: [targetVersion],
+        profiles: [profile],
+        profileVersions: { [profile.id]: [createdProfile.version] },
+        loading: false,
+        error: null,
+      });
+      onHistoricalImport({
+        ...formRef.current,
+        workflowLibraryProjectId: normalizedProjectId,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        workflowJson: pretty(targetVersion.workflow),
+        workflowVersionId: targetVersion.id,
+        workflowVersionNumber: targetVersion.version_number,
+        workflowContentSha256: targetVersion.content_sha256,
+        workflowProfileId: profile.id,
+        workflowProfileName: profile.name,
+        workflowProfileJson: pretty(createdProfile.version.profile),
+        workflowProfileVersionId: createdProfile.version.id,
+        workflowProfileVersionNumber: createdProfile.version.version_number,
+        workflowProfileWorkflowVersionId: createdProfile.version.workflow_version_id,
+        workflowProfileContentSha256: createdProfile.version.content_sha256,
+        historicalImportCopyResolutions: {
+          ...formRef.current.historicalImportCopyResolutions,
+          workflowVersion: workflowCopyResolution,
+          workflowProfileVersion: {
+            historicalVersionId: formRef.current.historicalProfileVersionId
+              ?? formRef.current.workflowProfileVersionId
+              ?? "",
+            copiedVersionId: createdProfile.version.id,
+          },
+        },
+      });
+      setHistoricalImport({ sourceRunId: requestedRunId, workflow: null, saving: false, error: null });
+    } catch (caught) {
+      if (!contextIsCurrent()) {
+        setHistoricalImport((current) => current.sourceRunId === requestedRunId
+          ? { ...current, saving: false }
+          : current);
+        return;
+      }
+      setHistoricalImport({
+        sourceRunId: requestedRunId,
+        workflow: createdWorkflow,
+        saving: false,
+        error: targetWorkflowVersionId
+          ? `The Workflow snapshot was imported, but the Profile snapshot was not. Retry to finish the Profile import. ${errorMessage(caught)}`
+          : `Workflow snapshot import failed. ${errorMessage(caught)}`,
+      });
+    }
+  }
 
   function chooseWorkflow(workflowId: string) {
     const workflow = activeLibrary.workflows.find((item) => item.id === workflowId);
@@ -283,6 +468,9 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       workflowVersionNumber: version.version_number,
       workflowContentSha256: version.content_sha256,
       workflowJson: pretty(version.workflow),
+      historicalWorkflowVersionId: null,
+      historicalWorkflowResourceStatus: null,
+      historicalWorkflowResourceReason: null,
     });
   }
 
@@ -295,6 +483,14 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
       workflowVersionNumber: version.version_number,
       workflowContentSha256: version.content_sha256,
       workflowJson: pretty(version.workflow),
+      historicalWorkflowVersionId: null,
+      historicalWorkflowResourceStatus: null,
+      historicalWorkflowResourceReason: null,
+      historicalImportCopyResolutions: {
+        ...form.historicalImportCopyResolutions,
+        workflowVersion: null,
+        workflowProfileVersion: null,
+      },
     };
     const profile = activeDetail.profiles.find((item) => item.id === form.workflowProfileId);
     if (!profile) {
@@ -378,6 +574,9 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
           workflowVersionNumber: version.version_number,
           workflowContentSha256: version.content_sha256,
           workflowJson: pretty(version.workflow),
+          historicalWorkflowVersionId: null,
+          historicalWorkflowResourceStatus: null,
+          historicalWorkflowResourceReason: null,
         };
         const profile = activeDetail.profiles.find(
           (item) => item.id === latestForm.workflowProfileId,
@@ -467,6 +666,23 @@ export function WorkflowLibraryEditor({ api, projectId, form, onChange, onMetada
         <strong>{linkStatus === "linked" ? "Library linked" : linkStatus === "checking" ? "Checking library linkage" : linkStatus === "integrity" ? "Integrity conflict" : linkStatus === "incomplete" ? "Profile required" : "Detached snapshots"}</strong>
         <span>{linkStatus === "linked" ? `${form.workflowName} v${form.workflowVersionNumber} / ${form.workflowProfileName} v${form.workflowProfileVersionNumber}` : linkStatus === "integrity" ? "The stored snapshots differ from the library. Your exact snapshots are preserved." : linkStatus === "incomplete" ? "Choose a compatible ProfileVersion for the selected WorkflowVersion." : "The exact Workflow and Profile snapshots remain usable without a library link."}</span>
       </div>
+      {sourceRunId && (linkStatus === "detached" || linkStatus === "integrity") ? (
+        <div className="workflow-empty">
+          <button
+            className="button-primary compact"
+            type="button"
+            disabled={historicalImport.saving}
+            onClick={() => void importHistoricalSnapshots()}
+          >
+            {historicalImport.saving
+              ? "Importing snapshots..."
+              : historicalImport.workflow || form.historicalImportCopyResolutions.workflowVersion
+                ? "Retry Profile snapshot import"
+                : "Import historical snapshots"}
+          </button>
+          {historicalImport.error ? <p className="operation-error" role="alert">{historicalImport.error}</p> : null}
+        </div>
+      ) : null}
       <textarea className="visually-hidden" aria-label="Workflow JSON" value={form.workflowJson} onChange={(event) => onChange({ ...detach(form), workflowJson: event.target.value, workflowProfileJson: form.workflowProfileJson })} />
       <textarea className="visually-hidden" aria-label="Workflow Profile JSON" value={form.workflowProfileJson} onChange={(event) => onChange({ ...detach(form), workflowJson: form.workflowJson, workflowProfileJson: event.target.value })} />
       <div className="repeater-actions workflow-actions">
@@ -525,7 +741,7 @@ function WorkflowDialog({ state, workflow, setState, onSubmit, onCancel }: { sta
 
 function applyProfile(form: BatchFormState, profile: ProjectWorkflowProfile, version: LibraryWorkflowProfileVersion): BatchFormState {
   const profileJson = pretty(version.profile);
-  return reconcileFormBindings({ ...form, workflowProfileId: profile.id, workflowProfileName: profile.name, workflowProfileVersionId: version.id, workflowProfileVersionNumber: version.version_number, workflowProfileWorkflowVersionId: version.workflow_version_id, workflowProfileContentSha256: version.content_sha256, workflowProfileJson: profileJson }, profileJson);
+  return reconcileFormBindings({ ...form, workflowProfileId: profile.id, workflowProfileName: profile.name, workflowProfileVersionId: version.id, workflowProfileVersionNumber: version.version_number, workflowProfileWorkflowVersionId: version.workflow_version_id, workflowProfileContentSha256: version.content_sha256, workflowProfileJson: profileJson, historicalProfileVersionId: null, historicalProfileResourceStatus: null, historicalProfileResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowProfileVersion: null } }, profileJson);
 }
 
 function selectProfileWithoutVersion(
@@ -541,11 +757,18 @@ function selectProfileWithoutVersion(
     workflowProfileWorkflowVersionId: null,
     workflowProfileContentSha256: null,
     workflowProfileJson: "{}",
+    historicalProfileVersionId: null,
+    historicalProfileResourceStatus: null,
+    historicalProfileResourceReason: null,
+    historicalImportCopyResolutions: {
+      ...form.historicalImportCopyResolutions,
+      workflowProfileVersion: null,
+    },
   };
 }
 
 function clearProfileLink(form: BatchFormState): BatchFormState {
-  return { ...form, workflowProfileId: null, workflowProfileName: "", workflowProfileVersionId: null, workflowProfileVersionNumber: null, workflowProfileWorkflowVersionId: null, workflowProfileContentSha256: null };
+  return { ...form, workflowProfileId: null, workflowProfileName: "", workflowProfileVersionId: null, workflowProfileVersionNumber: null, workflowProfileWorkflowVersionId: null, workflowProfileContentSha256: null, historicalProfileVersionId: null, historicalProfileResourceStatus: null, historicalProfileResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowProfileVersion: null } };
 }
 
 function clearProfileSelectionAndSnapshot(form: BatchFormState): BatchFormState {
@@ -553,7 +776,7 @@ function clearProfileSelectionAndSnapshot(form: BatchFormState): BatchFormState 
 }
 
 function detach(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowLibraryProjectId: null, workflowId: null, workflowName: "", workflowVersionId: null, workflowVersionNumber: null, workflowContentSha256: null };
+  return { ...clearProfileLink(form), workflowLibraryProjectId: null, workflowId: null, workflowName: "", workflowVersionId: null, workflowVersionNumber: null, workflowContentSha256: null, historicalWorkflowVersionId: null, historicalWorkflowResourceStatus: null, historicalWorkflowResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowVersion: null, workflowProfileVersion: null } };
 }
 
 function linkedStatus(form: BatchFormState): LinkStatus {

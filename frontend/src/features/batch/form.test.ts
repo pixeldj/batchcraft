@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { canonicalBatchIntent } from "./savedBatch";
 import {
   buildBatchRequest,
   buildEditableBatchSnapshot,
+  editableBatchSnapshotToForm,
   editableBatchSnapshotIdentity,
   generateRandomSeeds,
   initialBatchForm,
@@ -15,6 +17,7 @@ import {
   reconcileImageBindings,
   parameterRangeCount,
   requiredPromptPlaceholders,
+  restoreHistoricalResourceState,
 } from "./form";
 
 describe("Prompt placeholder requirements", () => {
@@ -66,6 +69,11 @@ describe("buildBatchRequest", () => {
       projectFilesystemKey: "",
       projectName: "",
       prompts: [],
+      historicalImportCopyResolutions: {
+        promptVersions: [],
+        workflowVersion: null,
+        workflowProfileVersion: null,
+      },
     });
   });
 
@@ -536,6 +544,217 @@ describe("buildBatchRequest", () => {
     expect(request.seeds.mode).toBe("explicit");
     expect(request.seeds.values).toHaveLength(3);
     expect(request.seeds.values.every((seed) => seed >= 0 && seed <= 4_294_967_295)).toBe(true);
+  });
+
+  it("uses supplied historical Random seeds while retaining Random snapshot intent", () => {
+    const form = populatedBatchForm();
+    form.seedMode = "random";
+    form.randomSeedCount = "3";
+
+    const request = buildBatchRequest(form, undefined, [91, 17, 42]);
+
+    expect(request.seeds).toEqual({ mode: "explicit", values: [91, 17, 42] });
+    expect(request.batch_snapshot.seed_intent).toEqual({
+      mode: "random",
+      values: [],
+      random_seed_count: 3,
+    });
+  });
+
+  it("reconstructs exact ordered editable intent and applies resource linkage statuses", () => {
+    const snapshot = buildEditableBatchSnapshot(populatedBatchForm());
+    snapshot.prompt_versions = [
+      { id: "historical-prompt-1", prompt_id: "prompt-1", version_number: 3, name: "First", text: "First" },
+      { id: "historical-prompt-2", prompt_id: "prompt-2", version_number: 5, name: "Second", text: "Second" },
+    ];
+    snapshot.image_bindings = [{ slot_key: "source", values: [null, "asset-b", "asset-a"] }];
+    snapshot.workflow_selection = {
+      workflow_id: "workflow-1",
+      workflow_version_id: "historical-workflow",
+      workflow_name: "Frozen workflow",
+      workflow_version_number: 4,
+      workflow_profile_id: "profile-1",
+      workflow_profile_version_id: "historical-profile",
+      workflow_profile_name: "Frozen profile",
+      workflow_profile_version_number: 6,
+      workflow: { node: { inputs: { cfg: 7 } } },
+      workflow_profile: {
+        mappings: {},
+        image_inputs: [{ key: "source", label: "Source", node_id: "1", input_name: "image" }],
+        parameters: [
+          { key: "cfg", label: "CFG", node_id: "1", input_name: "cfg", value_type: "float" },
+          { key: "width", label: "Width", node_id: "2", input_name: "width", value_type: "integer" },
+          { key: "height", label: "Height", node_id: "2", input_name: "height", value_type: "integer" },
+        ],
+      },
+    };
+    snapshot.parameter_bindings = [{
+      parameter_key: "cfg",
+      mode: "range",
+      include_base: true,
+      range: { start: "0.10", end: "0.30", step: "0.05" },
+    }];
+    snapshot.linked_parameter_sets = [{
+      set_key: "resolution",
+      set_label: "Resolution",
+      members: ["width", "height"],
+      rows: [
+        { row_label: "Landscape", values: { width: 1024, height: 768 } },
+        { row_label: "Base width", values: { width: null, height: 512 } },
+      ],
+    }];
+    snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
+    snapshot.prompt_versions[0].prompt_id = null;
+    snapshot.workflow_selection.workflow_id = null;
+    snapshot.workflow_selection.workflow_profile_id = null;
+
+    const form = editableBatchSnapshotToForm({
+      run_id: "run-1",
+      batch_snapshot: snapshot,
+      resources: {
+        prompt_versions: [
+          { position: 0, historical_version_id: "current-prompt-1", status: "linked", reason: null, linked_version_id: "current-prompt-1", linked_resource_id: "prompt-1" },
+          { position: 1, historical_version_id: "historical-prompt-2", status: "conflict", reason: "content mismatch", linked_version_id: null, linked_resource_id: null },
+        ],
+        workflow_version: { historical_version_id: "historical-workflow", status: "detached", reason: "missing", linked_version_id: null, linked_resource_id: "recovered-workflow" },
+        workflow_profile_version: { historical_version_id: "historical-profile", status: "conflict", reason: "content mismatch", linked_version_id: null, linked_resource_id: "recovered-profile" },
+      },
+    });
+
+    expect(form.prompts.map(({ libraryProjectId, versionId, text }) => ({ libraryProjectId, versionId, text }))).toEqual([
+      { libraryProjectId: "project-1", versionId: "current-prompt-1", text: "First" },
+      { libraryProjectId: null, versionId: "historical-prompt-2", text: "Second" },
+    ]);
+    expect(form.imageBindings).toEqual(snapshot.image_bindings);
+    expect(form.parameterBindings[0]).toMatchObject({
+      parameterKey: "cfg",
+      valueType: "float",
+      mode: "range",
+      range: { start: "0.10", end: "0.30", step: "0.05", includeBase: true },
+    });
+    expect(form.linkedParameterSets[0]).toEqual({
+      setKey: "resolution",
+      setLabel: "Resolution",
+      members: [
+        { parameterKey: "width", valueType: "integer" },
+        { parameterKey: "height", valueType: "integer" },
+      ],
+      rows: [
+        { rowLabel: "Landscape", values: { width: { kind: "override", value: "1024" }, height: { kind: "override", value: "768" } } },
+        { rowLabel: "Base width", values: { width: { kind: "base" }, height: { kind: "override", value: "512" } } },
+      ],
+    });
+    expect(form).toMatchObject({
+      seedMode: "random",
+      randomSeedCount: "2",
+      workflowLibraryProjectId: null,
+      workflowVersionId: "historical-workflow",
+      workflowProfileVersionId: "historical-profile",
+      workflowContentSha256: null,
+      workflowProfileContentSha256: null,
+      workflowId: "recovered-workflow",
+      workflowProfileId: "recovered-profile",
+    });
+    expect(form.prompts[0].promptId).toBe("prompt-1");
+    expect(form.historicalImportCopyResolutions).toEqual({
+      promptVersions: [],
+      workflowVersion: null,
+      workflowProfileVersion: null,
+    });
+    expect(JSON.parse(form.workflowJson)).toEqual(snapshot.workflow_selection.workflow);
+    expect(JSON.parse(form.workflowProfileJson)).toEqual(snapshot.workflow_selection.workflow_profile);
+  });
+
+  it("restores validated import-copy selections by frozen Prompt position after reordering", () => {
+    const snapshot = buildEditableBatchSnapshot(populatedBatchForm());
+    snapshot.prompt_versions = [
+      { id: "historical-first", prompt_id: null, version_number: 1, name: "First", text: "First text" },
+      { id: "historical-second", prompt_id: null, version_number: 1, name: "Second", text: "Second text" },
+    ];
+    snapshot.workflow_selection.workflow_version_id = "historical-workflow";
+    snapshot.workflow_selection.workflow_profile_version_id = "historical-profile";
+    const reconstruction = {
+      run_id: "run-1",
+      batch_snapshot: snapshot,
+      resources: {
+        prompt_versions: [
+          { position: 0, historical_version_id: "historical-first", status: "detached" as const, reason: "missing", linked_version_id: null, linked_resource_id: null },
+          { position: 1, historical_version_id: "historical-second", status: "detached" as const, reason: "missing", linked_version_id: null, linked_resource_id: null },
+        ],
+        workflow_version: { historical_version_id: "historical-workflow", status: "detached" as const, reason: "missing", linked_version_id: null, linked_resource_id: null },
+        workflow_profile_version: { historical_version_id: "historical-profile", status: "detached" as const, reason: "missing", linked_version_id: null, linked_resource_id: null },
+      },
+    };
+    const current = editableBatchSnapshotToForm(reconstruction);
+    current.prompts = [
+      { ...current.prompts[1], libraryProjectId: "project-1", promptId: "copied-prompt", versionId: "copied-second", snapshotName: "Second copy" },
+      current.prompts[0],
+    ];
+    current.workflowLibraryProjectId = "project-1";
+    current.workflowId = "copied-workflow";
+    current.workflowVersionId = "copied-workflow-version";
+    current.workflowProfileId = "copied-profile";
+    current.workflowProfileVersionId = "copied-profile-version";
+    current.workflowProfileWorkflowVersionId = "copied-workflow-version";
+    current.workflowProfileJson = JSON.stringify({
+      ...JSON.parse(current.workflowProfileJson),
+      id: "copied-profile",
+      name: "Copied profile",
+    });
+    current.historicalImportCopyResolutions = {
+      promptVersions: [{ position: 1, historicalVersionId: "historical-second", copiedVersionId: "copied-second" }],
+      workflowVersion: { historicalVersionId: "historical-workflow", copiedVersionId: "copied-workflow-version" },
+      workflowProfileVersion: { historicalVersionId: "historical-profile", copiedVersionId: "copied-profile-version" },
+    };
+
+    const restored = restoreHistoricalResourceState(current, reconstruction);
+
+    expect(restored.prompts.map((prompt) => prompt.versionId)).toEqual(["copied-second", "historical-first"]);
+    expect(restored.prompts[0]).toMatchObject({
+      libraryProjectId: "project-1",
+      promptId: "copied-prompt",
+      historicalResourceStatus: "detached",
+    });
+    expect(restored).toMatchObject({
+      workflowId: "copied-workflow",
+      workflowVersionId: "copied-workflow-version",
+      workflowProfileId: "copied-profile",
+      workflowProfileVersionId: "copied-profile-version",
+      historicalImportCopyResolutions: current.historicalImportCopyResolutions,
+    });
+    expect(buildEditableBatchSnapshot(restored)).not.toHaveProperty("historicalImportCopyResolutions");
+    const withoutResolutions = structuredClone(restored);
+    withoutResolutions.historicalImportCopyResolutions = {
+      promptVersions: [],
+      workflowVersion: null,
+      workflowProfileVersion: null,
+    };
+    expect(canonicalBatchIntent(restored)).toBe(canonicalBatchIntent(withoutResolutions));
+
+    restored.historicalImportCopyResolutions.promptVersions[0].historicalVersionId = "wrong-source";
+    restored.historicalImportCopyResolutions.workflowProfileVersion = {
+      historicalVersionId: "wrong-profile",
+      copiedVersionId: "copied-profile-version",
+    };
+    const invalidated = restoreHistoricalResourceState(restored, reconstruction);
+    expect(invalidated.historicalImportCopyResolutions.promptVersions).toEqual([]);
+    expect(invalidated.historicalImportCopyResolutions.workflowVersion).toEqual(
+      current.historicalImportCopyResolutions.workflowVersion,
+    );
+    expect(invalidated.historicalImportCopyResolutions.workflowProfileVersion).toBeNull();
+
+    const partial = editableBatchSnapshotToForm(reconstruction);
+    partial.workflowJson = "{}";
+    partial.historicalImportCopyResolutions.workflowVersion = {
+      historicalVersionId: "historical-workflow",
+      copiedVersionId: "copied-workflow-version",
+    };
+    const restoredPartial = restoreHistoricalResourceState(partial, reconstruction);
+    expect(restoredPartial.workflowVersionId).toBe("historical-workflow");
+    expect(restoredPartial.historicalWorkflowResourceStatus).toBe("detached");
+    expect(restoredPartial.historicalImportCopyResolutions.workflowVersion).toEqual(
+      partial.historicalImportCopyResolutions.workflowVersion,
+    );
   });
 });
 

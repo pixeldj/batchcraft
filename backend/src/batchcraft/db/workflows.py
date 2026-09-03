@@ -382,6 +382,10 @@ class WorkflowProfileStore:
                 connection.execute("BEGIN IMMEDIATE")
                 parent_workflow = _profile_workflow(connection, workflow_id)
                 target = _profile_target(connection, workflow_version_id, workflow_id)
+                if parent_workflow.archived_at is not None or target.archived_at is not None:
+                    raise WorkflowProfileValidationError(
+                        "Workflow and WorkflowVersion must both be active"
+                    )
                 canonical, digest = _canonical_profile(
                     profile_id, name, mappings, image_inputs, parameters, target.workflow
                 )

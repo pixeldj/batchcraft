@@ -45,8 +45,7 @@ closed. The application must not silently delete, reset, or rewrite user databas
 Historical SQLite tables are non-authoritative projections and may be replaced atomically from
 filesystem truth. Temporary file-backed test databases remain disposable. Browser working-session
 recovery is versioned convenience state; unsupported or malformed records may reset to an empty session.
-ADR 0012 remains Proposed until BC-021 completes editable reconstruction and the full cross-instance
-release gate.
+ADR 0012 remains Proposed until the full cross-instance release gate passes.
 
 ## Repository Shape
 
@@ -387,8 +386,10 @@ validation. The frontend imports owned candidates, reindexes Projects, groups hi
 frozen Run Plans and Result Details,
 and displays execution availability and Result integrity without browser-held Run IDs.
 
-BC-021 remains Planned for editable `Load Run as Batch`, detached-resource relinking/import, automated
-end-to-end cross-instance reconstruction, and the live ComfyUI acceptance step.
+BC-021 is complete. Editable `Load Run as Batch`, detached-resource classification, exact relinking,
+explicit server-sourced historical import, and an automated clean-instance reconstruction/Preview/new-Run
+path are implemented. The complete realistic fixture, repeat-fresh-instance proof, and live ComfyUI
+acceptance step remain release-level checks for ADR 0012.
 
 ## Python Conventions
 
@@ -451,13 +452,19 @@ Keep API access in `src/api/`, feature components in `src/features/`, and small 
 execution transitions, and Result provenance on the backend.
 
 Browser working-session recovery is a pointer/cache, not runtime authority. Store the strict recovery
-v2 record under `batchcraft.working-session-recovery.v2` in localStorage. It may contain semantic form
-values, selected Project and Saved Batch pointers, current Run ID, and ordered unique Run IDs for the
-current Batch working session. It must not contain Preview, execution, Job, Result, frozen Run response,
-or materialized Random seed data. Reconnect a saved Project only by exact Project ID and filesystem-key
-match. Keep Project-scoped Prompt and Asset requests blank until that verification succeeds. Restore
-Run, execution, and Result state from the backend only when the frozen Run matches current Project and
-Batch IDs plus filesystem keys. Require a fresh compiler Preview after every cold load. Switching
+v4 record under `batchcraft.working-session-recovery.v4` in localStorage. It may contain semantic form
+values, selected Project and Saved Batch pointers, a historical source Run ID for detached-resource
+imports, explicit validated historical-to-copy resolution IDs, current Run ID, and ordered unique Run
+IDs for the current Batch working session. It must not
+contain Preview, execution, Job, Result, frozen Run response, or materialized Random seed data. Detached
+Workflow/Profile JSON remains in the record even when historical version IDs exist. Reconnect a saved
+Project only by exact Project ID and filesystem-key match. Keep Project-scoped Prompt and Asset requests
+blank until that verification succeeds. Treat editable draft identity, observed Run identity, and
+Batch-scoped gallery membership independently. Discover the process-local active Run on startup and
+foreground re-entry; it takes monitor precedence over a different persisted pointer. A frozen Project or
+Batch mismatch prevents gallery association but not Run monitoring or pointer retention. Hydrate Run and
+execution state before Results, retry only transient startup failures with bounded backoff, and clear a
+pointer only after definitive missing or invalid Run evidence. Require a fresh compiler Preview after every cold load. Switching
 Project starts a fresh Batch identity and clears Project-scoped Prompt, Workflow/Profile, Image Input,
 Parameter, Run, and gallery state. Changing Batch identity resets the gallery; semantic edits within the
 same Batch retain it and invalidate Preview. Presentation-only collapse changes do neither.
@@ -467,6 +474,8 @@ API process. A restored `running` Run without an active task remains historicall
 stops polling it, hides impossible cancellation actions, and permits a fresh Preview and replacement
 Run. Saving mutable Batch intent remains available during active execution because the current Run is
 already frozen; Project and Batch navigation remain locked only while local execution control is active.
+Active-Run discovery is task-registry visibility only, not durable scheduler or ComfyUI authority, and a
+backend restart returning no active task does not erase a known submitted Run pointer.
 
 The selected Profile drives the named Image Input editor. It renders slots in Profile order and lets
 each choose ordered Project Asset alternatives plus an independent Base workflow alternative. Profile

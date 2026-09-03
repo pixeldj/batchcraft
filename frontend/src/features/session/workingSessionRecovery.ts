@@ -9,15 +9,20 @@ import {
   type VariableBindingForm,
 } from "../batch/form";
 
-export const WORKING_SESSION_RECOVERY_KEY = "batchcraft.working-session-recovery.v2";
-const WORKING_SESSION_RECOVERY_VERSION = 2;
+export const WORKING_SESSION_RECOVERY_KEY = "batchcraft.working-session-recovery.v4";
+const WORKING_SESSION_RECOVERY_VERSION = 4;
 
 type StoredVariableBinding = Omit<VariableBindingForm, "key">;
-type StoredPrompt = Omit<PromptForm, "key" | "placeholders">;
+type StoredPrompt = Omit<
+  PromptForm,
+  "key" | "placeholders" | "historicalVersionId" | "historicalResourceStatus" | "historicalResourceReason"
+>;
 
 interface StoredBatchForm extends Omit<
   BatchFormState,
   "prompts" | "variableBindings" | "workflowJson" | "workflowProfileJson"
+  | "historicalWorkflowVersionId" | "historicalWorkflowResourceStatus" | "historicalWorkflowResourceReason"
+  | "historicalProfileVersionId" | "historicalProfileResourceStatus" | "historicalProfileResourceReason"
 > {
   prompts: StoredPrompt[];
   variableBindings: StoredVariableBinding[];
@@ -25,8 +30,8 @@ interface StoredBatchForm extends Omit<
   workflowProfileJson: string | null;
 }
 
-interface WorkingSessionRecoveryV2 {
-  format_version: 2;
+interface WorkingSessionRecoveryV4 {
+  format_version: 4;
   updated_at: string;
   draft: StoredBatchForm;
   current_run_id: string | null;
@@ -34,6 +39,7 @@ interface WorkingSessionRecoveryV2 {
   selected_project_id: string | null;
   selected_saved_batch_id: string | null;
   saved_batch_base_revision: number | null;
+  source_run_id: string | null;
 }
 
 export interface RestoredWorkingSession {
@@ -43,6 +49,7 @@ export interface RestoredWorkingSession {
   selectedProjectId: string | null;
   selectedSavedBatchId: string | null;
   savedBatchBaseRevision: number | null;
+  sourceRunId: string | null;
   workflowSnapshotRecoveryRequired: boolean;
   profileSnapshotRecoveryRequired: boolean;
   draftRestored: boolean;
@@ -60,7 +67,7 @@ export function loadWorkingSessionRecovery(
       return defaultSession();
     }
     const value: unknown = JSON.parse(raw);
-    if (!isWorkingSessionRecoveryV1(value)) {
+    if (!isWorkingSessionRecoveryV4(value)) {
       return defaultSession();
     }
     return restoredSession(value);
@@ -77,6 +84,7 @@ export function saveWorkingSessionRecovery(
   storage: Storage | null = browserLocalStorage(),
   selectedSavedBatchId: string | null = null,
   savedBatchBaseRevision: number | null = null,
+  sourceRunId: string | null = null,
 ): void {
   if (!storage) {
     return;
@@ -85,7 +93,7 @@ export function saveWorkingSessionRecovery(
   if (currentRunId && !normalizedRunIds.includes(currentRunId)) {
     normalizedRunIds.push(currentRunId);
   }
-  const envelope: WorkingSessionRecoveryV2 = {
+  const envelope: WorkingSessionRecoveryV4 = {
     format_version: WORKING_SESSION_RECOVERY_VERSION,
     updated_at: new Date().toISOString(),
     draft: dehydrateForm(form),
@@ -94,6 +102,7 @@ export function saveWorkingSessionRecovery(
     selected_project_id: selectedProjectId,
     selected_saved_batch_id: selectedSavedBatchId,
     saved_batch_base_revision: savedBatchBaseRevision,
+    source_run_id: sourceRunId,
   };
   try {
     storage.setItem(WORKING_SESSION_RECOVERY_KEY, JSON.stringify(envelope));
@@ -103,8 +112,16 @@ export function saveWorkingSessionRecovery(
 }
 
 function dehydrateForm(form: BatchFormState): StoredBatchForm {
+  const resolutions = resolutionsForCurrentSelections(form);
+  const storedForm = { ...form, historicalImportCopyResolutions: resolutions };
+  delete storedForm.historicalWorkflowVersionId;
+  delete storedForm.historicalWorkflowResourceStatus;
+  delete storedForm.historicalWorkflowResourceReason;
+  delete storedForm.historicalProfileVersionId;
+  delete storedForm.historicalProfileResourceStatus;
+  delete storedForm.historicalProfileResourceReason;
   return {
-    ...form,
+    ...storedForm,
     prompts: form.prompts.map(({
       libraryProjectId,
       promptId,
@@ -113,6 +130,7 @@ function dehydrateForm(form: BatchFormState): StoredBatchForm {
       versionNumber,
       snapshotName,
       text,
+      historicalPosition,
     }) => ({
       libraryProjectId,
       promptId,
@@ -121,13 +139,46 @@ function dehydrateForm(form: BatchFormState): StoredBatchForm {
       versionNumber,
       snapshotName,
       text,
+      historicalPosition: historicalPosition ?? null,
     })),
     variableBindings: form.variableBindings.map(({ placeholder, values }) => ({
       placeholder,
       values: [...values],
     })),
-    workflowJson: form.workflowVersionId ? null : form.workflowJson,
-    workflowProfileJson: form.workflowProfileVersionId ? null : form.workflowProfileJson,
+    workflowJson: (form.workflowLibraryProjectId && form.workflowVersionId) || resolutions.workflowVersion
+      ? null
+      : form.workflowJson,
+    workflowProfileJson: (form.workflowLibraryProjectId && form.workflowProfileVersionId)
+      || resolutions.workflowProfileVersion
+      ? null
+      : form.workflowProfileJson,
+  };
+}
+
+function resolutionsForCurrentSelections(
+  form: BatchFormState,
+): BatchFormState["historicalImportCopyResolutions"] {
+  return {
+    promptVersions: form.historicalImportCopyResolutions.promptVersions.filter((resolution) => (
+      form.prompts.some((prompt) => prompt.versionId === resolution.copiedVersionId)
+    )),
+    workflowVersion: form.historicalImportCopyResolutions.workflowVersion
+      && (
+        form.historicalImportCopyResolutions.workflowVersion.copiedVersionId
+          === form.workflowVersionId
+        || (
+          form.historicalImportCopyResolutions.workflowVersion.historicalVersionId
+            === form.historicalWorkflowVersionId
+          && form.workflowVersionId === form.historicalWorkflowVersionId
+        )
+      )
+      ? form.historicalImportCopyResolutions.workflowVersion
+      : null,
+    workflowProfileVersion: form.historicalImportCopyResolutions.workflowProfileVersion?.copiedVersionId
+      === form.workflowProfileVersionId
+      && form.workflowProfileWorkflowVersionId === form.workflowVersionId
+      ? form.historicalImportCopyResolutions.workflowProfileVersion
+      : null,
   };
 }
 
@@ -148,12 +199,21 @@ function hydrateForm(form: StoredBatchForm): BatchFormState {
       ...prompt,
       key: newPrompt().key,
       placeholders: [],
+      historicalVersionId: null,
+      historicalResourceStatus: null,
+      historicalResourceReason: null,
     })),
     variableBindings: form.variableBindings.map((binding) => ({
       ...binding,
       key: newVariableBinding().key,
     })),
     ...parameterState,
+    historicalWorkflowVersionId: null,
+    historicalWorkflowResourceStatus: null,
+    historicalWorkflowResourceReason: null,
+    historicalProfileVersionId: null,
+    historicalProfileResourceStatus: null,
+    historicalProfileResourceReason: null,
   };
 }
 
@@ -165,13 +225,14 @@ function defaultSession(): RestoredWorkingSession {
     selectedProjectId: null,
     selectedSavedBatchId: null,
     savedBatchBaseRevision: null,
+    sourceRunId: null,
     workflowSnapshotRecoveryRequired: false,
     profileSnapshotRecoveryRequired: false,
     draftRestored: false,
   };
 }
 
-function restoredSession(value: WorkingSessionRecoveryV2): RestoredWorkingSession {
+function restoredSession(value: WorkingSessionRecoveryV4): RestoredWorkingSession {
   return {
     form: hydrateForm(value.draft),
     currentRunId: value.current_run_id,
@@ -179,6 +240,7 @@ function restoredSession(value: WorkingSessionRecoveryV2): RestoredWorkingSessio
     selectedProjectId: value.selected_project_id,
     selectedSavedBatchId: value.selected_saved_batch_id,
     savedBatchBaseRevision: value.saved_batch_base_revision,
+    sourceRunId: value.source_run_id,
     workflowSnapshotRecoveryRequired: value.draft.workflowJson === null,
     profileSnapshotRecoveryRequired: value.draft.workflowProfileJson === null,
     draftRestored: true,
@@ -193,7 +255,7 @@ function browserLocalStorage(): Storage | null {
   }
 }
 
-function isWorkingSessionRecoveryV1(value: unknown): value is WorkingSessionRecoveryV2 {
+function isWorkingSessionRecoveryV4(value: unknown): value is WorkingSessionRecoveryV4 {
   return (
     isRecord(value) &&
     hasExactKeys(value, [
@@ -205,6 +267,7 @@ function isWorkingSessionRecoveryV1(value: unknown): value is WorkingSessionReco
       "selected_project_id",
       "selected_saved_batch_id",
       "saved_batch_base_revision",
+      "source_run_id",
     ]) &&
     value.format_version === WORKING_SESSION_RECOVERY_VERSION &&
     isIsoTimestamp(value.updated_at) &&
@@ -219,6 +282,8 @@ function isWorkingSessionRecoveryV1(value: unknown): value is WorkingSessionReco
     (value.saved_batch_base_revision === null ||
       (isInteger(value.saved_batch_base_revision) && value.saved_batch_base_revision >= 1)) &&
     ((value.selected_saved_batch_id === null) === (value.saved_batch_base_revision === null))
+    && (value.source_run_id === null || isNonEmptyString(value.source_run_id))
+    && (value.source_run_id !== null || !hasHistoricalImportCopyResolutions(value.draft))
   );
 }
 
@@ -270,6 +335,7 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
       "workflowProfileVersionNumber",
       "workflowProfileWorkflowVersionId",
       "workflowProfileContentSha256",
+      "historicalImportCopyResolutions",
     ]) &&
     stringFields.every((field) => typeof value[field] === "string") &&
     (typeof value.workflowJson === "string" ||
@@ -294,8 +360,49 @@ function isStoredBatchForm(value: unknown): value is StoredBatchForm {
     isNullableString(value.workflowProfileVersionId) &&
     isNullableInteger(value.workflowProfileVersionNumber) &&
     isNullableString(value.workflowProfileWorkflowVersionId) &&
-    isNullableString(value.workflowProfileContentSha256)
+    isNullableString(value.workflowProfileContentSha256) &&
+    isHistoricalImportCopyResolutions(value.historicalImportCopyResolutions)
   );
+}
+
+function isHistoricalImportCopyResolutions(value: unknown): boolean {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "promptVersions",
+    "workflowVersion",
+    "workflowProfileVersion",
+  ])) return false;
+  if (!Array.isArray(value.promptVersions) || !value.promptVersions.every((resolution) => (
+    isRecord(resolution)
+    && hasExactKeys(resolution, ["position", "historicalVersionId", "copiedVersionId"])
+    && isInteger(resolution.position)
+    && resolution.position >= 0
+    && isNonEmptyString(resolution.historicalVersionId)
+    && isNonEmptyString(resolution.copiedVersionId)
+    && resolution.historicalVersionId !== resolution.copiedVersionId
+  ))) return false;
+  const positions = value.promptVersions.map((resolution) => (resolution as { position: number }).position);
+  const copiedIds = value.promptVersions.map((resolution) => (resolution as { copiedVersionId: string }).copiedVersionId);
+  return new Set(positions).size === positions.length
+    && new Set(copiedIds).size === copiedIds.length
+    && isNullableVersionCopyResolution(value.workflowVersion)
+    && isNullableVersionCopyResolution(value.workflowProfileVersion);
+}
+
+function isNullableVersionCopyResolution(value: unknown): boolean {
+  return value === null || (
+    isRecord(value)
+    && hasExactKeys(value, ["historicalVersionId", "copiedVersionId"])
+    && isNonEmptyString(value.historicalVersionId)
+    && isNonEmptyString(value.copiedVersionId)
+    && value.historicalVersionId !== value.copiedVersionId
+  );
+}
+
+function hasHistoricalImportCopyResolutions(value: StoredBatchForm): boolean {
+  const resolutions = value.historicalImportCopyResolutions;
+  return resolutions.promptVersions.length > 0
+    || resolutions.workflowVersion !== null
+    || resolutions.workflowProfileVersion !== null;
 }
 
 function isLinkedParameterSets(value: unknown): boolean {
@@ -400,6 +507,7 @@ function isStoredPrompt(value: unknown): value is StoredPrompt {
       "versionNumber",
       "snapshotName",
       "text",
+      "historicalPosition",
     ]) &&
     isNullableString(value.libraryProjectId) &&
     isNullableString(value.promptId) &&
@@ -407,7 +515,9 @@ function isStoredPrompt(value: unknown): value is StoredPrompt {
     typeof value.versionId === "string" &&
     isNullableInteger(value.versionNumber) &&
     typeof value.snapshotName === "string" &&
-    typeof value.text === "string"
+    typeof value.text === "string" &&
+    (value.historicalPosition === null
+      || (isInteger(value.historicalPosition) && value.historicalPosition >= 0))
   );
 }
 

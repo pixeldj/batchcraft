@@ -12,13 +12,19 @@ import type { LibraryPromptVersion, ProjectPrompt } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
 import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
-import type { PromptForm } from "./form";
+import type { HistoricalImportCopyResolutions, PromptForm } from "./form";
 
 interface Props {
   api: BatchcraftApi;
   projectId: string;
   prompts: PromptForm[];
+  historicalImportCopyResolutions?: HistoricalImportCopyResolutions;
+  sourceRunId?: string | null;
   onChange(prompts: PromptForm[]): void;
+  onHistoricalImport?(
+    prompts: PromptForm[],
+    resolutions: HistoricalImportCopyResolutions,
+  ): void;
   onMetadataChange(prompts: PromptForm[]): void;
 }
 
@@ -53,7 +59,14 @@ export function PromptLibraryEditor({
   api,
   projectId,
   prompts,
+  historicalImportCopyResolutions = {
+    promptVersions: [],
+    workflowVersion: null,
+    workflowProfileVersion: null,
+  },
+  sourceRunId = null,
   onChange,
+  onHistoricalImport = onChange,
   onMetadataChange,
 }: Props) {
   const [library, setLibrary] = useState<{
@@ -79,7 +92,8 @@ export function PromptLibraryEditor({
   } | null>(null);
   const [historyRetry, setHistoryRetry] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  const [detachedState, setDetachedState] = useState<Record<number, "checking" | "integrity">>({});
+  const [detachedState, setDetachedState] = useState<Record<number, "checking" | "detached" | "integrity">>({});
+  const [importState, setImportState] = useState<Record<number, { saving: boolean; error: string | null }>>({});
   const loadTag = useRef(0);
   const historyTag = useRef(0);
   const detachedTag = useRef(0);
@@ -92,8 +106,18 @@ export function PromptLibraryEditor({
     PromptForm,
     "libraryProjectId" | "promptId" | "promptName" | "versionNumber" | "placeholders"
   >>>());
+  const historicalPositions = useRef<{ runId: string | null; positions: Map<number, number> }>({
+    runId: null,
+    positions: new Map(),
+  });
+  const promptMutationContexts = useRef(new Map<number, { signature: string; generation: number }>());
   const notifyMetadataChange = useEffectEvent(onMetadataChange);
-  const getCurrentPrompts = useEffectEvent(() => prompts);
+  const promptsRef = useRef(prompts);
+  const resolutionsRef = useRef(historicalImportCopyResolutions);
+  const historicalImportRef = useRef(onHistoricalImport);
+  promptsRef.current = prompts;
+  resolutionsRef.current = historicalImportCopyResolutions;
+  historicalImportRef.current = onHistoricalImport;
   const applyReconnectPatches = useEffectEvent(() => {
     let changed = false;
     const updated = prompts.map((prompt) => {
@@ -112,6 +136,28 @@ export function PromptLibraryEditor({
     .join("\u0001");
   const normalizedProjectId = projectId.trim();
   projectIdRef.current = normalizedProjectId;
+  const historicalKeysChanged = prompts.length > 0
+    && prompts.every((prompt) => prompt.historicalVersionId !== null)
+    && prompts.every((prompt) => !historicalPositions.current.positions.has(prompt.key));
+  if (historicalPositions.current.runId !== sourceRunId || historicalKeysChanged) {
+    historicalPositions.current = {
+      runId: sourceRunId,
+      positions: new Map(prompts.map((prompt, index) => [
+        prompt.key,
+        prompt.historicalPosition ?? index,
+      ])),
+    };
+  }
+  for (const prompt of prompts) {
+    const signature = historicalPromptSignature(sourceRunId, normalizedProjectId, prompt);
+    const context = promptMutationContexts.current.get(prompt.key);
+    if (!context || context.signature !== signature) {
+      promptMutationContexts.current.set(prompt.key, {
+        signature,
+        generation: (context?.generation ?? 0) + 1,
+      });
+    }
+  }
 
   const activeLibrary = library.projectId === normalizedProjectId ? library : {
     projectId: normalizedProjectId,
@@ -186,7 +232,7 @@ export function PromptLibraryEditor({
 
   useEffect(() => {
     if (activeLibrary.loading || activeLibrary.error || !normalizedProjectId) return;
-    const currentPrompts = getCurrentPrompts();
+    const currentPrompts = promptsRef.current;
     const namesUpdated = currentPrompts.map((prompt) => {
       if (prompt.libraryProjectId !== normalizedProjectId || !prompt.promptId) return prompt;
       const currentPrompt = activeLibrary.prompts.find((item) => item.id === prompt.promptId);
@@ -207,6 +253,17 @@ export function PromptLibraryEditor({
     const controller = new AbortController();
     const checked = checkedDetached.current;
     for (const prompt of candidates) {
+      if (
+        prompt.historicalResourceStatus
+        && prompt.historicalResourceStatus !== "linked"
+        && prompt.versionId === prompt.historicalVersionId
+      ) {
+        setDetachedState((current) => ({
+          ...current,
+          [prompt.key]: prompt.historicalResourceStatus === "conflict" ? "integrity" : "detached",
+        }));
+        continue;
+      }
       const signature = detachedSignature(normalizedProjectId, prompt);
       if (checked.has(signature)) continue;
       checked.add(signature);
@@ -448,6 +505,74 @@ export function PromptLibraryEditor({
     onChange(updated);
   }
 
+  async function importHistoricalPrompt(prompt: PromptForm) {
+    const position = historicalPositions.current.positions.get(prompt.key);
+    if (!sourceRunId || position === undefined || importState[prompt.key]?.saving) return;
+    const requestedRunId = sourceRunId;
+    const requestedContext = promptMutationContexts.current.get(prompt.key);
+    if (!requestedContext) return;
+    const contextIsCurrent = () => {
+      const current = promptMutationContexts.current.get(prompt.key);
+      const currentPrompt = promptsRef.current.find((item) => item.key === prompt.key);
+      return historicalPositions.current.runId === requestedRunId
+        && currentPrompt !== undefined
+        && current?.generation === requestedContext.generation
+        && current.signature === requestedContext.signature;
+    };
+    setImportState((current) => ({ ...current, [prompt.key]: { saving: true, error: null } }));
+    try {
+      const response = await api.importRunPromptVersion(requestedRunId, position, {
+        import_request_id: `prompt:${position}:${prompt.historicalVersionId ?? prompt.versionId}`,
+        name: prompt.snapshotName || prompt.promptName || "Prompt",
+        description: null,
+        note: null,
+      });
+      if (!contextIsCurrent()) {
+        setImportState((current) => omitKey(current, prompt.key));
+        return;
+      }
+      const logicalPrompt: ProjectPrompt = { ...response.prompt, latest_active_version: response.version };
+      setLibrary((current) => current.projectId === normalizedProjectId
+        ? { ...current, prompts: [...current.prompts, logicalPrompt] }
+        : current);
+      const latestPrompts = promptsRef.current;
+      const importedPrompts = latestPrompts.map((item) => item.key === prompt.key
+        ? {
+          ...promptForm(item.key, normalizedProjectId, response.prompt.name, response.version),
+          historicalPosition: position,
+          historicalVersionId: prompt.historicalVersionId ?? prompt.versionId,
+          historicalResourceStatus: prompt.historicalResourceStatus,
+          historicalResourceReason: prompt.historicalResourceReason,
+        }
+        : item);
+      const resolutions = resolutionsRef.current;
+      const importedResolutions = {
+        ...resolutions,
+        promptVersions: [
+          ...resolutions.promptVersions.filter((item) => item.position !== position),
+          {
+            position,
+            historicalVersionId: prompt.historicalVersionId ?? prompt.versionId,
+            copiedVersionId: response.version.id,
+          },
+        ].sort((left, right) => left.position - right.position),
+      };
+      promptsRef.current = importedPrompts;
+      resolutionsRef.current = importedResolutions;
+      historicalImportRef.current(importedPrompts, importedResolutions);
+      setImportState((current) => omitKey(current, prompt.key));
+    } catch (caught) {
+      if (!contextIsCurrent()) {
+        setImportState((current) => omitKey(current, prompt.key));
+        return;
+      }
+      setImportState((current) => ({
+        ...current,
+        [prompt.key]: { saving: false, error: errorMessage(caught) },
+      }));
+    }
+  }
+
   function handleWorkspaceKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -517,7 +642,23 @@ export function PromptLibraryEditor({
           const projectMismatch = Boolean(
             prompt.libraryProjectId && prompt.libraryProjectId !== normalizedProjectId,
           );
-          const detached = Boolean(prompt.promptId) && !projectMismatch && !currentPrompt;
+          const authoritativeDetached = prompt.historicalResourceStatus === "detached"
+            && prompt.versionId === prompt.historicalVersionId;
+          const authoritativeConflict = prompt.historicalResourceStatus === "conflict"
+            && prompt.versionId === prompt.historicalVersionId;
+          const detached = !authoritativeConflict && (
+            authoritativeDetached || (Boolean(prompt.promptId) && !projectMismatch && !currentPrompt)
+          );
+          const importable = Boolean(sourceRunId)
+            && historicalPositions.current.positions.has(prompt.key)
+            && (
+              projectMismatch
+              || !prompt.promptId
+              || !prompt.libraryProjectId
+              || detached
+              || detachedState[prompt.key] === "integrity"
+              || authoritativeConflict
+            );
           const logicalName = currentPrompt?.name ?? prompt.promptName ?? prompt.snapshotName;
           return (
             <article className="repeater-card prompt-card" key={prompt.key}>
@@ -535,11 +676,26 @@ export function PromptLibraryEditor({
               {logicalName !== prompt.snapshotName ? <p className="section-note">Saved as {prompt.snapshotName}</p> : null}
               <pre className="prompt-editor">{prompt.text}</pre>
               {projectMismatch ? <p className="blocked-note" role="alert">This Prompt belongs to another Project.</p> : null}
-              {!prompt.promptId || !prompt.libraryProjectId ? <p className="blocked-note" role="alert">This PromptVersion is detached from the Prompt library.</p> : null}
-              {detached ? <p className="blocked-note" role="alert">The linked Prompt is not registered in this Project.</p> : null}
+              {!authoritativeConflict && (!prompt.promptId || !prompt.libraryProjectId) ? <p className="blocked-note" role="alert">This PromptVersion is detached from the Prompt library.</p> : null}
+              {detached ? <p className="blocked-note" role="alert">{prompt.historicalResourceReason ?? "The linked Prompt is not registered in this Project."}</p> : null}
               {detachedState[prompt.key] === "checking" ? <p role="status">Checking library linkage...</p> : null}
-              {detachedState[prompt.key] === "integrity" ? (
-                <p className="blocked-note" role="alert">PromptVersion integrity check failed: stored content differs from the library.</p>
+              {detachedState[prompt.key] === "integrity" || authoritativeConflict ? (
+                <p className="blocked-note" role="alert">PromptVersion integrity check failed: {prompt.historicalResourceReason ?? "stored content differs from the library."}</p>
+              ) : null}
+              {importable ? (
+                <div className="repeater-actions">
+                  <button
+                    className="button-secondary compact"
+                    type="button"
+                    disabled={importState[prompt.key]?.saving}
+                    onClick={() => void importHistoricalPrompt(prompt)}
+                  >
+                    {importState[prompt.key]?.saving ? "Importing snapshot..." : "Import historical snapshot"}
+                  </button>
+                </div>
+              ) : null}
+              {importState[prompt.key]?.error ? (
+                <p className="operation-error" role="alert">Prompt snapshot import failed. {importState[prompt.key].error}</p>
               ) : null}
             </article>
           );
@@ -884,7 +1040,26 @@ function promptForm(
     snapshotName: version.name_snapshot,
     text: version.text,
     placeholders: version.placeholders,
+    historicalVersionId: null,
+    historicalResourceStatus: null,
+    historicalResourceReason: null,
   };
+}
+
+function historicalPromptSignature(
+  sourceRunId: string | null,
+  projectId: string,
+  prompt: PromptForm,
+): string {
+  return JSON.stringify([
+    sourceRunId,
+    projectId,
+    prompt.versionId,
+    prompt.snapshotName,
+    prompt.text,
+    prompt.historicalVersionId,
+    prompt.historicalResourceStatus,
+  ]);
 }
 
 function suggestCopyName(sourceName: string, library: ProjectPrompt[]): string {

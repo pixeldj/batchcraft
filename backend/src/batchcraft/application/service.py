@@ -1,15 +1,17 @@
 import asyncio
 import hashlib
+import json
 import os
 import re
 import stat
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
+from uuid import UUID, uuid5
 
 from batchcraft.comfyui import (
     ComfyUIError,
@@ -25,9 +27,28 @@ from batchcraft.db import (
     HistoricalRunRecord,
     ProjectNotFoundError,
     ProjectStore,
+    PromptConflictError,
+    PromptNotFoundError,
+    PromptRecord,
+    PromptStore,
+    PromptVersionConflictError,
+    PromptVersionNotFoundError,
+    PromptVersionRecord,
     RunCancellationMode,
     RunCancellationRequestRecord,
     RunCancellationRequestStore,
+    WorkflowConflictError,
+    WorkflowNotFoundError,
+    WorkflowProfileConflictError,
+    WorkflowProfileNotFoundError,
+    WorkflowProfileRecord,
+    WorkflowProfileStore,
+    WorkflowProfileVersionNotFoundError,
+    WorkflowProfileVersionRecord,
+    WorkflowRecord,
+    WorkflowStore,
+    WorkflowVersionNotFoundError,
+    WorkflowVersionRecord,
 )
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
@@ -52,6 +73,7 @@ from batchcraft.files import (
     AssetRecord,
     AssetStoreError,
     BatchIdentity,
+    BatchSnapshotV1,
     ProjectAssetStore,
     ProjectIdentity,
     PublishedRun,
@@ -64,6 +86,7 @@ from batchcraft.files.history import (
     ProjectHistoryScanError,
     ProjectHistoryScanner,
 )
+from batchcraft.files.snapshots import SnapshotPromptVersion, SnapshotWorkflowSelection
 
 from .cancellation import ActiveRunCancellationControl
 from .errors import (
@@ -72,6 +95,8 @@ from .errors import (
     AssetPublicationError,
     AssetUploadError,
     ExecutionNotEligibleError,
+    HistoricalResourceImportConflictError,
+    HistoricalResourceImportError,
     InvalidProjectKeyError,
     ProjectHistoryNotFoundError,
     ProjectImportConflictError,
@@ -85,9 +110,11 @@ from .errors import (
     RunNotFoundError,
     RunPublicationError,
 )
+from .library import LibraryService
 from .tasks import RunTaskRegistry
 
 _RUN_DIRECTORY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
+_HISTORICAL_IMPORT_NAMESPACE = UUID("cf2d89da-87dc-4ce7-8bf5-c1da75fc690b")
 _IMAGE_MIME_TYPES = {
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
@@ -165,6 +192,29 @@ class RunCancellation:
 class RunCancellationRequestResult(RunCancellation):
     run_id: str
     created: bool
+
+
+class ResourceLinkStatus(StrEnum):
+    LINKED = "linked"
+    DETACHED = "detached"
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceLink:
+    historical_version_id: str | None
+    status: ResourceLinkStatus
+    linked_version_id: str | None = None
+    linked_resource_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchReconstruction:
+    run_id: str
+    batch_snapshot: BatchSnapshotV1
+    prompt_versions: tuple[ResourceLink, ...]
+    workflow_version: ResourceLink
+    workflow_profile_version: ResourceLink
 
 
 class BatchcraftService:
@@ -319,6 +369,230 @@ class BatchcraftService:
     def get_historical_run(self, run_id: str) -> PublishedRun:
         return self._get_run(run_id, historical=True)
 
+    def get_batch_reconstruction(self, run_id: str) -> BatchReconstruction:
+        run = self.get_historical_run(run_id)
+        snapshot = BatchSnapshotV1.model_validate(run.batch_snapshot)
+        database_path = self.cancellation_store.database_path
+        project_context_matches = _registered_project_context_matches(
+            ProjectStore(database_path),
+            run.project.id,
+            run.project.filesystem_key,
+        )
+        prompt_store = PromptStore(database_path)
+        workflow_store = WorkflowStore(database_path)
+        profile_store = WorkflowProfileStore(database_path)
+
+        prompt_links = tuple(
+            _classify_prompt_version(
+                prompt_store,
+                item,
+                run.project.id,
+                project_context_matches=project_context_matches,
+            )
+            for item in snapshot.prompt_versions
+        )
+        workflow_link = _classify_workflow_version(
+            workflow_store,
+            snapshot.workflow_selection,
+            run.project.id,
+            run.workflow_sha256,
+            project_context_matches=project_context_matches,
+        )
+        profile_link = _classify_workflow_profile_version(
+            profile_store,
+            snapshot.workflow_selection,
+            run.project.id,
+            workflow_link.status,
+            run.workflow_profile_sha256,
+            project_context_matches=project_context_matches,
+        )
+        return BatchReconstruction(
+            run_id=run.run_id,
+            batch_snapshot=snapshot,
+            prompt_versions=prompt_links,
+            workflow_version=workflow_link,
+            workflow_profile_version=profile_link,
+        )
+
+    def import_historical_prompt_copy(
+        self,
+        run_id: str,
+        position: int,
+        *,
+        import_request_id: str,
+        name: str,
+        description: str | None,
+        note: str | None,
+        library: LibraryService,
+    ) -> tuple[PromptRecord, PromptVersionRecord]:
+        run, snapshot = self._historical_copy_source(run_id, library)
+        if position < 0 or position >= len(snapshot.prompt_versions):
+            raise HistoricalResourceImportError(
+                f"Historical PromptVersion position {position} is outside the available range "
+                f"0..{len(snapshot.prompt_versions) - 1}"
+            )
+        prompt = snapshot.prompt_versions[position]
+        if not prompt.text.strip():
+            raise HistoricalResourceImportError(
+                f"Historical PromptVersion at position {position} has empty text and cannot be "
+                "imported as a mutable Prompt"
+            )
+        prompt_id, version_id = _historical_import_ids(
+            run.project.id,
+            run.run_id,
+            "prompt",
+            import_request_id,
+            position=position,
+        )
+        for candidate_name in _historical_import_names(prompt.name or name):
+            try:
+                return library.create_prompt(
+                    run.project.id,
+                    name=candidate_name,
+                    description=description,
+                    text=prompt.text,
+                    note=note,
+                    prompt_id=prompt_id,
+                    version_id=version_id,
+                )
+            except (PromptConflictError, PromptVersionConflictError) as error:
+                replay = _replay_historical_prompt_copy(
+                    library,
+                    prompt_id=prompt_id,
+                    version_id=version_id,
+                    project_id=run.project.id,
+                    text=prompt.text,
+                    error=error,
+                )
+                if replay is not None:
+                    return replay
+        raise HistoricalResourceImportConflictError(
+            "No collision-safe Prompt name is available for historical import"
+        )
+
+    def import_historical_workflow_copy(
+        self,
+        run_id: str,
+        *,
+        import_request_id: str,
+        name: str,
+        description: str | None,
+        note: str | None,
+        library: LibraryService,
+    ) -> tuple[WorkflowRecord, WorkflowVersionRecord]:
+        run, snapshot = self._historical_copy_source(run_id, library)
+        workflow_id, version_id = _historical_import_ids(
+            run.project.id, run.run_id, "workflow", import_request_id
+        )
+        preferred_name = snapshot.workflow_selection.workflow_name or name
+        for candidate_name in _historical_import_names(preferred_name):
+            try:
+                return library.create_workflow(
+                    run.project.id,
+                    name=candidate_name,
+                    description=description,
+                    workflow=run.workflow,
+                    note=note,
+                    workflow_id=workflow_id,
+                    version_id=version_id,
+                )
+            except WorkflowConflictError as error:
+                replay = _replay_historical_workflow_copy(
+                    library,
+                    workflow_id=workflow_id,
+                    version_id=version_id,
+                    project_id=run.project.id,
+                    content_sha256=run.workflow_sha256,
+                    error=error,
+                )
+                if replay is not None:
+                    return replay
+        raise HistoricalResourceImportConflictError(
+            "No collision-safe Workflow name is available for historical import"
+        )
+
+    def import_historical_workflow_profile_copy(
+        self,
+        run_id: str,
+        *,
+        import_request_id: str,
+        name: str,
+        description: str | None,
+        note: str | None,
+        workflow_version_id: str,
+        library: LibraryService,
+    ) -> tuple[WorkflowProfileRecord, WorkflowProfileVersionRecord]:
+        run, snapshot = self._historical_copy_source(run_id, library)
+        try:
+            target = library.get_workflow_version(workflow_version_id)
+            target_workflow = library.get_workflow(target.workflow_id)
+        except (WorkflowNotFoundError, WorkflowVersionNotFoundError) as error:
+            raise HistoricalResourceImportError(
+                "Target WorkflowVersion was not found in the historical Run Project"
+            ) from error
+        if target.archived_at is not None or target_workflow.archived_at is not None:
+            raise HistoricalResourceImportError(
+                "Target Workflow and WorkflowVersion must both be active"
+            )
+        if (
+            target.project_id != run.project.id
+            or target_workflow.project_id != run.project.id
+            or target.content_sha256 != run.workflow_sha256
+        ):
+            raise HistoricalResourceImportError(
+                "Target WorkflowVersion must belong to the historical Run Project and exactly "
+                "match its frozen Workflow"
+            )
+
+        profile = run.workflow_profile
+        profile_id, version_id = _historical_import_ids(
+            run.project.id, run.run_id, "workflow-profile", import_request_id
+        )
+        mappings = cast(Mapping[str, object], profile["mappings"])
+        image_inputs = cast(list[object], profile["image_inputs"])
+        parameters = cast(list[object], profile["parameters"])
+        preferred_name = snapshot.workflow_selection.workflow_profile_name or name
+        for candidate_name in _historical_import_names(preferred_name):
+            try:
+                return library.create_workflow_profile(
+                    target.workflow_id,
+                    name=candidate_name,
+                    description=description,
+                    workflow_version_id=target.id,
+                    mappings=mappings,
+                    image_inputs=image_inputs,
+                    parameters=parameters,
+                    note=note,
+                    profile_id=profile_id,
+                    version_id=version_id,
+                )
+            except WorkflowProfileConflictError as error:
+                replay = _replay_historical_workflow_profile_copy(
+                    library,
+                    profile_id=profile_id,
+                    version_id=version_id,
+                    project_id=run.project.id,
+                    workflow_id=target.workflow_id,
+                    workflow_version_id=target.id,
+                    mappings=mappings,
+                    image_inputs=image_inputs,
+                    parameters=parameters,
+                    error=error,
+                )
+                if replay is not None:
+                    return replay
+        raise HistoricalResourceImportConflictError(
+            "No collision-safe Workflow Profile name is available for historical import"
+        )
+
+    def _historical_copy_source(
+        self, run_id: str, library: LibraryService
+    ) -> tuple[PublishedRun, BatchSnapshotV1]:
+        run = self.get_historical_run(run_id)
+        snapshot = BatchSnapshotV1.model_validate(run.batch_snapshot)
+        library.require_project_ownership(run.project.id, run.project.filesystem_key)
+        return run, snapshot
+
     def _get_run(self, run_id: str, *, historical: bool) -> PublishedRun:
         matches: list[Path] = []
         for candidate in self._run_candidates():
@@ -364,6 +638,9 @@ class BatchcraftService:
 
     def execution_task_active(self, run_id: str) -> bool:
         return self.task_registry.is_active(run_id)
+
+    async def get_active_execution_run_id(self) -> str | None:
+        return await self.task_registry.active_run_id()
 
     def get_run_cancellation(self, state: RunExecutionState) -> RunCancellation | None:
         intent = self._get_cancellation_intent(
@@ -687,6 +964,319 @@ class BatchcraftService:
 
 def _is_within(path: Path, root: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
+
+
+def _historical_import_ids(
+    project_id: str,
+    run_id: str,
+    resource_kind: str,
+    import_request_id: str,
+    *,
+    position: int | None = None,
+) -> tuple[str, str]:
+    if not import_request_id.strip():
+        raise HistoricalResourceImportError("Import request ID must be a nonempty string")
+    parts: list[str | int] = [project_id, run_id, resource_kind]
+    if position is not None:
+        parts.append(position)
+    parts.append(import_request_id)
+    scope = json.dumps(parts, ensure_ascii=True, separators=(",", ":"))
+    return (
+        str(uuid5(_HISTORICAL_IMPORT_NAMESPACE, f"{scope}:logical")),
+        str(uuid5(_HISTORICAL_IMPORT_NAMESPACE, f"{scope}:version")),
+    )
+
+
+def _historical_import_names(preferred_name: str) -> Iterator[str]:
+    yield preferred_name
+    yield f"{preferred_name} (imported)"
+    for suffix in range(2, 10_001):
+        yield f"{preferred_name} (imported {suffix})"
+
+
+def _replay_historical_prompt_copy(
+    library: LibraryService,
+    *,
+    prompt_id: str,
+    version_id: str,
+    project_id: str,
+    text: str,
+    error: Exception,
+) -> tuple[PromptRecord, PromptVersionRecord] | None:
+    try:
+        prompt = library.get_prompt(prompt_id)
+    except PromptNotFoundError:
+        prompt = None
+    try:
+        version = library.get_prompt_version(version_id)
+    except PromptVersionNotFoundError:
+        version = None
+    if prompt is None and version is None:
+        return None
+    if not (
+        prompt is not None
+        and version is not None
+        and prompt.project_id == project_id
+        and prompt.archived_at is None
+        and version.prompt_id == prompt.id
+        and version.version_number == 1
+        and version.archived_at is None
+        and version.text == text
+    ):
+        raise _historical_import_collision("Prompt") from error
+    return prompt, version
+
+
+def _replay_historical_workflow_copy(
+    library: LibraryService,
+    *,
+    workflow_id: str,
+    version_id: str,
+    project_id: str,
+    content_sha256: str,
+    error: Exception,
+) -> tuple[WorkflowRecord, WorkflowVersionRecord] | None:
+    try:
+        workflow = library.get_workflow(workflow_id)
+    except WorkflowNotFoundError:
+        workflow = None
+    try:
+        version = library.get_workflow_version(version_id)
+    except WorkflowVersionNotFoundError:
+        version = None
+    if workflow is None and version is None:
+        return None
+    if not (
+        workflow is not None
+        and version is not None
+        and workflow.project_id == project_id
+        and workflow.archived_at is None
+        and version.workflow_id == workflow.id
+        and version.project_id == project_id
+        and version.version_number == 1
+        and version.archived_at is None
+        and version.content_sha256 == content_sha256
+    ):
+        raise _historical_import_collision("Workflow") from error
+    return workflow, version
+
+
+def _replay_historical_workflow_profile_copy(
+    library: LibraryService,
+    *,
+    profile_id: str,
+    version_id: str,
+    project_id: str,
+    workflow_id: str,
+    workflow_version_id: str,
+    mappings: Mapping[str, object],
+    image_inputs: list[object],
+    parameters: list[object],
+    error: Exception,
+) -> tuple[WorkflowProfileRecord, WorkflowProfileVersionRecord] | None:
+    try:
+        profile = library.get_workflow_profile(profile_id)
+    except WorkflowProfileNotFoundError:
+        profile = None
+    try:
+        version = library.get_workflow_profile_version(version_id)
+    except WorkflowProfileVersionNotFoundError:
+        version = None
+    if profile is None and version is None:
+        return None
+    stored = {} if version is None else version.profile
+    source_payload = {
+        "mappings": dict(mappings),
+        "image_inputs": image_inputs,
+        "parameters": parameters,
+    }
+    stored_payload = {key: stored.get(key) for key in source_payload}
+    if not (
+        profile is not None
+        and version is not None
+        and profile.project_id == project_id
+        and profile.workflow_id == workflow_id
+        and profile.archived_at is None
+        and version.workflow_profile_id == profile.id
+        and version.workflow_id == workflow_id
+        and version.project_id == project_id
+        and version.workflow_version_id == workflow_version_id
+        and version.version_number == 1
+        and version.archived_at is None
+        and set(stored) == {"id", "name", *source_payload}
+        and stored.get("id") == profile.id
+        and _canonical_sha256(stored_payload) == _canonical_sha256(source_payload)
+    ):
+        raise _historical_import_collision("Workflow Profile") from error
+    return profile, version
+
+
+def _canonical_sha256(value: object) -> str:
+    serialized = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(f"{serialized}\n".encode()).hexdigest()
+
+
+def _historical_import_collision(resource_label: str) -> HistoricalResourceImportConflictError:
+    return HistoricalResourceImportConflictError(
+        f"Historical {resource_label} import request IDs are occupied by incoherent library records"
+    )
+
+
+def _classify_prompt_version(
+    store: PromptStore,
+    snapshot: SnapshotPromptVersion,
+    project_id: str,
+    *,
+    project_context_matches: bool,
+) -> ResourceLink:
+    prompt = snapshot
+    version_id = prompt.id
+    try:
+        version = store.get_version(version_id)
+    except PromptVersionNotFoundError:
+        return ResourceLink(version_id, ResourceLinkStatus.DETACHED)
+    try:
+        parent = store.get(version.prompt_id)
+    except PromptNotFoundError:
+        return ResourceLink(version_id, ResourceLinkStatus.CONFLICT)
+    if version.archived_at is not None or parent.archived_at is not None:
+        return ResourceLink(version_id, ResourceLinkStatus.DETACHED)
+    matches = (
+        version.name_snapshot == prompt.name
+        and version.text == prompt.text
+        and project_context_matches
+        and parent.project_id == project_id
+        and (prompt.prompt_id is None or version.prompt_id == prompt.prompt_id)
+        and (prompt.version_number is None or version.version_number == prompt.version_number)
+    )
+    if not matches:
+        return ResourceLink(version_id, ResourceLinkStatus.CONFLICT)
+    return ResourceLink(
+        historical_version_id=version_id,
+        status=ResourceLinkStatus.LINKED,
+        linked_version_id=version.id,
+        linked_resource_id=version.prompt_id,
+    )
+
+
+def _classify_workflow_version(
+    store: WorkflowStore,
+    selection: SnapshotWorkflowSelection,
+    project_id: str,
+    frozen_content_sha256: str,
+    *,
+    project_context_matches: bool,
+) -> ResourceLink:
+    version_id = selection.workflow_version_id
+    if version_id is None:
+        return ResourceLink(None, ResourceLinkStatus.DETACHED)
+    try:
+        version = store.get_version(version_id)
+    except WorkflowVersionNotFoundError:
+        return ResourceLink(version_id, ResourceLinkStatus.DETACHED)
+    try:
+        parent = store.get(version.workflow_id)
+    except WorkflowNotFoundError:
+        return ResourceLink(version_id, ResourceLinkStatus.CONFLICT)
+    if version.archived_at is not None or parent.archived_at is not None:
+        return ResourceLink(version_id, ResourceLinkStatus.DETACHED)
+    matches = (
+        version.content_sha256 == frozen_content_sha256
+        and project_context_matches
+        and version.project_id == project_id
+        and parent.project_id == project_id
+        and (selection.workflow_id is None or version.workflow_id == selection.workflow_id)
+        and (
+            selection.workflow_version_number is None
+            or version.version_number == selection.workflow_version_number
+        )
+    )
+    if not matches:
+        return ResourceLink(version_id, ResourceLinkStatus.CONFLICT)
+    return ResourceLink(
+        historical_version_id=version_id,
+        status=ResourceLinkStatus.LINKED,
+        linked_version_id=version.id,
+        linked_resource_id=version.workflow_id,
+    )
+
+
+def _classify_workflow_profile_version(
+    store: WorkflowProfileStore,
+    selection: SnapshotWorkflowSelection,
+    project_id: str,
+    workflow_status: ResourceLinkStatus,
+    frozen_content_sha256: str,
+    *,
+    project_context_matches: bool,
+) -> ResourceLink:
+    version_id = selection.workflow_profile_version_id
+    if version_id is None:
+        return ResourceLink(None, ResourceLinkStatus.DETACHED)
+    try:
+        version = store.get_version(version_id)
+    except WorkflowProfileVersionNotFoundError:
+        return ResourceLink(version_id, ResourceLinkStatus.DETACHED)
+    try:
+        parent = store.get(version.workflow_profile_id)
+    except WorkflowProfileNotFoundError:
+        return ResourceLink(version_id, ResourceLinkStatus.CONFLICT)
+    if version.archived_at is not None or parent.archived_at is not None:
+        return ResourceLink(version_id, ResourceLinkStatus.DETACHED)
+    matches = (
+        version.content_sha256 == frozen_content_sha256
+        and project_context_matches
+        and version.project_id == project_id
+        and parent.project_id == project_id
+        and parent.workflow_id == version.workflow_id
+        and (
+            selection.workflow_profile_id is None
+            or version.workflow_profile_id == selection.workflow_profile_id
+        )
+        and (selection.workflow_id is None or version.workflow_id == selection.workflow_id)
+        and (
+            selection.workflow_version_id is None
+            or version.workflow_version_id == selection.workflow_version_id
+        )
+        and (
+            selection.workflow_profile_version_number is None
+            or version.version_number == selection.workflow_profile_version_number
+        )
+    )
+    if not matches:
+        status = ResourceLinkStatus.CONFLICT
+    elif workflow_status is ResourceLinkStatus.LINKED:
+        status = ResourceLinkStatus.LINKED
+    elif workflow_status is ResourceLinkStatus.CONFLICT:
+        status = ResourceLinkStatus.CONFLICT
+    else:
+        status = ResourceLinkStatus.DETACHED
+    if status is not ResourceLinkStatus.LINKED:
+        return ResourceLink(version_id, status)
+    return ResourceLink(
+        historical_version_id=version_id,
+        status=status,
+        linked_version_id=version.id,
+        linked_resource_id=version.workflow_profile_id,
+    )
+
+
+def _registered_project_context_matches(
+    store: ProjectStore,
+    project_id: str,
+    filesystem_key: str,
+) -> bool:
+    try:
+        project = store.get(project_id)
+    except ProjectNotFoundError:
+        return False
+    return project.filesystem_key == filesystem_key
 
 
 def _cancellation_request_result(

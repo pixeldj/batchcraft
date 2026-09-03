@@ -101,6 +101,65 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("discovers the active execution", async () => {
+    const fetchMock = successfulFetch({ run_id: "run-live" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new BatchcraftApiClient("http://api.test").getActiveExecution();
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/executions/active", {
+      signal: undefined,
+    });
+  });
+
+  it("loads Batch reconstruction for an encoded Run ID", async () => {
+    const fetchMock = successfulFetch({ run_id: "run/one" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new BatchcraftApiClient("http://api.test").getBatchReconstruction("run/one");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/runs/run%2Fone/batch-reconstruction",
+      { signal: undefined },
+    );
+  });
+
+  it("imports Run-scoped Prompt, Workflow, and Profile snapshots as copies", async () => {
+    const fetchMock = repeatedSuccessfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient("http://api.test");
+    const metadata = {
+      import_request_id: "historical-copy-request",
+      name: "Historical copy",
+      description: null,
+      note: "Recovered",
+    };
+
+    await client.importRunPromptVersion("run/one", 3, metadata);
+    await client.importRunWorkflowVersion("run/one", metadata);
+    await client.importRunWorkflowProfileVersion("run/one", {
+      ...metadata,
+      workflow_version_id: "workflow version",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "http://api.test/api/runs/run%2Fone/batch-reconstruction/prompt-versions/3/import-copy",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata) },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "http://api.test/api/runs/run%2Fone/batch-reconstruction/workflow-version/import-copy",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata) },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(3,
+      "http://api.test/api/runs/run%2Fone/batch-reconstruction/workflow-profile-version/import-copy",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...metadata, workflow_version_id: "workflow version" }),
+      },
+    );
+  });
+
   it("creates a Run with metadata separate from the Preview Batch request", async () => {
     const fetchMock = successfulFetch({ run_id: "run-1" });
     vi.stubGlobal("fetch", fetchMock);

@@ -74,6 +74,14 @@ class RunDataError(ApplicationError):
     pass
 
 
+class HistoricalResourceImportError(ApplicationError):
+    pass
+
+
+class HistoricalResourceImportConflictError(HistoricalResourceImportError):
+    pass
+
+
 class ProjectHistoryNotFoundError(ApplicationError):
     pass
 

@@ -406,8 +406,9 @@ produces explicit unavailable execution. Missing or corrupt Result bytes retain 
 Historical Run, execution, and Result-detail reads use strict read-only loaders that can preserve frozen
 provenance and recorded metadata when `outputs/` or individual Result files are absent. Execution,
 cancellation, discard, and Result download use strict mutation/content loaders and require all relevant
-paths and bytes to validate. BC-021 will add editable `Load Run as Batch` and the final cross-instance
-acceptance proof. A future CSV import may be convenient, but CSV alone cannot guarantee exact replay.
+paths and bytes to validate. BC-021 now reconstructs editable intent and detached resources without
+rewriting these files. The complete cross-instance and live execution proof remains open. A future CSV
+import may be convenient, but CSV alone cannot guarantee exact replay.
 
 ## Loading and Validation
 

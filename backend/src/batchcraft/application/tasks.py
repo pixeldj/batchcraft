@@ -58,6 +58,11 @@ class RunTaskRegistry:
         active = self._active_runs.get(run_id)
         return active is not None and not active.task.done()
 
+    async def active_run_id(self) -> str | None:
+        async with self._lock:
+            self._remove_completed()
+            return next(iter(self._active_runs), None)
+
     async def request_cancellation(
         self, run_id: str, mode: RunCancellationMode
     ) -> tuple[RunCancellationRequestRecord, bool] | None:

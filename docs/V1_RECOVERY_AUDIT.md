@@ -6,8 +6,9 @@ This document records the V1-001 audit of batchcraft's current persistence behav
 prerelease implementation with the proposed portability contract in ADR 0012.
 
 The audit is descriptive. BC-019 closed the record-level format gaps, and BC-020 added owned-v1 Project
-import, historical reindex, and Project history inspection. Editable reconstruction and final
-cross-instance acceptance remain in BC-021. ADR 0012 therefore remains Proposed.
+import, historical reindex, and Project history inspection. BC-021 completed editable reconstruction and
+detached-resource relinking/import; final cross-instance release validation remains open.
+ADR 0012 therefore remains Proposed.
 
 ## Audit conclusion
 
@@ -15,10 +16,9 @@ A modern published Run contains enough immutable plan and provenance data to be 
 recompiled without its original SQLite library. The Project filesystem also retains referenced Asset
 bytes and detailed execution and Result state.
 
-That data is now exposed for owned-v1 import and historical inspection. A fresh instance can import by
-filesystem key, browse valid and degraded Runs, and rebuild historical indexes without browser state.
-It still cannot reconstruct editable Batch intent with missing library records represented as detached
-resources.
+That data is now exposed for owned-v1 import, historical inspection, and editable Batch reconstruction.
+A fresh instance can import by filesystem key, browse valid and degraded Runs, rebuild historical indexes,
+and load frozen intent with missing library records represented as detached resources.
 
 The v1 contract is therefore feasible with the current authority split, but not yet satisfied.
 
@@ -90,7 +90,7 @@ without an explicit user operation.
 | `manifest.csv` | `batchcraft.manifest-csv` | 1 | Emitted secondary export; not parsed during normal published Run loading. |
 | `workflow.json` descriptor | `batchcraft.workflow-snapshot` | 1 | Identifies the raw, hash-bound ComfyUI API workflow payload. |
 | `workflow-profile.json` descriptor | `batchcraft.workflow-profile-snapshot` | 1 | Identifies the raw, hash-bound Profile payload validated with the workflow. |
-| Browser working session | 2 | Key names the format | Unsupported or malformed records reset to an empty session. |
+| Browser working session | 4 | Key names the format | Unsupported or malformed records reset to an empty session. |
 | SQLite schema | Migrations 0001 and 0002 | Migration filenames and history rows | Checksummed, contiguous, forward-only migration runner. |
 
 The preserved `0001_initial.sql` checksum is
@@ -156,8 +156,7 @@ loaders validate the referenced bytes.
 Remaining gaps in recovery workflow are:
 
 - cancellation intent remains SQLite-only until it becomes an outcome in `execution.json`;
-- `Load Run as Batch`, detached resource relinking/import, and final cross-instance execution acceptance
-  are not implemented;
+- final realistic cross-instance and live ComfyUI execution acceptance is not complete;
 - Project history has no pagination or advanced filters.
 
 Output naming is not currently editable product behavior. BC-019 removed that stale conceptual Batch
@@ -205,8 +204,8 @@ BC-020 classifies discovered content instead of silently trusting it:
 | Missing or corrupt Result file | Keep Run and Result metadata discoverable as degraded; do not serve unverified bytes. |
 | Missing or invalid `execution.json` | Keep valid frozen Run detail and report execution unavailable; read-only detail derives an initial view when the file is absent. |
 | Duplicate Run ID | Report an identity conflict; do not choose one silently. |
-| Missing mutable library record | Historical inspection uses frozen data; editable detached-resource reconstruction remains BC-021. |
-| Same stable library identity with different immutable content | Historical inspection does not relink; conflict-aware relinking remains BC-021. |
+| Missing mutable library record | Historical inspection and Preview use frozen data; explicit import creates a new mutable copy. |
+| Same stable library identity with different immutable content | Reconstruction reports a conflict and never links silently. |
 
 ## Gap allocation
 
@@ -247,6 +246,6 @@ The main implementation evidence is in:
 
 ## Exit condition
 
-V1-001 is complete. BC-019 and BC-020 now provide candidate-v1 records, owned Project import,
-rebuildable history, and degraded inspection. The v1 portability contract remains unproven until BC-021
-passes the complete cross-instance gate.
+V1-001 is complete. BC-019 and BC-020 provide candidate-v1 records, owned Project import, rebuildable
+history, and degraded inspection. BC-021 reconstruction is complete, but the v1 portability contract
+remains unproven until the complete cross-instance and live execution gate passes.

@@ -16,8 +16,10 @@ from pydantic import (
 )
 
 from batchcraft.application import (
+    BatchReconstruction,
     ComfyUIStatus,
     ListedResult,
+    ResourceLink,
     RunCancellation,
     RunCancellationRequestResult,
     RunCreationInput,
@@ -1312,6 +1314,10 @@ class RunCancellationRequestedResponse(RunCancellationResponse):
         )
 
 
+class ActiveExecutionResponse(ApiModel):
+    run_id: str | None
+
+
 class ExecutionResponse(ApiModel):
     run_id: str
     status: str
@@ -1487,6 +1493,84 @@ class RunResponse(RunCreatedResponse):
                 execution_task_active=execution_task_active,
             ),
         )
+
+
+class ResourceLinkResponse(ApiModel):
+    status: Literal["linked", "detached", "conflict"]
+    reason: str | None
+    historical_version_id: str | None
+    linked_version_id: str | None
+    linked_resource_id: str | None
+
+
+class PromptResourceLinkResponse(ResourceLinkResponse):
+    position: int
+
+
+class ReconstructionResourcesResponse(ApiModel):
+    prompt_versions: list[PromptResourceLinkResponse]
+    workflow_version: ResourceLinkResponse
+    workflow_profile_version: ResourceLinkResponse
+
+
+class BatchReconstructionResponse(ApiModel):
+    run_id: str
+    batch_snapshot: BatchSnapshotV1
+    resources: ReconstructionResourcesResponse
+
+    @classmethod
+    def from_reconstruction(cls, reconstruction: BatchReconstruction) -> Self:
+        return cls(
+            run_id=reconstruction.run_id,
+            batch_snapshot=reconstruction.batch_snapshot,
+            resources=ReconstructionResourcesResponse(
+                prompt_versions=[
+                    PromptResourceLinkResponse(
+                        position=position,
+                        status=item.status.value,
+                        reason=_resource_link_reason(item.status.value),
+                        historical_version_id=item.historical_version_id,
+                        linked_version_id=item.linked_version_id,
+                        linked_resource_id=item.linked_resource_id,
+                    )
+                    for position, item in enumerate(reconstruction.prompt_versions)
+                ],
+                workflow_version=_resource_link_response(reconstruction.workflow_version),
+                workflow_profile_version=_resource_link_response(
+                    reconstruction.workflow_profile_version
+                ),
+            ),
+        )
+
+
+class HistoricalResourceImportCopyRequest(ApiModel):
+    import_request_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str | None = None
+    note: str | None = None
+
+
+class HistoricalProfileImportCopyRequest(HistoricalResourceImportCopyRequest):
+    workflow_version_id: str = Field(min_length=1)
+
+
+def _resource_link_response(link: ResourceLink) -> ResourceLinkResponse:
+    status: Literal["linked", "detached", "conflict"] = link.status.value
+    return ResourceLinkResponse(
+        status=status,
+        reason=_resource_link_reason(status),
+        historical_version_id=link.historical_version_id,
+        linked_version_id=link.linked_version_id,
+        linked_resource_id=link.linked_resource_id,
+    )
+
+
+def _resource_link_reason(status: str) -> str | None:
+    if status == "detached":
+        return "The historical identity is not available in this library."
+    if status == "conflict":
+        return "The historical identity exists with different immutable content or ownership."
+    return None
 
 
 class ExecutionStartedResponse(ApiModel):

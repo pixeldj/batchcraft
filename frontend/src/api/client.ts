@@ -1,8 +1,10 @@
 import type {
   AdoptableProjectsResponse,
   AdoptableBatchesResponse,
+  ActiveExecutionResponse,
   ApiErrorEnvelope,
   AssetsResponse,
+  BatchReconstructionResponse,
   BatchRequest,
   ComfyUIStatusResponse,
   CreatePromptRequest,
@@ -17,6 +19,8 @@ import type {
   CreateWorkflowVersionRequest,
   ExecutionResponse,
   ExecutionStartedResponse,
+  HistoricalResourceImportRequest,
+  HistoricalWorkflowProfileImportRequest,
   LibraryPromptVersion,
   PreviewResponse,
   ProjectAdoptRequest,
@@ -124,7 +128,12 @@ export interface BatchcraftApi {
   archiveWorkflowProfileVersion(versionId: string): Promise<LibraryWorkflowProfileVersion>;
   previewBatch(batch: BatchRequest): Promise<PreviewResponse>;
   createRun(request: RunCreateRequest): Promise<RunCreatedResponse>;
+  getActiveExecution(signal?: AbortSignal): Promise<ActiveExecutionResponse>;
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse>;
+  getBatchReconstruction(runId: string, signal?: AbortSignal): Promise<BatchReconstructionResponse>;
+  importRunPromptVersion(runId: string, position: number, body: HistoricalResourceImportRequest): Promise<CreatePromptResponse>;
+  importRunWorkflowVersion(runId: string, body: HistoricalResourceImportRequest): Promise<CreateWorkflowResponse>;
+  importRunWorkflowProfileVersion(runId: string, body: HistoricalWorkflowProfileImportRequest): Promise<CreateWorkflowProfileResponse>;
   startRun(runId: string): Promise<ExecutionStartedResponse>;
   getExecution(runId: string, signal?: AbortSignal): Promise<ExecutionResponse>;
   getResults(runId: string, signal?: AbortSignal): Promise<ResultsResponse>;
@@ -377,8 +386,37 @@ export class BatchcraftApiClient implements BatchcraftApi {
     return this.request("/api/runs", this.jsonRequest(request, "POST"));
   }
 
+  getActiveExecution(signal?: AbortSignal): Promise<ActiveExecutionResponse> {
+    return this.request("/api/executions/active", { signal });
+  }
+
   getRun(runId: string, signal?: AbortSignal): Promise<RunResponse> {
     return this.request(`/api/runs/${encodeURIComponent(runId)}`, { signal });
+  }
+
+  getBatchReconstruction(runId: string, signal?: AbortSignal): Promise<BatchReconstructionResponse> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/batch-reconstruction`, { signal });
+  }
+
+  importRunPromptVersion(runId: string, position: number, body: HistoricalResourceImportRequest): Promise<CreatePromptResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/batch-reconstruction/prompt-versions/${position}/import-copy`,
+      this.jsonRequest(body, "POST"),
+    );
+  }
+
+  importRunWorkflowVersion(runId: string, body: HistoricalResourceImportRequest): Promise<CreateWorkflowResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/batch-reconstruction/workflow-version/import-copy`,
+      this.jsonRequest(body, "POST"),
+    );
+  }
+
+  importRunWorkflowProfileVersion(runId: string, body: HistoricalWorkflowProfileImportRequest): Promise<CreateWorkflowProfileResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/batch-reconstruction/workflow-profile-version/import-copy`,
+      this.jsonRequest(body, "POST"),
+    );
   }
 
   startRun(runId: string): Promise<ExecutionStartedResponse> {

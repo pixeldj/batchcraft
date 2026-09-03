@@ -1,5 +1,7 @@
 import type {
   BatchRequest,
+  BatchReconstructionResourceStatus,
+  BatchReconstructionResponse,
   EditableBatchSnapshot,
   ImageBindingRequest,
   JsonObject,
@@ -27,6 +29,10 @@ export interface PromptForm {
   snapshotName: string;
   text: string;
   placeholders: string[];
+  historicalPosition?: number | null;
+  historicalVersionId?: string | null;
+  historicalResourceStatus?: BatchReconstructionResourceStatus | null;
+  historicalResourceReason?: string | null;
 }
 
 export interface ParameterBindingForm {
@@ -60,6 +66,21 @@ export type ParameterAlternativeForm =
   | { kind: "base" }
   | { kind: "override"; value: string };
 
+export interface HistoricalVersionCopyResolution {
+  historicalVersionId: string;
+  copiedVersionId: string;
+}
+
+export interface HistoricalPromptVersionCopyResolution extends HistoricalVersionCopyResolution {
+  position: number;
+}
+
+export interface HistoricalImportCopyResolutions {
+  promptVersions: HistoricalPromptVersionCopyResolution[];
+  workflowVersion: HistoricalVersionCopyResolution | null;
+  workflowProfileVersion: HistoricalVersionCopyResolution | null;
+}
+
 export interface BatchFormState {
   projectId: string;
   projectFilesystemKey: string;
@@ -90,6 +111,13 @@ export interface BatchFormState {
   workflowProfileVersionNumber: number | null;
   workflowProfileWorkflowVersionId: string | null;
   workflowProfileContentSha256: string | null;
+  historicalWorkflowVersionId?: string | null;
+  historicalWorkflowResourceStatus?: BatchReconstructionResourceStatus | null;
+  historicalWorkflowResourceReason?: string | null;
+  historicalProfileVersionId?: string | null;
+  historicalProfileResourceStatus?: BatchReconstructionResourceStatus | null;
+  historicalProfileResourceReason?: string | null;
+  historicalImportCopyResolutions: HistoricalImportCopyResolutions;
 }
 
 export interface BatchRequestContext {
@@ -127,6 +155,10 @@ export function newPrompt(promptNumber = 1): PromptForm {
     snapshotName: `Prompt ${promptNumber}`,
     text: "",
     placeholders: [],
+    historicalPosition: null,
+    historicalVersionId: null,
+    historicalResourceStatus: null,
+    historicalResourceReason: null,
   };
 }
 
@@ -200,6 +232,13 @@ export function initialBatchForm(): BatchFormState {
     workflowProfileVersionNumber: null,
     workflowProfileWorkflowVersionId: null,
     workflowProfileContentSha256: null,
+    historicalWorkflowVersionId: null,
+    historicalWorkflowResourceStatus: null,
+    historicalWorkflowResourceReason: null,
+    historicalProfileVersionId: null,
+    historicalProfileResourceStatus: null,
+    historicalProfileResourceReason: null,
+    historicalImportCopyResolutions: emptyHistoricalImportCopyResolutions(),
   };
 }
 
@@ -216,10 +255,16 @@ export class FormBuildError extends Error {
 export function buildBatchRequest(
   form: BatchFormState,
   context: BatchRequestContext = { sourceSavedBatch: null },
+  materializedRandomSeeds?: number[],
 ): BatchRequest {
   const batchSnapshot = buildEditableBatchSnapshot(form, context);
   const seedInput = form.seedMode === "random"
-    ? { mode: "explicit" as const, values: generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)) }
+    ? {
+      mode: "explicit" as const,
+      values: materializedRandomSeeds
+        ? validateMaterializedRandomSeeds(materializedRandomSeeds, parseRandomSeedCount(form.randomSeedCount))
+        : generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)),
+    }
     : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
 
   return {
@@ -358,6 +403,305 @@ export function buildEditableBatchSnapshot(
       workflow_profile: workflowProfile,
     },
   };
+}
+
+export function editableBatchSnapshotToForm(
+  reconstruction: BatchReconstructionResponse,
+): BatchFormState {
+  const snapshot = reconstruction.batch_snapshot;
+  const form = initialBatchForm();
+  const profileParametersByKey = new Map(
+    profileParameters(snapshot.workflow_selection.workflow_profile).map((parameter) => [parameter.key, parameter]),
+  );
+  const promptResources = new Map(
+    reconstruction.resources.prompt_versions.map((resource) => [resource.position, resource]),
+  );
+  const workflowResource = reconstruction.resources.workflow_version;
+  const profileResource = reconstruction.resources.workflow_profile_version;
+  const selectedWorkflowVersionId = workflowResource.status === "linked"
+    ? workflowResource.linked_version_id ?? snapshot.workflow_selection.workflow_version_id
+    : snapshot.workflow_selection.workflow_version_id;
+  const parameterBindings: ParameterBindingForm[] = snapshot.parameter_bindings.map((binding) => {
+    const parameter = profileParametersByKey.get(binding.parameter_key);
+    if (!parameter) {
+      throw new FormBuildError("parameters", `Frozen Parameter ${binding.parameter_key} is missing from the Workflow Profile.`);
+    }
+    return {
+      parameterKey: binding.parameter_key,
+      valueType: parameter.value_type,
+      mode: binding.mode,
+      alternatives: binding.mode === "values"
+        ? binding.values.map(parameterAlternative)
+        : [{ kind: "base" }],
+      range: binding.mode === "range"
+        ? {
+          start: binding.range.start,
+          end: binding.range.end,
+          step: binding.range.step,
+          includeBase: binding.include_base,
+        }
+        : defaultParameterRange(parameter.value_type),
+    };
+  });
+  const linkedParameterSets: LinkedParameterSetForm[] = snapshot.linked_parameter_sets.map((set) => ({
+    setKey: set.set_key,
+    setLabel: set.set_label,
+    members: set.members.map((parameterKey) => {
+      const parameter = profileParametersByKey.get(parameterKey);
+      if (!parameter) {
+        throw new FormBuildError("parameters", `Frozen Preset member ${parameterKey} is missing from the Workflow Profile.`);
+      }
+      return { parameterKey, valueType: parameter.value_type };
+    }),
+    rows: set.rows.map((row) => ({
+      rowLabel: row.row_label ?? "",
+      values: Object.fromEntries(set.members.map((parameterKey) => [
+        parameterKey,
+        parameterAlternative(row.values[parameterKey]),
+      ])),
+    })),
+  }));
+
+  return {
+    ...form,
+    projectId: snapshot.project.id,
+    projectFilesystemKey: snapshot.project.filesystem_key,
+    projectName: snapshot.project.name,
+    batchId: snapshot.batch.id,
+    batchFilesystemKey: snapshot.batch.filesystem_key,
+    batchName: snapshot.batch.name,
+    batchDescription: snapshot.batch.description ?? "",
+    prompts: snapshot.prompt_versions.map((prompt, index) => {
+      const resource = promptResources.get(index);
+      const linked = resource?.status === "linked";
+      return {
+        key: newPrompt().key,
+        libraryProjectId: linked ? snapshot.project.id : null,
+        promptId: resource?.linked_resource_id ?? prompt.prompt_id,
+        promptName: prompt.name,
+        versionId: linked ? resource.linked_version_id ?? prompt.id : prompt.id,
+        versionNumber: prompt.version_number,
+        snapshotName: prompt.name,
+        text: prompt.text,
+        placeholders: [],
+        historicalPosition: index,
+        historicalVersionId: resource?.historical_version_id ?? prompt.id,
+        historicalResourceStatus: resource?.status ?? "detached",
+        historicalResourceReason: resource?.reason ?? null,
+      };
+    }),
+    variableBindings: snapshot.variable_bindings.map((binding) => newVariableBinding(
+      binding.placeholder,
+      [...binding.values],
+    )),
+    imageBindings: snapshot.image_bindings.map((binding) => ({
+      slot_key: binding.slot_key,
+      values: [...binding.values],
+    })),
+    parameterBindings,
+    linkedParameterSets,
+    seedMode: snapshot.seed_intent.mode,
+    seedValues: snapshot.seed_intent.values.join("\n"),
+    randomSeedCount: String(snapshot.seed_intent.random_seed_count ?? 1),
+    workflowJson: JSON.stringify(snapshot.workflow_selection.workflow, null, 2),
+    workflowProfileJson: JSON.stringify(snapshot.workflow_selection.workflow_profile, null, 2),
+    workflowLibraryProjectId: workflowResource.status === "linked" && profileResource.status === "linked"
+      ? snapshot.project.id
+      : null,
+    workflowId: workflowResource.linked_resource_id ?? snapshot.workflow_selection.workflow_id,
+    workflowName: snapshot.workflow_selection.workflow_name ?? "",
+    workflowVersionId: selectedWorkflowVersionId,
+    workflowVersionNumber: snapshot.workflow_selection.workflow_version_number,
+    workflowContentSha256: null,
+    workflowProfileId: profileResource.linked_resource_id ?? snapshot.workflow_selection.workflow_profile_id,
+    workflowProfileName: snapshot.workflow_selection.workflow_profile_name ?? "",
+    workflowProfileVersionId: profileResource.status === "linked"
+      ? profileResource.linked_version_id ?? snapshot.workflow_selection.workflow_profile_version_id
+      : snapshot.workflow_selection.workflow_profile_version_id,
+    workflowProfileVersionNumber: snapshot.workflow_selection.workflow_profile_version_number,
+    workflowProfileWorkflowVersionId: profileResource.status === "linked"
+      ? selectedWorkflowVersionId
+      : snapshot.workflow_selection.workflow_version_id,
+    workflowProfileContentSha256: null,
+    historicalWorkflowVersionId: workflowResource.historical_version_id
+      ?? snapshot.workflow_selection.workflow_version_id,
+    historicalWorkflowResourceStatus: workflowResource.status,
+    historicalWorkflowResourceReason: workflowResource.reason,
+    historicalProfileVersionId: profileResource.historical_version_id
+      ?? snapshot.workflow_selection.workflow_profile_version_id,
+    historicalProfileResourceStatus: profileResource.status,
+    historicalProfileResourceReason: profileResource.reason,
+    historicalImportCopyResolutions: emptyHistoricalImportCopyResolutions(),
+  };
+}
+
+export function restoreHistoricalResourceState(
+  current: BatchFormState,
+  reconstruction: BatchReconstructionResponse,
+): BatchFormState {
+  const historical = editableBatchSnapshotToForm(reconstruction);
+  const promptResources = new Map(
+    reconstruction.resources.prompt_versions.map((resource) => [resource.position, resource]),
+  );
+  const promptCopyResolutions = current.historicalImportCopyResolutions.promptVersions.filter((resolution) => {
+    const resource = promptResources.get(resolution.position);
+    const source = historical.prompts[resolution.position];
+    return resource?.historical_version_id === resolution.historicalVersionId
+      && source !== undefined
+      && current.prompts.some((prompt) => (
+        prompt.versionId === resolution.copiedVersionId
+        && prompt.text === source.text
+      ));
+  });
+  const prompts = current.prompts.map((prompt) => {
+    const copied = promptCopyResolutions.find((resolution) => {
+      const source = historical.prompts[resolution.position];
+      return prompt.versionId === resolution.copiedVersionId
+        && source !== undefined
+        && prompt.text === source.text;
+    });
+    if (copied) return prompt;
+    const positionedSource = prompt.historicalPosition === null
+      || prompt.historicalPosition === undefined
+      ? undefined
+      : historical.prompts[prompt.historicalPosition];
+    const source = positionedSource
+      && prompt.versionId === positionedSource.versionId
+      && prompt.snapshotName === positionedSource.snapshotName
+      && prompt.text === positionedSource.text
+      ? positionedSource
+      : historical.prompts.find((candidate) => (
+        prompt.versionId === candidate.versionId
+        && prompt.snapshotName === candidate.snapshotName
+        && prompt.text === candidate.text
+      ));
+    if (
+      !source
+    ) return prompt;
+    return {
+      ...prompt,
+      libraryProjectId: source.libraryProjectId,
+      promptId: source.promptId,
+      historicalPosition: source.historicalPosition,
+      historicalVersionId: source.historicalVersionId,
+      historicalResourceStatus: source.historicalResourceStatus,
+      historicalResourceReason: source.historicalResourceReason,
+    };
+  });
+  const workflowCopyResolution = validVersionCopyResolution(
+    current.historicalImportCopyResolutions.workflowVersion,
+    reconstruction.resources.workflow_version.historical_version_id,
+    current.workflowVersionId,
+    current.workflowJson,
+    historical.workflowJson,
+  );
+  const workflowUsesCopy = workflowCopyResolution?.copiedVersionId === current.workflowVersionId;
+  const profileCopyResolution = validProfileCopyResolution(
+    current.historicalImportCopyResolutions.workflowProfileVersion,
+    reconstruction.resources.workflow_profile_version.historical_version_id,
+    current.workflowProfileVersionId,
+    current.workflowProfileJson,
+    historical.workflowProfileJson,
+  ) && current.workflowProfileWorkflowVersionId === current.workflowVersionId
+    ? current.historicalImportCopyResolutions.workflowProfileVersion
+    : null;
+  const workflowSelectionMatches = current.workflowVersionId === historical.workflowVersionId;
+  const profileSelectionMatches = current.workflowProfileVersionId === historical.workflowProfileVersionId;
+  const workflowMatches = Boolean(workflowCopyResolution) || workflowSelectionMatches
+    && (current.workflowJson === historical.workflowJson || current.workflowJson.trim() === "{}");
+  const profileMatches = Boolean(profileCopyResolution) || profileSelectionMatches
+    && (current.workflowProfileJson === historical.workflowProfileJson || current.workflowProfileJson.trim() === "{}");
+  return {
+    ...current,
+    prompts,
+    historicalImportCopyResolutions: {
+      promptVersions: promptCopyResolutions,
+      workflowVersion: workflowCopyResolution,
+      workflowProfileVersion: profileCopyResolution,
+    },
+    ...(workflowMatches ? {
+      workflowJson: historical.workflowJson,
+      ...(workflowUsesCopy ? {} : {
+        workflowLibraryProjectId: historical.workflowLibraryProjectId,
+        workflowId: historical.workflowId,
+        historicalWorkflowVersionId: historical.historicalWorkflowVersionId,
+        historicalWorkflowResourceStatus: historical.historicalWorkflowResourceStatus,
+        historicalWorkflowResourceReason: historical.historicalWorkflowResourceReason,
+      }),
+    } : {}),
+    ...(profileMatches ? {
+      workflowProfileJson: historical.workflowProfileJson,
+      ...(profileCopyResolution ? {} : {
+        workflowProfileId: historical.workflowProfileId,
+        historicalProfileVersionId: historical.historicalProfileVersionId,
+        historicalProfileResourceStatus: historical.historicalProfileResourceStatus,
+        historicalProfileResourceReason: historical.historicalProfileResourceReason,
+      }),
+    } : {}),
+  };
+}
+
+function emptyHistoricalImportCopyResolutions(): HistoricalImportCopyResolutions {
+  return {
+    promptVersions: [],
+    workflowVersion: null,
+    workflowProfileVersion: null,
+  };
+}
+
+function validVersionCopyResolution(
+  resolution: HistoricalVersionCopyResolution | null,
+  historicalVersionId: string | null,
+  selectedVersionId: string | null,
+  currentJson: string,
+  historicalJson: string,
+): HistoricalVersionCopyResolution | null {
+  if (
+    !resolution
+    || resolution.historicalVersionId !== historicalVersionId
+    || (
+      resolution.copiedVersionId !== selectedVersionId
+      && historicalVersionId !== selectedVersionId
+    )
+    || (currentJson !== historicalJson && currentJson.trim() !== "{}")
+  ) return null;
+  return resolution;
+}
+
+function validProfileCopyResolution(
+  resolution: HistoricalVersionCopyResolution | null,
+  historicalVersionId: string | null,
+  selectedVersionId: string | null,
+  currentJson: string,
+  historicalJson: string,
+): HistoricalVersionCopyResolution | null {
+  if (
+    !resolution
+    || resolution.historicalVersionId !== historicalVersionId
+    || resolution.copiedVersionId !== selectedVersionId
+  ) return null;
+  try {
+    const current = JSON.parse(currentJson) as Record<string, unknown>;
+    const historical = JSON.parse(historicalJson) as Record<string, unknown>;
+    const payload = (profile: Record<string, unknown>) => ({
+      mappings: profile.mappings,
+      image_inputs: profile.image_inputs,
+      parameters: profile.parameters,
+    });
+    return JSON.stringify(canonicalize(payload(current)))
+      === JSON.stringify(canonicalize(payload(historical)))
+      ? resolution
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parameterAlternative(value: ParameterScalar | null | undefined): ParameterAlternativeForm {
+  if (value === undefined) {
+    throw new FormBuildError("parameters", "A frozen Preset row is missing a member value.");
+  }
+  return value === null ? { kind: "base" } : { kind: "override", value: String(value) };
 }
 
 export function profileImageInputs(profile: JsonObject | string): WorkflowProfileImageInput[] {
@@ -703,6 +1047,18 @@ export function generateRandomSeeds(
   while (seeds.size < count) {
     cryptoSource.getRandomValues(value);
     seeds.add(value[0]);
+  }
+  return [...seeds];
+}
+
+function validateMaterializedRandomSeeds(seeds: number[], expectedCount: number): number[] {
+  if (seeds.length !== expectedCount) {
+    throw new FormBuildError("seeds", "Historical Random seeds do not match the frozen Random count.");
+  }
+  for (const seed of seeds) {
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new FormBuildError("seeds", "Historical Random seeds must be nonnegative safe integers.");
+    }
   }
   return [...seeds];
 }

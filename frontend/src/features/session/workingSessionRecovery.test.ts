@@ -8,10 +8,18 @@ import {
 } from "./workingSessionRecovery";
 
 describe("durable browser working-session recovery", () => {
-  it("writes recovery v2 metadata and omits reconstructable snapshots and UI keys", () => {
+  it("writes recovery v4 metadata, the historical pointer, and validated resolution metadata", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.seedMode = "random";
+    form.historicalWorkflowVersionId = "historical-workflow";
+    form.historicalWorkflowResourceStatus = "conflict";
+    form.historicalWorkflowResourceReason = "ownership mismatch";
+    form.historicalImportCopyResolutions = {
+      promptVersions: [{ position: 1, historicalVersionId: "historical-prompt", copiedVersionId: "prompt-second" }],
+      workflowVersion: { historicalVersionId: "historical-workflow", copiedVersionId: "workflow-v2" },
+      workflowProfileVersion: { historicalVersionId: "historical-profile", copiedVersionId: "profile-v3" },
+    };
     form.prompts.push({
       key: 999,
       libraryProjectId: null,
@@ -22,6 +30,9 @@ describe("durable browser working-session recovery", () => {
       snapshotName: "Second Prompt",
       text: "Second {{subject}}",
       placeholders: ["subject"],
+      historicalVersionId: "historical-prompt",
+      historicalResourceStatus: "detached",
+      historicalResourceReason: "missing",
     });
 
     saveWorkingSession(
@@ -32,6 +43,7 @@ describe("durable browser working-session recovery", () => {
       storage,
       "saved-batch-1",
       7,
+      "source-run-9",
     );
     const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
       string,
@@ -39,7 +51,7 @@ describe("durable browser working-session recovery", () => {
     >;
     const restored = loadWorkingSession(storage);
 
-    expect(stored.format_version).toBe(2);
+    expect(stored.format_version).toBe(4);
     expect(stored.updated_at).toEqual(expect.any(String));
     expect(stored).toMatchObject({
       current_run_id: "run-42",
@@ -47,9 +59,11 @@ describe("durable browser working-session recovery", () => {
       selected_project_id: "selected-project",
       selected_saved_batch_id: "saved-batch-1",
       saved_batch_base_revision: 7,
+      source_run_id: "source-run-9",
     });
     expect((stored.draft as { prompts: unknown[] }).prompts).toEqual([
       {
+        historicalPosition: null,
         libraryProjectId: "library-project",
         promptId: "prompt-logical",
         promptName: "Current Prompt Name",
@@ -59,6 +73,7 @@ describe("durable browser working-session recovery", () => {
         text: "Restored {{subject}}",
       },
       {
+        historicalPosition: null,
         libraryProjectId: null,
         promptId: null,
         promptName: "Second Prompt",
@@ -72,14 +87,23 @@ describe("durable browser working-session recovery", () => {
       { placeholder: "subject", values: ["wolf", "fox"] },
     ]);
     expect(stored.draft).toMatchObject({ workflowJson: null, workflowProfileJson: null });
+    expect(stored.draft).toMatchObject({
+      historicalImportCopyResolutions: form.historicalImportCopyResolutions,
+    });
+    expect(stored.draft).not.toHaveProperty("historicalWorkflowResourceStatus");
+    expect(stored.draft).not.toHaveProperty("historicalWorkflowResourceReason");
+    expect((stored.draft as { prompts: unknown[] }).prompts[1]).not.toHaveProperty("historicalResourceStatus");
+    expect((stored.draft as { prompts: unknown[] }).prompts[1]).not.toHaveProperty("historicalResourceReason");
     expect(restored.form).toMatchObject({ workflowJson: "{}", workflowProfileJson: "{}" });
     expect(restored.form.prompts.map((prompt) => prompt.placeholders)).toEqual([[], []]);
+    expect(restored.form.historicalImportCopyResolutions).toEqual(form.historicalImportCopyResolutions);
     expect(restored).toMatchObject({
       currentRunId: "run-42",
       sessionRunIds: ["run-40", "run-42"],
       selectedProjectId: "selected-project",
       selectedSavedBatchId: "saved-batch-1",
       savedBatchBaseRevision: 7,
+      sourceRunId: "source-run-9",
       workflowSnapshotRecoveryRequired: true,
       profileSnapshotRecoveryRequired: true,
       draftRestored: true,
@@ -119,14 +143,84 @@ describe("durable browser working-session recovery", () => {
   it("preserves detached Workflow and Profile JSON as editable draft state", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
-    form.workflowVersionId = null;
-    form.workflowProfileVersionId = null;
+    form.workflowLibraryProjectId = null;
+    form.workflowVersionId = "historical-workflow-version";
+    form.workflowProfileVersionId = "historical-profile-version";
     form.workflowJson = '{"detached":"workflow"}';
     form.workflowProfileJson = '{"mappings":{},"image_inputs":[],"parameters":[]}';
 
     saveWorkingSession(form, null, [], "selected-project", storage);
 
     const restored = loadWorkingSession(storage);
+    expect(restored.form.workflowJson).toBe(form.workflowJson);
+    expect(restored.form.workflowProfileJson).toBe(form.workflowProfileJson);
+    expect(restored.workflowSnapshotRecoveryRequired).toBe(false);
+    expect(restored.profileSnapshotRecoveryRequired).toBe(false);
+  });
+
+  it("omits only the reconstructable Workflow JSON for a partial Workflow-only copy resolution", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.workflowLibraryProjectId = null;
+    form.workflowVersionId = "historical-workflow-version";
+    form.historicalWorkflowVersionId = "historical-workflow-version";
+    form.workflowProfileVersionId = "historical-profile-version";
+    form.workflowJson = '{"detached":"workflow"}';
+    form.workflowProfileJson = '{"detached":"profile","image_inputs":[],"parameters":[]}';
+    form.historicalImportCopyResolutions.workflowVersion = {
+      historicalVersionId: "historical-workflow-version",
+      copiedVersionId: "copied-workflow-version",
+    };
+
+    saveWorkingSession(form, null, [], "selected-project", storage, null, null, "source-run");
+
+    const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as {
+      draft: { workflowJson: string | null; workflowProfileJson: string | null };
+    };
+    const restored = loadWorkingSession(storage);
+    expect(stored.draft.workflowJson).toBeNull();
+    expect(stored.draft.workflowProfileJson).toBe(form.workflowProfileJson);
+    expect(restored.workflowSnapshotRecoveryRequired).toBe(true);
+    expect(restored.profileSnapshotRecoveryRequired).toBe(false);
+    expect(restored.form.historicalImportCopyResolutions.workflowVersion).toEqual(
+      form.historicalImportCopyResolutions.workflowVersion,
+    );
+  });
+
+  it("keeps an incomplete linked Workflow selection recoverable", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.workflowLibraryProjectId = "project-1";
+    form.workflowProfileId = "profile-without-version";
+    form.workflowProfileVersionId = null;
+    form.workflowProfileJson = "{}";
+
+    saveWorkingSession(form, null, [], "project-1", storage);
+
+    const restored = loadWorkingSession(storage);
+    expect(restored.draftRestored).toBe(true);
+    expect(restored.form.workflowProfileJson).toBe("{}");
+    expect(restored.profileSnapshotRecoveryRequired).toBe(false);
+  });
+
+  it("drops stale copy resolutions and retains their detached JSON", () => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    form.workflowLibraryProjectId = null;
+    form.historicalImportCopyResolutions = {
+      promptVersions: [{ position: 0, historicalVersionId: "historical-prompt", copiedVersionId: "no-longer-selected" }],
+      workflowVersion: { historicalVersionId: "historical-workflow", copiedVersionId: "no-longer-selected" },
+      workflowProfileVersion: { historicalVersionId: "historical-profile", copiedVersionId: "no-longer-selected" },
+    };
+
+    saveWorkingSession(form, null, [], "selected-project", storage, null, null, "source-run");
+
+    const restored = loadWorkingSession(storage);
+    expect(restored.form.historicalImportCopyResolutions).toEqual({
+      promptVersions: [],
+      workflowVersion: null,
+      workflowProfileVersion: null,
+    });
     expect(restored.form.workflowJson).toBe(form.workflowJson);
     expect(restored.form.workflowProfileJson).toBe(form.workflowProfileJson);
     expect(restored.workflowSnapshotRecoveryRequired).toBe(false);
@@ -183,7 +277,7 @@ describe("durable browser working-session recovery", () => {
     expect(loadWorkingSession(storage).form.parameterBindings[0]).toEqual(form.parameterBindings[0]);
   });
 
-  it("round-trips exact linked Preset drafts in recovery v2 and ignores the v1 key", () => {
+  it("round-trips exact linked Preset drafts in recovery v4 and ignores old keys", () => {
     const storage = new MemoryStorage();
     const form = populatedForm();
     form.parameterBindings = [];
@@ -197,6 +291,10 @@ describe("durable browser working-session recovery", () => {
 
     const oldStorage = new MemoryStorage();
     oldStorage.setItem("batchcraft.working-session-recovery.v1", storage.getItem(WORKING_SESSION_KEY) ?? "");
+    expectFreshSession(loadWorkingSession(oldStorage));
+    oldStorage.setItem("batchcraft.working-session-recovery.v2", storage.getItem(WORKING_SESSION_KEY) ?? "");
+    expectFreshSession(loadWorkingSession(oldStorage));
+    oldStorage.setItem("batchcraft.working-session-recovery.v3", storage.getItem(WORKING_SESSION_KEY) ?? "");
     expectFreshSession(loadWorkingSession(oldStorage));
   });
 
@@ -321,6 +419,17 @@ describe("durable browser working-session recovery", () => {
     ["unknown envelope field", (envelope: Record<string, unknown>) => {
       envelope.legacy = true;
     }],
+    ["historical source Run ID", (envelope: Record<string, unknown>) => {
+      envelope.source_run_id = "";
+    }],
+    ["historical copy resolution", (envelope: Record<string, unknown>) => {
+      const form = envelope.draft as { historicalImportCopyResolutions: { promptVersions: unknown[] } };
+      form.historicalImportCopyResolutions.promptVersions = [{
+        position: -1,
+        historicalVersionId: "historical",
+        copiedVersionId: "copied",
+      }];
+    }],
     ["Parameter binding value", (envelope: Record<string, unknown>) => {
       const form = envelope.draft as { parameterBindings: Array<Record<string, unknown>> };
       const alternatives = form.parameterBindings[0].alternatives as Array<Record<string, unknown>>;
@@ -355,7 +464,7 @@ describe("durable browser working-session recovery", () => {
     expectFreshSession(loadWorkingSession(storage));
   });
 
-  it.each([0, 1, 13, 99])("resets an unsupported recovery version %i", (version) => {
+  it.each([0, 1, 2, 3, 13, 99])("resets an unsupported recovery version %i", (version) => {
     const storage = new MemoryStorage();
     saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
@@ -457,6 +566,7 @@ function expectFreshSession(restored: ReturnType<typeof loadWorkingSession>): vo
   expect(restored.selectedProjectId).toBeNull();
   expect(restored.selectedSavedBatchId).toBeNull();
   expect(restored.savedBatchBaseRevision).toBeNull();
+  expect(restored.sourceRunId).toBeNull();
   expect(restored.workflowSnapshotRecoveryRequired).toBe(false);
   expect(restored.profileSnapshotRecoveryRequired).toBe(false);
   expect(restored.form.prompts).toEqual([]);

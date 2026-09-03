@@ -6,14 +6,18 @@ Runs, watching Job state, viewing the current Run's Results, reviewing accumulat
 this browser working session, and browsing filesystem-indexed Project history. It communicates only
 with the batchcraft FastAPI application.
 
-The browser stores one strict working-session recovery v2 record under
-`batchcraft.working-session-recovery.v2` in `localStorage`. It contains editable Batch intent, selected
-Project and Saved Batch pointers, current Run ID, and ordered unique session Run IDs. Linked
+The browser stores one strict working-session recovery v4 record under
+`batchcraft.working-session-recovery.v4` in `localStorage`. It contains editable Batch intent, selected
+Project and Saved Batch pointers, historical source Run identity, current Run ID, and ordered unique
+session Run IDs. Explicit historical-to-copy resolution IDs make partial detached-resource imports
+resumable after a refresh. Linked
 Workflow/Profile JSON is reconstructed by immutable version ID; detached JSON remains draft state.
 Unsupported or malformed records start a clean working session. Refreshing or reopening a tab restores
-the draft, then reloads Run, execution, and Result data from FastAPI. Result metadata and bytes are never
-stored as browser truth. Preview is never restored as valid; the user must compile the recovered draft
-again. Old sessionStorage v13 data is discarded rather than migrated.
+the draft and independently discovers any Run owned by the current backend process. Run and execution
+state load before Results, and transient startup failures receive bounded retries. Draft identity controls
+gallery association but never by itself hides or erases a valid observed Run. Result metadata and bytes
+are never stored as browser truth. Preview is never restored as valid; the user must compile the recovered
+draft again. Older browser recovery formats are discarded rather than migrated.
 
 The selected ProfileVersion defines zero or more ordered, named Image Inputs. Each slot selects one or
 more ordered Base workflow and Reference Asset alternatives. Profile changes reconcile bindings by
@@ -140,4 +144,4 @@ Frontend tests mock the typed API client. They do not require FastAPI or ComfyUI
   remains the workflow editor.
 - Batch Results remain a browser-session gallery; the separate Project History section provides the
   durable Project-scoped view.
-- The screen has no backend executor restart recovery, retry, rating, or Project-history filtering.
+- The screen has no backend executor restart recovery, execution retry, rating, or Project-history filtering.

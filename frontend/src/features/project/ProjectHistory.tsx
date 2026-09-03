@@ -16,6 +16,8 @@ interface Props {
   projectId: string | null;
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
+  loadRunAsBatch(runId: string): Promise<void>;
+  loadRunAsBatchDisabled?: boolean;
 }
 
 interface ResultState {
@@ -30,7 +32,14 @@ interface DetailState {
   error: string | null;
 }
 
-export function ProjectHistory({ api, projectId, getCachedRun, loadRun }: Props) {
+export function ProjectHistory({
+  api,
+  projectId,
+  getCachedRun,
+  loadRun,
+  loadRunAsBatch,
+  loadRunAsBatchDisabled,
+}: Props) {
   if (!projectId) {
     return (
       <section className="section-card quiet-card inactive-card" aria-labelledby="project-history-heading">
@@ -46,6 +55,8 @@ export function ProjectHistory({ api, projectId, getCachedRun, loadRun }: Props)
       projectId={projectId}
       getCachedRun={getCachedRun}
       loadRun={loadRun}
+      loadRunAsBatch={loadRunAsBatch}
+      loadRunAsBatchDisabled={loadRunAsBatchDisabled}
     />
   );
 }
@@ -55,6 +66,8 @@ function VerifiedProjectHistory({
   projectId,
   getCachedRun,
   loadRun,
+  loadRunAsBatch,
+  loadRunAsBatchDisabled = false,
 }: Omit<Props, "projectId"> & { projectId: string }) {
   const [history, setHistory] = useState<ProjectRunsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,6 +75,8 @@ function VerifiedProjectHistory({
   const [refresh, setRefresh] = useState(0);
   const [reindexing, setReindexing] = useState(false);
   const [reindexError, setReindexError] = useState<string | null>(null);
+  const [loadingBatchRunId, setLoadingBatchRunId] = useState<string | null>(null);
+  const [loadBatchError, setLoadBatchError] = useState<string | null>(null);
   const [resultsByRun, setResultsByRun] = useState<Record<string, ResultState>>({});
   const [detailsByRun, setDetailsByRun] = useState<Record<string, DetailState>>({});
   const [expandedByRun, setExpandedByRun] = useState<Record<string, boolean>>({});
@@ -183,6 +198,19 @@ function VerifiedProjectHistory({
     );
   }
 
+  async function loadAsBatch(runId: string) {
+    if (loadingBatchRunId || loadRunAsBatchDisabled) return;
+    setLoadingBatchRunId(runId);
+    setLoadBatchError(null);
+    try {
+      await loadRunAsBatch(runId);
+    } catch (caught) {
+      setLoadBatchError(errorMessage(caught));
+    } finally {
+      setLoadingBatchRunId(null);
+    }
+  }
+
   const groups = history ? groupByBatch(history.runs) : [];
 
   return (
@@ -200,6 +228,7 @@ function VerifiedProjectHistory({
       {loading ? <p role="status">Loading Project history...</p> : null}
       {error ? <p className="operation-error" role="alert">Project history unavailable: {error}</p> : null}
       {reindexError ? <p className="operation-error" role="alert">Project reindex failed: {reindexError}</p> : null}
+      {loadBatchError ? <p className="operation-error" role="alert">Run could not be loaded as a Batch: {loadBatchError}</p> : null}
 
       {history ? (
         <ProjectDiagnostics diagnostics={history.diagnostics} />
@@ -274,6 +303,16 @@ function VerifiedProjectHistory({
                             onClick={(event) => setPlanTarget({ run: detailState.run as RunResponse, restoreTarget: event.currentTarget })}
                           >
                             View Run Plan
+                          </button>
+                        ) : null}
+                        {historicalRun.replayable ? (
+                          <button
+                            className="button-secondary compact"
+                            type="button"
+                            disabled={loadRunAsBatchDisabled || loadingBatchRunId !== null}
+                            onClick={() => void loadAsBatch(historicalRun.run_id)}
+                          >
+                            {loadingBatchRunId === historicalRun.run_id ? "Loading Batch..." : "Load Run as Batch"}
                           </button>
                         ) : null}
                         {resultState?.loading ? <p className="empty-note">Loading Results...</p> : null}

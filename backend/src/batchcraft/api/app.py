@@ -22,6 +22,8 @@ from batchcraft.application import (
     BatchcraftService,
     ExecutionAlreadyActiveError,
     ExecutionNotEligibleError,
+    HistoricalResourceImportConflictError,
+    HistoricalResourceImportError,
     InvalidProjectKeyError,
     LibraryService,
     ProjectAdoptionError,
@@ -91,12 +93,14 @@ from batchcraft.version import batchcraft_version
 
 from .config import Settings
 from .schemas import (
+    ActiveExecutionResponse,
     AdoptableBatchesResponse,
     AdoptableBatchResponse,
     AdoptableProjectResponse,
     AdoptableProjectsResponse,
     AssetResponse,
     AssetsResponse,
+    BatchReconstructionResponse,
     BatchRequest,
     ComfyUIStatusResponse,
     ErrorDetail,
@@ -104,6 +108,8 @@ from .schemas import (
     ExecutionResponse,
     ExecutionStartedResponse,
     HealthResponse,
+    HistoricalProfileImportCopyRequest,
+    HistoricalResourceImportCopyRequest,
     HistoricalRunResponse,
     HistoryDiagnosticResponse,
     LibraryPromptVersionResponse,
@@ -905,6 +911,95 @@ def create_app(
             execution_task_active=service.execution_task_active(run_id),
         )
 
+    @app.get(
+        "/api/runs/{run_id}/batch-reconstruction",
+        response_model=BatchReconstructionResponse,
+    )
+    async def get_batch_reconstruction(
+        run_id: str,
+        service: ServiceDependency,
+    ) -> BatchReconstructionResponse:
+        reconstruction = await asyncio.to_thread(service.get_batch_reconstruction, run_id)
+        return BatchReconstructionResponse.from_reconstruction(reconstruction)
+
+    @app.post(
+        "/api/runs/{run_id}/batch-reconstruction/prompt-versions/{position}/import-copy",
+        response_model=PromptCreatedResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_historical_prompt_copy(
+        run_id: str,
+        position: int,
+        request: HistoricalResourceImportCopyRequest,
+        service: ServiceDependency,
+        library: LibraryDependency,
+    ) -> PromptCreatedResponse:
+        prompt, version = await asyncio.to_thread(
+            service.import_historical_prompt_copy,
+            run_id,
+            position,
+            import_request_id=request.import_request_id,
+            name=request.name,
+            description=request.description,
+            note=request.note,
+            library=library,
+        )
+        return PromptCreatedResponse(
+            prompt=PromptResponse.from_record(prompt),
+            version=LibraryPromptVersionResponse.from_record(version),
+        )
+
+    @app.post(
+        "/api/runs/{run_id}/batch-reconstruction/workflow-version/import-copy",
+        response_model=WorkflowCreatedResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_historical_workflow_copy(
+        run_id: str,
+        request: HistoricalResourceImportCopyRequest,
+        service: ServiceDependency,
+        library: LibraryDependency,
+    ) -> WorkflowCreatedResponse:
+        workflow, version = await asyncio.to_thread(
+            service.import_historical_workflow_copy,
+            run_id,
+            import_request_id=request.import_request_id,
+            name=request.name,
+            description=request.description,
+            note=request.note,
+            library=library,
+        )
+        return WorkflowCreatedResponse(
+            workflow=WorkflowResponse.from_record(workflow),
+            version=WorkflowVersionResponse.from_record(version),
+        )
+
+    @app.post(
+        "/api/runs/{run_id}/batch-reconstruction/workflow-profile-version/import-copy",
+        response_model=WorkflowProfileCreatedResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_historical_workflow_profile_copy(
+        run_id: str,
+        request: HistoricalProfileImportCopyRequest,
+        service: ServiceDependency,
+        library: LibraryDependency,
+    ) -> WorkflowProfileCreatedResponse:
+        profile, version = await asyncio.to_thread(
+            service.import_historical_workflow_profile_copy,
+            run_id,
+            import_request_id=request.import_request_id,
+            name=request.name,
+            description=request.description,
+            note=request.note,
+            workflow_version_id=request.workflow_version_id,
+            library=library,
+        )
+        return WorkflowProfileCreatedResponse(
+            workflow_profile=WorkflowProfileResponse.from_record(profile),
+            version=WorkflowProfileVersionResponse.from_record(version),
+        )
+
     @app.post(
         "/api/runs/{run_id}/execute",
         response_model=ExecutionStartedResponse,
@@ -916,6 +1011,12 @@ def create_app(
     ) -> ExecutionStartedResponse:
         run = await service.start_execution(run_id)
         return ExecutionStartedResponse(run_id=run.run_id, status="accepted")
+
+    @app.get("/api/executions/active", response_model=ActiveExecutionResponse)
+    async def get_active_execution(
+        service: ServiceDependency,
+    ) -> ActiveExecutionResponse:
+        return ActiveExecutionResponse(run_id=await service.get_active_execution_run_id())
 
     @app.get("/api/runs/{run_id}/execution", response_model=ExecutionResponse)
     async def get_execution(
@@ -1162,6 +1263,26 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def project_import_failed(_request: Request, error: Exception) -> JSONResponse:
         return _error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "project_import_failed", str(error)
+        )
+
+    @app.exception_handler(HistoricalResourceImportConflictError)
+    async def historical_resource_import_conflict(
+        _request: Request, error: HistoricalResourceImportConflictError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "historical_resource_import_conflict",
+            str(error),
+        )
+
+    @app.exception_handler(HistoricalResourceImportError)
+    async def invalid_historical_resource_import(
+        _request: Request, error: HistoricalResourceImportError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_historical_resource_import",
+            str(error),
         )
 
     @app.exception_handler(SavedBatchDiscoveryError)

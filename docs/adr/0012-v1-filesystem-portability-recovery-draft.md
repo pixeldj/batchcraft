@@ -74,8 +74,24 @@ Historical detail uses strict read-only loaders that tolerate unavailable output
 recorded metadata. Execution mutations and Result download retain strict storage and byte validation.
 Applied SQLite migration bytes are now preserved and BC-020 adds forward migration
 `0002_historical_projections.sql`; temporary test databases and versioned browser recovery remain
-disposable. BC-021 still owns editable `Load Run as Batch`, detached-resource workflows, and the full
-cross-instance release gate. This ADR remains Proposed.
+disposable. BC-021 subsequently implemented editable `Load Run as Batch` and detached-resource workflows;
+the full cross-instance release gate remains separate. This ADR remains Proposed.
+
+### BC-021 implementation progress
+
+Completed BC-021 reconstructs a validated historical Batch snapshot as an unsaved editable draft. The
+backend classifies frozen Prompt, Workflow, and Workflow Profile identities as linked, detached, or conflicting
+against current SQLite identity, content, archive state, Project ID, and filesystem ownership without
+mutating either authority. Explicit Run-scoped import operations
+reload frozen content server-side and create new mutable library copies. The frontend requires a fresh
+Preview, preserves detached snapshots and explicit import resolutions through working-session recovery v4,
+uses idempotent import operation identities, and uses frozen concrete seeds
+for the first unedited Preview of historical Random intent.
+
+Focused automated coverage proves a clean database can import a copied Project, reconstruct and Preview
+the original plan, explicitly import detached resources, create a new Run, and leave every original Run
+file hash unchanged. The complete realistic fixture, repeat-fresh-instance proof, and live ComfyUI smoke
+test remain release-level checks. This ADR therefore remains Proposed.
 
 ## Decision
 

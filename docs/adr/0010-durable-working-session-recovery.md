@@ -64,3 +64,27 @@ closed to normal defaults. Last writer wins; multi-tab coordination is deferred.
 
 Project-wide Run history, backend executor restart recovery, create-Run publication reconciliation,
 cross-device synchronization, multi-user sessions, and multi-tab conflict handling remain separate work.
+
+## 2026-09-03 active-monitor recovery addendum
+
+Owner testing found that valid draft recovery could still lose the visible execution monitor when the
+browser Run pointer was absent or when startup Project/Batch reconciliation rejected it. The backend
+continued executing, but the frontend had no process-local discovery path. This contradicted the intended
+closed-tab outcome without changing filesystem execution authority.
+
+The current FastAPI process now exposes the one Run ID owned by its in-memory task registry. On startup,
+`pageshow`, and visible `visibilitychange`, the frontend reconciles that discovery with the persisted Run
+pointer deterministically: the backend-discovered active Run takes monitor precedence, while a different
+valid persisted Run remains a historical/session reference. Editable draft identity and observed Run
+identity are independent. Frozen Project/Batch matching controls only Batch-scoped gallery association;
+it does not erase or hide a recoverable Run.
+
+Run and execution state hydrate before and independently of Results. Only transient startup reads receive
+bounded retry, with abort and stale-response protection. A pointer is cleared only after definitive
+`run_not_found` or invalid immutable Run data. Temporary Project omission, network failure, identity
+mismatch, and a restarted backend reporting no active task retain the known pointer. A persisted running
+Run without local task ownership remains visible as control unavailable.
+
+This addendum supersedes the earlier statement that no backend API change was required. Active discovery
+is process-local task-registry visibility only. It is not durable scheduler state, remote ComfyUI
+authority, or backend executor restart recovery, all of which remain outside this decision.

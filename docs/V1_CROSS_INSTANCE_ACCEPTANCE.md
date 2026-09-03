@@ -7,9 +7,11 @@ historical experiment archive and that a modern historical Run can become a new 
 the original SQLite database or browser state.
 
 BC-019 and BC-020 provide the durable records, owned-v1 import, rebuildable historical projections, and
-read-only Project history needed for the first half of this scenario. BC-021 remains Planned and must add
-editable reconstruction, detached-resource workflows, and the final clean-instance/live execution proof.
-The complete scenario is still an acceptance contract, not a passed release gate.
+read-only Project history needed for the first half of this scenario. BC-021 is complete: editable
+reconstruction, conflict-aware detached resources, explicit historical import, and focused automated
+clean-instance Preview/new-Run proof are implemented. The complete realistic fixture,
+repeat-fresh-instance, and live execution proof remain release-level checks. This is still an acceptance
+contract, not a passed release gate.
 
 ## Current BC-020 evidence
 
@@ -212,6 +214,8 @@ Any required use of Instance A's SQLite database, browser state, mutable librari
 Run IDs fails the gate.
 
 Current gate status: BC-020 import, reindex, inspection, idempotency, and degraded-content coverage is
-implemented. BC-021 reconstruction, relinking, complete automated cross-instance coverage, repeat-fresh
-Instance B proof, and the live ComfyUI smoke test are incomplete. No final manual cross-instance
-acceptance is claimed.
+implemented. Completed BC-021 covers frozen-intent reconstruction, exact/missing/conflicting resource
+classification, explicit server-sourced historical import, exact pre-edit Preview, new Run creation, and
+original-Run hash preservation in focused automated tests. Complete realistic-fixture coverage,
+repeat-fresh Instance B proof, and the live ComfyUI smoke test remain incomplete. No final manual
+cross-instance acceptance is claimed.

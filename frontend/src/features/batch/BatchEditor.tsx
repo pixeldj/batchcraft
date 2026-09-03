@@ -25,6 +25,7 @@ import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
 interface Props {
   form: BatchFormState;
+  historicalSourceRunId: string | null;
   api: BatchcraftApi;
   selectedProjectId: string | null;
   projectVerified: boolean;
@@ -39,6 +40,7 @@ interface Props {
   error: string | null;
   previewing: boolean;
   onChange(form: BatchFormState): void;
+  onHistoricalResourceChange(form: BatchFormState): void;
   onPromptMetadataChange(prompts: BatchFormState["prompts"]): void;
   onWorkflowMetadataChange(form: BatchFormState): void;
   onProjectReconnect(project: ProjectResponse): void;
@@ -56,6 +58,7 @@ interface Props {
 export function BatchEditor({
   api,
   form,
+  historicalSourceRunId,
   selectedProjectId,
   projectVerified,
   projectSwitchingBlocked,
@@ -69,6 +72,7 @@ export function BatchEditor({
   error,
   previewing,
   onChange,
+  onHistoricalResourceChange,
   onPromptMetadataChange,
   onWorkflowMetadataChange,
   onProjectReconnect,
@@ -201,7 +205,9 @@ export function BatchEditor({
         api={api}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
         form={form}
+        sourceRunId={historicalSourceRunId}
         onChange={onChange}
+        onHistoricalImport={onHistoricalResourceChange}
         onMetadataChange={onWorkflowMetadataChange}
       />
 
@@ -209,7 +215,25 @@ export function BatchEditor({
         api={api}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
         prompts={form.prompts}
-        onChange={(prompts) => update("prompts", prompts)}
+        historicalImportCopyResolutions={form.historicalImportCopyResolutions}
+        sourceRunId={historicalSourceRunId}
+        onChange={(prompts) => onChange({
+          ...form,
+          prompts,
+          historicalImportCopyResolutions: {
+            ...form.historicalImportCopyResolutions,
+            promptVersions: form.historicalImportCopyResolutions.promptVersions.filter(
+              (resolution) => prompts.some(
+                (prompt) => prompt.versionId === resolution.copiedVersionId,
+              ),
+            ),
+          },
+        })}
+        onHistoricalImport={(prompts, historicalImportCopyResolutions) => onHistoricalResourceChange({
+          ...form,
+          prompts,
+          historicalImportCopyResolutions,
+        })}
         onMetadataChange={onPromptMetadataChange}
       />
 

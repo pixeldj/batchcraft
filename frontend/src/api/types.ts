@@ -123,6 +123,37 @@ export interface EditableBatchSnapshot {
   };
 }
 
+export type BatchReconstructionResourceStatus = "linked" | "detached" | "conflict";
+
+export interface BatchReconstructionResource {
+  historical_version_id: string | null;
+  status: BatchReconstructionResourceStatus;
+  reason: string | null;
+  linked_version_id: string | null;
+  linked_resource_id: string | null;
+}
+
+export interface BatchReconstructionResponse {
+  run_id: string;
+  batch_snapshot: EditableBatchSnapshot;
+  resources: {
+    prompt_versions: Array<BatchReconstructionResource & { position: number }>;
+    workflow_version: BatchReconstructionResource;
+    workflow_profile_version: BatchReconstructionResource;
+  };
+}
+
+export interface HistoricalResourceImportRequest {
+  import_request_id: string;
+  name: string;
+  description: string | null;
+  note: string | null;
+}
+
+export interface HistoricalWorkflowProfileImportRequest extends HistoricalResourceImportRequest {
+  workflow_version_id: string;
+}
+
 export interface ComfyUIStatusResponse {
   reachable: boolean;
   version: string | null;
@@ -589,6 +620,10 @@ export interface RunCreatedResponse {
   batch_name: string;
   job_count: number;
   durable_status: string;
+}
+
+export interface ActiveExecutionResponse {
+  run_id: string | null;
 }
 
 export interface RunResponse extends RunCreatedResponse {

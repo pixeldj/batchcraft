@@ -329,7 +329,344 @@ describe("WorkflowLibraryEditor", () => {
     expect(screen.getByLabelText("Workflow Profile JSON")).toHaveValue('{ "prompt": "local" }');
     expect(metadataChange).not.toHaveBeenCalled();
   });
+
+  it("does not relink an authoritative historical ownership conflict by matching content", async () => {
+    const storedWorkflow = workflowVersion();
+    const storedProfile = profileVersion();
+    const form = linkedForm(storedWorkflow, storedProfile);
+    form.workflowLibraryProjectId = null;
+    form.historicalWorkflowVersionId = storedWorkflow.id;
+    form.historicalWorkflowResourceStatus = "conflict";
+    form.historicalWorkflowResourceReason = "WorkflowVersion ownership conflict.";
+    form.historicalProfileVersionId = storedProfile.id;
+    form.historicalProfileResourceStatus = "linked";
+    const metadataChange = vi.fn();
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", storedWorkflow)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [storedWorkflow] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", storedProfile)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [storedProfile] })),
+      getWorkflowVersion: vi.fn(async () => storedWorkflow),
+      getWorkflowProfileVersion: vi.fn(async () => storedProfile),
+    });
+
+    render(<WorkflowLibraryEditor api={api} projectId="project-a" form={form} sourceRunId="run-1" onChange={() => undefined} onMetadataChange={metadataChange} />);
+
+    expect(await screen.findByText("Integrity conflict")).toBeInTheDocument();
+    expect(api.getWorkflowVersion).not.toHaveBeenCalled();
+    expect(api.getWorkflowProfileVersion).not.toHaveBeenCalled();
+    expect(metadataChange).not.toHaveBeenCalled();
+  });
+
+  it("rechecks integrity when frozen JSON changes under the same version IDs", async () => {
+    const storedWorkflow = workflowVersion();
+    const storedProfile = profileVersion();
+    const original = linkedForm(storedWorkflow, storedProfile);
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", storedWorkflow)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [storedWorkflow] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", storedProfile)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [storedProfile] })),
+      getWorkflowVersion: vi.fn(async () => storedWorkflow),
+      getWorkflowProfileVersion: vi.fn(async () => storedProfile),
+    });
+    const view = render(<WorkflowLibraryEditor api={api} projectId="project-a" form={original} onChange={() => undefined} onMetadataChange={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    expect(await screen.findByText("Library linked")).toBeInTheDocument();
+
+    view.rerender(<WorkflowLibraryEditor api={api} projectId="project-a" form={{ ...original, workflowJson: '{"node":"changed"}' }} onChange={() => undefined} onMetadataChange={() => undefined} />);
+
+    expect(await screen.findByText("Integrity conflict")).toBeInTheDocument();
+    expect(api.getWorkflowVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps missing historical rows detached without clearing IDs or checking forever", async () => {
+    const storedWorkflow = workflowVersion();
+    const storedProfile = profileVersion();
+    const form = linkedForm(storedWorkflow, storedProfile);
+    const metadataChange = vi.fn();
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [] })),
+      getWorkflowVersion: vi.fn(async () => storedWorkflow),
+      getWorkflowProfileVersion: vi.fn(async () => storedProfile),
+    });
+    render(<WorkflowLibraryEditor api={api} projectId="project-a" form={form} onChange={vi.fn()} onMetadataChange={metadataChange} />);
+
+    expect(await screen.findByText("Detached snapshots")).toBeInTheDocument();
+    expect(screen.queryByText("Checking library linkage")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Workflow JSON")).toHaveValue(JSON.stringify(storedWorkflow.workflow));
+    expect(screen.getByLabelText("Workflow Profile JSON")).toHaveValue(JSON.stringify(storedProfile.profile));
+    expect(metadataChange).not.toHaveBeenCalled();
+  });
+
+  it("retries only the Profile after a partial historical snapshot import", async () => {
+    const form = linkedForm(workflowVersion(), profileVersion());
+    form.workflowLibraryProjectId = null;
+    form.imageBindings = [{ slot_key: "style", values: [null, "asset-a"] }];
+    form.parameterBindings = [{
+      parameterKey: "steps",
+      valueType: "integer",
+      mode: "range",
+      alternatives: [{ kind: "base" }],
+      range: { start: "1.0", end: "3.0", step: "1.0", includeBase: true },
+    }];
+    form.linkedParameterSets = [];
+    const createdWorkflowVersion = workflowVersion({
+      id: "imported-workflow-v1",
+      workflow_id: "imported-workflow",
+      content_sha256: "imported-workflow-sha",
+    });
+    const createdWorkflow = workflow("imported-workflow", "Portrait", createdWorkflowVersion);
+    const workflowResponse = {
+      workflow: {
+        id: createdWorkflow.id,
+        project_id: createdWorkflow.project_id,
+        name: createdWorkflow.name,
+        description: createdWorkflow.description,
+        created_at: createdWorkflow.created_at,
+        updated_at: createdWorkflow.updated_at,
+        archived_at: createdWorkflow.archived_at,
+      },
+      version: createdWorkflowVersion,
+    };
+    const createdProfileVersion = profileVersion({
+      id: "imported-profile-v1",
+      workflow_profile_id: "imported-profile",
+      workflow_id: "imported-workflow",
+      workflow_version_id: createdWorkflowVersion.id,
+      content_sha256: "imported-profile-sha",
+    });
+    const createdProfile = workflowProfile("imported-profile", "Mapping", createdProfileVersion);
+    const profileResponse = {
+      workflow_profile: {
+        id: createdProfile.id,
+        workflow_id: createdProfile.workflow_id,
+        project_id: createdProfile.project_id,
+        name: createdProfile.name,
+        description: createdProfile.description,
+        created_at: createdProfile.created_at,
+        updated_at: createdProfile.updated_at,
+        archived_at: createdProfile.archived_at,
+      },
+      version: createdProfileVersion,
+    };
+    const importProfile = vi.fn<BatchcraftApi["importRunWorkflowProfileVersion"]>()
+      .mockRejectedValueOnce(new Error("Profile write failed"))
+      .mockResolvedValueOnce(profileResponse);
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [] })),
+      importRunWorkflowVersion: vi.fn(async () => workflowResponse),
+      importRunWorkflowProfileVersion: importProfile,
+    });
+    const onHistoricalImport = vi.fn();
+    render(
+      <WorkflowLibraryEditor
+        api={api}
+        projectId="project-a"
+        form={form}
+        sourceRunId="run-1"
+        onChange={vi.fn()}
+        onHistoricalImport={onHistoricalImport}
+        onMetadataChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Import historical snapshots" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The Workflow snapshot was imported, but the Profile snapshot was not.",
+    );
+    expect(onHistoricalImport).toHaveBeenCalledOnce();
+    expect(onHistoricalImport.mock.calls[0][0]).toMatchObject({
+      historicalImportCopyResolutions: {
+        workflowVersion: {
+          historicalVersionId: "workflow-v1",
+          copiedVersionId: "imported-workflow-v1",
+        },
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry Profile snapshot import" }));
+
+    await waitFor(() => expect(onHistoricalImport).toHaveBeenCalledTimes(2));
+    expect(api.importRunWorkflowVersion).toHaveBeenCalledOnce();
+    expect(api.importRunWorkflowVersion).toHaveBeenCalledWith("run-1", {
+      import_request_id: "workflow:workflow-v1",
+      name: "Portrait",
+      description: null,
+      note: null,
+    });
+    expect(importProfile).toHaveBeenCalledTimes(2);
+    expect(importProfile).toHaveBeenLastCalledWith("run-1", {
+      import_request_id: "workflow-profile:profile-v1",
+      name: "Mapping",
+      description: null,
+      note: null,
+      workflow_version_id: "imported-workflow-v1",
+    });
+    const updated = onHistoricalImport.mock.calls[1][0] as BatchFormState;
+    expect(updated).toMatchObject({
+      workflowLibraryProjectId: "project-a",
+      workflowId: "imported-workflow",
+      workflowVersionId: "imported-workflow-v1",
+      workflowContentSha256: "imported-workflow-sha",
+      workflowProfileId: "imported-profile",
+      workflowProfileVersionId: "imported-profile-v1",
+      workflowProfileWorkflowVersionId: "imported-workflow-v1",
+      workflowProfileContentSha256: "imported-profile-sha",
+      imageBindings: form.imageBindings,
+      parameterBindings: form.parameterBindings,
+      linkedParameterSets: form.linkedParameterSets,
+    });
+    expect(JSON.parse(updated.workflowJson)).toEqual(createdWorkflowVersion.workflow);
+    expect(JSON.parse(updated.workflowProfileJson)).toEqual(createdProfileVersion.profile);
+  });
+
+  it("resumes a Profile import after remount without copying the Workflow again", async () => {
+    const form = detachedHistoricalForm();
+    const workflowResponse = importedWorkflowResponse();
+    const copiedWorkflow: ProjectWorkflow = {
+      ...workflowResponse.workflow,
+      latest_active_version: workflowResponse.version,
+    };
+    const importProfile = vi.fn<BatchcraftApi["importRunWorkflowProfileVersion"]>()
+      .mockRejectedValueOnce(new Error("Profile write failed"))
+      .mockResolvedValueOnce(importedProfileResponse());
+    let workflowAvailable = false;
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: workflowAvailable ? [copiedWorkflow] : [] })),
+      getWorkflowVersion: vi.fn(async () => workflowResponse.version),
+      importRunWorkflowVersion: vi.fn(async () => {
+        workflowAvailable = true;
+        return workflowResponse;
+      }),
+      importRunWorkflowProfileVersion: importProfile,
+    });
+    let progress = form;
+    const first = render(
+      <WorkflowLibraryEditor
+        api={api}
+        projectId="project-a"
+        form={form}
+        sourceRunId="run-1"
+        onChange={vi.fn()}
+        onHistoricalImport={(updated) => { progress = updated; }}
+        onMetadataChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Import historical snapshots" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Profile snapshot was not");
+    first.unmount();
+
+    const onHistoricalImport = vi.fn();
+    render(
+      <WorkflowLibraryEditor
+        api={api}
+        projectId="project-a"
+        form={progress}
+        sourceRunId="run-1"
+        onChange={vi.fn()}
+        onHistoricalImport={onHistoricalImport}
+        onMetadataChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Profile snapshot import" }));
+
+    await waitFor(() => expect(onHistoricalImport).toHaveBeenCalledOnce());
+    expect(api.importRunWorkflowVersion).toHaveBeenCalledOnce();
+    expect(importProfile).toHaveBeenCalledTimes(2);
+    expect(onHistoricalImport.mock.calls[0][0]).toMatchObject({
+      workflowVersionId: "imported-workflow-v1",
+      workflowProfileVersionId: "imported-profile-v1",
+      historicalImportCopyResolutions: {
+        workflowVersion: {
+          historicalVersionId: "workflow-v1",
+          copiedVersionId: "imported-workflow-v1",
+        },
+        workflowProfileVersion: {
+          historicalVersionId: "profile-v1",
+          copiedVersionId: "imported-profile-v1",
+        },
+      },
+    });
+  });
+
+  it("ignores a historical import completion after the ProfileVersion changes", async () => {
+    const pending = deferred<Awaited<ReturnType<BatchcraftApi["importRunWorkflowProfileVersion"]>>>();
+    const form = detachedHistoricalForm();
+    const api = makeApi({
+      importRunWorkflowVersion: vi.fn(async () => importedWorkflowResponse()),
+      importRunWorkflowProfileVersion: vi.fn(() => pending.promise),
+    });
+    const onHistoricalImport = vi.fn();
+    const view = render(<WorkflowLibraryEditor api={api} projectId="project-a" form={form} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Import historical snapshots" }));
+    await waitFor(() => expect(api.importRunWorkflowProfileVersion).toHaveBeenCalled());
+
+    view.rerender(<WorkflowLibraryEditor api={api} projectId="project-a" form={{ ...form, workflowProfileVersionId: "profile-v2" }} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />);
+    await act(async () => pending.resolve(importedProfileResponse()));
+
+    expect(onHistoricalImport).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a historical import completion after same-version snapshot content reloads", async () => {
+    const pending = deferred<Awaited<ReturnType<BatchcraftApi["importRunWorkflowProfileVersion"]>>>();
+    const form = detachedHistoricalForm();
+    const api = makeApi({
+      importRunWorkflowVersion: vi.fn(async () => importedWorkflowResponse()),
+      importRunWorkflowProfileVersion: vi.fn(() => pending.promise),
+    });
+    const onHistoricalImport = vi.fn();
+    const view = render(<WorkflowLibraryEditor api={api} projectId="project-a" form={form} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Import historical snapshots" }));
+    await waitFor(() => expect(api.importRunWorkflowProfileVersion).toHaveBeenCalled());
+
+    view.rerender(<WorkflowLibraryEditor api={api} projectId="project-a" form={{ ...form, workflowJson: '{"node":"reloaded"}' }} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />);
+    await act(async () => pending.resolve(importedProfileResponse()));
+
+    expect(onHistoricalImport).toHaveBeenCalledOnce();
+  });
 });
+
+function detachedHistoricalForm(): BatchFormState {
+  const form = linkedForm(workflowVersion(), profileVersion());
+  return {
+    ...form,
+    workflowLibraryProjectId: null,
+    historicalWorkflowVersionId: form.workflowVersionId,
+    historicalWorkflowResourceStatus: "detached",
+    historicalProfileVersionId: form.workflowProfileVersionId,
+    historicalProfileResourceStatus: "detached",
+  };
+}
+
+function importedWorkflowResponse(): CreateWorkflowResponse {
+  const version = workflowVersion({ id: "imported-workflow-v1", workflow_id: "imported-workflow" });
+  return {
+    workflow: {
+      id: "imported-workflow", project_id: "project-a", name: "Workflow",
+      description: null, created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+    },
+    version,
+  };
+}
+
+function importedProfileResponse(): Awaited<ReturnType<BatchcraftApi["importRunWorkflowProfileVersion"]>> {
+  const version = profileVersion({
+    id: "imported-profile-v1",
+    workflow_profile_id: "imported-profile",
+    workflow_id: "imported-workflow",
+    workflow_version_id: "imported-workflow-v1",
+  });
+  return {
+    workflow_profile: {
+      id: "imported-profile", workflow_id: "imported-workflow", project_id: "project-a",
+      name: "Profile", description: null, created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+    },
+    version,
+  };
+}
 
 function renderEditor(api: BatchcraftApi, projectId: string) {
   return render(editor(api, projectId));

@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import type { BatchcraftApi } from "../../api/client";
+import { ApiError, type BatchcraftApi } from "../../api/client";
 import type {
   AdoptableProject,
   ProjectAdoptRequest,
@@ -80,6 +80,8 @@ export function ProjectSelector({
   const listTag = useRef(0);
   const adoptTag = useRef(0);
   const mutationTag = useRef(0);
+  const automaticListRetries = useRef(0);
+  const automaticListTimer = useRef<number | null>(null);
   const trigger = useRef<HTMLButtonElement | HTMLSelectElement | null>(null);
   const contextVersion = useRef(0);
   const previousContext = useRef("");
@@ -113,7 +115,14 @@ export function ProjectSelector({
           )
           : undefined;
         if (match) {
+          automaticListRetries.current = 0;
           if (!projectVerifiedRef.current) notifyReconnect(match);
+        } else if (candidateId && candidateKey && automaticListRetries.current < 2) {
+          automaticListRetries.current += 1;
+          automaticListTimer.current = window.setTimeout(
+            () => setListRetry((current) => current + 1),
+            50 * automaticListRetries.current,
+          );
         } else {
           notifyUnresolved();
         }
@@ -121,10 +130,23 @@ export function ProjectSelector({
       (caught: unknown) => {
         if (tag !== listTag.current || version !== contextVersion.current || isAbortError(caught)) return;
         setListState({ loading: false, error: errorMessage(caught) });
+        if (isTransientListError(caught) && automaticListRetries.current < 2) {
+          automaticListRetries.current += 1;
+          automaticListTimer.current = window.setTimeout(
+            () => setListRetry((current) => current + 1),
+            50 * automaticListRetries.current,
+          );
+        }
       },
     );
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (automaticListTimer.current !== null) {
+        window.clearTimeout(automaticListTimer.current);
+        automaticListTimer.current = null;
+      }
+    };
   }, [api, candidateId, candidateKey, listRetry]);
 
   useEffect(() => {
@@ -526,4 +548,10 @@ export function ProjectSelector({
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isTransientListError(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.code === "network_error" || (
+    error.status !== null && error.status >= 500
+  );
 }

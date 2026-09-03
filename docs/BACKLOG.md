@@ -8,7 +8,7 @@ _Last consolidated: 2026-09-01._
 
 ## Current focus
 
-1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Done)
+1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, In Progress)
 2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, Done)
 3. [BC-003C: Interrupt owned ComfyUI Job](#bc-003c-interrupt-owned-comfyui-job) (P2, Planned)
 4. [BC-002: Durable queued Runs](#bc-002-durable-queued-runs) (P2, Planned)
@@ -124,7 +124,7 @@ Every entry has these fields:
 | --- | --- |
 | ID | BC-003A |
 | Priority | P1 |
-| Status | Done |
+| Status | In Progress |
 | Area | Execution / Cancellation |
 | Summary | Let a user request that a running Run stop after its currently submitted Job reaches a proven terminal state. |
 | Dependencies / Notes | Follow ADR 0003: SQLite owns durable cancellation intent and `execution.json` owns the execution outcome. This operation must not clear unrelated ComfyUI queue work. It may introduce the minimum cancellation-intent storage needed without implementing the complete durable scheduler. |
@@ -135,6 +135,11 @@ confirmed Stop action, visible request/stopping state, ambiguous-response reconc
 closed-tab recovery, and preserved Result review. Automated coverage and owner acceptance are complete.
 If the current Job is the final Job and succeeds, the honest Run outcome is `succeeded` because no
 unsubmitted Job remains to cancel.
+
+Correctness follow-up: owner testing found that closing and reopening the tab could restore the editable
+draft without restoring the active Run monitor. Process-local active-Run discovery and independent
+draft/monitor reconciliation are implemented with automated coverage. This item remains In Progress until
+the closed-tab owner retest confirms active progress reappears without resubmission.
 
 Why this matters:
 
@@ -913,7 +918,7 @@ not a claim that BC-021's manual cross-instance acceptance has passed.
 | --- | --- |
 | ID | BC-021 |
 | Priority | P1 |
-| Status | Planned |
+| Status | Done |
 | Area | Runs / Recovery / Historical reuse |
 | Summary | Reconstruct editable Batch intent from a modern historical Run with detached resources, then pass the clean-instance portability release gate. |
 | Dependencies / Notes | V1-004. Depends on BC-020. Implements the portability-specific `Load Run as Batch` part of BC-006; `Recreate Result` and `Exact Rerun` remain in BC-006. Follow `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. |
@@ -928,6 +933,21 @@ Acceptance requires:
 - automated cross-instance import, inspection, reconstruction, relinking, and degraded-content tests;
 - one separate live ComfyUI smoke test proving successful execution of the reconstructed Batch;
 - unchanged hashes for every original historical Run file.
+
+Implementation progress: historical Runs now load as unsaved editable drafts through a read-only,
+conflict-aware reconstruction endpoint. Exact identities relink, absent identities remain detached, and
+same-ID content mismatches remain conflicts. Explicit Run-scoped imports create new Prompt, Workflow, and
+Profile history from server-loaded frozen content. Deterministic import request identities make retries
+idempotent, while recovery v4 preserves explicit per-draft historical import resolutions and resumes a
+Workflow import whose dependent Profile import failed. Imported resources preserve frozen display names;
+genuine uniqueness collisions use deterministic `(imported)` suffixes. Focused clean-instance coverage
+proves exact pre-edit Preview, new Run creation, and unchanged original Run hashes. Final review coverage
+also protects stale frontend reconstruction/import requests, cold Random-seed recovery, Project filesystem
+ownership, archived resources, and dependent Workflow/Profile conflicts. Verification passes with 611
+backend tests, Ruff check/format, mypy, and package build, plus 352 frontend tests, typecheck, lint, and
+production build. The complete realistic fixture, repeat-fresh-instance proof, and live ComfyUI gate remain
+as release-level validation under `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`, not BC-021 implementation
+blockers.
 
 ## Maintenance rules
 

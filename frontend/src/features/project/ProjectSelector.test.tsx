@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BatchcraftApi } from "../../api/client";
+import { ApiError, type BatchcraftApi } from "../../api/client";
 import type {
   AdoptableProjectsResponse,
   ProjectResponse,
@@ -52,9 +52,8 @@ describe("ProjectSelector active Projects", () => {
     await act(async () => stale.resolve({ projects: [project("old", "old-key", "Stale")] }));
     expect(screen.queryByText("Stale")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(listProjects).toHaveBeenCalledTimes(3));
     expect(await screen.findByText(/Select an active Project/)).toBeInTheDocument();
-    expect(listProjects).toHaveBeenCalledTimes(3);
   });
 
   it("marks a blank or mismatched candidate unresolved without matching its name", async () => {
@@ -68,8 +67,21 @@ describe("ProjectSelector active Projects", () => {
 
     expect(await screen.findByText(/does not exactly match/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Active Project" })).toHaveValue("");
-    expect(callbacks.onUnresolved).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(callbacks.onUnresolved).toHaveBeenCalledTimes(1));
     expect(callbacks.onReconnect).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a definitive Project list failure", async () => {
+    const listProjects = vi.fn<BatchcraftApi["listProjects"]>().mockRejectedValue(
+      new ApiError("Request was rejected", "invalid_request", 422),
+    );
+    const api = makeApi({ listProjects });
+
+    renderSelector(api, callbackProps());
+
+    expect(await screen.findByText("Could not load Projects: Request was rejected")).toBeInTheDocument();
+    await act(async () => new Promise((resolve) => window.setTimeout(resolve, 200)));
+    expect(listProjects).toHaveBeenCalledOnce();
   });
 });
 

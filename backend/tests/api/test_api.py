@@ -1834,6 +1834,17 @@ def _wait_for_status(http: TestClient, run_id: str, expected: str) -> ExecutionR
     raise AssertionError(f"Run {run_id} did not reach {expected}")
 
 
+def _wait_for_no_active_execution(http: TestClient) -> None:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        response = http.get("/api/executions/active")
+        assert response.status_code == 200
+        if response.json() == {"run_id": None}:
+            return
+        time.sleep(0.01)
+    raise AssertionError("The completed execution task was not released")
+
+
 def test_health_and_comfyui_status_reachable_and_client_lifecycle(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     client = FakeComfyUIClient()
@@ -3029,6 +3040,7 @@ def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path)
     client = FakeComfyUIClient(artifact_count=2)
 
     with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        assert http.get("/api/executions/active").json() == {"run_id": None}
         run_id = _create_run(http, _batch_request((asset_id,)))
         run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
         immutable_before = {
@@ -3040,6 +3052,7 @@ def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path)
         assert started.status_code == 202
         assert started.json() == {"run_id": run_id, "status": "accepted"}
         execution = _wait_for_status(http, run_id, "succeeded")
+        _wait_for_no_active_execution(http)
         results = http.get(f"/api/runs/{run_id}/results")
         first_file = http.get(f"/api/runs/{run_id}/results/1/1")
         missing = http.get(f"/api/runs/{run_id}/results/1/99")
@@ -3179,6 +3192,7 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         first = http.post(f"/api/runs/{run_id}/execute")
         assert first.status_code == 202
         assert started.wait(timeout=1)
+        active = http.get("/api/executions/active")
 
         second = http.post(f"/api/runs/{run_id}/execute")
         discard = http.post(f"/api/runs/{run_id}/discard")
@@ -3187,6 +3201,8 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
         execution = http.get(f"/api/runs/{run_id}/execution")
         run_response = http.get(f"/api/runs/{run_id}")
 
+        assert active.status_code == 200
+        assert active.json() == {"run_id": run_id}
         assert second.status_code == 409
         assert second.json()["error"]["code"] == "execution_already_active"
         assert discard.status_code == 409
@@ -3205,9 +3221,12 @@ def test_duplicate_active_execution_is_rejected_and_running_state_is_visible(
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
     ) as restarted_http:
+        restored_active = restarted_http.get("/api/executions/active")
         restored_execution = restarted_http.get(f"/api/runs/{run_id}/execution")
         restored_run = restarted_http.get(f"/api/runs/{run_id}")
 
+    assert restored_active.status_code == 200
+    assert restored_active.json() == {"run_id": None}
     assert restored_execution.json()["status"] == "running"
     assert restored_execution.json()["execution_task_active"] is False
     assert restored_run.json()["execution"]["execution_task_active"] is False

@@ -105,7 +105,12 @@ POST /api/batches/{batch_id}/archive
 POST /api/batches/preview
 POST /api/runs
 GET  /api/runs/{run_id}
+GET  /api/runs/{run_id}/batch-reconstruction
+POST /api/runs/{run_id}/batch-reconstruction/prompt-versions/{position}/import-copy
+POST /api/runs/{run_id}/batch-reconstruction/workflow-version/import-copy
+POST /api/runs/{run_id}/batch-reconstruction/workflow-profile-version/import-copy
 POST /api/runs/{run_id}/execute
+GET  /api/executions/active
 POST /api/runs/{run_id}/discard
 POST /api/runs/{run_id}/cancel
 GET  /api/runs/{run_id}/execution
@@ -320,6 +325,37 @@ reported by diagnostic. `execution_available: false` and null execution fields e
 missing or invalid execution record. This endpoint needs neither browser `localStorage` Run IDs nor
 mutable Prompt, Workflow, Profile, or Saved Batch rows.
 
+`GET /api/runs/{run_id}/batch-reconstruction` loads the validated historical Run without changing its
+files or mutable libraries. It returns the frozen Batch snapshot plus ordered PromptVersion,
+WorkflowVersion, and ProfileVersion reconciliation states. A resource is `linked` only when its stable
+identity, immutable content, available parent/version metadata, active archive state, and Project ID and
+filesystem ownership match SQLite exactly. A missing or archived identity is `detached`; the same
+identity with different immutable content or ownership is `conflict`. A ProfileVersion cannot link unless
+its exact target WorkflowVersion also links, and a WorkflowVersion conflict propagates to the dependent
+ProfileVersion.
+
+Each reconciliation state identifies the frozen `historical_version_id`, nullable exact
+`linked_version_id`, and nullable linked logical `linked_resource_id`. These fields let the frontend
+retain authoritative conflicts and recover logical parent identity when an older snapshot omitted it.
+
+The three `/import-copy` operations are explicit mutable actions. They reload frozen content from the
+Run server-side and create new logical resources with version 1; request bodies never supply replacement
+Prompt, Workflow, or Profile JSON. Prompt import identifies the frozen ordered entry by zero-based
+`position`. Workflow Profile import requires a `workflow_version_id` that belongs to the Run Project and
+exactly matches the frozen Workflow. Empty historical Prompt text remains inspectable and previewable but
+cannot be imported into the current mutable Prompt library. Archived Workflow or WorkflowVersion targets
+cannot receive an imported historical ProfileVersion. New resources preserve the frozen display name
+when it is available. A genuine uniqueness collision uses `Name (imported)`, then
+`Name (imported 2)`, and so on; Profile name collisions are scoped to the target Workflow.
+
+Every import-copy request requires a nonempty `import_request_id`. The backend derives deterministic UUID
+identities from the Project ID, Run ID, resource kind, Prompt position when applicable, and request ID.
+Replaying the same request returns its existing logical resource and version 1 after checking frozen
+content, Project ownership, active identities, parent/version relations, and the Profile's WorkflowVersion
+target. Later logical name or description changes do not invalidate replay. Reusing a request ID whose
+derived identities are occupied by unrelated or incoherent rows returns HTTP 409 with
+`historical_resource_import_conflict`. A different request ID creates a deliberately distinct copy.
+
 Direct Run lookup scans the documented hierarchy:
 
 ```text
@@ -338,6 +374,11 @@ selected regular file's path, size, and SHA-256 before serving it.
 ## Execution Tasks
 
 `POST /api/runs/{run_id}/execute` returns `202 Accepted` after retaining an in-process `asyncio.Task`. The task invokes the existing queue-depth-1 executor. SQLite is authoritative only for durable cancellation request intent; all authoritative execution outcomes remain in `batchcraft.execution` v1 `execution.json`.
+
+`GET /api/executions/active` returns `{"run_id": "..."}` for the one live Run task owned by the
+current FastAPI process, or `{"run_id": null}`. This is process-local task-registry discovery for browser
+monitor reconnection. It is not persisted scheduler state, does not report remote ComfyUI activity, and
+does not provide executor restart recovery.
 
 `POST /api/runs/{run_id}/discard` durably marks a Run that has never started as `cancelled` and returns the existing execution response shape with `200 OK`. The Run directory and frozen provenance remain available through Run lookup and Run Plan inspection. Discard records `completed_at`, leaves `started_at`, `current_job_ordinal`, and `error` null, preserves every Job as pristine `pending`, and records the stable Run diagnostic `discarded_before_start`. Repeated discard is idempotent.
 
@@ -386,11 +427,18 @@ about whether a previously submitted remote ComfyUI Job is still running.
 
 An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the earlier Run.
 
-A refreshed browser may reconnect to a Run already executing in the same backend process. It reads
-the existing state and resumes polling without calling the execution-start endpoint. If persisted state
-is `running` but `execution_task_active` is false, the browser stops polling, reports that local control
-is unavailable, and permits another immutable Run without rewriting the earlier Run. This is UI
-reconnection and release of stale control, not backend execution recovery.
+A refreshed browser discovers the Run already executing in the same backend process, reconciles it with
+any persisted browser pointer, reads its Run and execution state, and resumes polling without calling the
+execution-start endpoint. Process-local discovery takes monitor precedence over a different persisted
+pointer, while draft identity controls only working-session gallery association. Result loading is
+independent and cannot delay execution-state hydration. Definitive missing or invalid Run data may clear
+a pointer; draft mismatch and transient Project or network failures retain it for bounded retry and later
+revalidation.
+
+If persisted state is `running` but `execution_task_active` is false, the browser retains and displays the
+known Run, stops polling, reports that local control is unavailable, and permits another immutable Run
+without rewriting the earlier Run. This is UI reconnection and release of stale control, not backend
+execution recovery.
 
 ## Results
 

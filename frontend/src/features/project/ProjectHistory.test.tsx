@@ -110,19 +110,52 @@ describe("ProjectHistory", () => {
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
     expect(startRun).not.toHaveBeenCalled();
   });
+
+  it("offers Load Run as Batch only for replayable Runs", async () => {
+    const loadRunAsBatch = vi.fn(async () => undefined);
+    const api = makeApi({
+      listProjectRuns: vi.fn(async () => ({
+        project_id: "project-1",
+        runs: [
+          historicalRun({ run_id: "replayable", run_name: "Replayable", replayable: true }),
+          historicalRun({ run_id: "degraded", run_name: "Degraded", replayable: false }),
+        ],
+        diagnostics: [],
+      })),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1", loadRunAsBatch);
+
+    const runs = await screen.findAllByRole("article");
+    fireEvent.click(within(runs[0]).getByRole("button", { name: "Open" }));
+    fireEvent.click(within(runs[1]).getByRole("button", { name: "Open" }));
+    fireEvent.click(within(runs[0]).getByRole("button", { name: "Load Run as Batch" }));
+
+    await waitFor(() => expect(loadRunAsBatch).toHaveBeenCalledWith("replayable"));
+    expect(within(runs[1]).queryByRole("button", { name: "Load Run as Batch" })).not.toBeInTheDocument();
+  });
 });
 
-function renderHistory(api: BatchcraftApi, projectId: string | null) {
-  return render(history(api, projectId));
+function renderHistory(
+  api: BatchcraftApi,
+  projectId: string | null,
+  loadRunAsBatch: (runId: string) => Promise<void> = async () => undefined,
+) {
+  return render(history(api, projectId, loadRunAsBatch));
 }
 
-function history(api: BatchcraftApi, projectId: string | null) {
+function history(
+  api: BatchcraftApi,
+  projectId: string | null,
+  loadRunAsBatch: (runId: string) => Promise<void> = async () => undefined,
+) {
   return (
     <ProjectHistory
       api={api}
       projectId={projectId}
       getCachedRun={() => null}
       loadRun={(runId) => api.getRun(runId)}
+      loadRunAsBatch={loadRunAsBatch}
     />
   );
 }

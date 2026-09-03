@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -44,6 +44,68 @@ export function useRunExecution(
   const stopRetryAvailable = useRef(false);
   const detachReconciliation = useRef(false);
   const detachRetryAvailable = useRef(false);
+  const resultsRequest = useRef<AbortController | null>(null);
+  const trailingResultsRefresh = useRef(false);
+  const executionFailures = useRef(0);
+
+  const requestResults = useEffectEvent(function loadResults(runId: string) {
+    if (resultsRequest.current) {
+      trailingResultsRefresh.current = true;
+      return;
+    }
+    const controller = new AbortController();
+    resultsRequest.current = controller;
+    void api.getResults(runId, controller.signal).then(
+      (nextResults) => {
+        if (controller.signal.aborted) return;
+        setResults(nextResults.results);
+        setResultsError(null);
+      },
+      (caught: unknown) => {
+        if (!isAbort(caught) && !controller.signal.aborted) setResultsError(errorMessage(caught));
+      },
+    ).finally(() => {
+      if (resultsRequest.current !== controller) return;
+      resultsRequest.current = null;
+      if (trailingResultsRefresh.current && !controller.signal.aborted) {
+        trailingResultsRefresh.current = false;
+        loadResults(runId);
+      }
+    });
+  });
+
+  useEffect(() => () => {
+    resultsRequest.current?.abort();
+    resultsRequest.current = null;
+    trailingResultsRefresh.current = false;
+  }, [run?.run_id]);
+
+  useEffect(() => {
+    if (!run || !initialExecution || initialExecution.run_id !== run.run_id) return;
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      setExecution(initialExecution);
+      setPolling(initialExecution.execution_task_active);
+    });
+    return () => { current = false; };
+  }, [initialExecution, run]);
+
+  useEffect(() => {
+    if (!run) return;
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      setResults(initialResults);
+      setResultsError(initialResultsError);
+    });
+    return () => { current = false; };
+  }, [initialResults, initialResultsError, run]);
+
+  useEffect(() => {
+    if (!run || !initialExecution) return;
+    requestResults(run.run_id);
+  }, [api, initialExecution, run]);
 
   useEffect(() => {
     onStatusChange(execution?.status ?? (run ? "created" : null));
@@ -78,6 +140,7 @@ export function useRunExecution(
             ? { ...nextExecution, cancellation: current.cancellation }
             : nextExecution
         ));
+        executionFailures.current = 0;
 
         if (stopReconciliation.current) {
           stopReconciliation.current = false;
@@ -132,17 +195,7 @@ export function useRunExecution(
           }
         }
 
-        try {
-          const nextResults = await api.getResults(run.run_id, controller.signal);
-          if (!disposed) {
-            setResults(nextResults.results);
-            setResultsError(null);
-          }
-        } catch (caught) {
-          if (!isAbort(caught) && !disposed) {
-            setResultsError(errorMessage(caught));
-          }
-        }
+        requestResults(run.run_id);
 
         if (
           TERMINAL_STATUSES.has(nextExecution.status) ||
@@ -154,6 +207,11 @@ export function useRunExecution(
       } catch (caught) {
         if (!isAbort(caught) && !disposed) {
           setError(errorMessage(caught));
+          executionFailures.current += 1;
+          if (!isTransient(caught) || executionFailures.current >= 3) {
+            setPolling(false);
+            return;
+          }
         }
       }
 
@@ -403,4 +461,10 @@ export function useRunExecution(
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isTransient(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.code === "network_error" || (
+    error.status !== null && error.status >= 500
+  );
 }

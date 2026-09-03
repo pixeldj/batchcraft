@@ -128,8 +128,8 @@ This layout is illustrative, not mandatory. Avoid creating abstractions before b
 The first application slice follows this split. `api/` owns HTTP DTOs, routes, status codes, CORS, configuration, and lifecycle. `application/` coordinates the existing production packages and provides narrow Run/asset discovery plus an in-process Run task registry. It contains no generic repository, command bus, event bus, or scheduler framework.
 
 Saved Batch definitions are durably persisted in SQLite with a monotonic `revision`. The browser also
-retains one strict working-session recovery v2 record in `localStorage`. That record contains editable
-Batch intent plus stable Project, Saved Batch, current Run, and ordered session Run identity pointers.
+retains one strict working-session recovery v4 record in `localStorage`. That record contains editable
+Batch intent plus stable Project, Saved Batch, historical source Run, current Run, and ordered session Run identity pointers.
 It contains no Preview, execution, Job, Result, or frozen Run response. Linked Workflow/Profile JSON is
 reconstructed by version ID; detached JSON remains editable draft state. Every cold load requires a new
 Preview. Stored Run identities rebuild a Batch-scoped working-session Results gallery from
@@ -142,6 +142,20 @@ provenance into `batchcraft.manifest` v1 with Batch snapshot v1. SQLite owns cur
 Workflow, and Workflow Profile libraries, mutable Saved Batches, durable Run cancellation intent, and
 non-authoritative historical projections. The Project filesystem remains authoritative for historical
 provenance, execution outcomes, Asset bytes, and Result bytes.
+
+Historical Batch reconstruction is read-only until the user explicitly imports detached resources. The
+backend classifies exact links and identity conflicts against SQLite while the frontend retains frozen
+content as an unsaved draft. Preview and Run creation continue through the normal compiler boundary; no
+historical execution bypass exists. Explicit copy imports use deterministic operation identities so an
+ambiguous retry returns the same mutable resource. Draft-only historical import resolutions survive
+browser recovery, including a Workflow copy completed before its dependent Profile copy.
+
+Editable draft identity, Batch-scoped gallery identity, and the observed Run monitor are independent.
+On startup and foreground re-entry, the frontend may discover the one process-local active Run from the
+backend task registry. That Run takes monitor precedence over a different browser pointer, but joins the
+working-session gallery only when its frozen Project and Batch identity match. Mismatch or transient
+Project/network failure never erases a recoverable pointer. Run and execution state hydrate before
+Results, and transient startup reads use bounded retry with stale-response cancellation.
 
 ## Application Queue
 
@@ -181,6 +195,11 @@ Execution API read models expose whether the current process still owns a live t
 is separate from durable Run status and remote ComfyUI state. A browser may use loss of local ownership
 to stop stale polling and release workspace controls, but must not rewrite the Run, claim remote
 cancellation, retry, or resubmit its Jobs.
+
+The task registry exposes its current active Run ID for browser monitor discovery. This query is
+process-local and disappears on backend restart; it is not a scheduler lease and makes no claim about a
+previously submitted ComfyUI Job. A known browser pointer remains inspectable after that loss of local
+ownership and is not erased merely because discovery returns no active task.
 
 Benefits:
 

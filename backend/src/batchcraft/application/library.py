@@ -40,6 +40,7 @@ from batchcraft.files import (
 )
 
 from .errors import (
+    HistoricalResourceImportError,
     ProjectAdoptionError,
     ProjectDiscoveryError,
     ProjectPublicationError,
@@ -154,6 +155,24 @@ class LibraryService:
 
     def get_project(self, project_id: str) -> ProjectRecord:
         return self._projects.get(project_id)
+
+    def require_project_ownership(self, project_id: str, filesystem_key: str) -> ProjectRecord:
+        project = self._projects.get(project_id)
+        if project.filesystem_key != filesystem_key:
+            raise HistoricalResourceImportError(
+                "Historical Run Project does not match the registered Project filesystem key"
+            )
+        try:
+            owner = self._owners.read(filesystem_key)
+        except ProjectOwnerError as error:
+            raise HistoricalResourceImportError(
+                "Historical Run Project filesystem ownership is missing or invalid"
+            ) from error
+        if owner.id != project.id:
+            raise HistoricalResourceImportError(
+                "Historical Run Project does not match filesystem ownership"
+            )
+        return project
 
     def update_project(
         self,
@@ -299,8 +318,18 @@ class LibraryService:
         description: str | None,
         text: str,
         note: str | None,
+        prompt_id: str | None = None,
+        version_id: str | None = None,
     ) -> tuple[PromptRecord, PromptVersionRecord]:
-        return self._prompts.create(project_id, name, text, description=description, note=note)
+        return self._prompts.create(
+            project_id,
+            name,
+            text,
+            description=description,
+            note=note,
+            prompt_id=prompt_id,
+            version_id=version_id,
+        )
 
     def list_prompts(
         self, project_id: str, *, include_archived: bool = False
@@ -355,9 +384,17 @@ class LibraryService:
         description: str | None,
         workflow: Mapping[str, object],
         note: str | None,
+        workflow_id: str | None = None,
+        version_id: str | None = None,
     ) -> tuple[WorkflowRecord, WorkflowVersionRecord]:
         return self._workflows.create(
-            project_id, name, workflow, description=description, note=note
+            project_id,
+            name,
+            workflow,
+            description=description,
+            note=note,
+            workflow_id=workflow_id,
+            version_id=version_id,
         )
 
     def list_workflows(
@@ -417,6 +454,8 @@ class LibraryService:
         image_inputs: Sequence[object],
         parameters: Sequence[object],
         note: str | None,
+        profile_id: str | None = None,
+        version_id: str | None = None,
     ) -> tuple[WorkflowProfileRecord, WorkflowProfileVersionRecord]:
         return self._workflow_profiles.create(
             workflow_id,
@@ -427,6 +466,8 @@ class LibraryService:
             parameters,
             description=description,
             note=note,
+            profile_id=profile_id,
+            version_id=version_id,
         )
 
     def list_workflow_profiles(

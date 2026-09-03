@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiError, type BatchcraftApi } from "../../api/client";
 import type { LibraryPromptVersion, ProjectPrompt, Prompt, PromptsResponse } from "../../api/types";
-import type { PromptForm } from "./form";
+import { initialBatchForm, type PromptForm } from "./form";
 import { PromptLibraryEditor } from "./PromptLibraryEditor";
 
 describe("PromptLibraryEditor workspace", () => {
@@ -413,6 +413,159 @@ describe("PromptLibraryEditor loading and linkage", () => {
     expect(await screen.findByText("PromptVersion integrity check failed: stored content differs from the library.")).toBeInTheDocument();
     expect(callbacks.onMetadataChange).not.toHaveBeenCalled();
   });
+
+  it("retains an authoritative historical conflict even when library content matches", async () => {
+    const conflicted = formPrompt({
+      libraryProjectId: null,
+      promptId: "wrong-parent",
+      historicalVersionId: "version-1",
+      historicalResourceStatus: "conflict",
+      historicalResourceReason: "PromptVersion ownership does not match the frozen parent.",
+    });
+    const callbacks = callbackProps();
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })),
+      getPromptVersion: vi.fn(async () => version()),
+    });
+
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[conflicted]} sourceRunId="run-1" {...callbacks} />);
+
+    expect((await screen.findAllByText(/PromptVersion ownership does not match/)).length).toBeGreaterThan(0);
+    expect(api.getPromptVersion).not.toHaveBeenCalled();
+    expect(callbacks.onMetadataChange).not.toHaveBeenCalled();
+  });
+
+  it("imports one detached historical Prompt position and replaces only that selection", async () => {
+    const detached = formPrompt({ libraryProjectId: null, promptId: null });
+    const other = formPrompt({ key: 11, versionId: "version-2", snapshotName: "Other", text: "Other" });
+    const importedVersion = version({
+      id: "imported-v1",
+      prompt_id: "imported-prompt",
+      name_snapshot: "Saved name",
+    });
+    const importedPrompt = prompt("imported-prompt", "Saved name");
+    const onHistoricalImport = vi.fn();
+    const api = makeApi({
+      importRunPromptVersion: vi.fn(async () => ({ prompt: importedPrompt, version: importedVersion })),
+    });
+    render(
+      <PromptLibraryEditor
+        api={api}
+        projectId="project-1"
+        prompts={[detached, other]}
+        sourceRunId="run/history"
+        onChange={vi.fn()}
+        onHistoricalImport={onHistoricalImport}
+        onMetadataChange={vi.fn()}
+      />,
+    );
+
+    const card = screen.getByText("saved text").closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Import historical snapshot" }));
+
+    await waitFor(() => expect(api.importRunPromptVersion).toHaveBeenCalledWith("run/history", 0, {
+      import_request_id: "prompt:0:version-1",
+      name: "Saved name",
+      description: null,
+      note: null,
+    }));
+    const updated = onHistoricalImport.mock.calls[0][0] as PromptForm[];
+    expect(updated[0]).toMatchObject({
+      libraryProjectId: "project-1",
+      promptId: "imported-prompt",
+      versionId: "imported-v1",
+      text: "saved text",
+    });
+    expect(updated[1]).toBe(other);
+    expect(onHistoricalImport.mock.calls[0][1]).toEqual({
+      promptVersions: [{
+        position: 0,
+        historicalVersionId: "version-1",
+        copiedVersionId: "imported-v1",
+      }],
+      workflowVersion: null,
+      workflowProfileVersion: null,
+    });
+  });
+
+  it("merges concurrent historical Prompt imports into the latest selection", async () => {
+    const firstRequest = deferred<Awaited<ReturnType<BatchcraftApi["importRunPromptVersion"]>>>();
+    const secondRequest = deferred<Awaited<ReturnType<BatchcraftApi["importRunPromptVersion"]>>>();
+    const first = formPrompt({ libraryProjectId: null, promptId: null, historicalVersionId: "version-1", historicalResourceStatus: "detached" });
+    const second = formPrompt({ key: 11, libraryProjectId: null, promptId: null, versionId: "version-2", snapshotName: "Other", text: "Other", historicalVersionId: "version-2", historicalResourceStatus: "detached" });
+    const importedFirst = { prompt: prompt("imported-1", "First copy"), version: version({ id: "imported-v1", prompt_id: "imported-1" }) };
+    const importedSecond = { prompt: prompt("imported-2", "Second copy"), version: version({ id: "imported-v2", prompt_id: "imported-2", name_snapshot: "Other", text: "Other" }) };
+    const api = makeApi({
+      importRunPromptVersion: vi.fn((_runId, position) => position === 0 ? firstRequest.promise : secondRequest.promise),
+    });
+    let current = [first, second];
+    let resolutions = initialBatchForm().historicalImportCopyResolutions;
+    const view = render(rendered());
+    function rendered() {
+      return <PromptLibraryEditor api={api} projectId="project-1" prompts={current} historicalImportCopyResolutions={resolutions} sourceRunId="run-1" onChange={() => undefined} onHistoricalImport={(prompts, importedResolutions) => { current = prompts; resolutions = importedResolutions; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
+    }
+
+    const buttons = screen.getAllByRole("button", { name: "Import historical snapshot" });
+    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
+    await act(async () => secondRequest.resolve(importedSecond));
+    await act(async () => firstRequest.resolve(importedFirst));
+
+    expect(current.map((item) => item.versionId)).toEqual(["imported-v1", "imported-v2"]);
+    expect(resolutions.promptVersions).toHaveLength(2);
+  });
+
+  it("rebuilds historical positions when the same Run reloads with new prompt keys", async () => {
+    const importedVersion = version({ id: "imported-v2", prompt_id: "imported-2", name_snapshot: "Other" });
+    const api = makeApi({
+      importRunPromptVersion: vi.fn(async () => ({
+        prompt: prompt("imported-2", "Other copy"),
+        version: importedVersion,
+      })),
+    });
+    const first = formPrompt({ libraryProjectId: null, promptId: null, historicalVersionId: "version-1", historicalResourceStatus: "detached" });
+    const second = formPrompt({ key: 11, libraryProjectId: null, promptId: null, versionId: "version-2", snapshotName: "Other", text: "Other", historicalVersionId: "version-2", historicalResourceStatus: "detached" });
+    const onHistoricalImport = vi.fn();
+    const view = render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[first, second]} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />);
+
+    const reloaded = [
+      { ...second, key: 21, historicalPosition: 1 },
+      { ...first, key: 20, historicalPosition: 0 },
+    ];
+    view.rerender(<PromptLibraryEditor api={api} projectId="project-1" prompts={reloaded} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />);
+    const card = screen.getByText("Other").closest("article");
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Import historical snapshot" }));
+
+    await waitFor(() => expect(api.importRunPromptVersion).toHaveBeenCalledWith("run-1", 1, expect.any(Object)));
+  });
+
+  it("ignores an import completion after its Prompt was removed", async () => {
+    const pending = deferred<Awaited<ReturnType<BatchcraftApi["importRunPromptVersion"]>>>();
+    const detached = formPrompt({
+      libraryProjectId: null,
+      promptId: null,
+      historicalPosition: 0,
+      historicalVersionId: "version-1",
+      historicalResourceStatus: "detached",
+    });
+    const api = makeApi({ importRunPromptVersion: vi.fn(() => pending.promise) });
+    const onHistoricalImport = vi.fn();
+    const view = render(
+      <PromptLibraryEditor api={api} projectId="project-1" prompts={[detached]} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Import historical snapshot" }));
+    view.rerender(
+      <PromptLibraryEditor api={api} projectId="project-1" prompts={[]} sourceRunId="run-1" onChange={vi.fn()} onHistoricalImport={onHistoricalImport} onMetadataChange={vi.fn()} />,
+    );
+
+    await act(async () => pending.resolve({
+      prompt: prompt("imported-prompt", "Imported"),
+      version: version({ id: "imported-version", prompt_id: "imported-prompt" }),
+    }));
+
+    expect(onHistoricalImport).not.toHaveBeenCalled();
+  });
 });
 
 const PROJECT_NOT_FOUND_MESSAGE = "Project was not found. Check the Project ID and try again.";
@@ -483,7 +636,7 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     listPrompts: vi.fn(async () => ({ prompts: [] })), createPrompt: vi.fn(async () => ({ prompt: prompt(), version: version() })), getPrompt: vi.fn(async () => prompt()), updatePrompt: vi.fn(async () => prompt()), listPromptVersions: vi.fn(async () => ({ prompt_versions: [] })), createPromptVersion: vi.fn(async () => version()), getPromptVersion: vi.fn(async () => version()),
     listWorkflows: vi.fn(async () => ({ workflows: [] })), createWorkflow: vi.fn(), getWorkflow: vi.fn(), updateWorkflow: vi.fn(), archiveWorkflow: vi.fn(), listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [] })), createWorkflowVersion: vi.fn(), getWorkflowVersion: vi.fn(), archiveWorkflowVersion: vi.fn(),
     listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })), createWorkflowProfile: vi.fn(), getWorkflowProfile: vi.fn(), updateWorkflowProfile: vi.fn(), archiveWorkflowProfile: vi.fn(), listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [] })), createWorkflowProfileVersion: vi.fn(), getWorkflowProfileVersion: vi.fn(), archiveWorkflowProfileVersion: vi.fn(),
-    previewBatch: vi.fn(async () => ({ job_count: 0, warnings: [], jobs: [] })), createRun: vi.fn(), getRun: vi.fn(), startRun: vi.fn(), getExecution: vi.fn(), getResults: vi.fn(async () => ({ run_id: "run-1", results: [] })), resultUrl: (url) => url, assetUrl: (url) => url,
+    previewBatch: vi.fn(async () => ({ job_count: 0, warnings: [], jobs: [] })), createRun: vi.fn(), getActiveExecution: vi.fn(async () => ({ run_id: null })), getRun: vi.fn(), getBatchReconstruction: vi.fn(), importRunPromptVersion: vi.fn(), importRunWorkflowVersion: vi.fn(), importRunWorkflowProfileVersion: vi.fn(), startRun: vi.fn(), getExecution: vi.fn(), getResults: vi.fn(async () => ({ run_id: "run-1", results: [] })), resultUrl: (url) => url, assetUrl: (url) => url,
     ...overrides,
   };
 }
