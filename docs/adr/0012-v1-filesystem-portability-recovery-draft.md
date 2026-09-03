@@ -37,14 +37,24 @@ The prerelease implementation already provides a strong historical Run record:
 - SQLite remains the authority for mutable libraries and cancellation intent, while the Project
   filesystem remains the authority for historical Run provenance and execution outcomes.
 
-The implementation does not yet provide the v1 recovery workflow:
+BC-019 establishes the candidate-v1 record contracts:
+
+- canonical Project, Batch, Asset, Run, manifest, Batch snapshot, and execution records have explicit,
+  independently managed v1 identities;
+- standalone canonical JSON records carry producer batchcraft version metadata;
+- raw workflow and Workflow Profile payloads remain directly usable and are identified by strict,
+  hash-bound v1 manifest descriptors;
+- the emitted secondary CSV has an independent v1 identity and producer column but is optional during
+  normal published-Run loading;
+- each Job freezes an output prefix bound to its Run and Job identity;
+- `backend/tests/fixtures/v1_project/` locks emitted bytes for a complete modern record set.
+
+The implementation still does not provide the complete v1 recovery workflow:
 
 - Project adoption registers owner metadata but does not import or index historical content;
 - there is no Project-wide validated Run discovery or rebuildable Run/Job/Result index;
 - the frontend can recover only Run IDs retained in browser working-session storage;
 - there is no `Load Run as Batch` operation or detached historical resource model;
-- current durable formats use unrelated prerelease version numbers and some records lack an explicit
-  format identity or producer application version;
 - no automated cross-instance acceptance test proves recovery from a copied Project directory.
 
 These are release gaps, not exceptions to the proposed contract.
@@ -172,25 +182,27 @@ The exact implementation may copy or adopt an existing Project directory, but va
 
 ### 7. V1 durable filesystem schemas reset to format version 1 exactly once
 
-Before the v1 release contract is frozen, the current prerelease durable schemas will be consolidated and reset to clean v1 format numbers.
+BC-019 consolidates the current prerelease durable schemas and resets them to clean candidate-v1 format numbers.
 
-Each durable schema must have an explicit format identity and independent format version, conceptually:
+Each durable schema has an explicit format identity and independent format version:
 
     {
       "format": "batchcraft.manifest",
       "format_version": 1
     }
 
-Durable Project-format schemas that exist at the v1 boundary should begin at version 1, including applicable:
+The implemented candidate-v1 formats are:
 
-- Project owner metadata;
-- Batch owner metadata;
-- Asset metadata;
-- Run metadata;
-- manifest;
-- Batch snapshot;
-- execution state;
-- other canonical Project filesystem records discovered by the V1-001 audit.
+- `batchcraft.project`;
+- `batchcraft.batch`;
+- `batchcraft.asset`;
+- `batchcraft.run`;
+- `batchcraft.manifest`;
+- `batchcraft.batch-snapshot`;
+- `batchcraft.execution`;
+- `batchcraft.workflow-snapshot`;
+- `batchcraft.workflow-profile-snapshot`;
+- `batchcraft.manifest-csv`.
 
 Obsolete prerelease readers and compatibility branches may be removed before v1.
 
@@ -208,7 +220,7 @@ The batchcraft application version answers:
 
 These are separate concerns.
 
-The v1 formats should also record the producer application version where practical, for example:
+Standalone canonical JSON records record the producer application version, for example:
 
     {
       "format": "batchcraft.manifest",
@@ -221,6 +233,9 @@ The v1 formats should also record the producer application version where practic
 batchcraft 1.1, 1.2, or 2.0 may continue writing manifest format 1 if that schema has not changed.
 
 If one durable schema changes after v1, only that schema's format version needs to increment.
+CSV rows use a flat `batchcraft_version` column. The embedded Batch snapshot and raw payload descriptors
+inherit producer context from manifest v1. Mutable `execution.json` producer metadata identifies the
+writer of its current representation and may change on a later valid state write.
 
 ### 9. Browser recovery format is not part of the portable Project contract
 
@@ -354,11 +369,11 @@ The intended release sequence is:
    - finalize this ADR.
 
 2. **V1-002 — V1 Format Consolidation**
-   - resolve audit gaps;
-   - reset current durable schema versions to 1;
-   - remove obsolete prerelease compatibility;
-   - add format identity / producer metadata;
-   - add strong round-trip fixtures.
+   - implemented by BC-019: audit gaps resolved at the record level;
+   - current durable schema versions reset independently to 1;
+   - obsolete prerelease compatibility removed;
+   - format identity and producer metadata added;
+   - strict corruption tests and an emitted-byte round-trip Project fixture added.
 
 3. **V1-003 — Project Import & Historical Reindex**
    - fresh database Project import;

@@ -289,7 +289,7 @@ A Batch also owns configuration such as:
 - zero or more ordered named image bindings;
 - seed policy;
 - exposed workflow parameter values or dimensions;
-- output naming configuration.
+- no editable output naming configuration; Run creation derives a fixed namespace for each Job.
 
 Changing a Batch does not alter previous Runs.
 
@@ -398,7 +398,7 @@ The Run snapshot must include effective copies of:
 - ordered named image bindings and selected asset provenance, which may use Base workflow;
 - seed policy and resolved seeds;
 - exposed workflow parameters;
-- output naming configuration;
+- a concrete per-Job output prefix derived from Run and Job identity;
 - compiled Job list;
 - complete editable Linked Parameter Set definitions and rows;
 - optional Run name and description plus the immutable filesystem key.
@@ -407,9 +407,9 @@ Once Run creation succeeds, these effective values and the compiled Job plan are
 
 Run execution state is separate from immutable provenance. Status, timestamps, ComfyUI prompt IDs, errors, and Results may advance while execution proceeds.
 
-The v3 filesystem representation stores this mutable data in `execution.json`; v1 and v2 execution state are unsupported. Run states are `created`, `running`, `succeeded`, `failed`, `blocked`, and `cancelled`. `blocked` means automatic progression stopped on unresolved work and is not permission to retry. It covers an unresolved accepted or ambiguous submission and the deliberate local-detach shape identified by `User detached from current Job while remote completion was unconfirmed.` A detached Run retains its current Job ordinal, has no completion timestamp, preserves the current Job's best-known preparation or submission evidence and Results, and leaves every later Job pristine pending. It remains available for a future explicit reconciliation operation. `cancelled` has two valid shapes: a pristine pre-execution discard with diagnostic `discarded_before_start`, or a started Run with diagnostic `stopped_after_current_job`, a succeeded Job prefix, and a non-empty cancelled Job suffix. Frozen provenance remains inspectable in both cases. `succeeded`, `failed`, and `cancelled` are immutable terminal Run states.
+The `batchcraft.execution` v1 filesystem representation stores this mutable data in `execution.json`; all prerelease execution formats are unsupported. Run states are `created`, `running`, `succeeded`, `failed`, `blocked`, and `cancelled`. `blocked` means automatic progression stopped on unresolved work and is not permission to retry. It covers an unresolved accepted or ambiguous submission and the deliberate local-detach shape identified by `User detached from current Job while remote completion was unconfirmed.` A detached Run retains its current Job ordinal, has no completion timestamp, preserves the current Job's best-known preparation or submission evidence and Results, and leaves every later Job pristine pending. It remains available for a future explicit reconciliation operation. `cancelled` has two valid shapes: a pristine pre-execution discard with diagnostic `discarded_before_start`, or a started Run with diagnostic `stopped_after_current_job`, a succeeded Job prefix, and a non-empty cancelled Job suffix. Frozen provenance remains inspectable in both cases. `succeeded`, `failed`, and `cancelled` are immutable terminal Run states.
 
-SQLite stores durable Run cancellation intent as `(run_id, mode, requested_at)`, with current modes `after_current_job` and `detach`. Both intents may coexist. `detach` takes precedence in the active read model because it ends local waiting immediately, while preserving the earlier soft-stop request as durable history. Intent is not copied into `execution.json`: SQLite is authoritative for the request, while execution v3 is authoritative for the resulting Run and Job outcomes. Losing SQLite request metadata does not prevent reconstructing the detached blocked shape or a completed cancellation outcome from the Run filesystem.
+SQLite stores durable Run cancellation intent as `(run_id, mode, requested_at)`, with current modes `after_current_job` and `detach`. Both intents may coexist. `detach` takes precedence in the active read model because it ends local waiting immediately, while preserving the earlier soft-stop request as durable history. Intent is not copied into `execution.json`: SQLite is authoritative for the request, while execution v1 is authoritative for the resulting Run and Job outcomes. Losing SQLite request metadata does not prevent reconstructing the detached blocked shape or a completed cancellation outcome from the Run filesystem.
 
 ## Job
 
@@ -438,7 +438,7 @@ A Job additionally records:
 - resolved variable name/value pairs;
 - ordered `resolved_image_inputs`, one per Profile slot, each carrying a slot key and optional asset;
 - resolved workflow parameters;
-- expected output prefix;
+- concrete output prefix `batchcraft/<run-id>/<job-id>/result`, frozen in manifest v1 and passed unchanged to workflow preparation;
 - workflow hash.
 
 The compiler orders Job dimensions as PromptVersion, prompt variables, Profile Image Input slots,

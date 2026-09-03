@@ -15,9 +15,15 @@ from batchcraft.files._io import (
     utc_timestamp,
     write_json,
 )
-from batchcraft.files.models import AssetRecord
+from batchcraft.files.formats import (
+    ASSET_FORMAT,
+    format_header,
+    require_exact_keys,
+    validate_format_record,
+)
+from batchcraft.files.models import AssetRecord, ProjectIdentity
+from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 
-ASSET_FORMAT_VERSION = 1
 _SHA256_LENGTH = 64
 
 
@@ -32,10 +38,12 @@ class ProjectAssetStore:
         *,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
+        producer_version: str | None = None,
     ) -> None:
         self.project_path = project_path
         self._id_factory = id_factory or (lambda: str(uuid4()))
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._producer_version = producer_version
 
     @property
     def assets_path(self) -> Path:
@@ -45,6 +53,8 @@ class ProjectAssetStore:
         if not source.is_file():
             raise AssetStoreError(f"asset source is not a file: {source}")
 
+        project = self._project_owner()
+        self._validate_import_paths()
         staging_root = self.assets_path / ".staging"
         ensure_directory(staging_root)
         staging_path = staging_root / str(uuid4())
@@ -73,7 +83,7 @@ class ProjectAssetStore:
             asset_id = self._id_factory()
             _validate_asset_id(asset_id)
             metadata = {
-                "format_version": ASSET_FORMAT_VERSION,
+                **format_header(ASSET_FORMAT, self._producer_version),
                 "asset_id": asset_id,
                 "sha256": sha256,
                 "original_filename": source.name,
@@ -81,9 +91,14 @@ class ProjectAssetStore:
                 "byte_size": byte_size,
                 "stored_path": stored_path,
                 "created_at": utc_timestamp(self._clock),
+                "project": {
+                    "project_id": project.id,
+                    "filesystem_key": project.filesystem_key,
+                },
             }
             write_json(staging_path / "asset.json", metadata)
             fsync_directory(staging_path)
+            self._validate_import_paths(sha256)
             ensure_directory(final_path.parent)
 
             try:
@@ -118,6 +133,20 @@ class ProjectAssetStore:
         self._validate_asset_paths(sha256)
         try:
             metadata = read_json_object(metadata_path)
+            validate_format_record(
+                metadata,
+                ASSET_FORMAT,
+                {
+                    "asset_id",
+                    "sha256",
+                    "original_filename",
+                    "mime_type",
+                    "byte_size",
+                    "stored_path",
+                    "created_at",
+                    "project",
+                },
+            )
             record = AssetRecord(
                 asset_id=_required_string(metadata, "asset_id"),
                 sha256=_required_string(metadata, "sha256"),
@@ -131,10 +160,25 @@ class ProjectAssetStore:
             raise AssetStoreError(f"invalid asset metadata for {sha256}: {error}") from error
 
         expected_stored_path = content_path.relative_to(self.project_path).as_posix()
-        if type(metadata.get("format_version")) is not int or (
-            metadata["format_version"] != ASSET_FORMAT_VERSION
-        ):
-            raise AssetStoreError(f"unsupported asset format version for {sha256}")
+        project = self._project_owner()
+        project_data = metadata["project"]
+        if not isinstance(project_data, dict):
+            raise AssetStoreError(f"asset Project identity must be an object for {sha256}")
+        try:
+            require_exact_keys(
+                project_data,
+                {"project_id", "filesystem_key"},
+                "Asset Project identity",
+            )
+        except ValueError as error:
+            raise AssetStoreError(f"invalid asset metadata for {sha256}: {error}") from error
+        if project_data != {
+            "project_id": project.id,
+            "filesystem_key": project.filesystem_key,
+        }:
+            raise AssetStoreError(
+                f"asset Project identity does not match its directory for {sha256}"
+            )
         _validate_asset_id(record.asset_id)
         if record.sha256 != sha256:
             raise AssetStoreError(f"asset metadata digest does not match path for {sha256}")
@@ -178,25 +222,7 @@ class ProjectAssetStore:
         return tuple(records)
 
     def read_asset_id(self, sha256: str) -> str:
-        _validate_sha256(sha256)
-        metadata_path = self._asset_path(sha256) / "asset.json"
-        if metadata_path.is_symlink() or not metadata_path.is_file():
-            raise AssetStoreError(f"asset identity metadata is missing or unsafe for {sha256}")
-        try:
-            metadata = read_json_object(metadata_path)
-            if type(metadata.get("format_version")) is not int or (
-                metadata["format_version"] != ASSET_FORMAT_VERSION
-            ):
-                raise AssetStoreError(f"unsupported asset format version for {sha256}")
-            asset_id = _required_string(metadata, "asset_id")
-            _validate_asset_id(asset_id)
-            return asset_id
-        except (OSError, ValueError) as error:
-            if isinstance(error, AssetStoreError):
-                raise
-            raise AssetStoreError(
-                f"invalid asset identity metadata for {sha256}: {error}"
-            ) from error
+        return self.read_metadata(sha256).asset_id
 
     def validate_record(self, record: AssetRecord) -> AssetRecord:
         stored = self.load(record.sha256)
@@ -211,6 +237,7 @@ class ProjectAssetStore:
         return self._asset_path(sha256) / "content"
 
     def _validate_asset_paths(self, sha256: str) -> None:
+        self._validate_project_paths()
         assets_root = self.assets_path / "sha256"
         prefix_path = assets_root / sha256[:2]
         asset_path = prefix_path / sha256
@@ -222,6 +249,29 @@ class ProjectAssetStore:
             raise AssetStoreError(f"asset metadata is missing or unsafe for {sha256}")
         if content_path.is_symlink() or not content_path.is_file():
             raise AssetStoreError(f"asset content is missing or unsafe for {sha256}")
+
+    def _project_owner(self) -> ProjectIdentity:
+        try:
+            return ProjectOwnerStore(
+                self.project_path.parent,
+                producer_version=self._producer_version,
+            ).read(self.project_path.name)
+        except ProjectOwnerError as error:
+            raise AssetStoreError(f"invalid Project owner for Asset storage: {error}") from error
+
+    def _validate_project_paths(self) -> None:
+        if self.project_path.is_symlink() or not self.project_path.is_dir():
+            raise AssetStoreError("Project asset directory is missing or unsafe")
+        if self.assets_path.is_symlink():
+            raise AssetStoreError("Project assets directory is unsafe")
+
+    def _validate_import_paths(self, sha256: str | None = None) -> None:
+        self._validate_project_paths()
+        paths = [self.assets_path / ".staging", self.assets_path / "sha256"]
+        if sha256 is not None:
+            paths.append(self.assets_path / "sha256" / sha256[:2])
+        if any(path.is_symlink() for path in paths):
+            raise AssetStoreError("Project asset import path is unsafe")
 
 
 def _required_string(data: dict[str, object], name: str) -> str:
@@ -240,7 +290,8 @@ def _validate_sha256(sha256: str) -> None:
 
 def _validate_asset_id(asset_id: str) -> None:
     if (
-        asset_id in {".", ".."}
+        not asset_id
+        or asset_id in {".", ".."}
         or "/" in asset_id
         or "\\" in asset_id
         or any(ord(character) < 32 for character in asset_id)

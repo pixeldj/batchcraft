@@ -8,27 +8,31 @@ from batchcraft.files import (
     BatchIdentity,
     BatchOwnerError,
     BatchOwnerStore,
+    ProjectIdentity,
+    ProjectOwnerStore,
 )
 
 BATCH = BatchIdentity(id="batch-id", filesystem_key="batch_key", name="Initial name")
 
 
 def _project(tmp_path: Path) -> Path:
-    path = tmp_path / "project"
-    path.mkdir()
-    return path
+    ProjectOwnerStore(tmp_path).publish(ProjectIdentity("project-id", "project", "Project"))
+    return tmp_path / "project"
 
 
 def test_publish_read_and_conflict_preserve_canonical_initial_identity(tmp_path: Path) -> None:
     project_path = _project(tmp_path)
-    store = BatchOwnerStore(project_path)
+    store = BatchOwnerStore(project_path, producer_version="fixture-version")
     assert store.publish(BATCH) == BATCH
     assert store.publish(BatchIdentity(BATCH.id, BATCH.filesystem_key, "Renamed")) == BATCH
     expected = {
         "batch_id": "batch-id",
+        "created_by": {"batchcraft_version": "fixture-version"},
         "filesystem_key": "batch_key",
+        "format": "batchcraft.batch",
         "format_version": 1,
         "name": "Initial name",
+        "project": {"filesystem_key": "project", "project_id": "project-id"},
     }
     assert (project_path / "batches" / "batch_key" / "batch.json").read_bytes() == (
         json.dumps(expected, separators=(",", ":"), sort_keys=True) + "\n"
@@ -91,6 +95,42 @@ def test_rejects_symlinked_project_batches_batch_and_owner(tmp_path: Path) -> No
     (batch_path / "batch.json").symlink_to(external_owner)
     with pytest.raises(BatchOwnerError, match="symlink"):
         BatchOwnerStore(project).read("batch_key")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (("format", "batchcraft.other"), "wrong format identity"),
+        (("format_version", 2), "unsupported format version"),
+        (("extra", "value"), "unexpected extra"),
+    ),
+)
+def test_read_rejects_invalid_v1_format_shape(
+    tmp_path: Path, mutation: tuple[str, object], message: str
+) -> None:
+    project = _project(tmp_path)
+    store = BatchOwnerStore(project)
+    store.publish(BATCH)
+    owner_path = project / "batches" / BATCH.filesystem_key / "batch.json"
+    owner = json.loads(owner_path.read_text())
+    owner[mutation[0]] = mutation[1]
+    owner_path.write_text(json.dumps(owner))
+
+    with pytest.raises(BatchOwnerError, match=message):
+        store.read(BATCH.filesystem_key)
+
+
+def test_read_rejects_project_owner_chain_mismatch(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    store = BatchOwnerStore(project)
+    store.publish(BATCH)
+    owner_path = project / "batches" / BATCH.filesystem_key / "batch.json"
+    owner = json.loads(owner_path.read_text())
+    owner["project"]["project_id"] = "other-project"
+    owner_path.write_text(json.dumps(owner))
+
+    with pytest.raises(BatchOwnerError, match="does not match"):
+        store.read(BATCH.filesystem_key)
 
 
 def test_discover_is_immediate_safe_and_does_not_invent_orphan_identity(tmp_path: Path) -> None:

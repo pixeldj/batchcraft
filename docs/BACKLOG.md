@@ -853,7 +853,7 @@ Acceptance requires:
 | --- | --- |
 | ID | BC-019 |
 | Priority | P1 |
-| Status | Planned |
+| Status | Done |
 | Area | Persistence / File formats |
 | Summary | Replace prerelease Project record schemas with explicit, independently versioned v1 formats that satisfy the recovery audit. |
 | Dependencies / Notes | V1-002. Depends on BC-018 and ADR 0012. Follow the prerelease reset policy in ADR 0004. Do not add compatibility readers for unsupported development data unless separately required. |
@@ -866,6 +866,14 @@ Acceptance requires:
 - resolution of missing fields identified by BC-018, including output intent documentation;
 - strict round-trip, unsupported-version, hash, path, owner-chain, and fixture tests;
 - updated `FILE_FORMAT.md`, developer policy, and format examples that match emitted bytes.
+
+Implementation result: canonical Project JSON records now use strict named v1 contracts with producer
+metadata; raw workflow/Profile payloads and the secondary CSV have independent v1 descriptors; CSV is
+emitted during publication but optional during normal loading; each Job freezes an identity-bound output
+prefix; and `backend/tests/fixtures/v1_project/` locks emitted bytes and round-trip behavior. Import,
+historical reindexing, detached resources, and cross-instance acceptance remain in BC-020/BC-021.
+Verification passed with 569 backend tests, Ruff check/format, mypy, Python package build, 304 frontend
+tests, frontend typecheck/lint/build, and `git diff --check`. No live ComfyUI host was required.
 
 ### BC-020: Project import and historical reindex
 

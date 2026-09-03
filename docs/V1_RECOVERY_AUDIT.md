@@ -5,9 +5,9 @@
 This document records the V1-001 audit of batchcraft's current persistence behavior. It compares the
 prerelease implementation with the proposed portability contract in ADR 0012.
 
-The audit is descriptive. It does not freeze current schemas or claim that Project portability is
-complete. ADR 0012 remains Proposed until the format, import, reconstruction, and cross-instance work
-passes its release gates.
+The audit is descriptive. BC-019 subsequently closed the record-level format gaps described here, but
+Project import, reconstruction, and cross-instance acceptance remain incomplete. ADR 0012 therefore
+remains Proposed until all release gates pass.
 
 ## Audit conclusion
 
@@ -42,7 +42,7 @@ The v1 contract is therefore feasible with the current authority split, but not 
             `-- <NNN-run-key>/
                 |-- run.json
                 |-- manifest.json
-                |-- manifest.csv
+                |-- manifest.csv          optional secondary artifact when loading
                 |-- workflow.json
                 |-- workflow-profile.json
                 |-- execution.json        optional until execution state is written
@@ -77,27 +77,28 @@ without an explicit user operation.
 
 ## Format inventory
 
-| Record | Current prerelease version | Explicit format identity | Reader behavior |
+| Record | Candidate v1 format | Version | Reader behavior |
 | --- | ---: | --- | --- |
-| `project.json` | 1 | No | Rejects unsupported versions and unsafe or mismatched filesystem keys. |
-| `batch.json` | 1 | No | Rejects unsupported versions and invalid owner data. |
-| `asset.json` | 1 | No | Validates metadata, stored path, byte size, and SHA-256. |
-| `run.json` | 2 | No | Rejects unsupported versions and checks identity against manifest and path. |
-| `manifest.json` | 9 | No | Canonical plan and provenance record; unsupported versions fail closed. |
-| Embedded Batch snapshot | 6 | No | Strict schema; loader recompiles and compares the concrete plan. |
-| `execution.json` | 3 | No | Strict mutable state machine with Result path, size, and hash validation. |
-| `manifest.csv` | Tied to manifest v9 | No | Secondary export; not parsed during normal published Run loading. |
-| `workflow.json` | None | No | Hash-bound frozen ComfyUI API workflow JSON. |
-| `workflow-profile.json` | None | No | Hash-bound frozen mapping JSON validated with the workflow. |
+| `project.json` | `batchcraft.project` | 1 | Strict owner identity, producer, path, and shape validation. |
+| `batch.json` | `batchcraft.batch` | 1 | Strict owner identity and Project owner-chain validation. |
+| `asset.json` | `batchcraft.asset` | 1 | Validates producer, Project owner, metadata, stored path, byte size, and SHA-256. |
+| `run.json` | `batchcraft.run` | 1 | Checks identity against manifest, owner chain, and exact Project layout. |
+| `manifest.json` | `batchcraft.manifest` | 1 | Canonical strict plan and provenance record; unsupported versions fail closed. |
+| Embedded Batch snapshot | `batchcraft.batch-snapshot` | 1 | Strict schema; loader recompiles and compares the concrete plan. |
+| `execution.json` | `batchcraft.execution` | 1 | Strict mutable state machine with Result path, size, and hash validation. |
+| `manifest.csv` | `batchcraft.manifest-csv` | 1 | Emitted secondary export; not parsed during normal published Run loading. |
+| `workflow.json` descriptor | `batchcraft.workflow-snapshot` | 1 | Identifies the raw, hash-bound ComfyUI API workflow payload. |
+| `workflow-profile.json` descriptor | `batchcraft.workflow-profile-snapshot` | 1 | Identifies the raw, hash-bound Profile payload validated with the workflow. |
 | Browser working session | 2 | Key names the format | Unsupported or malformed records reset to an empty session. |
 | SQLite baseline | Migration 0001 | Migration filename and history row | Checksum-validated, contiguous migration runner. |
 
 The current `0001_initial.sql` checksum is
 `8441adf452ba918a4dff1ce0f65e40ce62ad52ea9efe0304b4343bbfc5a27617`.
 
-The unrelated prerelease version numbers reflect development history. BC-019 will define clean v1
-format identities and reset applicable durable Project schemas to version 1 before release. The audit
-does not change readers or persisted files.
+Each Project format is independently versioned. Canonical standalone JSON records carry
+`created_by.batchcraft_version`; CSV rows carry `batchcraft_version`; the embedded Batch snapshot and raw
+payload descriptors inherit producer context from manifest v1. Producer version does not control parsing.
+All prerelease Project record shapes are unsupported and fail closed without rewriting persisted files.
 
 ## Current adoption and discovery behavior
 
@@ -125,7 +126,7 @@ from the current browser working-session record.
 
 ### Preserved editable intent
 
-Batch snapshot v6 preserves:
+Batch snapshot v1 preserves:
 
 - Project, Batch, and optional source Saved Batch identity;
 - ordered Prompt snapshots with exact text and optional library identity metadata;
@@ -154,18 +155,15 @@ loaders validate the referenced bytes.
 
 ### Missing or incomplete recovery data
 
-Current gaps in the records or their public projections are:
+Remaining gaps in recovery workflow or public projections are:
 
-- no producer `batchcraft_version` on durable records;
-- no explicit format name on durable JSON records;
-- no independent version for frozen workflow records or CSV;
-- no editable output naming configuration in Batch snapshot v6;
 - no single Project-level catalog of published Runs, so recovery requires bounded filesystem scanning;
 - cancellation intent remains SQLite-only until it becomes an outcome in `execution.json`;
 - current HTTP and frontend views do not expose every stored diagnostic and provenance field uniformly.
 
-Output naming is not currently editable product behavior. BC-019 must either add it to the v1 Batch
-snapshot when such behavior is introduced or remove the stale conceptual field from `DATA_MODEL.md`.
+Output naming is not currently editable product behavior. BC-019 removed that stale conceptual Batch
+field and now freezes each generated `batchcraft/<run-id>/<job-id>/result` prefix as concrete Job
+provenance. Any future editable naming feature must explicitly version the Batch snapshot contract.
 
 ## Validation coverage
 
@@ -175,7 +173,8 @@ Current loaders already enforce much of the required trust boundary:
 - non-symlink owner and output paths at key boundaries;
 - Project, Batch, and Run identity consistency across path and records;
 - required Run files and output directory;
-- supported exact format versions;
+- exact format identities, independently managed v1 versions, producer metadata, and strict shapes;
+- versioned workflow, Workflow Profile, and CSV descriptors;
 - frozen workflow and Workflow Profile SHA-256 values;
 - Workflow/Profile mapping validity;
 - ordered unique Prompt, slot, parameter, Job, and Linked Parameter Set identities;
@@ -183,6 +182,7 @@ Current loaders already enforce much of the required trust boundary:
 - complete typed scalar Job resolution;
 - Batch snapshot recompilation to the exact manifest plan;
 - referenced Asset and Result path, size, and hash integrity.
+- exact per-Job output prefixes bound to Run and Job identity.
 
 The import contract still needs a Project-level validation coordinator. One bad Run should be reported
 as degraded without hiding unrelated valid Runs, except when Project or Batch ownership itself is
@@ -227,6 +227,7 @@ The main implementation evidence is in:
 - `backend/src/batchcraft/files/runs.py`;
 - `backend/src/batchcraft/files/snapshots.py`;
 - `backend/src/batchcraft/execution/state.py`;
+- `backend/tests/fixtures/v1_project/` for emitted-byte and round-trip coverage;
 - `backend/src/batchcraft/application/library.py`;
 - `backend/src/batchcraft/application/service.py`;
 - `backend/src/batchcraft/db/migrations/`;

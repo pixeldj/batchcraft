@@ -15,6 +15,13 @@ from batchcraft.files._io import (
     read_json_object,
     write_bytes,
 )
+from batchcraft.files.formats import (
+    EXECUTION_FORMAT,
+    format_header,
+    require_exact_keys,
+    validate_format_record,
+)
+from batchcraft.files.formats import EXECUTION_FORMAT_VERSION as _EXECUTION_FORMAT_VERSION
 
 from .models import (
     JobExecutionState,
@@ -24,7 +31,7 @@ from .models import (
     RunExecutionStatus,
 )
 
-EXECUTION_FORMAT_VERSION = 3
+EXECUTION_FORMAT_VERSION = _EXECUTION_FORMAT_VERSION
 EXECUTION_FILENAME = "execution.json"
 DISCARDED_BEFORE_START = "discarded_before_start"
 STOPPED_AFTER_CURRENT_JOB = "stopped_after_current_job"
@@ -86,17 +93,23 @@ class ExecutionStateError(ValueError):
 
 
 class ExecutionStateStore:
-    def __init__(self, run_path: Path) -> None:
+    def __init__(self, run_path: Path, *, producer_version: str | None = None) -> None:
         self.run_path = run_path
         self.state_path = run_path / EXECUTION_FILENAME
         self.outputs_path = run_path / "outputs"
+        self._producer_version = producer_version
 
     def initialize(self, run: PublishedRun) -> RunExecutionState:
+        if self.state_path.is_symlink():
+            raise ExecutionStateError("execution state path must not be a symlink")
         if self.state_path.exists():
             return self.load(run)
         state = initial_execution_state(run)
         self._validate_against_run(run, state)
-        self._atomic_replace(self.state_path, canonical_json_bytes(_state_data(state)))
+        self._atomic_replace(
+            self.state_path,
+            canonical_json_bytes(_state_data(state, self._producer_version)),
+        )
         return state
 
     def load(self, run: PublishedRun) -> RunExecutionState:
@@ -106,6 +119,8 @@ class ExecutionStateStore:
         return self._load(run, verify_result_files=False)
 
     def _load(self, run: PublishedRun, *, verify_result_files: bool) -> RunExecutionState:
+        if self.state_path.is_symlink() or not self.state_path.is_file():
+            raise ExecutionStateError("execution state path must be a regular file")
         try:
             state = _parse_state(read_json_object(self.state_path))
         except (OSError, ValueError) as error:
@@ -117,6 +132,8 @@ class ExecutionStateStore:
 
     def save(self, run: PublishedRun, state: RunExecutionState) -> None:
         previous: RunExecutionState | None = None
+        if self.state_path.is_symlink():
+            raise ExecutionStateError("execution state path must not be a symlink")
         if self.state_path.exists():
             previous = self._load(run, verify_result_files=False)
         self._validate_against_run(run, state, verify_result_files=False)
@@ -128,7 +145,10 @@ class ExecutionStateStore:
                 self.run_path,
                 tuple(result for job in state.jobs for result in job.results),
             )
-        self._atomic_replace(self.state_path, canonical_json_bytes(_state_data(state)))
+        self._atomic_replace(
+            self.state_path,
+            canonical_json_bytes(_state_data(state, self._producer_version)),
+        )
 
     def validate_storage(self, run: PublishedRun) -> None:
         self._validate_against_run(
@@ -518,9 +538,9 @@ def _has_succeeded_prefix_cancelled_suffix(
     )
 
 
-def _state_data(state: RunExecutionState) -> dict[str, object]:
+def _state_data(state: RunExecutionState, producer_version: str | None = None) -> dict[str, object]:
     return {
-        "format_version": EXECUTION_FORMAT_VERSION,
+        **format_header(EXECUTION_FORMAT, producer_version),
         "run_id": state.run_id,
         "status": state.status.value,
         "started_at": state.started_at,
@@ -571,8 +591,23 @@ def _result_data(result: ResultRecord) -> dict[str, object]:
 
 
 def _parse_state(data: dict[str, object]) -> RunExecutionState:
-    if _required_integer(data, "format_version") != EXECUTION_FORMAT_VERSION:
-        raise ExecutionStateError("unsupported execution state format version")
+    try:
+        validate_format_record(
+            data,
+            EXECUTION_FORMAT,
+            {
+                "run_id",
+                "status",
+                "started_at",
+                "completed_at",
+                "current_job_ordinal",
+                "error",
+                "diagnostics",
+                "jobs",
+            },
+        )
+    except ValueError as error:
+        raise ExecutionStateError(f"invalid execution state format: {error}") from error
     state = RunExecutionState(
         run_id=_required_string(data, "run_id"),
         status=_enum_value(RunExecutionStatus, data, "status"),
@@ -588,6 +623,26 @@ def _parse_state(data: dict[str, object]) -> RunExecutionState:
 
 
 def _parse_job(data: dict[str, object]) -> JobExecutionState:
+    _require_shape(
+        data,
+        {
+            "job_id",
+            "ordinal",
+            "status",
+            "client_id",
+            "submission_disposition",
+            "submission_http_status",
+            "submission_response",
+            "prompt_id",
+            "started_at",
+            "completed_at",
+            "error",
+            "diagnostics",
+            "history_status",
+            "results",
+        },
+        "execution Job",
+    )
     disposition_value = data.get("submission_disposition")
     disposition = (
         None
@@ -613,6 +668,24 @@ def _parse_job(data: dict[str, object]) -> JobExecutionState:
 
 
 def _parse_result(data: dict[str, object]) -> ResultRecord:
+    _require_shape(
+        data,
+        {
+            "job_id",
+            "job_ordinal",
+            "artifact_ordinal",
+            "producing_node_id",
+            "output_name",
+            "remote_filename",
+            "remote_subfolder",
+            "remote_type",
+            "local_path",
+            "content_type",
+            "byte_size",
+            "sha256",
+        },
+        "execution Result",
+    )
     return ResultRecord(
         job_id=_required_string(data, "job_id"),
         job_ordinal=_required_integer(data, "job_ordinal"),
@@ -646,6 +719,13 @@ def _object(value: object, name: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ExecutionStateError(f"{name} must be a JSON object")
     return cast(dict[str, object], value)
+
+
+def _require_shape(data: dict[str, object], keys: set[str], description: str) -> None:
+    try:
+        require_exact_keys(data, keys, description)
+    except ValueError as error:
+        raise ExecutionStateError(str(error)) from error
 
 
 def _optional_object(data: dict[str, object], name: str) -> dict[str, object] | None:

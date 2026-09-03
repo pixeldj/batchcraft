@@ -172,8 +172,9 @@ class SnapshotWorkflowSelection(SnapshotModel):
     workflow_profile: dict[str, object]
 
 
-class BatchSnapshotV6(SnapshotModel):
-    snapshot_version: int = Field(strict=True, ge=6, le=6)
+class BatchSnapshotV1(SnapshotModel):
+    format: Literal["batchcraft.batch-snapshot"]
+    format_version: int = Field(strict=True, ge=1, le=1)
     project: SnapshotIdentity
     source_saved_batch: SnapshotSourceSavedBatch | None
     batch: SnapshotBatch

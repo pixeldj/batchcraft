@@ -25,8 +25,10 @@ A Batch may provide:
 - VariableBindings;
 - ordered named Image Input bindings;
 - ordered independent parameter bindings and Linked Parameter Sets;
-- seed policy;
-- output naming configuration.
+- seed policy.
+
+Output naming is not editable Batch intent. Run creation allocates each Job identity and freezes the
+concrete `batchcraft/<run-id>/<job-id>/result` prefix after compilation.
 
 ## Compilation Pipeline
 

@@ -12,9 +12,14 @@ from batchcraft.files._io import (
     read_json_object,
     write_json,
 )
-from batchcraft.files.models import BatchIdentity
-
-BATCH_OWNER_FORMAT_VERSION = 1
+from batchcraft.files.formats import (
+    BATCH_FORMAT,
+    format_header,
+    require_exact_keys,
+    validate_format_record,
+)
+from batchcraft.files.models import BatchIdentity, ProjectIdentity
+from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,12 +43,14 @@ class BatchOwnerDiscoveryError(BatchOwnerError):
 
 
 class BatchOwnerStore:
-    def __init__(self, project_path: Path) -> None:
+    def __init__(self, project_path: Path, *, producer_version: str | None = None) -> None:
         self.project_path = project_path
         self.batches_path = project_path / "batches"
+        self._producer_version = producer_version
 
     def publish(self, batch: BatchIdentity) -> BatchIdentity:
         _validate_identity(batch)
+        project = self._project_owner()
         batch_path = self.batches_path / batch.filesystem_key
         owner_path = batch_path / "batch.json"
         try:
@@ -60,10 +67,14 @@ class BatchOwnerStore:
                 write_json(
                     temporary_path,
                     {
-                        "format_version": BATCH_OWNER_FORMAT_VERSION,
+                        **format_header(BATCH_FORMAT, self._producer_version),
                         "batch_id": batch.id,
                         "filesystem_key": batch.filesystem_key,
                         "name": batch.name,
+                        "project": {
+                            "project_id": project.id,
+                            "filesystem_key": project.filesystem_key,
+                        },
                     },
                 )
                 _require_directory(batch_path, "Batch directory")
@@ -148,10 +159,31 @@ class BatchOwnerStore:
             if isinstance(error, BatchOwnerError):
                 raise
             raise BatchOwnerError(f"invalid Batch owner file {owner_path}: {error}") from error
-        if type(data.get("format_version")) is not int or (
-            data["format_version"] != BATCH_OWNER_FORMAT_VERSION
-        ):
-            raise BatchOwnerError(f"unsupported Batch owner format in {owner_path}")
+        try:
+            validate_format_record(
+                data,
+                BATCH_FORMAT,
+                {"batch_id", "filesystem_key", "name", "project"},
+            )
+        except ValueError as error:
+            raise BatchOwnerError(f"invalid Batch owner format in {owner_path}: {error}") from error
+        project = self._project_owner()
+        project_data = data["project"]
+        if not isinstance(project_data, dict):
+            raise BatchOwnerError(f"project must be an object in {owner_path}")
+        try:
+            require_exact_keys(
+                project_data,
+                {"project_id", "filesystem_key"},
+                "Batch owner Project identity",
+            )
+        except ValueError as error:
+            raise BatchOwnerError(f"invalid Batch owner format in {owner_path}: {error}") from error
+        if project_data != {
+            "project_id": project.id,
+            "filesystem_key": project.filesystem_key,
+        }:
+            raise BatchOwnerError("Batch owner Project identity does not match its directory")
         batch_id = _required_string(data, "batch_id", owner_path)
         _validate_batch_id(batch_id)
         stored_key = _required_string(data, "filesystem_key", owner_path)
@@ -161,6 +193,15 @@ class BatchOwnerStore:
         if stored_key != filesystem_key:
             raise BatchOwnerError("Batch owner file has a mismatched key")
         return BatchIdentity(id=batch_id, filesystem_key=stored_key, name=name)
+
+    def _project_owner(self) -> ProjectIdentity:
+        try:
+            return ProjectOwnerStore(
+                self.project_path.parent,
+                producer_version=self._producer_version,
+            ).read(self.project_path.name)
+        except ProjectOwnerError as error:
+            raise BatchOwnerError(f"invalid Project owner for Batch storage: {error}") from error
 
     def discover(self) -> tuple[AdoptableBatch, ...]:
         _require_project_directory(self.project_path)

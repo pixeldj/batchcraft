@@ -16,8 +16,21 @@ from batchcraft.files import (
 PROJECT = ProjectIdentity(id="project-id", filesystem_key="project_key", name="Initial name")
 
 
+def _owner_record(**overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "format": "batchcraft.project",
+        "format_version": 1,
+        "created_by": {"batchcraft_version": "fixture-version"},
+        "project_id": "project-id",
+        "filesystem_key": "project_key",
+        "name": "Name",
+    }
+    record.update(overrides)
+    return record
+
+
 def test_publish_writes_canonical_owner_and_read_returns_initial_identity(tmp_path: Path) -> None:
-    store = ProjectOwnerStore(tmp_path / "projects")
+    store = ProjectOwnerStore(tmp_path / "projects", producer_version="fixture-version")
 
     published = store.publish(PROJECT)
     renamed = store.publish(
@@ -30,7 +43,9 @@ def test_publish_writes_canonical_owner_and_read_returns_initial_identity(tmp_pa
 
     owner_path = tmp_path / "projects" / "project_key" / "project.json"
     data = {
+        "created_by": {"batchcraft_version": "fixture-version"},
         "filesystem_key": "project_key",
+        "format": "batchcraft.project",
         "format_version": 1,
         "name": "Initial name",
         "project_id": "project-id",
@@ -104,41 +119,24 @@ def test_read_rejects_ownerless_asset_only_directory_without_inventing_identity(
 @pytest.mark.parametrize(
     ("owner", "message"),
     (
-        ({"format_version": 2}, "unsupported Project owner format"),
+        (_owner_record(format="batchcraft.other"), "wrong format identity"),
+        (_owner_record(format_version=2), "unsupported format version"),
+        (_owner_record(created_by={"batchcraft_version": ""}), "non-empty string"),
+        (_owner_record(extra="value"), "unexpected extra"),
         (
-            {
-                "format_version": 1,
-                "project_id": "project-id",
-                "filesystem_key": "other_key",
-                "name": "Name",
-            },
+            _owner_record(filesystem_key="other_key"),
             "mismatched key",
         ),
         (
-            {
-                "format_version": 1,
-                "project_id": "",
-                "filesystem_key": "project_key",
-                "name": "Name",
-            },
+            _owner_record(project_id=""),
             "project_id must be a non-empty string",
         ),
         (
-            {
-                "format_version": 1,
-                "project_id": "bad/id",
-                "filesystem_key": "project_key",
-                "name": "Name",
-            },
+            _owner_record(project_id="bad/id"),
             "not route-safe",
         ),
         (
-            {
-                "format_version": 1,
-                "project_id": "project-id",
-                "filesystem_key": "project_key",
-                "name": "",
-            },
+            _owner_record(name=""),
             "name must be a non-empty string",
         ),
     ),

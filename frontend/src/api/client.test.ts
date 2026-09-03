@@ -445,7 +445,8 @@ function batchRequest() {
     workflow,
     workflow_profile: workflowProfile,
     batch_snapshot: {
-      snapshot_version: 6 as const,
+      format: "batchcraft.batch-snapshot" as const,
+      format_version: 1 as const,
       project,
       source_saved_batch: null,
       batch: { ...batch, description: null },

@@ -2258,7 +2258,9 @@ describe("Current Run restoration", () => {
     expect(screen.getByText(/cannot resume it automatically/)).toBeInTheDocument();
     expect(screen.queryByText("Watching execution state...")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop waiting" })).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
+    });
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await pause(20);
     expect(api.getExecution).toHaveBeenCalledOnce();
@@ -3393,7 +3395,8 @@ function runLookupResponse(
       jobs: previewResponse().jobs,
     },
     batch_snapshot: {
-      snapshot_version: 6,
+      format: "batchcraft.batch-snapshot",
+      format_version: 1,
       project: { id: "project-1", filesystem_key: "project_1", name: "My Project" },
       source_saved_batch: { id: "batch-1", revision: 3 },
       batch: {

@@ -51,6 +51,7 @@ from batchcraft.files import (
     BatchIdentity,
     ProjectAssetStore,
     ProjectIdentity,
+    ProjectOwnerStore,
     PublishedRun,
     RunFilesystemStore,
 )
@@ -306,6 +307,7 @@ def _published_run(
 ) -> tuple[PublishedRun, tuple[bytes, ...]]:
     projects_path = tmp_path / "projects"
     project_path = projects_path / PROJECT.filesystem_key
+    ProjectOwnerStore(projects_path).publish(PROJECT)
     contents: tuple[bytes, ...] = ()
     assets: tuple[AssetRecord, ...] = ()
     if with_images:
@@ -375,7 +377,8 @@ def _published_run(
         project=PROJECT,
         batch=BATCH,
         batch_snapshot={
-            "snapshot_version": 6,
+            "format": "batchcraft.batch-snapshot",
+            "format_version": 1,
             "project": {
                 "id": PROJECT.id,
                 "filesystem_key": PROJECT.filesystem_key,
@@ -1578,7 +1581,7 @@ def test_execution_state_round_trips_and_atomic_failure_preserves_previous_file(
     assert not tuple(run.path.glob(".execution.json.*.tmp"))
 
 
-def test_execution_v3_rejects_older_versions_and_discarded_is_terminal(tmp_path: Path) -> None:
+def test_execution_v1_rejects_other_versions_and_discarded_is_terminal(tmp_path: Path) -> None:
     run, _ = _published_run(tmp_path, job_count=1)
     store = ExecutionStateStore(run.path)
     initial = store.initialize(run)
@@ -1595,15 +1598,31 @@ def test_execution_v3_rejects_older_versions_and_discarded_is_terminal(tmp_path:
         store.save(run, replace(cancelled, completed_at="later"))
 
     data = json.loads(store.state_path.read_text())
-    assert data["format_version"] == 3
-    for invalid_version in (1, 2, True, 3.0):
+    assert data["format_version"] == 1
+    for invalid_version in (0, 2, 3, True, 1.0):
         data["format_version"] = invalid_version
         store.state_path.write_text(json.dumps(data))
         with pytest.raises(
             ExecutionStateError,
-            match="format_version must be a positive integer|unsupported execution state format",
+            match="unsupported format version|invalid execution state format",
         ):
             store.load(run)
+
+
+@pytest.mark.parametrize("broken", (False, True))
+def test_execution_rejects_state_file_symlink(tmp_path: Path, broken: bool) -> None:
+    run, _ = _published_run(tmp_path, job_count=1)
+    target = tmp_path / "missing.json" if broken else tmp_path / "external.json"
+    if not broken:
+        target.write_text("{}")
+    state_path = run.path / "execution.json"
+    state_path.symlink_to(target)
+    store = ExecutionStateStore(run.path)
+
+    with pytest.raises(ExecutionStateError, match="symlink"):
+        store.initialize(run)
+    with pytest.raises(ExecutionStateError, match="symlink"):
+        store.save(run, state_module.initial_execution_state(run))
 
 
 def test_started_cancellation_round_trips_and_jobs_are_terminal(tmp_path: Path) -> None:

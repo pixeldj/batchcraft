@@ -28,11 +28,11 @@ projects/
             ├── .staging/
             ├── 001-baseline/
             │   ├── run.json
-            │   ├── manifest.json
-             │   ├── manifest.csv
+             │   ├── manifest.json
+             │   ├── manifest.csv          emitted secondary artifact; optional when loading
              │   ├── workflow.json
              │   ├── workflow-profile.json
-             │   ├── execution.json
+             │   ├── execution.json        optional until execution state is written
              │   └── outputs/
             │       ├── 000001-01.png
             │       ├── 000002-01.png
@@ -44,6 +44,12 @@ projects/
 Project and Batch paths use stable, path-safe filesystem keys rather than editable display names. Renaming a Project or Batch does not move historical paths. Stable internal IDs remain distinct from both filesystem keys and display names. `project.json` and `batch.json` bind each filesystem key to its stable internal ID so the same path cannot later be reused for another entity.
 
 Names in owner identity files are the labels present when those files were first created. Each Run snapshots the Project and Batch labels current at its own creation time.
+
+`project.json` and `batch.json` are strict `batchcraft.project` and `batchcraft.batch` v1 records. Each
+contains `created_by.batchcraft_version`; `batch.json` also embeds the parent Project ID and filesystem
+key. `asset.json`, `run.json`, `manifest.json`, and `execution.json` use the same strict envelope with
+their own independently managed format identities and versions. Unknown root fields, malformed producer
+metadata, wrong identities, and unsupported versions fail closed.
 
 The immutable Run filesystem key identifies each execution within its Batch path. `run.json` and
 `manifest.json` retain the stable internal Run ID as the true identity.
@@ -76,11 +82,13 @@ while preserving human readability.
 
 Stores Run-level metadata.
 
-The v2 creation schema is:
+The v1 creation schema is:
 
 ```json
 {
-  "format_version": 2,
+  "format": "batchcraft.run",
+  "format_version": 1,
+  "created_by": {"batchcraft_version": "..."},
   "run_id": "...",
   "run_number": 3,
   "name": "CFG sweep",
@@ -112,7 +120,9 @@ Contains the imported base ComfyUI API-format workflow snapshot used to compile 
 
 This is immutable once successful Run creation completes.
 
-The file uses canonical JSON encoding. Its SHA-256 is recorded in Run and Job provenance.
+The file uses canonical JSON encoding. It remains an unwrapped ComfyUI API workflow so it can be used
+directly. Manifest v1 identifies it with a strict `batchcraft.workflow-snapshot` v1 descriptor containing
+`payload_format: "comfyui.api-workflow"`, the fixed path, and SHA-256.
 
 ## `workflow-profile.json`
 
@@ -123,13 +133,16 @@ is immutable once successful Run creation completes.
 
 Together, `workflow.json`, `workflow-profile.json`, and the per-Job values in `manifest.json` describe the concrete workflow mutations required for replay.
 
-The file uses canonical JSON encoding. Its SHA-256 is recorded separately from the base workflow hash.
+The file uses canonical JSON encoding and remains the raw batchcraft Workflow Profile payload. Manifest
+v1 identifies it with a strict `batchcraft.workflow-profile-snapshot` v1 descriptor containing
+`payload_format: "batchcraft.workflow-profile"`, the fixed path, and SHA-256.
 
 ## `manifest.json`
 
 The JSON manifest is the canonical machine-readable execution description.
 
-The current manifest has `format_version: 9` and contains:
+The current manifest has `format: "batchcraft.manifest"`, `format_version: 1`, producer metadata under
+`created_by.batchcraft_version`, and contains:
 
 - Run ID, number, optional immutable name and description, filesystem key, creation timestamp, and
   Project/Batch identity snapshots;
@@ -146,11 +159,12 @@ The current manifest has `format_version: 9` and contains:
 - ordered Profile parameter definitions and each Job's ordered typed `resolved_parameters`;
 - each Job's selected Linked Parameter Set row provenance;
 - seed;
+- the exact per-Job output prefix `batchcraft/<run-id>/<job-id>/result`;
 - per-Job workflow and Workflow Profile hashes.
 
 Nested structures are allowed here.
 
-`manifest.json` is authoritative for exact replay. The v9 creation manifest contains immutable plan and
+`manifest.json` is authoritative for exact replay. The v1 creation manifest contains immutable plan and
 provenance only. Job execution status, ComfyUI prompt IDs, errors, and Results remain in the separated
 versioned execution representation.
 
@@ -180,7 +194,9 @@ Every Job also contains ordered `resolved_parameter_sets` entries shaped as
 These entries freeze the selected row identity for human-readable provenance. Concrete execution still
 uses `resolved_parameters`; linked-set structures never reach the executor or ComfyUI.
 
-Manifest v9 requires a top-level `batch_snapshot` object with `snapshot_version: 6`. It stores variable
+Manifest v1 requires a strict top-level `batch_snapshot` object with
+`format: "batchcraft.batch-snapshot"` and `format_version: 1`. The embedded snapshot inherits producer
+context from its enclosing manifest. It stores variable
 bindings canonically as `{ "placeholder": string, "values": string[] }`. Zero values may
 appear in mutable Saved Batch drafts but a successfully compiled Run cannot use a zero-value binding.
 An empty string is one concrete value. New writes reject exact duplicate values, including duplicate
@@ -204,7 +220,8 @@ explicit editable intent; Range cells and inactive independent bindings for link
 Snapshots may also preserve optional human-readable Workflow and Profile names plus immutable version
 numbers. These labels support historical UI inspection and are not required for replay.
 
-Manifest v1-v8 and snapshot v1-v5 are unsupported. The loader rejects them and never rewrites Run files.
+All prerelease manifest and Batch snapshot shapes are unsupported. The loader rejects them and never
+rewrites Run files.
 
 ## `manifest.csv`
 
@@ -216,9 +233,12 @@ The CSV manifest is a human-friendly tabular representation intended for:
 - future convenient import workflows;
 - simple external tooling.
 
-The columns emitted alongside a v9 JSON manifest are:
+The columns emitted alongside a v1 JSON manifest are:
 
 ```text
+format
+format_version
+batchcraft_version
 job_ordinal
 job_id
 prompt_version_id
@@ -234,8 +254,10 @@ workflow_sha256
 workflow_profile_sha256
 ```
 
-`manifest.json`'s `format_version` identifies the CSV schema that accompanies the Run; the CSV has no
-independent version field.
+Every row identifies `batchcraft.manifest-csv`, format version 1, and the producer batchcraft version.
+Manifest v1 also carries a strict descriptor for the fixed `manifest.csv` path. New Run publication
+always emits and byte-validates this CSV. Loading an already published Run does not require or parse it:
+the file may be missing or reformatted without overriding canonical JSON provenance.
 
 `resolved_image_inputs_json` contains the same ordered slot objects as the canonical Job JSON. The JSON
 manifest remains authoritative, including explicit `null` asset values for Base workflow.
@@ -252,13 +274,16 @@ A standalone CSV file is not sufficient for guaranteed exact replay. Exact repla
 
 `execution.json` is the versioned mutable execution record. It is reconstructable without SQLite and remains separate from generation-significant data in `manifest.json`.
 
-Only execution format v3 is supported. Execution formats v1 and v2 are intentionally unsupported and have no compatibility loader. This version change does not alter `run.json` or `manifest.json` versions.
+Only `batchcraft.execution` format v1 is supported. All prerelease execution formats are unsupported and
+have no compatibility loader.
 
-The v3 shape is:
+The v1 shape is:
 
 ```json
 {
-  "format_version": 3,
+  "format": "batchcraft.execution",
+  "format_version": 1,
+  "created_by": {"batchcraft_version": "..."},
   "run_id": "...",
   "status": "running",
   "started_at": "...",
@@ -301,7 +326,12 @@ Stop-after-current never interrupts ComfyUI or clears its queue. If submission a
 
 Local detach also never interrupts ComfyUI or clears its queue. SQLite intent is persisted before the owned local execution task is cancelled solely to wake an in-flight await. The executor converts that wake-up to the detached blocked shape only when durable detach intent is present; unrelated task cancellation does not fabricate a terminal execution outcome. A restarted application reads the blocked filesystem state and does not resume the old Run automatically.
 
-Every update writes canonical JSON to a unique sibling temporary file, fsyncs it, atomically replaces `execution.json`, and fsyncs the Run directory. A failed temporary write leaves the prior complete state file in place. Loading execution state verifies every recorded Result's existence, size, and SHA-256. Saving validates state transitions and append-only Result metadata, but reads and hashes only newly appended Result files.
+Every update writes canonical JSON to a unique sibling temporary file, fsyncs it, atomically replaces
+`execution.json`, and fsyncs the Run directory. Its producer value identifies the writer of the current
+mutable representation and may change on a later valid write. A failed temporary write leaves the prior
+complete state file in place. Loading execution state verifies every recorded Result's existence, size,
+and SHA-256. Saving validates state transitions and append-only Result metadata, but reads and hashes only
+newly appended Result files.
 
 ## Outputs
 
@@ -335,7 +365,10 @@ provenance and relies on the immutable base workflow snapshot for that target's 
 
 Reference Asset bytes live immutably in the Project's content-addressed asset store. Runs do not copy every input asset into their own directories by default.
 
-`asset.json` has `format_version: 1` and records the asset ID, SHA-256, original filename, detected MIME type or `null`, byte size, Project-relative stored path, and creation timestamp. Bytes are stored without a filename-derived extension at `assets/sha256/<first-two-hash-characters>/<full-sha256>/content`.
+`asset.json` has `format: "batchcraft.asset"`, `format_version: 1`, producer metadata, and records the
+Asset ID, SHA-256, original filename, detected MIME type or `null`, byte size, Project-relative stored
+path, creation timestamp, and parent Project ID/filesystem key. Bytes are stored without a filename-derived
+extension at `assets/sha256/<first-two-hash-characters>/<full-sha256>/content`.
 
 Import copies and hashes bytes in one pass through Project-local staging, then publishes the complete content/metadata directory atomically. Identical content reuses the existing asset record and bytes, regardless of the later import filename. The first successful import therefore supplies the retained original-filename and MIME metadata. Different content always has a different content path.
 
@@ -359,7 +392,8 @@ Human review metadata such as ratings and notes may be stored separately or in e
 
 ## Import and Rerun
 
-batchcraft should support importing the current manifest v9 for exact replay. A future CSV import may provide a convenient best-effort workflow, but CSV alone does not guarantee exact replay.
+BC-020 will add importing the current manifest v1 for exact replay. A future CSV import may provide a
+convenient best-effort workflow, but CSV alone does not guarantee exact replay.
 
 The application should recognize enough metadata to:
 
@@ -377,14 +411,15 @@ Modified reruns can be added later.
 
 ## Loading and Validation
 
-Loading a published Run requires `run.json`, canonical manifest v9, `manifest.csv`, both snapshot
-files, and `outputs/`. Manifest v9 requires a batch snapshot with `snapshot_version: 6`, a non-empty
+Loading a published Run requires `run.json`, canonical manifest v1, both raw snapshot files, and
+`outputs/`. The secondary `manifest.csv` is not required. Manifest v1 requires a Batch snapshot v1, a non-empty
 ordered PromptVersion collection, unique PromptVersion IDs, required names, and every Job's
 association with a known PromptVersion. The loader validates ordered, unique Profile slot metadata and
 requires every Job to contain the same ordered slot keys. Each resolved slot must contain either a
 complete Reference Asset object or explicit `null`; a missing slot or asset key is invalid.
 
-The loader also validates Run/Project/Batch identity consistency, the directory name against the frozen
+The loader also validates strict record and descriptor shapes, producer metadata, Run/Project/Batch
+owner-chain consistency, the exact `projects/<project>/batches/<batch>/<run>` layout, the directory name against the frozen
 `filesystem_key`, one-based contiguous Job ordinals,
 unique Job IDs, fully resolved prompts, snapshot hashes, and every referenced Project asset's metadata,
 size, and content hash. It also validates frozen parameter definitions, ordered Job keys, each resolved
@@ -392,32 +427,30 @@ value against its declared type, the Batch partition between independent and lin
 each Job's selected linked-row provenance. The Batch snapshot must contain the same identities and Workflow/Profile
 content and must recompile to the exact frozen plan. The loader reconstructs the original
 `CompiledRunPlan`, compiler warnings, execution
-identities, asset records, and both snapshots without SQLite. CSV remains secondary: it must be
-present in a complete current Run, but reformatting its line endings or quoting does not override or
-invalidate canonical JSON provenance. Unsupported versions are rejected and existing Run directories
+identities, asset records, and both snapshots without SQLite. Each Job output prefix must exactly match
+its Run and Job identity. CSV remains secondary and is ignored during normal loading. Unsupported versions are rejected and existing Run directories
 are never rewritten.
 
 ## Schema Versioning
 
-Every durable JSON format includes an explicit schema or format version. Import code must not infer a
-version solely from missing fields.
+Every canonical durable Project JSON record includes an explicit format identity, independently managed
+format version, and producer metadata. Import code must not infer a version solely from missing fields.
 
 Example:
 
 ```json
 {
+  "format": "batchcraft.manifest",
   "format_version": 1
 }
 ```
 
-The pre-release baseline supports `run.json` v2, manifest v9 with required snapshot v6, execution v3,
-and `asset.json` v1. Unsupported development versions fail closed. The application does not rewrite
-or delete them automatically. Version fields and migration boundaries remain so a future change can
-add an explicit compatibility path when released data requires one.
-
-Development Runs using `run-NNN`, `run.json` v1, or manifest v1-v8 are unsupported. Developers must
-inspect and recreate them manually when needed; batchcraft does not migrate, rename, rewrite, or delete
-those directories.
+The candidate v1 matrix is `batchcraft.project`, `batchcraft.batch`, `batchcraft.asset`,
+`batchcraft.run`, `batchcraft.manifest`, `batchcraft.batch-snapshot`, `batchcraft.execution`,
+`batchcraft.workflow-snapshot`, `batchcraft.workflow-profile-snapshot`, and
+`batchcraft.manifest-csv`, each independently at format version 1. Unsupported development formats fail
+closed. The application does not rewrite or delete them automatically. The committed emitted-byte
+fixture is `backend/tests/fixtures/v1_project/`.
 
 ## Filesystem Publication and SQLite Indexing
 

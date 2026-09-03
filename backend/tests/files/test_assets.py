@@ -5,9 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from batchcraft.files import AssetStoreError, ProjectAssetStore
+from batchcraft.files import (
+    AssetStoreError,
+    ProjectAssetStore,
+    ProjectIdentity,
+    ProjectOwnerStore,
+)
 
 FIXED_TIME = datetime(2026, 8, 27, 12, 30, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _publish_project_owner(tmp_path: Path) -> None:
+    ProjectOwnerStore(tmp_path).publish(ProjectIdentity("project-id", "project", "Project"))
 
 
 def test_import_calculates_sha256_and_stores_metadata(tmp_path: Path) -> None:
@@ -19,6 +29,7 @@ def test_import_calculates_sha256_and_stores_metadata(tmp_path: Path) -> None:
         project_path,
         id_factory=lambda: "asset-1",
         clock=lambda: FIXED_TIME,
+        producer_version="fixture-version",
     )
 
     asset = store.import_file(source)
@@ -36,7 +47,9 @@ def test_import_calculates_sha256_and_stores_metadata(tmp_path: Path) -> None:
     metadata_path = project_path / asset.stored_path
     metadata = json.loads(metadata_path.with_name("asset.json").read_text())
     assert metadata == {
+        "format": "batchcraft.asset",
         "format_version": 1,
+        "created_by": {"batchcraft_version": "fixture-version"},
         "asset_id": "asset-1",
         "sha256": expected_sha256,
         "original_filename": "portrait.png",
@@ -44,6 +57,7 @@ def test_import_calculates_sha256_and_stores_metadata(tmp_path: Path) -> None:
         "byte_size": len(content),
         "stored_path": asset.stored_path,
         "created_at": "2026-08-27T12:30:00Z",
+        "project": {"project_id": "project-id", "filesystem_key": "project"},
     }
     assert store.load(expected_sha256) == asset
 
@@ -83,10 +97,60 @@ def test_asset_format_version_requires_a_json_integer(
     metadata["format_version"] = invalid_version
     metadata_path.write_text(json.dumps(metadata))
 
-    with pytest.raises(AssetStoreError, match="unsupported asset format version"):
+    with pytest.raises(AssetStoreError, match="unsupported format version"):
         store.read_metadata(asset.sha256)
-    with pytest.raises(AssetStoreError, match="unsupported asset format version"):
+    with pytest.raises(AssetStoreError, match="unsupported format version"):
         store.read_asset_id(asset.sha256)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("format", "batchcraft.other", "wrong format identity"),
+        ("format_version", 2, "unsupported format version"),
+        ("extra", "value", "unexpected extra"),
+    ),
+)
+def test_asset_rejects_invalid_v1_format_shape(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    source = tmp_path / "portrait.png"
+    source.write_bytes(b"asset bytes")
+    store = ProjectAssetStore(tmp_path / "project", id_factory=lambda: "asset-1")
+    asset = store.import_file(source)
+    metadata_path = (store.project_path / asset.stored_path).with_name("asset.json")
+    metadata = json.loads(metadata_path.read_text())
+    metadata[field] = value
+    metadata_path.write_text(json.dumps(metadata))
+
+    with pytest.raises(AssetStoreError, match=message):
+        store.read_metadata(asset.sha256)
+
+
+@pytest.mark.parametrize("unsafe_directory", (".staging", "sha256"))
+def test_import_rejects_symlinked_internal_directory(tmp_path: Path, unsafe_directory: str) -> None:
+    source = tmp_path / "portrait.png"
+    source.write_bytes(b"asset bytes")
+    project_path = tmp_path / "project"
+    assets_path = project_path / "assets"
+    assets_path.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (assets_path / unsafe_directory).symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(AssetStoreError, match="import path is unsafe"):
+        ProjectAssetStore(project_path).import_file(source)
+    assert not tuple(external.iterdir())
+
+
+def test_import_rejects_empty_asset_id_before_publication(tmp_path: Path) -> None:
+    source = tmp_path / "portrait.png"
+    source.write_bytes(b"asset bytes")
+    store = ProjectAssetStore(tmp_path / "project", id_factory=lambda: "")
+
+    with pytest.raises(AssetStoreError, match="asset ID is not URL-safe"):
+        store.import_file(source)
+    assert not tuple((store.assets_path / "sha256").glob("*/*"))
 
 
 def test_different_content_remains_distinct(tmp_path: Path) -> None:
@@ -160,19 +224,19 @@ def test_metadata_listing_skips_corrupt_unrelated_asset_and_rejects_duplicate_id
 
     assert store.list_metadata() == (first,)
 
-    second_metadata_path.with_name("asset.json").write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "asset_id": first.asset_id,
-                "sha256": second.sha256,
-                "original_filename": second.original_filename,
-                "mime_type": second.mime_type,
-                "byte_size": second.byte_size,
-                "stored_path": second.stored_path,
-                "created_at": second.created_at,
-            }
-        )
-    )
+    duplicate_metadata = {
+        "format": "batchcraft.asset",
+        "format_version": 1,
+        "created_by": {"batchcraft_version": "fixture-version"},
+        "asset_id": first.asset_id,
+        "sha256": second.sha256,
+        "original_filename": second.original_filename,
+        "mime_type": second.mime_type,
+        "byte_size": second.byte_size,
+        "stored_path": second.stored_path,
+        "created_at": second.created_at,
+        "project": {"project_id": "project-id", "filesystem_key": "project"},
+    }
+    second_metadata_path.with_name("asset.json").write_text(json.dumps(duplicate_metadata))
     with pytest.raises(AssetStoreError, match="duplicate Project asset ID"):
         store.list_metadata()

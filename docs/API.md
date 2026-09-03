@@ -188,7 +188,8 @@ Archive operations set archive timestamps through `POST .../archive`; they do no
 versions. Canonical JSON and stored hashes are checked when versions are read.
 
 `POST /api/batches/preview` and `POST /api/runs` accept the same complete Batch request shape plus a
-required `batch_snapshot` object containing the full editable Saved Batch state. The request carries
+required `batch_snapshot` v1 object containing `format: "batchcraft.batch-snapshot"`,
+`format_version: 1`, and the full editable Saved Batch state. The request carries
 Project and Batch identity, an ordered `prompt_versions` array with stable ID, frozen name, and
 template text, canonical variable bindings shaped as `{ "placeholder": string, "values": string[] }`,
 ordered image bindings shaped as `{ "slot_key": string, "values": [asset_id | null] }`, seed input,
@@ -215,7 +216,7 @@ scalar `resolved_parameters`, selected `resolved_parameter_sets` row provenance,
 materialized seed. Each resolved image entry has `slot_key`, frozen `label`, nullable `asset_id`, and a
 nullable frozen filename. The required `batch_snapshot` exposes canonical
 editable intent, including optional frozen Workflow/Profile display labels and version numbers. The
-Run loader supports manifest v9 with `snapshot_version: 6`; unsupported manifest or snapshot versions
+Run loader supports `batchcraft.manifest` v1 with Batch snapshot v1; unsupported identities or versions
 make the Run invalid rather than producing a partial response.
 
 ## Project Assets
@@ -237,9 +238,9 @@ Project, performs full size and SHA-256 verification through `ProjectAssetStore.
 unsafe files, and verifies the selected image signature before serving it. Arbitrary local paths are
 never accepted.
 
-A missing Project has an empty asset listing. Import may create its content-addressed asset
-hierarchy, but it does not manufacture `project.json`; SQLite-backed Project creation/adoption or
-successful Run publication binds a Project filesystem key to Project identity.
+A missing Project has an empty asset listing. Import requires an existing valid `batchcraft.project` v1
+owner and writes `batchcraft.asset` v1 metadata bound to that Project identity. SQLite-backed Project
+creation/adoption or successful Run publication creates the owner binding.
 
 ## Saved Batch Persistence
 
@@ -301,14 +302,14 @@ concrete ordered seed list before Preview or Run creation.
 There is no SQLite Run index yet. The application service scans only the documented hierarchy:
 
 ```text
-<projects-root>/*/batches/*/run-*
+<projects-root>/*/batches/*/*-*
 ```
 
 Candidates are constrained to the configured root. The filesystem layer reads only the stable Run ID from safe `run.json` identity metadata during discovery, and only matching candidate paths receive full `RunFilesystemStore.load_run()` validation. Corrupt unrelated Runs therefore do not block lookup. This narrow scan is temporary application glue, not a generic repository abstraction.
 
 ## Execution Tasks
 
-`POST /api/runs/{run_id}/execute` returns `202 Accepted` after retaining an in-process `asyncio.Task`. The task invokes the existing queue-depth-1 executor. SQLite is authoritative only for durable cancellation request intent; all authoritative execution outcomes remain in execution format v3 `execution.json`.
+`POST /api/runs/{run_id}/execute` returns `202 Accepted` after retaining an in-process `asyncio.Task`. The task invokes the existing queue-depth-1 executor. SQLite is authoritative only for durable cancellation request intent; all authoritative execution outcomes remain in `batchcraft.execution` v1 `execution.json`.
 
 `POST /api/runs/{run_id}/discard` durably marks a Run that has never started as `cancelled` and returns the existing execution response shape with `200 OK`. The Run directory and frozen provenance remain available through Run lookup and Run Plan inspection. Discard records `completed_at`, leaves `started_at`, `current_job_ordinal`, and `error` null, preserves every Job as pristine `pending`, and records the stable Run diagnostic `discarded_before_start`. Repeated discard is idempotent.
 
@@ -347,7 +348,7 @@ Run `blocked`. If an admitted final Job succeeds, no cancelled suffix remains an
 `GET /api/runs/{run_id}/execution` returns an optional `cancellation` object, and
 `GET /api/runs/{run_id}` returns the same object under `execution.cancellation`. It contains `mode`,
 nullable `requested_at`, and one projection state: `stop_requested` before admission,
-`stopping_after_current_job` after admission, `cancelled` when execution v3 records a cancellation
+`stopping_after_current_job` after admission, `cancelled` when execution v1 records a cancellation
 outcome, or `finished` when the request exists but execution honestly reached `succeeded`, `failed`, or
 `blocked`. A discarded Run projects `cancelled` with `requested_at: null`.
 

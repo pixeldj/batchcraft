@@ -270,7 +270,7 @@ async def _execute_job(
                     if item.value is not None
                 },
                 seed=persisted_job.compiled_job.seed,
-                output_prefix=f"batchcraft/{run.run_id}/{persisted_job.job_id}/result",
+                output_prefix=persisted_job.output_prefix,
             ),
         )
     except Exception as error:

@@ -330,7 +330,8 @@ export function buildEditableBatchSnapshot(
     };
 
   return {
-    snapshot_version: 6,
+    format: "batchcraft.batch-snapshot",
+    format_version: 1,
     project,
     source_saved_batch: context.sourceSavedBatch,
     batch: { ...batch, description: form.batchDescription.trim() || null },

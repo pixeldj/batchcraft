@@ -43,9 +43,12 @@ and browser-session formats. Unsupported persisted data fails closed; an unsuppo
 browser session starts from clean working state. The application must not silently delete or rewrite
 local databases or Run directories.
 
-Keep explicit format versions, the SQLite migration runner, and current-version rejection tests. When
-the baseline changes, update the version, operational documentation, and current-format tests together.
-Add a compatibility path only for a concrete released-data or external-consumer requirement.
+Keep explicit format identities and independently managed versions, the SQLite migration runner, and
+current-version rejection tests. BC-019 establishes candidate-v1 Project filesystem formats, but the
+released compatibility promise does not begin until ADR 0012's import and cross-instance gates pass.
+Until then, unsupported prerelease data still fails closed. After that gate, valid v1 data must not be
+invalidated by rewriting baselines or casually dropping readers. Add a compatibility path only for a
+concrete released-data or external-consumer requirement.
 
 ## Repository Shape
 
@@ -124,7 +127,7 @@ This phase should establish:
 - Run and Job execution identity;
 - stable internal filesystem identities independent of editable display names;
 - canonical `manifest.json`;
-- secondary `manifest.csv`;
+- secondary `manifest.csv`, emitted during publication but optional during later loading;
 - base workflow and Workflow Profile snapshots;
 - immutable content-addressed Project assets;
 - staging and atomic Run publication;
@@ -144,7 +147,7 @@ This boundary intentionally excludes scheduling, retries, mutable execution-stat
 
 Completed.
 
-Production code under `backend/src/batchcraft/execution/` persists execution format v3 mutable state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory. Execution formats v1 and v2 are intentionally unsupported; there are no compatibility loaders.
+Production code under `backend/src/batchcraft/execution/` persists `batchcraft.execution` v1 mutable state, executes one published Run with queue depth one, falls back from advisory WebSocket failure to bounded history reconciliation, and writes deterministic Results under the Run's `outputs/` directory. All prerelease execution formats are intentionally unsupported; there are no compatibility loaders.
 
 This layer accepts a narrow cancellation-control boundary for submission admission and stop checkpoints, but excludes cancellation-intent persistence itself. It also excludes global Run selection, concurrent execution, priorities, retries, automatic recovery, SQLite, FastAPI, React, and result review UI. Normal tests use a deterministic ComfyUI fake.
 
@@ -323,7 +326,7 @@ Project-wide history, or executor restart recovery.
 
 The backend/core portion of BC-003A is implemented. SQLite stores idempotent `after_current_job`
 intent, the application layer serializes durable request acknowledgement against Job submission
-admission, and execution format v3 records the resulting Run and Job outcomes. The executor stops
+admission, and execution format v1 records the resulting Run and Job outcomes. The executor stops
 before another submission when possible, otherwise lets the already admitted Job reach an honest
 terminal or blocked state and ingests successful Results before cancelling the remaining unsubmitted
 Jobs. It never interrupts ComfyUI or clears its queue.
@@ -343,8 +346,8 @@ BC-017 adds optional immutable Run name and notes provenance. Published Run dire
 true identity; discovery narrows candidates by directory convention, lookup matches persisted Run ID,
 and loading verifies the directory against the frozen filesystem key.
 
-This change establishes `run.json` v2 and manifest v8. Batch snapshot v5, execution v3, browser
-working-session recovery v1, and SQLite remain current. Existing development `run-NNN` directories,
+This change historically established `run.json` v2 and manifest v8. Batch snapshot v5, execution v3,
+and browser working-session recovery v1 were current at that phase. Existing development `run-NNN` directories,
 `run.json` v1, and manifest v7 Runs are unsupported and must be inspected and recreated manually when
 needed. batchcraft does not migrate, rename, rewrite, or delete them automatically.
 
@@ -355,11 +358,21 @@ ordered row dimension. The compiler inserts a linked set at its earliest Profile
 members as independent axes, and emits complete scalar/Base parameters plus selected-row provenance.
 The executor and ComfyUI adapter remain unchanged and receive scalar overrides only.
 
-This change establishes Batch snapshot v6, manifest v9, CSV resolved-set provenance, browser
-working-session recovery v2, and normalized linked-set tables in the consolidated SQLite baseline.
-`run.json` v2 and execution v3 remain current. Existing databases, snapshot-v5/manifest-v8 development
+This change historically established Batch snapshot v6, manifest v9, CSV resolved-set provenance,
+browser working-session recovery v2, and normalized linked-set tables in the consolidated SQLite baseline.
+`run.json` v2 and execution v3 were current at that phase. Existing databases, snapshot-v5/manifest-v8 development
 Runs, and recovery v1 drafts are unsupported. They require manual inspection and recreation when needed;
 batchcraft never migrates, rewrites, or deletes them automatically.
+
+### Phase 2.13: V1 format consolidation
+
+BC-019 resets the canonical Project filesystem records to independently named candidate-v1 formats.
+Project, Batch, Asset, Run, manifest, Batch snapshot, execution, raw snapshot descriptor, and CSV
+contracts each begin at format version 1. Canonical batchcraft JSON records include producer application
+metadata; raw workflow payloads remain directly usable and are identified by hash-bound manifest
+descriptors. Each Job freezes a generated output prefix bound to Run and Job identity. The emitted-byte
+fixture under `backend/tests/fixtures/v1_project/` locks the complete current record set. This phase does
+not add import, historical indexing, detached resources, or the cross-instance release gate.
 
 ## Python Conventions
 
@@ -415,7 +428,7 @@ rather than only `:memory:`.
 Cancellation changes require tests for durable and idempotent intent, both request/admission race
 orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and
 blocked precedence, succeeded-prefix/cancelled-suffix validation, absence of ComfyUI interrupt or queue
-operations, read-model reconstruction, and execution v2 rejection plus v3 round-trip behavior.
+operations, read-model reconstruction, and rejection of non-v1 execution records plus v1 round-trip behavior.
 
 ## Frontend Conventions
 
@@ -588,10 +601,12 @@ Changes to JSON/CSV Run artifacts are version-sensitive.
 When changing a durable format:
 
 1. update `docs/FILE_FORMAT.md`;
-2. update explicit format/schema versions when appropriate;
-3. add current import/round-trip and unsupported-version tests;
-4. state whether a compatibility path is explicitly required;
-5. document any manual reset or migration behavior.
+2. update its explicit format identity and independently managed schema version when appropriate;
+3. define producer metadata and any raw-payload or secondary-artifact descriptors;
+4. add current round-trip, exact-shape, unsupported-version, hash, path, and owner-chain tests;
+5. update the committed golden fixture and inspect its emitted bytes;
+6. state whether a compatibility path is explicitly required;
+7. document any manual reset or migration behavior.
 
 During pre-release development, old Run readability is not the default requirement. Unsupported data
 must fail closed without automatic deletion or rewriting. Do not infer durable format versions solely

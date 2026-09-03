@@ -77,7 +77,7 @@ from batchcraft.files import (
     AdoptableProject,
     AssetRecord,
     BatchIdentity,
-    BatchSnapshotV6,
+    BatchSnapshotV1,
     ProjectIdentity,
     PublishedRun,
 )
@@ -198,7 +198,7 @@ class BatchRequest(ApiModel):
     seeds: SeedRequest
     workflow: dict[str, object]
     workflow_profile: dict[str, object]
-    batch_snapshot: BatchSnapshotV6
+    batch_snapshot: BatchSnapshotV1
 
     @model_validator(mode="after")
     def validate_snapshot_consistency(self) -> Self:
@@ -1371,7 +1371,7 @@ class RunResponse(RunCreatedResponse):
     prompt_versions: list[PromptSnapshotResponse]
     jobs: list[RunJobResponse]
     plan: RunPlanResponse
-    batch_snapshot: BatchSnapshotV6
+    batch_snapshot: BatchSnapshotV1
     execution: ExecutionResponse
 
     @classmethod
@@ -1399,7 +1399,7 @@ class RunResponse(RunCreatedResponse):
                 for job in run.compiled_plan.jobs
             ],
             plan=RunPlanResponse.from_run(run),
-            batch_snapshot=BatchSnapshotV6.model_validate(run.batch_snapshot),
+            batch_snapshot=BatchSnapshotV1.model_validate(run.batch_snapshot),
             execution=ExecutionResponse.from_state(
                 state,
                 cancellation,

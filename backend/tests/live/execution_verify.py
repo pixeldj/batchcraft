@@ -113,7 +113,8 @@ async def verify() -> dict[str, object]:
         project=project,
         batch=batch,
         batch_snapshot={
-            "snapshot_version": 6,
+            "format": "batchcraft.batch-snapshot",
+            "format_version": 1,
             "project": {
                 "id": project.id,
                 "filesystem_key": project.filesystem_key,

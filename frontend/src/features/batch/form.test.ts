@@ -112,7 +112,8 @@ describe("buildBatchRequest", () => {
         parameters: [],
       },
       batch_snapshot: expect.objectContaining({
-        snapshot_version: 6,
+        format: "batchcraft.batch-snapshot",
+        format_version: 1,
         source_saved_batch: null,
       }),
     });

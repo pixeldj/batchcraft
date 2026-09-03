@@ -4,7 +4,6 @@ import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, closing
 from datetime import datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, cast
 
@@ -85,6 +84,7 @@ from batchcraft.db import (
 from batchcraft.domain import CompilationError
 from batchcraft.execution import execute_run
 from batchcraft.files import ProjectOwnerStore
+from batchcraft.version import batchcraft_version
 
 from .config import Settings
 from .schemas import (
@@ -942,10 +942,7 @@ def _create_comfyui_client(settings: Settings) -> ComfyUIClient:
 
 
 def _package_version() -> str:
-    try:
-        return version("batchcraft")
-    except PackageNotFoundError:
-        return "0.1.0"
+    return batchcraft_version()
 
 
 def _register_error_handlers(app: FastAPI) -> None:

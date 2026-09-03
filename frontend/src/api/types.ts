@@ -92,7 +92,8 @@ export interface RunCreateRequest extends BatchRequest {
 }
 
 export interface EditableBatchSnapshot {
-  snapshot_version: 6;
+  format: "batchcraft.batch-snapshot";
+  format_version: 1;
   project: IdentityRequest;
   source_saved_batch: { id: string; revision: number } | null;
   batch: IdentityRequest & { description: string | null };

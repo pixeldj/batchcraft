@@ -10,9 +10,8 @@ from batchcraft.files._io import (
     read_json_object,
     write_json,
 )
+from batchcraft.files.formats import PROJECT_FORMAT, format_header, validate_format_record
 from batchcraft.files.models import AdoptableProject, ProjectIdentity
-
-PROJECT_OWNER_FORMAT_VERSION = 1
 
 
 class ProjectOwnerError(ValueError):
@@ -28,8 +27,9 @@ class ProjectOwnerDiscoveryError(ProjectOwnerError):
 
 
 class ProjectOwnerStore:
-    def __init__(self, projects_path: Path) -> None:
+    def __init__(self, projects_path: Path, *, producer_version: str | None = None) -> None:
         self.projects_path = projects_path
+        self._producer_version = producer_version
 
     def publish(self, project: ProjectIdentity) -> ProjectIdentity:
         """Create the owner binding if absent and return the immutable stored identity."""
@@ -48,7 +48,7 @@ class ProjectOwnerStore:
                 write_json(
                     temporary_path,
                     {
-                        "format_version": PROJECT_OWNER_FORMAT_VERSION,
+                        **format_header(PROJECT_FORMAT, self._producer_version),
                         "project_id": project.id,
                         "filesystem_key": project.filesystem_key,
                         "name": project.name,
@@ -139,10 +139,16 @@ class ProjectOwnerStore:
                 raise
             raise ProjectOwnerError(f"invalid Project owner file {owner_path}: {error}") from error
 
-        if type(data.get("format_version")) is not int or (
-            data["format_version"] != PROJECT_OWNER_FORMAT_VERSION
-        ):
-            raise ProjectOwnerError(f"unsupported Project owner format in {owner_path}")
+        try:
+            validate_format_record(
+                data,
+                PROJECT_FORMAT,
+                {"project_id", "filesystem_key", "name"},
+            )
+        except ValueError as error:
+            raise ProjectOwnerError(
+                f"invalid Project owner format in {owner_path}: {error}"
+            ) from error
         project_id = _required_string(data, "project_id", owner_path)
         _validate_project_id(project_id)
         stored_key = _required_string(data, "filesystem_key", owner_path)

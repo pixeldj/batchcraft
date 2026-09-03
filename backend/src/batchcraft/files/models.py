@@ -43,6 +43,7 @@ class PersistedJob:
     job_id: str
     compiled_job: CompiledJob
     image_inputs: tuple["PersistedImageInput", ...]
+    output_prefix: str
 
 
 @dataclass(frozen=True, slots=True)

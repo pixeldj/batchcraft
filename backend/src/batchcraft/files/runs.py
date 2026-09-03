@@ -3,7 +3,6 @@ import hashlib
 import io
 import json
 import math
-import os
 import re
 import shutil
 import unicodedata
@@ -63,6 +62,21 @@ from batchcraft.files._io import (
     write_json,
 )
 from batchcraft.files.assets import AssetStoreError, ProjectAssetStore
+from batchcraft.files.batch_owners import BatchOwnerError, BatchOwnerStore
+from batchcraft.files.formats import (
+    MANIFEST_CSV_FORMAT,
+    MANIFEST_CSV_FORMAT_VERSION,
+    MANIFEST_FORMAT,
+    RUN_FORMAT,
+    WORKFLOW_PROFILE_SNAPSHOT_FORMAT,
+    WORKFLOW_PROFILE_SNAPSHOT_FORMAT_VERSION,
+    WORKFLOW_SNAPSHOT_FORMAT,
+    WORKFLOW_SNAPSHOT_FORMAT_VERSION,
+    format_header,
+    require_exact_keys,
+    validate_descriptor,
+    validate_format_record,
+)
 from batchcraft.files.models import (
     AssetRecord,
     BatchIdentity,
@@ -73,15 +87,13 @@ from batchcraft.files.models import (
 )
 from batchcraft.files.project_owners import ProjectOwnerError, ProjectOwnerStore
 from batchcraft.files.snapshots import (
-    BatchSnapshotV6,
+    BatchSnapshotV1,
     SnapshotLinkedParameterSet,
     SnapshotParameterRangeBinding,
     SnapshotParameterValuesBinding,
 )
+from batchcraft.version import batchcraft_version
 
-RUN_FORMAT_VERSION = 2
-MANIFEST_FORMAT_VERSION = 9
-OWNER_FORMAT_VERSION = 1
 RUN_NAME_MAX_LENGTH = 200
 RUN_DESCRIPTION_MAX_LENGTH = 4000
 RUN_SLUG_MAX_LENGTH = 80
@@ -89,6 +101,9 @@ _ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 _RUN_FILESYSTEM_KEY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
 _RUN_SLUG_SEPARATOR = re.compile(r"[^a-z0-9]+")
 _CSV_COLUMNS = (
+    "format",
+    "format_version",
+    "batchcraft_version",
     "job_ordinal",
     "job_id",
     "prompt_version_id",
@@ -116,10 +131,12 @@ class RunFilesystemStore:
         *,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
+        producer_version: str | None = None,
     ) -> None:
         self.projects_path = projects_path
         self._id_factory = id_factory or (lambda: str(uuid4()))
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._producer_version = producer_version
 
     def create_run(
         self,
@@ -143,19 +160,24 @@ class RunFilesystemStore:
         project_path = self.projects_path / project.filesystem_key
         batch_path = project_path / "batches" / batch.filesystem_key
         try:
-            ProjectOwnerStore(self.projects_path).publish(project)
+            ProjectOwnerStore(
+                self.projects_path,
+                producer_version=self._producer_version,
+            ).publish(project)
         except ProjectOwnerError as error:
             raise RunStoreError(str(error)) from error
-        ensure_directory(batch_path)
-        self._ensure_owner_file(
-            batch_path / "batch.json",
-            "batch",
-            batch.id,
-            batch.filesystem_key,
-            batch.name,
-        )
+        try:
+            BatchOwnerStore(
+                project_path,
+                producer_version=self._producer_version,
+            ).publish(batch)
+        except BatchOwnerError as error:
+            raise RunStoreError(str(error)) from error
 
-        asset_store = ProjectAssetStore(project_path)
+        asset_store = ProjectAssetStore(
+            project_path,
+            producer_version=self._producer_version,
+        )
         assets_by_id = self._validate_image_assets(plan, image_assets, asset_store)
         run_name = _normalize_run_text(name, "Run name", RUN_NAME_MAX_LENGTH)
         run_description = _normalize_run_text(
@@ -171,6 +193,8 @@ class RunFilesystemStore:
         staging_created = False
 
         try:
+            if staging_root.is_symlink():
+                raise RunStoreError("Run staging directory is unsafe")
             ensure_directory(staging_root)
             staging_path.mkdir()
             staging_created = True
@@ -195,25 +219,31 @@ class RunFilesystemStore:
             write_bytes(staging_path / "workflow.json", workflow_bytes)
             write_bytes(staging_path / "workflow-profile.json", workflow_profile_bytes)
 
-            persisted_jobs = tuple(
-                PersistedJob(
-                    job_id=self._new_id("Job"),
-                    compiled_job=job,
-                    image_inputs=tuple(
-                        PersistedImageInput(
-                            slot_key=item.slot_key,
-                            slot_label=next(
-                                slot.label
-                                for slot in plan.image_input_slots
-                                if slot.key == item.slot_key
-                            ),
-                            asset=(None if item.asset_id is None else assets_by_id[item.asset_id]),
-                        )
-                        for item in job.resolved_image_inputs
-                    ),
+            persisted_jobs_list: list[PersistedJob] = []
+            for job in plan.jobs:
+                job_id = self._new_id("Job")
+                persisted_jobs_list.append(
+                    PersistedJob(
+                        job_id=job_id,
+                        compiled_job=job,
+                        image_inputs=tuple(
+                            PersistedImageInput(
+                                slot_key=item.slot_key,
+                                slot_label=next(
+                                    slot.label
+                                    for slot in plan.image_input_slots
+                                    if slot.key == item.slot_key
+                                ),
+                                asset=(
+                                    None if item.asset_id is None else assets_by_id[item.asset_id]
+                                ),
+                            )
+                            for item in job.resolved_image_inputs
+                        ),
+                        output_prefix=f"batchcraft/{run_id}/{job_id}/result",
+                    )
                 )
-                for job in plan.jobs
-            )
+            persisted_jobs = tuple(persisted_jobs_list)
             run_metadata = _run_metadata(
                 run_id=run_id,
                 run_number=run_number,
@@ -226,6 +256,7 @@ class RunFilesystemStore:
                 job_count=plan.job_count,
                 workflow_sha256=workflow_sha256,
                 workflow_profile_sha256=workflow_profile_sha256,
+                producer_version=self._producer_version,
             )
             manifest = _manifest(
                 run_metadata=run_metadata,
@@ -234,6 +265,7 @@ class RunFilesystemStore:
                 jobs=persisted_jobs,
                 workflow_sha256=workflow_sha256,
                 workflow_profile_sha256=workflow_profile_sha256,
+                producer_version=self._producer_version,
             )
             write_json(staging_path / "run.json", run_metadata)
             write_json(staging_path / "manifest.json", manifest)
@@ -244,6 +276,7 @@ class RunFilesystemStore:
                     jobs=persisted_jobs,
                     workflow_sha256=workflow_sha256,
                     workflow_profile_sha256=workflow_profile_sha256,
+                    producer_version=self._producer_version,
                 ),
             )
             fsync_directory(outputs_path)
@@ -278,6 +311,10 @@ class RunFilesystemStore:
                 reservation_path.rmdir()
 
     def load_run(self, run_path: Path) -> PublishedRun:
+        if run_path.is_symlink() or not run_path.is_dir():
+            raise RunStoreError(f"Run path is missing or unsafe: {run_path}")
+        if not run_path.resolve().is_relative_to(self.projects_path.resolve()):
+            raise RunStoreError(f"Run path is outside the configured Projects root: {run_path}")
         try:
             project_path = run_path.parents[2]
         except IndexError as error:
@@ -291,6 +328,8 @@ class RunFilesystemStore:
             )
         if run_path.parent.name != published_run.batch.filesystem_key:
             raise RunStoreError("Run directory is not under its recorded Batch filesystem key")
+        if run_path.parent.parent.name != "batches":
+            raise RunStoreError("Run directory is not under a Project batches directory")
         if project_path.name != published_run.project.filesystem_key:
             raise RunStoreError("Run directory is not under its recorded Project filesystem key")
         return published_run
@@ -301,8 +340,7 @@ class RunFilesystemStore:
             raise RunStoreError(f"Run identity metadata is missing or unsafe: {run_path}")
         try:
             run_data = read_json_object(metadata_path)
-            if _integer(run_data, "format_version") != RUN_FORMAT_VERSION:
-                raise RunStoreError("unsupported run.json format version")
+            _validate_run_record(run_data)
             return _required_string(run_data, "run_id")
         except (OSError, ValueError) as error:
             if isinstance(error, RunStoreError):
@@ -313,14 +351,17 @@ class RunFilesystemStore:
         required_files = (
             "run.json",
             "manifest.json",
-            "manifest.csv",
             "workflow.json",
             "workflow-profile.json",
         )
-        missing = tuple(name for name in required_files if not (run_path / name).is_file())
+        missing = tuple(
+            name
+            for name in required_files
+            if (run_path / name).is_symlink() or not (run_path / name).is_file()
+        )
         if missing:
             raise RunStoreError(f"Run is missing required files: {', '.join(missing)}")
-        if not (run_path / "outputs").is_dir():
+        if (run_path / "outputs").is_symlink() or not (run_path / "outputs").is_dir():
             raise RunStoreError("Run is missing its outputs directory")
 
         try:
@@ -353,6 +394,27 @@ class RunFilesystemStore:
             workflow_profile=workflow_profile,
         )
 
+        try:
+            project_owner = ProjectOwnerStore(self.projects_path).read(project_path.name)
+            batch_key = (
+                run_path.parent.parent.name
+                if run_path.parent.name == ".staging"
+                else run_path.parent.name
+            )
+            batch_owner = BatchOwnerStore(project_path).read(batch_key)
+        except (ProjectOwnerError, BatchOwnerError) as error:
+            raise RunStoreError(f"Run owner chain is invalid: {error}") from error
+        if (project_owner.id, project_owner.filesystem_key) != (
+            loaded.project.id,
+            loaded.project.filesystem_key,
+        ):
+            raise RunStoreError("Run Project identity does not match project.json")
+        if (batch_owner.id, batch_owner.filesystem_key) != (
+            loaded.batch.id,
+            loaded.batch.filesystem_key,
+        ):
+            raise RunStoreError("Run Batch identity does not match batch.json")
+
         asset_store = ProjectAssetStore(project_path)
         validated_assets: dict[str, AssetRecord] = {}
         for job in loaded.jobs:
@@ -375,11 +437,16 @@ class RunFilesystemStore:
                     ) from error
 
         if validate_csv:
+            if (run_path / "manifest.csv").is_symlink() or not (
+                run_path / "manifest.csv"
+            ).is_file():
+                raise RunStoreError("staged Run is missing a safe manifest.csv")
             expected_csv = _manifest_csv_bytes(
                 plan=loaded.compiled_plan,
                 jobs=loaded.jobs,
                 workflow_sha256=workflow_sha256,
                 workflow_profile_sha256=workflow_profile_sha256,
+                producer_version=self._producer_version,
             )
             if (run_path / "manifest.csv").read_bytes() != expected_csv:
                 raise RunStoreError("staged manifest.csv does not match the canonical manifest")
@@ -433,6 +500,8 @@ class RunFilesystemStore:
 
     def _reserve_run_number(self, batch_path: Path, slug: str) -> tuple[int, Path, Path]:
         allocations_path = batch_path / ".allocations"
+        if allocations_path.is_symlink():
+            raise RunStoreError("Run allocation directory is unsafe")
         ensure_directory(allocations_path)
         for run_number in count(1):
             prefix = f"{run_number:03d}"
@@ -450,44 +519,6 @@ class RunFilesystemStore:
                 continue
             return run_number, reservation_path, final_path
         raise AssertionError("unreachable")
-
-    def _ensure_owner_file(
-        self,
-        path: Path,
-        kind: str,
-        owner_id: str,
-        filesystem_key: str,
-        name: str,
-    ) -> None:
-        payload = {
-            "format_version": OWNER_FORMAT_VERSION,
-            f"{kind}_id": owner_id,
-            "filesystem_key": filesystem_key,
-            "name": name,
-        }
-        temporary_path = path.parent / f".{path.name}.{uuid4()}.tmp"
-        try:
-            write_json(temporary_path, payload)
-            try:
-                os.link(temporary_path, path)
-                fsync_directory(path.parent)
-            except FileExistsError:
-                pass
-        finally:
-            temporary_path.unlink(missing_ok=True)
-
-        try:
-            existing = read_json_object(path)
-        except ValueError as error:
-            raise RunStoreError(f"invalid {kind} identity file {path}: {error}") from error
-        if _integer(existing, "format_version") != OWNER_FORMAT_VERSION:
-            raise RunStoreError(f"unsupported {kind} identity format in {path}")
-        if existing.get(f"{kind}_id") != owner_id:
-            raise RunStoreError(
-                f"{kind.capitalize()} filesystem key {filesystem_key!r} belongs to another ID"
-            )
-        if existing.get("filesystem_key") != filesystem_key:
-            raise RunStoreError(f"{kind.capitalize()} identity file has a mismatched key")
 
     def _validate_owner(self, owner_id: str, key: str, name: str, kind: str) -> None:
         if not owner_id:
@@ -645,9 +676,10 @@ def _run_metadata(
     job_count: int,
     workflow_sha256: str,
     workflow_profile_sha256: str,
+    producer_version: str | None,
 ) -> dict[str, object]:
     return {
-        "format_version": RUN_FORMAT_VERSION,
+        **format_header(RUN_FORMAT, producer_version),
         "run_id": run_id,
         "run_number": run_number,
         "name": name,
@@ -671,9 +703,10 @@ def _manifest(
     jobs: tuple[PersistedJob, ...],
     workflow_sha256: str,
     workflow_profile_sha256: str,
+    producer_version: str | None,
 ) -> dict[str, object]:
     return {
-        "format_version": MANIFEST_FORMAT_VERSION,
+        **format_header(MANIFEST_FORMAT, producer_version),
         "run": {
             "run_id": run_metadata["run_id"],
             "run_number": run_metadata["run_number"],
@@ -721,12 +754,23 @@ def _manifest(
             for warning in plan.warnings
         ],
         "workflow_snapshot": {
+            "format": WORKFLOW_SNAPSHOT_FORMAT,
+            "format_version": WORKFLOW_SNAPSHOT_FORMAT_VERSION,
+            "payload_format": "comfyui.api-workflow",
             "path": "workflow.json",
             "sha256": workflow_sha256,
         },
         "workflow_profile_snapshot": {
+            "format": WORKFLOW_PROFILE_SNAPSHOT_FORMAT,
+            "format_version": WORKFLOW_PROFILE_SNAPSHOT_FORMAT_VERSION,
+            "payload_format": "batchcraft.workflow-profile",
             "path": "workflow-profile.json",
             "sha256": workflow_profile_sha256,
+        },
+        "manifest_csv": {
+            "format": MANIFEST_CSV_FORMAT,
+            "format_version": MANIFEST_CSV_FORMAT_VERSION,
+            "path": "manifest.csv",
         },
         "jobs": [
             {
@@ -762,6 +806,7 @@ def _manifest(
                     for item in job.compiled_job.resolved_parameter_sets
                 ],
                 "seed": job.compiled_job.seed,
+                "output_prefix": job.output_prefix,
                 "workflow_sha256": workflow_sha256,
                 "workflow_profile_sha256": workflow_profile_sha256,
             }
@@ -776,6 +821,7 @@ def _manifest_csv_bytes(
     jobs: tuple[PersistedJob, ...],
     workflow_sha256: str,
     workflow_profile_sha256: str,
+    producer_version: str | None,
 ) -> bytes:
     prompt_versions = {version.id: version for version in plan.prompt_versions}
     output = io.StringIO(newline="")
@@ -785,6 +831,9 @@ def _manifest_csv_bytes(
         prompt_version = prompt_versions[job.compiled_job.prompt_version_id]
         writer.writerow(
             {
+                "format": MANIFEST_CSV_FORMAT,
+                "format_version": MANIFEST_CSV_FORMAT_VERSION,
+                "batchcraft_version": producer_version or batchcraft_version(),
                 "job_ordinal": job.compiled_job.ordinal,
                 "job_id": job.job_id,
                 "prompt_version_id": prompt_version.id,
@@ -847,10 +896,26 @@ def _manifest_csv_bytes(
 def _parse_run(
     run_data: dict[str, object], manifest_data: dict[str, object], run_path: Path
 ) -> PublishedRun:
-    if _integer(run_data, "format_version") != RUN_FORMAT_VERSION:
-        raise RunStoreError("unsupported run.json format version")
-    if _integer(manifest_data, "format_version") != MANIFEST_FORMAT_VERSION:
-        raise RunStoreError("unsupported manifest.json format version")
+    _validate_run_record(run_data)
+    try:
+        validate_format_record(
+            manifest_data,
+            MANIFEST_FORMAT,
+            {
+                "run",
+                "batch_snapshot",
+                "prompt_versions",
+                "image_input_slots",
+                "parameters",
+                "compiler_warnings",
+                "workflow_snapshot",
+                "workflow_profile_snapshot",
+                "manifest_csv",
+                "jobs",
+            },
+        )
+    except ValueError as error:
+        raise RunStoreError(f"invalid manifest.json format: {error}") from error
 
     batch_snapshot = _parse_batch_snapshot(_required_object(manifest_data, "batch_snapshot"))
 
@@ -868,13 +933,28 @@ def _parse_run(
     filesystem_key = _required_string(run_data, "filesystem_key")
     _validate_run_filesystem_key(filesystem_key, run_number)
     created_at = _required_string(run_data, "created_at")
-    _required_string(run_data, "status")
+    if _required_string(run_data, "status") != "created":
+        raise RunStoreError("run.json status must be 'created'")
     project = _parse_project(_required_object(run_data, "project"))
     batch = _parse_batch(_required_object(run_data, "batch"))
     workflow_sha256 = _required_string(run_data, "workflow_sha256")
     workflow_profile_sha256 = _required_string(run_data, "workflow_profile_sha256")
 
     manifest_run = _required_object(manifest_data, "run")
+    _require_shape(
+        manifest_run,
+        {
+            "run_id",
+            "run_number",
+            "name",
+            "description",
+            "filesystem_key",
+            "created_at",
+            "project",
+            "batch",
+        },
+        "manifest Run identity",
+    )
     if _required_string(manifest_run, "run_id") != run_id:
         raise RunStoreError("Run ID differs between run.json and manifest.json")
     if _positive_integer(manifest_run, "run_number") != run_number:
@@ -893,15 +973,42 @@ def _parse_run(
         raise RunStoreError("Batch identity differs between run.json and manifest.json")
 
     workflow_snapshot = _required_object(manifest_data, "workflow_snapshot")
+    try:
+        validate_descriptor(
+            workflow_snapshot,
+            WORKFLOW_SNAPSHOT_FORMAT,
+            {"payload_format", "path", "sha256"},
+        )
+    except ValueError as error:
+        raise RunStoreError(f"invalid workflow snapshot descriptor: {error}") from error
+    if _required_string(workflow_snapshot, "payload_format") != "comfyui.api-workflow":
+        raise RunStoreError("workflow snapshot has an unsupported payload format")
     if _required_string(workflow_snapshot, "path") != "workflow.json":
         raise RunStoreError("manifest has an unsupported workflow snapshot path")
     if _required_string(workflow_snapshot, "sha256") != workflow_sha256:
         raise RunStoreError("workflow hash differs between run.json and manifest.json")
     profile_snapshot = _required_object(manifest_data, "workflow_profile_snapshot")
+    try:
+        validate_descriptor(
+            profile_snapshot,
+            WORKFLOW_PROFILE_SNAPSHOT_FORMAT,
+            {"payload_format", "path", "sha256"},
+        )
+    except ValueError as error:
+        raise RunStoreError(f"invalid Workflow Profile snapshot descriptor: {error}") from error
+    if _required_string(profile_snapshot, "payload_format") != "batchcraft.workflow-profile":
+        raise RunStoreError("Workflow Profile snapshot has an unsupported payload format")
     if _required_string(profile_snapshot, "path") != "workflow-profile.json":
         raise RunStoreError("manifest has an unsupported Workflow Profile snapshot path")
     if _required_string(profile_snapshot, "sha256") != workflow_profile_sha256:
         raise RunStoreError("Workflow Profile hash differs between run.json and manifest.json")
+    csv_descriptor = _required_object(manifest_data, "manifest_csv")
+    try:
+        validate_descriptor(csv_descriptor, MANIFEST_CSV_FORMAT, {"path"})
+    except ValueError as error:
+        raise RunStoreError(f"invalid manifest CSV descriptor: {error}") from error
+    if _required_string(csv_descriptor, "path") != "manifest.csv":
+        raise RunStoreError("manifest has an unsupported CSV path")
 
     prompt_versions = tuple(
         _parse_prompt_version(_object_item(value, "PromptVersion"))
@@ -928,6 +1035,7 @@ def _parse_run(
     persisted_jobs = tuple(
         _parse_job(
             _object_item(value, "Job"),
+            run_id,
             workflow_sha256,
             workflow_profile_sha256,
         )
@@ -1002,20 +1110,60 @@ def _parse_run(
     )
 
 
+def _validate_run_record(data: dict[str, object]) -> None:
+    try:
+        validate_format_record(
+            data,
+            RUN_FORMAT,
+            {
+                "run_id",
+                "run_number",
+                "name",
+                "description",
+                "filesystem_key",
+                "created_at",
+                "status",
+                "project",
+                "batch",
+                "job_count",
+                "workflow_sha256",
+                "workflow_profile_sha256",
+            },
+        )
+    except ValueError as error:
+        raise RunStoreError(f"invalid run.json format: {error}") from error
+
+
 def _parse_job(
     data: dict[str, object],
+    run_id: str,
     workflow_sha256: str,
     workflow_profile_sha256: str,
 ) -> PersistedJob:
+    _require_shape(
+        data,
+        {
+            "job_id",
+            "ordinal",
+            "prompt_version_id",
+            "resolved_prompt",
+            "resolved_variables",
+            "resolved_image_inputs",
+            "resolved_parameters",
+            "resolved_parameter_sets",
+            "seed",
+            "output_prefix",
+            "workflow_sha256",
+            "workflow_profile_sha256",
+        },
+        "manifest Job",
+    )
     if _required_string(data, "workflow_sha256") != workflow_sha256:
         raise RunStoreError("Job workflow hash differs from the Run workflow hash")
     if _required_string(data, "workflow_profile_sha256") != workflow_profile_sha256:
         raise RunStoreError("Job Workflow Profile hash differs from the Run mapping hash")
     variables = tuple(
-        ResolvedVariable(
-            name=_required_string(variable, "name"),
-            value=_required_string(variable, "value", allow_empty=True),
-        )
+        _parse_resolved_variable(variable)
         for variable in (
             _object_item(value, "resolved variable")
             for value in _required_array(data, "resolved_variables")
@@ -1055,14 +1203,20 @@ def _parse_job(
         resolved_parameter_sets=resolved_parameter_sets,
         seed=_integer(data, "seed"),
     )
+    job_id = _required_string(data, "job_id")
+    output_prefix = _required_string(data, "output_prefix")
+    if output_prefix != f"batchcraft/{run_id}/{job_id}/result":
+        raise RunStoreError("Job output prefix does not match its Run and Job identity")
     return PersistedJob(
-        job_id=_required_string(data, "job_id"),
+        job_id=job_id,
         compiled_job=compiled_job,
         image_inputs=image_inputs,
+        output_prefix=output_prefix,
     )
 
 
 def _parse_image_input_slot(data: dict[str, object]) -> ImageInputSlot:
+    _require_shape(data, {"slot_key", "slot_label", "node_id", "input_name"}, "image input slot")
     return ImageInputSlot(
         key=_required_string(data, "slot_key"),
         label=_required_string(data, "slot_label"),
@@ -1072,6 +1226,11 @@ def _parse_image_input_slot(data: dict[str, object]) -> ImageInputSlot:
 
 
 def _parse_parameter(data: dict[str, object]) -> WorkflowParameter:
+    _require_shape(
+        data,
+        {"parameter_key", "parameter_label", "node_id", "input_name", "value_type"},
+        "workflow parameter",
+    )
     try:
         value_type = ParameterValueType(_required_string(data, "value_type"))
     except ValueError as error:
@@ -1086,6 +1245,7 @@ def _parse_parameter(data: dict[str, object]) -> WorkflowParameter:
 
 
 def _parse_resolved_parameter(data: dict[str, object]) -> ResolvedParameter:
+    _require_shape(data, {"parameter_key", "value"}, "resolved parameter")
     if "value" not in data:
         raise RunStoreError("resolved parameter must define value")
     value = data["value"]
@@ -1100,6 +1260,11 @@ def _parse_resolved_parameter(data: dict[str, object]) -> ResolvedParameter:
 
 
 def _parse_resolved_parameter_set(data: dict[str, object]) -> ResolvedParameterSet:
+    _require_shape(
+        data,
+        {"set_key", "set_label", "row_ordinal", "row_label"},
+        "resolved parameter set",
+    )
     return ResolvedParameterSet(
         set_key=_required_string(data, "set_key"),
         set_label=_required_string(data, "set_label"),
@@ -1127,6 +1292,7 @@ def _parameter_value_matches(value_type: ParameterValueType, value: object) -> b
 
 
 def _parse_persisted_image_input(data: dict[str, object]) -> PersistedImageInput:
+    _require_shape(data, {"slot_key", "slot_label", "asset"}, "resolved image input")
     if "asset" not in data:
         raise RunStoreError("resolved image input must define asset")
     raw_asset = data["asset"]
@@ -1138,6 +1304,11 @@ def _parse_persisted_image_input(data: dict[str, object]) -> PersistedImageInput
 
 
 def _parse_prompt_version(data: dict[str, object]) -> PromptVersion:
+    _require_shape(
+        data,
+        {"prompt_version_id", "prompt_version_name", "prompt_template"},
+        "PromptVersion",
+    )
     return PromptVersion(
         id=_required_string(data, "prompt_version_id"),
         name=_required_string(data, "prompt_version_name"),
@@ -1146,6 +1317,7 @@ def _parse_prompt_version(data: dict[str, object]) -> PromptVersion:
 
 
 def _parse_warning(data: dict[str, object]) -> CompilationWarning:
+    _require_shape(data, {"code", "message", "placeholder"}, "compiler warning")
     code_value = _required_string(data, "code")
     try:
         code = CompilationWarningCode(code_value)
@@ -1159,6 +1331,7 @@ def _parse_warning(data: dict[str, object]) -> CompilationWarning:
 
 
 def _parse_project(data: dict[str, object]) -> ProjectIdentity:
+    _require_shape(data, {"project_id", "filesystem_key", "name"}, "Project identity")
     return ProjectIdentity(
         id=_required_string(data, "project_id"),
         filesystem_key=_required_string(data, "filesystem_key"),
@@ -1167,6 +1340,7 @@ def _parse_project(data: dict[str, object]) -> ProjectIdentity:
 
 
 def _parse_batch(data: dict[str, object]) -> BatchIdentity:
+    _require_shape(data, {"batch_id", "filesystem_key", "name"}, "Batch identity")
     return BatchIdentity(
         id=_required_string(data, "batch_id"),
         filesystem_key=_required_string(data, "filesystem_key"),
@@ -1175,6 +1349,19 @@ def _parse_batch(data: dict[str, object]) -> BatchIdentity:
 
 
 def _parse_asset(data: dict[str, object]) -> AssetRecord:
+    _require_shape(
+        data,
+        {
+            "asset_id",
+            "sha256",
+            "original_filename",
+            "mime_type",
+            "byte_size",
+            "stored_path",
+            "created_at",
+        },
+        "Asset provenance",
+    )
     return AssetRecord(
         asset_id=_required_string(data, "asset_id"),
         sha256=_required_string(data, "sha256"),
@@ -1183,6 +1370,14 @@ def _parse_asset(data: dict[str, object]) -> AssetRecord:
         byte_size=_non_negative_integer(data, "byte_size"),
         stored_path=_required_string(data, "stored_path"),
         created_at=_required_string(data, "created_at"),
+    )
+
+
+def _parse_resolved_variable(data: dict[str, object]) -> ResolvedVariable:
+    _require_shape(data, {"name", "value"}, "resolved variable")
+    return ResolvedVariable(
+        name=_required_string(data, "name"),
+        value=_required_string(data, "value", allow_empty=True),
     )
 
 
@@ -1224,12 +1419,12 @@ def _canonical_json_object(value: Mapping[str, object], name: str) -> dict[str, 
 
 def _parse_batch_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
     try:
-        parsed = BatchSnapshotV6.model_validate(snapshot)
+        parsed = BatchSnapshotV1.model_validate(snapshot)
     except ValidationError as error:
-        raise RunStoreError(f"invalid Batch snapshot v6: {error}") from error
+        raise RunStoreError(f"invalid Batch snapshot v1: {error}") from error
     canonical = cast(dict[str, object], parsed.model_dump(mode="json"))
     if canonical != snapshot:
-        raise RunStoreError("invalid Batch snapshot v6: snapshot must use its complete shape")
+        raise RunStoreError("invalid Batch snapshot v1: snapshot must use its complete shape")
     return canonical
 
 
@@ -1242,7 +1437,7 @@ def _validate_batch_snapshot_consistency(
     workflow: dict[str, object],
     workflow_profile: dict[str, object],
 ) -> None:
-    parsed = BatchSnapshotV6.model_validate(snapshot)
+    parsed = BatchSnapshotV1.model_validate(snapshot)
     if (
         parsed.project.id,
         parsed.project.filesystem_key,
@@ -1374,6 +1569,13 @@ def _object_item(value: object, name: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise RunStoreError(f"{name} must be a JSON object")
     return cast(dict[str, object], value)
+
+
+def _require_shape(data: dict[str, object], keys: set[str], description: str) -> None:
+    try:
+        require_exact_keys(data, keys, description)
+    except ValueError as error:
+        raise RunStoreError(str(error)) from error
 
 
 def _required_array(data: dict[str, object], name: str) -> list[object]:

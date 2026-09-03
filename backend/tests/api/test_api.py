@@ -293,7 +293,14 @@ def _settings(tmp_path: Path) -> Settings:
     )
 
 
+def _publish_project_owner(settings: Settings) -> None:
+    ProjectOwnerStore(settings.projects_root).publish(
+        ProjectIdentity(id="project-id", filesystem_key="project_key", name="Project")
+    )
+
+
 def _import_asset(settings: Settings, tmp_path: Path, asset_id: str = "asset-1") -> str:
+    _publish_project_owner(settings)
     source = tmp_path / f"{asset_id}.png"
     source.write_bytes(f"reference:{asset_id}".encode())
     asset = ProjectAssetStore(
@@ -377,7 +384,8 @@ def _batch_request(
         "workflow": workflow,
         "workflow_profile": profile,
         "batch_snapshot": {
-            "snapshot_version": 6,
+            "format": "batchcraft.batch-snapshot",
+            "format_version": 1,
             "project": copy.deepcopy(project),
             "source_saved_batch": None,
             "batch": {**batch, "description": None},
@@ -734,14 +742,14 @@ def test_saved_batch_bindings_reject_old_fields(old_field: str, old_value: objec
         )
 
 
-@pytest.mark.parametrize("invalid_version", (1, True, 2.0))
-def test_batch_request_rejects_snapshot_version_one_and_non_integer_aliases(
+@pytest.mark.parametrize("invalid_version", (2, True, 1.0))
+def test_batch_request_rejects_unsupported_or_non_integer_snapshot_versions(
     invalid_version: object,
 ) -> None:
     request = _batch_request(())
     snapshot = request["batch_snapshot"]
     assert isinstance(snapshot, dict)
-    snapshot["snapshot_version"] = invalid_version
+    snapshot["format_version"] = invalid_version
 
     with pytest.raises(ValueError):
         BatchRequest.model_validate(request)
@@ -1738,7 +1746,8 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
             "workflow": workflow["workflow"],
             "workflow_profile": profile["profile"],
             "batch_snapshot": {
-                "snapshot_version": 6,
+                "format": "batchcraft.batch-snapshot",
+                "format_version": 1,
                 "project": {
                     "id": project["id"],
                     "filesystem_key": project["filesystem_key"],
@@ -1878,6 +1887,7 @@ def test_comfyui_unavailable_is_a_stable_status_response(tmp_path: Path) -> None
 
 def test_project_assets_upload_list_deduplicate_and_serve_content(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
+    _publish_project_owner(settings)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -1911,7 +1921,7 @@ def test_project_assets_upload_list_deduplicate_and_serve_content(tmp_path: Path
     assert content.status_code == 200
     assert content.headers["content-type"] == "image/png"
     assert content.content == PNG_A
-    assert not (settings.projects_root / "project_key" / "project.json").exists()
+    assert (settings.projects_root / "project_key" / "project.json").is_file()
 
 
 @pytest.mark.parametrize(
@@ -1963,6 +1973,7 @@ def test_project_asset_listing_is_lightweight_but_content_is_fully_verified(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
+    _publish_project_owner(settings)
 
     with TestClient(
         create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
@@ -2178,7 +2189,7 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v8
     assert created.status_code == 201
     run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
-    assert manifest["format_version"] == 9
+    assert manifest["format_version"] == 1
     expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
     assert manifest["batch_snapshot"] == expected_snapshot
     assert [job["seed"] for job in manifest["jobs"]] == [
@@ -2570,7 +2581,7 @@ def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
     assert next_run.json()["run_id"] != run_id
     assert client.submission_count == 0
     assert run_path.is_dir()
-    assert json.loads((run_path / "execution.json").read_text())["format_version"] == 3
+    assert json.loads((run_path / "execution.json").read_text())["format_version"] == 1
     assert {name: (run_path / name).read_bytes() for name in immutable_before} == immutable_before
 
 
@@ -2912,6 +2923,7 @@ def test_run_creation_ignores_corrupt_unrelated_project_asset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = _settings(tmp_path)
+    _publish_project_owner(settings)
     project_path = settings.projects_root / "project_key"
     healthy_source = tmp_path / "healthy.png"
     healthy_source.write_bytes(b"healthy")
@@ -3245,8 +3257,8 @@ def test_execution_rejects_unsafe_outputs_before_starting_task(tmp_path: Path) -
 
         response = http.post(f"/api/runs/{run_id}/execute")
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "execution_not_eligible"
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "invalid_run_data"
     assert not (run_path / "execution.json").exists()
     assert client.submission_count == 0
 

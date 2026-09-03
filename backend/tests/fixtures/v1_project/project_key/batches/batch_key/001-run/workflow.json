@@ -1,0 +1,1 @@
+{"104":{"class_type":"CLIPTextEncode","inputs":{"text":"original"}},"114":{"class_type":"KSampler","inputs":{"seed":0}},"221":{"class_type":"LoadImage","inputs":{"image":"original.png"}},"301":{"class_type":"SaveImage","inputs":{"filename_prefix":"original"}}}

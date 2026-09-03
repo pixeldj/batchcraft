@@ -135,7 +135,7 @@ backend-authoritative Run and Result data; they are not a Project-wide history i
 Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
 materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
 Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
-provenance into manifest v9 with Batch snapshot v6. SQLite now owns current Project metadata, the immutable-version Prompt,
+provenance into `batchcraft.manifest` v1 with Batch snapshot v1. SQLite now owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, mutable Saved Batches, and durable Run cancellation intent; searchable filesystem-derived
 indexes remain a later slice.
 
@@ -171,7 +171,7 @@ The first production executor fixes queue depth at exactly `1` and executes one 
 
 FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. Start admission and discard-before-start use the same registry lock: discard cannot race execution start and independently requires absent or exactly pristine initial state with no active task for that Run. Discard writes terminal `cancelled` execution state without deleting the Run or changing frozen provenance.
 
-Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` or `detach` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. After persisting `detach`, the registry targets only the owned local `asyncio.Task` with cancellation to wake an in-flight await. The executor recognizes that wake-up only when the same control reports durable detach intent, writes an honest blocked state, and leaves ordinary task cancellation to propagate. It preserves known submission evidence and Results, leaves later Jobs pending, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while execution format v3 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. Execution formats v1 and v2 are intentionally unsupported.
+Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` or `detach` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. After persisting `detach`, the registry targets only the owned local `asyncio.Task` with cancellation to wake an in-flight await. The executor recognizes that wake-up only when the same control reports durable detach intent, writes an honest blocked state, and leaves ordinary task cancellation to propagate. It preserves known submission evidence and Results, leaves later Jobs pending, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while `batchcraft.execution` v1 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. All prerelease execution formats are unsupported.
 
 Execution API read models expose whether the current process still owns a live task. This ephemeral fact
 is separate from durable Run status and remote ComfyUI state. A browser may use loss of local ownership
@@ -252,8 +252,10 @@ Core mappings, Image Input slots, and generic parameters share one writable-targ
 A Workflow/Profile pair may be the active selection on a mutable Saved Batch; that mutable selection
 state does not change how the immutable version snapshots are stored or validated.
 
-A Run stores both the imported base API workflow and a separate snapshot of the Workflow Profile
-mappings used to compile it. Per-Job resolved friendly values remain in the canonical JSON manifest.
+A Run stores both the raw imported base API workflow and a separate raw snapshot of the Workflow Profile
+mappings used to compile it. Strict v1 manifest descriptors identify their payload formats, fixed paths,
+and hashes without wrapping or altering those directly usable payloads. Per-Job resolved friendly values
+remain in the canonical JSON manifest.
 
 Example mapping:
 
@@ -301,7 +303,7 @@ Each compiled Job still carries one resolved scalar or Base state per Profile pa
 Saved Batches are mutable SQLite intent; Runs are immutable filesystem provenance. The explicit
 boundary between them is Preview. A Saved Batch may hold an incomplete editable state. Preview and
 Run creation consume complete effective snapshots plus the `batch_snapshot`; Run publication freezes
-the plan and provenance into manifest v9 with Batch snapshot v6. Editing a Saved Batch after Run creation never alters the
+the plan and provenance into manifest v1 with Batch snapshot v1. Editing a Saved Batch after Run creation never alters the
 existing Run.
 
 ## Persistence Strategy
@@ -332,10 +334,12 @@ Later migrations may add:
 The filesystem stores durable Run artifacts and binaries:
 
 - JSON manifest;
-- CSV manifest;
+- optional secondary CSV manifest;
 - Run metadata;
 - workflow snapshot;
 - Workflow Profile core mapping and named Image Input snapshot;
+- strict v1 descriptors for raw snapshots and CSV;
+- a fixed per-Job output prefix bound to Run and Job identity;
 - immutable Project asset identities and hashes;
 - downloaded outputs.
 
