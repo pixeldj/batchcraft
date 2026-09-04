@@ -6,7 +6,6 @@ import {
   buildEditableBatchSnapshot,
   editableBatchSnapshotToForm,
   editableBatchSnapshotIdentity,
-  generateRandomSeeds,
   initialBatchForm,
   MAX_RANDOM_SEED_COUNT,
   missingPromptPlaceholders,
@@ -18,6 +17,7 @@ import {
   parameterRangeCount,
   requiredPromptPlaceholders,
   restoreHistoricalResourceState,
+  withMaterializedRandomSeeds,
 } from "./form";
 
 describe("Prompt placeholder requirements", () => {
@@ -480,36 +480,13 @@ describe("buildBatchRequest", () => {
     ]);
   });
 
-  it("materializes the requested number of distinct unsigned 32-bit Random seeds", () => {
-    const values = [0, 0, 4_294_967_295];
-    let index = 0;
-    const cryptoSource = {
-      getRandomValues<T extends ArrayBufferView | null>(array: T): T {
-        if (!(array instanceof Uint32Array)) throw new Error("Expected Uint32Array");
-        array[0] = values[index++];
-        return array;
-      },
-    };
-
-    expect(generateRandomSeeds(2, cryptoSource)).toEqual([0, 4_294_967_295]);
-  });
-
   it("builds Random snapshot identity without materializing execution seeds", () => {
     const form = populatedBatchForm();
     form.seedMode = "random";
     form.randomSeedCount = "3";
-    const originalCrypto = globalThis.crypto;
-    Object.defineProperty(globalThis, "crypto", {
-      configurable: true,
-      value: { getRandomValues: () => { throw new Error("must not materialize"); } },
-    });
 
-    try {
-      const snapshot = buildEditableBatchSnapshot(form);
-      expect(snapshot.seed_intent).toEqual({ mode: "random", values: [], random_seed_count: 3 });
-    } finally {
-      Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
-    }
+    const snapshot = buildEditableBatchSnapshot(form);
+    expect(snapshot.seed_intent).toEqual({ mode: "random", values: [], random_seed_count: 3 });
   });
 
   it("canonicalizes nested object keys while preserving ordered snapshot arrays", () => {
@@ -534,31 +511,42 @@ describe("buildBatchRequest", () => {
     },
   );
 
-  it("sends Random seeds through the concrete explicit API contract", () => {
+  it("sends Random repetition intent to Preview without materialized seeds", () => {
     const form = populatedBatchForm();
     form.seedMode = "random";
     form.randomSeedCount = "3";
 
     const request = buildBatchRequest(form);
 
-    expect(request.seeds.mode).toBe("explicit");
-    expect(request.seeds.values).toHaveLength(3);
-    expect(request.seeds.values.every((seed) => seed >= 0 && seed <= 4_294_967_295)).toBe(true);
+    expect(request.seeds).toEqual({ mode: "random", values: [], random_seed_count: 3 });
   });
 
-  it("uses supplied historical Random seeds while retaining Random snapshot intent", () => {
+  it("adds Preview's per-Job Random seeds without changing editable intent", () => {
     const form = populatedBatchForm();
     form.seedMode = "random";
     form.randomSeedCount = "3";
 
-    const request = buildBatchRequest(form, undefined, [91, 17, 42]);
+    const request = withMaterializedRandomSeeds(buildBatchRequest(form), [91, 17, 42, 73]);
 
-    expect(request.seeds).toEqual({ mode: "explicit", values: [91, 17, 42] });
+    expect(request.seeds).toEqual({
+      mode: "random",
+      values: [91, 17, 42, 73],
+      random_seed_count: 3,
+    });
     expect(request.batch_snapshot.seed_intent).toEqual({
       mode: "random",
       values: [],
       random_seed_count: 3,
     });
+  });
+
+  it("rejects duplicate materialized Random Job seeds", () => {
+    const form = populatedBatchForm();
+    form.seedMode = "random";
+
+    expect(() => withMaterializedRandomSeeds(buildBatchRequest(form), [91, 91])).toThrow(
+      /invalid Random seed assignments/,
+    );
   });
 
   it("reconstructs exact ordered editable intent and applies resource linkage statuses", () => {

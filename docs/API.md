@@ -213,11 +213,14 @@ ordered independent parameter bindings using the discriminated `values` or `rang
 below, ordered `linked_parameter_sets`, the
 API-format workflow, and its Workflow Profile snapshot. The singular `prompt_version` field is not
 accepted.
-The `batch_snapshot` records the editable intent; concrete seed lists may still be materialized from
-a Random seed intent that stores only `mode` and `count`.
+The `batch_snapshot` records editable seed intent. Random intent is
+`{ "mode": "random", "values": [], "random_seed_count": N }`; it does not store Preview seeds.
 
 Preview calls the production Batch compiler, validates the exact workflow/Profile pair through the
-same preparation logic as Run creation, and returns every resolved Job in deterministic order.
+same preparation logic as Run creation, and returns every resolved Job in deterministic order. For an
+unmaterialized Random request, Preview computes the final Job count and assigns one unique seed per Job
+within `0..2^53-1`. The response's ordered Job seeds are the concrete assignments the client must send
+back in `seeds.values` for Run creation while preserving `mode: "random"` and `random_seed_count`.
 Each Preview Job includes `prompt_version_id` and `prompt_version_name`; clients do not infer source
 identity from resolved text. Run creation compiles and validates the request again, resolves existing
 Project assets, and publishes through `RunFilesystemStore`. `POST /api/runs` accepts optional
@@ -310,8 +313,10 @@ by stable key and expands Image Input and parameter dimensions in their respecti
 Alternative order inside each binding is significant and preserved. Parameters follow Image Input
 slots and precede seeds, so seeds vary fastest.
 
-Random seed intent stores `mode` and `count` in the `batch_snapshot`; the frontend materializes the
-concrete ordered seed list before Preview or Run creation.
+Random seed intent stores `mode` and `random_seed_count` in the `batch_snapshot`. Preview accepts empty
+`seeds.values` and materializes the concrete per-Job list. Run creation rejects an unmaterialized Random
+request and accepts only a list containing one assignment per final Job. Fixed and Explicit lists remain
+ordinary fastest-varying seed dimensions reused for every non-seed configuration.
 
 ## Project history and Run lookup
 

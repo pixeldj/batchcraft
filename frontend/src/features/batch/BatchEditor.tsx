@@ -356,7 +356,7 @@ export function BatchEditor({
               max={MAX_RANDOM_SEED_COUNT}
               step="1"
               label="Random seed count"
-              hint={`Generate 1 to ${MAX_RANDOM_SEED_COUNT} concrete seeds when Preview runs`}
+              hint={`Repeat each configuration 1 to ${MAX_RANDOM_SEED_COUNT} times; every Job gets its own random seed`}
               value={form.randomSeedCount}
               onChange={(event) => update("randomSeedCount", event.target.value)}
             />

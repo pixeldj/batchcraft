@@ -949,6 +949,37 @@ production build. The complete realistic fixture, repeat-fresh-instance proof, a
 as release-level validation under `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`, not BC-021 implementation
 blockers.
 
+### BC-022: Random seed per-Job semantics
+
+| Field | Value |
+| --- | --- |
+| ID | BC-022 |
+| Priority | P1 |
+| Status | Done |
+| Area | Seeds / Compilation / Reproducibility |
+| Summary | Materialize a distinct Random seed for every concrete Job while preserving Fixed and Explicit seed behavior. |
+| Dependencies / Notes | Correctness fix and v1 blocker. Random count is repetition intent per non-seed configuration. Preview must expose the exact concrete seeds reused by Run creation. Keep Saved Batch and Batch snapshot Random intent separate from frozen per-Job Run seeds. No durable format change is expected. Do not mark Done until automated verification and manual browser/live generation acceptance pass. |
+
+Implementation progress: backend Preview now owns unique per-Job materialization across the full safe
+seed range, while the pure compiler preserves deterministic fastest-varying Random repetition order.
+The frontend retains Preview's concrete assignments through Run publication retry and restores only
+Random count intent from Saved Batches, historical Runs, and working-session recovery. Fixed and Explicit
+reuse is unchanged; valid older Runs with repeated Random seeds remain readable. Automated verification
+passes with 619 backend tests, Ruff check/format, and mypy, plus 352 frontend tests, typecheck, lint, and
+production build. Owner browser/live generation acceptance is complete.
+
+Acceptance requires:
+
+- Random x N creates N fastest-varying repetitions for every ordered non-seed configuration;
+- every Job in one new Random materialization receives a unique seed within the existing seed bounds;
+- Preview and Run creation use the same materialized per-Job values, including publication retries;
+- Fixed reuses one seed across configurations and Explicit reuses its ordered seed list across each
+  configuration;
+- Saved Batch, Batch snapshot, historical reconstruction, and working-session recovery preserve Random
+  count as editable intent without persisting Preview seeds;
+- immutable Run Jobs and Result provenance retain each exact concrete seed;
+- automated backend/frontend verification and the documented manual browser/live generation check pass.
+
 ## Maintenance rules
 
 - Update only entries affected by the current task.

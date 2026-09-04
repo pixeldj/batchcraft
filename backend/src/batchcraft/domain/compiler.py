@@ -5,6 +5,7 @@ from typing import cast
 
 from batchcraft.domain.image_slots import validate_image_input_slot_key, validate_stable_key
 from batchcraft.domain.models import (
+    MAX_SAFE_INTEGER,
     BatchDefinition,
     CompilationPreview,
     CompilationWarning,
@@ -77,8 +78,18 @@ def _seed_values(batch: BatchDefinition) -> tuple[int, ...]:
     elif batch.seeds.mode is SeedMode.EXPLICIT:
         if not batch.seeds.values:
             raise CompilationError("explicit seed input must contain at least one seed")
+    elif batch.seeds.mode is SeedMode.MATERIALIZED_RANDOM:
+        if not batch.seeds.values:
+            raise CompilationError("materialized Random seeds must contain at least one seed")
+        if batch.seeds.random_seed_count is None or batch.seeds.random_seed_count < 1:
+            raise CompilationError("materialized Random seed count must be positive")
     else:
         raise CompilationError(f"unsupported seed mode: {batch.seeds.mode!r}")
+    if any(
+        isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 or seed > MAX_SAFE_INTEGER
+        for seed in batch.seeds.values
+    ):
+        raise CompilationError(f"seed values must be integers from 0 through {MAX_SAFE_INTEGER}")
     return batch.seeds.values
 
 
@@ -304,29 +315,38 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             emitted_sets.add(axis_linked_set.key)
 
     seeds = _seed_values(batch)
-    if max_jobs is not None:
-        if max_jobs < 0:
-            raise CompilationError("maximum Job count must not be negative")
-        expected_jobs = 0
-        for placeholder_names in prompt_placeholders:
-            prompt_jobs = len(seeds)
-            remaining_jobs = max_jobs - expected_jobs
-            if prompt_jobs > remaining_jobs:
+    seed_axis_count = (
+        batch.seeds.random_seed_count
+        if batch.seeds.mode is SeedMode.MATERIALIZED_RANDOM
+        else len(seeds)
+    )
+    assert seed_axis_count is not None
+    if max_jobs is not None and max_jobs < 0:
+        raise CompilationError("maximum Job count must not be negative")
+    expected_jobs = 0
+    for placeholder_names in prompt_placeholders:
+        prompt_jobs = seed_axis_count
+        remaining_jobs = None if max_jobs is None else max_jobs - expected_jobs
+        if remaining_jobs is not None and prompt_jobs > remaining_jobs:
+            raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+        for name in placeholder_names:
+            value_count = len(binding_values[name])
+            if remaining_jobs is not None and prompt_jobs > remaining_jobs // value_count:
                 raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
-            for name in placeholder_names:
-                value_count = len(binding_values[name])
-                if prompt_jobs > remaining_jobs // value_count:
-                    raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
-                prompt_jobs *= value_count
-            for image_axis in image_axes:
-                if prompt_jobs > remaining_jobs // len(image_axis):
-                    raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
-                prompt_jobs *= len(image_axis)
-            for parameter_axis in parameter_axes:
-                if prompt_jobs > remaining_jobs // len(parameter_axis):
-                    raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
-                prompt_jobs *= len(parameter_axis)
-            expected_jobs += prompt_jobs
+            prompt_jobs *= value_count
+        for image_axis in image_axes:
+            if remaining_jobs is not None and prompt_jobs > remaining_jobs // len(image_axis):
+                raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+            prompt_jobs *= len(image_axis)
+        for parameter_axis in parameter_axes:
+            if remaining_jobs is not None and prompt_jobs > remaining_jobs // len(parameter_axis):
+                raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
+            prompt_jobs *= len(parameter_axis)
+        expected_jobs += prompt_jobs
+    if batch.seeds.mode is SeedMode.MATERIALIZED_RANDOM and len(seeds) != expected_jobs:
+        raise CompilationError(
+            "materialized Random seed assignments must contain exactly one seed per Job"
+        )
 
     globally_used_placeholders = {
         name for placeholder_names in prompt_placeholders for name in placeholder_names
@@ -342,6 +362,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
     )
 
     jobs: list[CompiledJob] = []
+    random_seed_position = 0
 
     for prompt_version, placeholder_names in zip(
         batch.prompt_versions, prompt_placeholders, strict=True
@@ -395,7 +416,13 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                         ResolvedParameter(parameter_key=key, value=selected_values[key])
                         for key in parameter_keys
                     )
-                    for seed in seeds:
+                    seeds_for_configuration = seeds
+                    if batch.seeds.mode is SeedMode.MATERIALIZED_RANDOM:
+                        seeds_for_configuration = seeds[
+                            random_seed_position : random_seed_position + seed_axis_count
+                        ]
+                        random_seed_position += seed_axis_count
+                    for seed in seeds_for_configuration:
                         jobs.append(
                             CompiledJob(
                                 ordinal=len(jobs) + 1,

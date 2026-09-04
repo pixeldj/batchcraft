@@ -255,15 +255,13 @@ export class FormBuildError extends Error {
 export function buildBatchRequest(
   form: BatchFormState,
   context: BatchRequestContext = { sourceSavedBatch: null },
-  materializedRandomSeeds?: number[],
 ): BatchRequest {
   const batchSnapshot = buildEditableBatchSnapshot(form, context);
   const seedInput = form.seedMode === "random"
     ? {
-      mode: "explicit" as const,
-      values: materializedRandomSeeds
-        ? validateMaterializedRandomSeeds(materializedRandomSeeds, parseRandomSeedCount(form.randomSeedCount))
-        : generateRandomSeeds(parseRandomSeedCount(form.randomSeedCount)),
+      mode: "random" as const,
+      values: [],
+      random_seed_count: parseRandomSeedCount(form.randomSeedCount),
     }
     : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
 
@@ -283,6 +281,25 @@ export function buildBatchRequest(
     workflow: batchSnapshot.workflow_selection.workflow,
     workflow_profile: batchSnapshot.workflow_selection.workflow_profile,
     batch_snapshot: batchSnapshot,
+  };
+}
+
+export function withMaterializedRandomSeeds(
+  request: BatchRequest,
+  seeds: number[],
+): BatchRequest {
+  if (request.seeds.mode !== "random") return request;
+  if (seeds.length === 0 || new Set(seeds).size !== seeds.length) {
+    throw new FormBuildError("seeds", "Preview returned invalid Random seed assignments.");
+  }
+  for (const seed of seeds) {
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new FormBuildError("seeds", "Preview returned a Random seed outside the allowed range.");
+    }
+  }
+  return {
+    ...request,
+    seeds: { ...request.seeds, values: [...seeds] },
   };
 }
 
@@ -1036,31 +1053,6 @@ export function validateImageBindings(bindings: ImageBindingRequest[]): void {
 
 export function editableBatchSnapshotIdentity(snapshot: EditableBatchSnapshot): string {
   return JSON.stringify(canonicalize(snapshot));
-}
-
-export function generateRandomSeeds(
-  count: number,
-  cryptoSource: Pick<Crypto, "getRandomValues"> = globalThis.crypto,
-): number[] {
-  const seeds = new Set<number>();
-  const value = new Uint32Array(1);
-  while (seeds.size < count) {
-    cryptoSource.getRandomValues(value);
-    seeds.add(value[0]);
-  }
-  return [...seeds];
-}
-
-function validateMaterializedRandomSeeds(seeds: number[], expectedCount: number): number[] {
-  if (seeds.length !== expectedCount) {
-    throw new FormBuildError("seeds", "Historical Random seeds do not match the frozen Random count.");
-  }
-  for (const seed of seeds) {
-    if (!Number.isSafeInteger(seed) || seed < 0) {
-      throw new FormBuildError("seeds", "Historical Random seeds must be nonnegative safe integers.");
-    }
-  }
-  return [...seeds];
 }
 
 function parseRandomSeedCount(value: string): number {

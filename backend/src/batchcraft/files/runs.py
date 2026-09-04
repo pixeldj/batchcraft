@@ -1495,11 +1495,14 @@ def _validate_batch_snapshot_consistency(
     seed_intent = parsed.seed_intent
     if seed_intent.mode == "random":
         random_count = seed_intent.random_seed_count
-        if random_count is None or len(plan.jobs) < random_count:
+        if random_count is None:
             raise RunStoreError(
                 "Batch snapshot Random seed intent does not match the compiled plan"
             )
-        seeds = SeedInput.explicit(tuple(job.seed for job in plan.jobs[:random_count]))
+        seeds = SeedInput.materialized_random(
+            tuple(job.seed for job in plan.jobs),
+            random_count,
+        )
     elif seed_intent.mode == "fixed":
         seeds = SeedInput.fixed(seed_intent.values[0])
     else:

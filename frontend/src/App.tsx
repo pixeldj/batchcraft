@@ -29,6 +29,7 @@ import {
   initialBatchForm,
   reconcileFormBindings,
   restoreHistoricalResourceState,
+  withMaterializedRandomSeeds,
   type BatchFormState,
 } from "./features/batch/form";
 import {
@@ -118,7 +119,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     ),
   );
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
-  const [historicalRandomSeeds, setHistoricalRandomSeeds] = useState<number[] | null>(null);
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [createdUnavailableRunId, setCreatedUnavailableRunId] = useState<string | null>(null);
@@ -374,13 +374,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         || frozenRun.batch_snapshot.project.id !== requestedProjectId
         || frozenRun.batch_snapshot.project.filesystem_key !== formRef.current.projectFilesystemKey
       ) return;
-      const baseline = editableBatchSnapshotToForm(reconstruction);
-      const restored = restoreHistoricalResourceState(formRef.current, reconstruction);
-      const unedited = canonicalBatchIntent(restored) === canonicalBatchIntent(baseline);
       setForm((current) => restoreHistoricalResourceState(current, reconstruction));
-      setHistoricalRandomSeeds(unedited && baseline.seedMode === "random"
-        ? historicalSeedsFromPlan(frozenRun, Number(baseline.randomSeedCount))
-        : null);
       recoveredHistoricalRun.current = sourceRunId;
     }).catch((caught: unknown) => {
       if (!controller.signal.aborted && historicalSourceRunIdRef.current === sourceRunId) {
@@ -638,7 +632,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     }
     setForm(next);
     setPreviewSnapshot(null);
-    setHistoricalRandomSeeds(null);
     setPreviewRunAssociation(null);
     setBatchError(null);
     setCreateError(null);
@@ -877,7 +870,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         sourceSavedBatch: savedBatchLink
           ? { id: savedBatchLink.id, revision: savedBatchLink.revision }
           : null,
-      }, historicalRandomSeeds ?? undefined);
+      });
       const availableAssets = await api.listProjectAssets(request.project.filesystem_key);
       const availableAssetIds = new Set(availableAssets.assets.map((asset) => asset.asset_id));
       const selectedAssetIds = request.image_bindings.flatMap((binding) =>
@@ -892,8 +885,12 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       }
       const nextPreview = await api.previewBatch(request);
       if (requestedRevision === formRevision.current) {
-        setPreviewSnapshot({
+        const inspectedRequest = withMaterializedRandomSeeds(
           request,
+          nextPreview.jobs.map((job) => job.seed),
+        );
+        setPreviewSnapshot({
+          request: inspectedRequest,
           response: nextPreview,
           formRevision: requestedRevision,
           singleUse: form.seedMode === "random",
@@ -901,7 +898,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         setPreviewRunAssociation(null);
         setRunName("");
         setRunDescription("");
-        if (historicalRandomSeeds) setHistoricalRandomSeeds(null);
       }
     } catch (caught) {
       if (requestedRevision === formRevision.current) {
@@ -942,9 +938,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       throw new Error("The frozen Run belongs to another Project.");
     }
     const nextForm = editableBatchSnapshotToForm(reconstruction);
-    const randomSeeds = nextForm.seedMode === "random"
-      ? historicalSeedsFromPlan(frozenRun, Number(nextForm.randomSeedCount))
-      : null;
 
     runRevision.current += 1;
     formRevision.current += 1;
@@ -956,7 +949,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setForm(nextForm);
     setHistoricalSourceRunId(runId);
     recoveredHistoricalRun.current = runId;
-    setHistoricalRandomSeeds(randomSeeds);
     setPreviewSnapshot(null);
     setPreviewRunAssociation(null);
     setRun(null);
@@ -1398,12 +1390,4 @@ function withoutGalleryRun(
   const next = { ...runsById };
   delete next[runId];
   return next;
-}
-
-function historicalSeedsFromPlan(run: RunResponse, expectedCount: number): number[] {
-  const seeds = run.plan.jobs.slice(0, expectedCount).map((job) => job.seed);
-  if (seeds.length !== expectedCount) {
-    throw new Error("The frozen Run Plan does not contain the expected Random seed list.");
-  }
-  return seeds;
 }

@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import suppress
@@ -53,7 +54,7 @@ from batchcraft.db import (
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
 )
-from batchcraft.domain import BatchDefinition, CompiledRunPlan, compile_batch
+from batchcraft.domain import BatchDefinition, CompiledRunPlan, SeedInput, compile_batch
 from batchcraft.execution import (
     DISCARDED_BEFORE_START,
     USER_DETACHED_FROM_CURRENT_JOB,
@@ -115,6 +116,7 @@ from .tasks import RunTaskRegistry
 
 _RUN_DIRECTORY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
 _HISTORICAL_IMPORT_NAMESPACE = UUID("cf2d89da-87dc-4ce7-8bf5-c1da75fc690b")
+_SEED_SPACE_SIZE = 2**53
 _IMAGE_MIME_TYPES = {
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
@@ -138,6 +140,9 @@ class RunExecutor(Protocol):
         config: ExecutionConfig,
         cancellation_control: RunCancellationControl,
     ) -> Coroutine[object, object, RunExecutionState]: ...
+
+
+RandomSeedSource = Callable[[int], int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +235,7 @@ class BatchcraftService:
         history_store: HistoricalProjectionStore | None = None,
         executor: RunExecutor = execute_run,
         clock: Callable[[], datetime] | None = None,
+        random_seed_source: RandomSeedSource = secrets.randbelow,
     ) -> None:
         self.projects_root = projects_root
         self.comfyui_client = comfyui_client
@@ -243,12 +249,37 @@ class BatchcraftService:
         self.history_scanner = ProjectHistoryScanner(projects_root)
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._random_seed_source = random_seed_source
 
     def preview_batch(
         self, creation: RunCreationInput
     ) -> tuple[CompiledRunPlan, dict[str, AssetRecord]]:
         plan = self._compile_and_validate(creation)
         return plan, self._resolve_assets(creation.project.filesystem_key, plan)
+
+    def preview_random_batch(
+        self,
+        creation: RunCreationInput,
+        random_seed_count: int,
+    ) -> tuple[CompiledRunPlan, dict[str, AssetRecord]]:
+        if random_seed_count < 1:
+            raise RunCreationError("Random seed count must be positive")
+        base_plan = compile_batch(
+            creation.definition,
+            max_jobs=_SEED_SPACE_SIZE // random_seed_count,
+        )
+        seeds = materialize_random_seeds(
+            base_plan.job_count * random_seed_count,
+            self._random_seed_source,
+        )
+        materialized = replace(
+            creation,
+            definition=replace(
+                creation.definition,
+                seeds=SeedInput.materialized_random(seeds, random_seed_count),
+            ),
+        )
+        return self.preview_batch(materialized)
 
     def list_project_assets(self, project_filesystem_key: str) -> tuple[AssetRecord, ...]:
         store = self._project_asset_store(project_filesystem_key)
@@ -964,6 +995,30 @@ class BatchcraftService:
 
 def _is_within(path: Path, root: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
+
+
+def materialize_random_seeds(
+    count: int,
+    random_seed_source: RandomSeedSource = secrets.randbelow,
+) -> tuple[int, ...]:
+    if count < 0:
+        raise RunCreationError("Random seed assignment count must not be negative")
+    if count > _SEED_SPACE_SIZE:
+        raise RunCreationError("Random Job count exceeds the available seed space")
+
+    seeds: list[int] = []
+    used: set[int] = set()
+    while len(seeds) < count:
+        seed = random_seed_source(_SEED_SPACE_SIZE)
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < _SEED_SPACE_SIZE:
+            raise RunCreationError(
+                "Random seed source returned a value outside the allowed seed range"
+            )
+        if seed in used:
+            continue
+        used.add(seed)
+        seeds.append(seed)
+    return tuple(seeds)
 
 
 def _historical_import_ids(

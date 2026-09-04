@@ -67,7 +67,6 @@ from batchcraft.domain import (
     ParameterValuesIntent,
     PromptVersion,
     SeedInput,
-    SeedMode,
     VariableBinding,
     WorkflowParameter,
     extract_placeholder_names,
@@ -188,8 +187,36 @@ class LinkedParameterSetRequest(ApiModel):
 
 
 class SeedRequest(ApiModel):
-    mode: SeedMode
+    mode: Literal["fixed", "explicit", "random"]
     values: list[SafeSeed]
+    random_seed_count: int | None = Field(default=None, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_seed_request(self) -> Self:
+        if self.mode == "fixed":
+            if len(self.values) != 1 or self.random_seed_count is not None:
+                raise ValueError("Fixed seed input must contain one value and no Random count")
+        elif self.mode == "explicit":
+            if not self.values or self.random_seed_count is not None:
+                raise ValueError("Explicit seed input must contain values and no Random count")
+        elif self.random_seed_count is None:
+            raise ValueError("Random seed input requires a Random count")
+        elif self.values and len(set(self.values)) != len(self.values):
+            raise ValueError("Materialized Random seed assignments must be unique")
+        return self
+
+    @property
+    def needs_materialization(self) -> bool:
+        return self.mode == "random" and not self.values
+
+    def to_domain(self) -> SeedInput:
+        if self.mode == "fixed":
+            return SeedInput.fixed(self.values[0])
+        if self.mode == "explicit":
+            return SeedInput.explicit(tuple(self.values))
+        if not self.values or self.random_seed_count is None:
+            raise ValueError("Random seed assignments must be materialized before compilation")
+        return SeedInput.materialized_random(tuple(self.values), self.random_seed_count)
 
 
 class BatchRequest(ApiModel):
@@ -265,15 +292,15 @@ class BatchRequest(ApiModel):
         intent = snapshot.seed_intent
         if intent.mode == "random":
             if (
-                self.seeds.mode is not SeedMode.EXPLICIT
-                or len(self.seeds.values) != intent.random_seed_count
+                self.seeds.mode != "random"
+                or self.seeds.random_seed_count != intent.random_seed_count
             ):
                 raise ValueError("Random seed intent does not match materialized request seeds")
-        elif intent.mode != self.seeds.mode.value or intent.values != self.seeds.values:
+        elif intent.mode != self.seeds.mode or intent.values != self.seeds.values:
             raise ValueError("Batch snapshot seed intent does not match request seeds")
         return self
 
-    def to_creation_input(self) -> RunCreationInput:
+    def to_creation_input(self, *, seed_override: SeedInput | None = None) -> RunCreationInput:
         parameters = _profile_parameters(self.workflow_profile)
         return RunCreationInput(
             project=ProjectIdentity(
@@ -316,7 +343,7 @@ class BatchRequest(ApiModel):
                 linked_parameter_sets=tuple(
                     _linked_parameter_set(item) for item in self.linked_parameter_sets
                 ),
-                seeds=SeedInput(mode=self.seeds.mode, values=tuple(self.seeds.values)),
+                seeds=seed_override or self.seeds.to_domain(),
             ),
             workflow=self.workflow,
             workflow_profile=self.workflow_profile,
@@ -335,9 +362,17 @@ class RunCreateRequest(BatchRequest):
             return value.strip() or None
         return value
 
-    def to_creation_input(self) -> RunCreationInput:
+    @model_validator(mode="after")
+    def require_materialized_random_seeds(self) -> Self:
+        if self.seeds.needs_materialization:
+            raise ValueError(
+                "Run creation requires materialized Random seed assignments from Preview"
+            )
+        return self
+
+    def to_creation_input(self, *, seed_override: SeedInput | None = None) -> RunCreationInput:
         return replace(
-            super().to_creation_input(),
+            super().to_creation_input(seed_override=seed_override),
             name=self.run_name,
             description=self.run_description,
         )

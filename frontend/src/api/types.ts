@@ -77,10 +77,9 @@ export interface BatchRequest {
   image_bindings: ImageBindingRequest[];
   parameter_bindings: ParameterBindingRequest[];
   linked_parameter_sets: LinkedParameterSetRequest[];
-  seeds: {
-    mode: "fixed" | "explicit";
-    values: number[];
-  };
+  seeds:
+    | { mode: "fixed" | "explicit"; values: number[]; random_seed_count?: null }
+    | { mode: "random"; values: number[]; random_seed_count: number };
   workflow: JsonObject;
   workflow_profile: JsonObject;
   batch_snapshot: EditableBatchSnapshot;

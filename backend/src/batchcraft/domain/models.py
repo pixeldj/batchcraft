@@ -7,6 +7,7 @@ from enum import StrEnum
 class SeedMode(StrEnum):
     FIXED = "fixed"
     EXPLICIT = "explicit"
+    MATERIALIZED_RANDOM = "materialized_random"
 
 
 class CompilationWarningCode(StrEnum):
@@ -121,6 +122,7 @@ class LinkedParameterSet:
 class SeedInput:
     mode: SeedMode
     values: tuple[int, ...]
+    random_seed_count: int | None = None
 
     @classmethod
     def fixed(cls, seed: int) -> "SeedInput":
@@ -129,6 +131,14 @@ class SeedInput:
     @classmethod
     def explicit(cls, seeds: tuple[int, ...]) -> "SeedInput":
         return cls(mode=SeedMode.EXPLICIT, values=seeds)
+
+    @classmethod
+    def materialized_random(cls, seeds: tuple[int, ...], count: int) -> "SeedInput":
+        return cls(
+            mode=SeedMode.MATERIALIZED_RANDOM,
+            values=seeds,
+            random_seed_count=count,
+        )
 
 
 @dataclass(frozen=True, slots=True)

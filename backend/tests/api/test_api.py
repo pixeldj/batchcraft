@@ -30,6 +30,8 @@ from batchcraft.api.schemas import (
     SavedBatchParameterBindingRequest,
     SavedBatchVariableBindingRequest,
 )
+from batchcraft.application.errors import RunCreationError
+from batchcraft.application.service import materialize_random_seeds
 from batchcraft.comfyui import (
     ComfyUIConnectionError,
     DownloadedArtifact,
@@ -2166,19 +2168,32 @@ def test_batch_request_rejects_snapshot_mismatches(tmp_path: Path, mismatch: str
     assert response.json()["error"]["code"] == "invalid_request"
 
 
-def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v8(
+def test_random_seed_preview_materializes_unique_per_job_assignments_and_run_reuses_them(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
     request = _batch_request(())
-    request["seeds"] = {"mode": "explicit", "values": [101, 202, 303]}
+    workflow = cast(dict[str, dict[str, object]], request["workflow"])
+    workflow["7"]["inputs"] = {"seed": 0, "cfg": 4}
+    profile = cast(dict[str, object], request["workflow_profile"])
+    profile["parameters"] = [
+        {
+            "key": "cfg",
+            "label": "CFG",
+            "node_id": "7",
+            "input_name": "cfg",
+            "value_type": "integer",
+        }
+    ]
+    request["parameter_bindings"] = [{"parameter_key": "cfg", "mode": "values", "values": [4, 6]}]
+    request["seeds"] = {"mode": "random", "values": [], "random_seed_count": 2}
     snapshot = request["batch_snapshot"]
     assert isinstance(snapshot, dict)
     snapshot["source_saved_batch"] = {"id": "saved-batch", "revision": 7}
     snapshot["seed_intent"] = {
         "mode": "random",
         "values": [],
-        "random_seed_count": 3,
+        "random_seed_count": 2,
     }
     workflow_selection = snapshot["workflow_selection"]
     assert isinstance(workflow_selection, dict)
@@ -2190,43 +2205,65 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v8
             "workflow_profile_version_number": 4,
         }
     )
+    _sync_batch_snapshot(request)
+    candidates = iter([11, 11, 12, 13, 14, 15, 16, 17, 18])
+
+    def random_seed_source(limit: int) -> int:
+        assert limit == 2**53
+        return next(candidates)
 
     with TestClient(
-        create_app(settings, client_factory=lambda _settings: FakeComfyUIClient())
+        create_app(
+            settings,
+            client_factory=lambda _settings: FakeComfyUIClient(),
+            random_seed_source=random_seed_source,
+        )
     ) as http:
         preview = http.post("/api/batches/preview", json=request)
-        created = http.post("/api/runs", json=request)
+        assert preview.status_code == 200, preview.text
+        preview_seeds = [job["seed"] for job in preview.json()["jobs"]]
+        materialized = copy.deepcopy(request)
+        materialized["seeds"] = {
+            "mode": "random",
+            "values": preview_seeds,
+            "random_seed_count": 2,
+        }
+        created = http.post("/api/runs", json=materialized)
+        unmaterialized = http.post("/api/runs", json=request)
         run = http.get(f"/api/runs/{created.json()['run_id']}")
 
-    assert preview.status_code == 200
+    assert preview.json()["job_count"] == 8
+    assert preview_seeds == list(range(11, 19))
+    assert len(set(preview_seeds)) == 8
     assert created.status_code == 201
+    assert unmaterialized.status_code == 422
+    assert unmaterialized.json()["error"]["code"] == "invalid_request"
     run_path = next(settings.projects_root.glob("*/batches/*/[0-9]*-*"))
     manifest = json.loads((run_path / "manifest.json").read_text())
     assert manifest["format_version"] == 1
-    expected_snapshot = BatchRequest.model_validate(request).batch_snapshot.model_dump(mode="json")
+    expected_snapshot = BatchRequest.model_validate(materialized).batch_snapshot.model_dump(
+        mode="json"
+    )
     assert manifest["batch_snapshot"] == expected_snapshot
-    assert [job["seed"] for job in manifest["jobs"]] == [
-        101,
-        202,
-        303,
-        101,
-        202,
-        303,
-    ]
+    assert [job["seed"] for job in manifest["jobs"]] == preview_seeds
     assert run.json()["batch_snapshot"]["seed_intent"] == {
         "mode": "random",
         "values": [],
-        "random_seed_count": 3,
+        "random_seed_count": 2,
     }
     returned_workflow = run.json()["batch_snapshot"]["workflow_selection"]
     assert returned_workflow["workflow_name"] == "KREA2 Outfit"
     assert returned_workflow["workflow_version_number"] == 4
     assert returned_workflow["workflow_profile_name"] == "General"
     assert returned_workflow["workflow_profile_version_number"] == 4
-    assert sorted({job["seed"] for job in run.json()["plan"]["jobs"]}) == [101, 202, 303]
+    assert [job["seed"] for job in run.json()["plan"]["jobs"]] == preview_seeds
 
-    invalid = copy.deepcopy(request)
-    invalid["seeds"] = {"mode": "explicit", "values": [101, 202]}
+    invalid = copy.deepcopy(materialized)
+    invalid["seeds"] = {
+        "mode": "random",
+        "values": [11, 11, *preview_seeds[2:]],
+        "random_seed_count": 2,
+    }
     with TestClient(
         create_app(
             _settings(tmp_path / "invalid"), client_factory=lambda _settings: FakeComfyUIClient()
@@ -2235,6 +2272,16 @@ def test_random_seed_snapshot_validates_dual_state_and_is_written_to_manifest_v8
         mismatch = http.post("/api/batches/preview", json=invalid)
     assert mismatch.status_code == 422
     assert mismatch.json()["error"]["code"] == "invalid_request"
+
+
+def test_random_seed_materialization_handles_single_assignment_and_retries_collisions() -> None:
+    single = materialize_random_seeds(1, lambda limit: limit - 1)
+    candidates = iter([7, 7, 3, 9])
+
+    assert single == (2**53 - 1,)
+    assert materialize_random_seeds(3, lambda _limit: next(candidates)) == (7, 3, 9)
+    with pytest.raises(RunCreationError, match="exceeds the available seed space"):
+        materialize_random_seeds(2**53 + 1)
 
 
 def test_run_api_requires_complete_snapshot_v5_and_rejects_malformed_durable_snapshot(

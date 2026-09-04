@@ -874,6 +874,85 @@ def test_explicit_seed_order_is_preserved() -> None:
     assert [job.seed for job in compile_batch(batch).jobs] == [9, 2, 7]
 
 
+def test_fixed_seed_repeats_for_every_non_seed_configuration() -> None:
+    batch = batch_definition(
+        "{{animal}}",
+        bindings=(binding("animal", "cat", "dog", "fox", "bird"),),
+        seeds=SeedInput.fixed(123),
+    )
+
+    assert [job.seed for job in compile_batch(batch).jobs] == [123, 123, 123, 123]
+
+
+def test_explicit_seeds_repeat_in_order_for_every_non_seed_configuration() -> None:
+    batch = batch_definition(
+        "{{animal}}",
+        bindings=(binding("animal", "cat", "dog", "fox", "bird"),),
+        seeds=SeedInput.explicit((123, 456)),
+    )
+
+    assert [job.seed for job in compile_batch(batch).jobs] == [123, 456] * 4
+
+
+def test_materialized_random_seeds_assign_once_per_ordered_job() -> None:
+    parameter = WorkflowParameter("cfg", "CFG", "7", "cfg", ParameterValueType.INTEGER)
+    slot = ImageInputSlot("source", "Source", "1", "image")
+    batch = batch_definition(
+        "Prompt",
+        image_slots=(slot,),
+        image_bindings=(ImageBinding("source", ("A", "B")),),
+        parameters=(parameter,),
+        parameter_bindings=(ParameterBinding("cfg", (4, 6)),),
+        seeds=SeedInput.materialized_random(tuple(range(11, 19)), 2),
+    )
+
+    plan = compile_batch(batch)
+
+    assert [
+        (
+            job.resolved_image_inputs[0].asset_id,
+            job.resolved_parameters[0].value,
+            job.seed,
+        )
+        for job in plan.jobs
+    ] == [
+        ("A", 4, 11),
+        ("A", 4, 12),
+        ("A", 6, 13),
+        ("A", 6, 14),
+        ("B", 4, 15),
+        ("B", 4, 16),
+        ("B", 6, 17),
+        ("B", 6, 18),
+    ]
+
+
+@pytest.mark.parametrize(("count", "seeds"), ((1, (77,)), (3, (77, 88, 99))))
+def test_materialized_random_repetitions_for_one_configuration(
+    count: int,
+    seeds: tuple[int, ...],
+) -> None:
+    plan = compile_batch(
+        batch_definition(
+            "Prompt",
+            seeds=SeedInput.materialized_random(seeds, count),
+        )
+    )
+
+    assert [job.seed for job in plan.jobs] == list(seeds)
+
+
+def test_materialized_random_seeds_require_one_assignment_per_job() -> None:
+    batch = batch_definition(
+        "{{animal}}",
+        bindings=(binding("animal", "cat", "dog"),),
+        seeds=SeedInput.materialized_random((1, 2, 3), 2),
+    )
+
+    with pytest.raises(CompilationError, match="exactly one seed per Job"):
+        compile_batch(batch)
+
+
 def test_job_ordinals_are_one_based_and_contiguous() -> None:
     batch = batch_definition(
         "{{animal}}",

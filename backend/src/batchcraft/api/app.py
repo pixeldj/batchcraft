@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import secrets
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, closing
@@ -86,7 +87,7 @@ from batchcraft.db import (
     apply_migrations,
     open_connection,
 )
-from batchcraft.domain import CompilationError
+from batchcraft.domain import CompilationError, SeedInput
 from batchcraft.execution import execute_run
 from batchcraft.files import ProjectOwnerStore
 from batchcraft.version import batchcraft_version
@@ -187,6 +188,7 @@ def create_app(
     client_factory: ClientFactory | None = None,
     executor: RunExecutor = execute_run,
     clock: Callable[[], datetime] | None = None,
+    random_seed_source: Callable[[int], int] = secrets.randbelow,
 ) -> FastAPI:
     configured = settings or Settings.from_env()
     make_client = client_factory or _create_comfyui_client
@@ -207,6 +209,7 @@ def create_app(
             execution_config=configured.execution_config,
             executor=executor,
             clock=clock,
+            random_seed_source=random_seed_source,
         )
         app.state.library_service = LibraryService(
             project_store=ProjectStore(configured.database_path),
@@ -881,8 +884,16 @@ def create_app(
         request: BatchRequest,
         service: ServiceDependency,
     ) -> PreviewResponse:
-        creation = request.to_creation_input()
-        plan, image_assets = service.preview_batch(creation)
+        if request.seeds.needs_materialization:
+            assert request.seeds.random_seed_count is not None
+            creation = request.to_creation_input(seed_override=SeedInput.fixed(0))
+            plan, image_assets = service.preview_random_batch(
+                creation,
+                request.seeds.random_seed_count,
+            )
+        else:
+            creation = request.to_creation_input()
+            plan, image_assets = service.preview_batch(creation)
         return PreviewResponse.from_plan(plan, image_assets)
 
     @app.post(

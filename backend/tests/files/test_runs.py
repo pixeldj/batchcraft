@@ -166,7 +166,12 @@ class PostRenameFailureStore(RunFilesystemStore):
         raise OSError("simulated directory sync failure")
 
 
-def _fixture_plan(asset_id: str | None, *, seeds: tuple[int, ...] = (9, 3)) -> CompiledRunPlan:
+def _fixture_plan(
+    asset_id: str | None,
+    *,
+    seeds: tuple[int, ...] = (9, 3),
+    random_seed_count: int | None = None,
+) -> CompiledRunPlan:
     return compile_batch(
         BatchDefinition(
             prompt_versions=(
@@ -186,7 +191,11 @@ def _fixture_plan(asset_id: str | None, *, seeds: tuple[int, ...] = (9, 3)) -> C
             ),
             image_input_slots=(ImageInputSlot("reference", "Reference", "221", "image"),),
             image_bindings=(ImageBinding("reference", (asset_id,)),),
-            seeds=SeedInput.explicit(seeds),
+            seeds=(
+                SeedInput.explicit(seeds)
+                if random_seed_count is None
+                else SeedInput.materialized_random(seeds, random_seed_count)
+            ),
         )
     )
 
@@ -973,7 +982,12 @@ def test_non_v1_manifest_versions_are_rejected(tmp_path: Path, manifest_version:
         ),
         (
             "random",
-            (9001, 9002),
+            (9001, 9002, 9003, 9004),
+            {"mode": "random", "values": [], "random_seed_count": 2},
+        ),
+        (
+            "random",
+            (9001, 9002, 9001, 9002),
             {"mode": "random", "values": [], "random_seed_count": 2},
         ),
     ),
@@ -985,7 +999,11 @@ def test_manifest_v8_preserves_seed_intent_separately_from_concrete_job_seeds(
     seed_intent: dict[str, object],
 ) -> None:
     projects_path = tmp_path / seed_mode
-    plan = _fixture_plan(None, seeds=concrete_seeds)
+    plan = _fixture_plan(
+        None,
+        seeds=concrete_seeds,
+        random_seed_count=2 if seed_mode == "random" else None,
+    )
     batch_snapshot = {
         **BATCH_SNAPSHOT,
         "image_bindings": [{"slot_key": "reference", "values": [None]}],
@@ -1003,8 +1021,9 @@ def test_manifest_v8_preserves_seed_intent_separately_from_concrete_job_seeds(
 
     assert loaded.batch_snapshot == batch_snapshot
     assert manifest["batch_snapshot"]["seed_intent"] == seed_intent
-    assert [job.compiled_job.seed for job in loaded.jobs] == list(concrete_seeds) * 2
-    assert [job["seed"] for job in manifest["jobs"]] == list(concrete_seeds) * 2
+    expected_seeds = list(concrete_seeds) if seed_mode == "random" else list(concrete_seeds) * 2
+    assert [job.compiled_job.seed for job in loaded.jobs] == expected_seeds
+    assert [job["seed"] for job in manifest["jobs"]] == expected_seeds
 
 
 def test_manifest_v8_snapshot_has_no_input_or_output_aliases(tmp_path: Path) -> None:

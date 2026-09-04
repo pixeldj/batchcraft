@@ -492,10 +492,14 @@ incompatible set dissolves to independent Base bindings rather than reinterpreti
 Values, Range, or Preset change invalidates Preview. Collapsing the section is local UI state and does not.
 Job count, authoritative Range materialization, and concrete expansion remain backend responsibilities.
 
-Random seed intent belongs to the ephemeral frontend form, not the API domain model. Materialize it
-once with Web Crypto into an explicit ordered seed list before calling Preview, retain that exact
-request for Run creation, and consume the Preview only after successful Run publication. Fixed and
-Explicit Previews remain reusable; a failed Random Run creation keeps its inspected request for retry.
+Random seed intent remains editable frontend and Batch snapshot state as
+`{ mode: "random", random_seed_count: N }`. Preview sends that intent without concrete values. The
+backend first computes the complete non-seed expansion, then uses `secrets.randbelow` to materialize one
+unique seed per final Job within `0..2^53-1`. Preview returns those concrete assignments in deterministic
+Job order. The frontend retains that exact materialized request for Run creation and publication retry,
+then consumes it only after successful publication. A later Preview, historical `Load Run as Batch`, or
+cold recovery starts from editable intent and requests fresh Random assignments. Fixed and Explicit
+behavior is unchanged.
 
 PromptVersion is the compiler's first dimension. The frontend preserves PromptVersion request order
 and displays backend-returned PromptVersion identity in Preview. It does not calculate prompt products

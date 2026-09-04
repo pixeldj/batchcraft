@@ -11,7 +11,6 @@ import {
 import type {
   AssetResponse,
   BatchReconstructionResponse,
-  BatchRequest,
   ExecutionResponse,
   LibraryPromptVersion,
   PreviewResponse,
@@ -108,7 +107,7 @@ describe("Project selection", () => {
     expect(api.startRun).not.toHaveBeenCalled();
   });
 
-  it("loads a replayable Run as an unsaved draft and uses historical Random seeds once", async () => {
+  it("loads Random intent from a Run and requests fresh per-Job seeds for every Preview", async () => {
     const frozen = runLookupResponse("succeeded", "historical-run", 12);
     frozen.batch_snapshot.batch.name = "Recovered experiment";
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
@@ -125,10 +124,11 @@ describe("Project selection", () => {
         workflow_profile_version: { historical_version_id: "profile-v1", status: "detached", reason: "not imported", linked_version_id: null, linked_resource_id: null },
       },
     };
-    const previewBatch = vi.fn(async (request: BatchRequest) => {
-      void request;
-      return previewResponse();
-    });
+    const previewBatch = vi
+      .fn<BatchcraftApi["previewBatch"]>()
+      .mockResolvedValueOnce(previewResponseWithSeeds([101, 102]))
+      .mockResolvedValueOnce(previewResponseWithSeeds([7, 8]))
+      .mockResolvedValueOnce(previewResponseWithSeeds([9, 10]));
     const api = makeApi({
       listProjectRuns: vi.fn(async () => ({
         project_id: "project-1",
@@ -156,48 +156,40 @@ describe("Project selection", () => {
       getBatchReconstruction: vi.fn(async () => reconstruction),
       previewBatch,
     });
-    const randomValues = [7, 8, 9, 10];
-    let randomIndex = 0;
-    const randomSpy = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
-      if (!(array instanceof Uint32Array)) throw new Error("Expected Uint32Array");
-      array[0] = randomValues[randomIndex++];
-      return array;
+    render(<App api={api} />);
+    const historicalRun = await screen.findByText("Run 12");
+    const article = historicalRun.closest("article");
+    expect(article).not.toBeNull();
+    fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Open" }));
+    fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Load Run as Batch" }));
+
+    expect(await screen.findByText("Run 12 loaded as an unsaved Batch draft. Preview to verify the Job plan.")).toBeInTheDocument();
+    await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
+    expect(screen.getByRole("textbox", { name: "Batch name" })).toHaveValue("Recovered experiment");
+    const seeds = screen.getByRole("group", { name: "Seeds" });
+    fireEvent.click(within(seeds).getByRole("button", { name: "Edit" }));
+    expect(within(seeds).getByRole("combobox", { name: "Seed mode" })).toHaveValue("random");
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(previewBatch).toHaveBeenCalledTimes(1));
+    expect(previewBatch.mock.calls[0][0].seeds).toEqual({
+      mode: "random",
+      values: [],
+      random_seed_count: 2,
     });
 
-    try {
-      render(<App api={api} />);
-      const historicalRun = await screen.findByText("Run 12");
-      const article = historicalRun.closest("article");
-      expect(article).not.toBeNull();
-      fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Open" }));
-      fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Load Run as Batch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(previewBatch).toHaveBeenCalledTimes(2));
+    expect(previewBatch.mock.calls[1][0].seeds.values).toEqual([]);
 
-      expect(await screen.findByText("Run 12 loaded as an unsaved Batch draft. Preview to verify the Job plan.")).toBeInTheDocument();
-      await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
-      expect(screen.getByRole("textbox", { name: "Batch name" })).toHaveValue("Recovered experiment");
-      const seeds = screen.getByRole("group", { name: "Seeds" });
-      fireEvent.click(within(seeds).getByRole("button", { name: "Edit" }));
-      expect(within(seeds).getByRole("combobox", { name: "Seed mode" })).toHaveValue("random");
-      expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-      await waitFor(() => expect(previewBatch).toHaveBeenCalledTimes(1));
-      expect(previewBatch.mock.calls[0][0].seeds.values).toEqual([42, 42]);
-
-      fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-      await waitFor(() => expect(previewBatch).toHaveBeenCalledTimes(2));
-      expect(previewBatch.mock.calls[1][0].seeds.values).toEqual([7, 8]);
-
-      fireEvent.change(screen.getByRole("textbox", { name: "Batch name" }), {
-        target: { value: "Edited recovered experiment" },
-      });
-      await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
-      fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-      await waitFor(() => expect(previewBatch).toHaveBeenCalledTimes(3));
-      expect(previewBatch.mock.calls[2][0].seeds.values).toEqual([9, 10]);
-    } finally {
-      randomSpy.mockRestore();
-    }
+    fireEvent.change(screen.getByRole("textbox", { name: "Batch name" }), {
+      target: { value: "Edited recovered experiment" },
+    });
+    await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(previewBatch).toHaveBeenCalledTimes(3));
+    expect(previewBatch.mock.calls[2][0].seeds.values).toEqual([]);
   });
 
   it("does not let a stale Load Run completion overwrite an intervening form edit", async () => {
@@ -854,8 +846,8 @@ describe("Batch preview", () => {
     }));
     const api = makeApi({
       listPrompts: vi.fn(async () => ({ prompts: [projectPrompt(), alternate] })),
-      previewBatch: vi.fn(async () => previewResponse(3)),
-      createRun: vi.fn(async () => runResponse("run-random", 4, 3)),
+      previewBatch: vi.fn(async () => previewResponseWithSeeds([31, 32, 33, 34, 35, 36])),
+      createRun: vi.fn(async () => runResponse("run-random", 4, 6)),
     });
     render(<App api={api} />);
     await enterAsset();
@@ -867,8 +859,7 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await screen.findByRole("button", { name: "Create Run" });
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
-    expect(previewRequest.seeds.mode).toBe("explicit");
-    expect(previewRequest.seeds.values).toHaveLength(3);
+    expect(previewRequest.seeds).toEqual({ mode: "random", values: [], random_seed_count: 3 });
     expect(previewRequest.prompt_versions).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
@@ -876,6 +867,7 @@ describe("Batch preview", () => {
     expect(await screen.findByRole("heading", { name: "Run 4" })).toBeInTheDocument();
     expect(vi.mocked(api.createRun).mock.calls[0][0]).toEqual({
       ...previewRequest,
+      seeds: { mode: "random", values: [31, 32, 33, 34, 35, 36], random_seed_count: 3 },
       run_name: null,
       run_description: null,
     });
@@ -887,6 +879,7 @@ describe("Batch preview", () => {
 
   it("retains a Random Preview when Run creation fails", async () => {
     const api = makeApi({
+      previewBatch: vi.fn(async () => previewResponseWithSeeds([41, 42])),
       createRun: vi.fn(async () => {
         throw new ApiError("Run publication failed", "run_publication_failed", 500);
       }),
@@ -899,6 +892,10 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     const createRun = await screen.findByRole("button", { name: "Create Run" });
     const previewRequest = vi.mocked(api.previewBatch).mock.calls[0][0];
+    const materializedRequest = {
+      ...previewRequest,
+      seeds: { mode: "random" as const, values: [41, 42], random_seed_count: 2 },
+    };
     fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), {
       target: { value: "Retry name" },
     });
@@ -915,12 +912,12 @@ describe("Batch preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await waitFor(() => expect(api.createRun).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.createRun).mock.calls[0][0]).toEqual({
-      ...previewRequest,
+      ...materializedRequest,
       run_name: "Retry name",
       run_description: "Keep on failure",
     });
     expect(vi.mocked(api.createRun).mock.calls[1][0]).toEqual({
-      ...previewRequest,
+      ...materializedRequest,
       run_name: "Retry name",
       run_description: "Keep on failure",
     });
@@ -1015,7 +1012,9 @@ describe("Batch preview", () => {
       range: { start: "0", end: "10", step: "1", includeBase: false },
     }];
     saveWorkingSession(form, null, [], "project-1");
-    const api = makeApi();
+    const api = makeApi({
+      previewBatch: vi.fn(async () => previewResponseWithSeeds([501, 502, 503])),
+    });
     render(<App api={api} />);
     await screen.findByText(/Draft restored/);
     await expandConfiguration("Parameters");
@@ -1429,12 +1428,14 @@ describe("Browser working-session restoration", () => {
     await waitFor(() => expect(previewBatch).toBeEnabled());
     fireEvent.click(previewBatch);
     await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
-    const seeds = vi.mocked(api.previewBatch).mock.calls[0][0].seeds.values;
-    expect(seeds).toHaveLength(3);
-    expect(seeds).not.toEqual([111, 222, 333]);
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].seeds).toEqual({
+      mode: "random",
+      values: [],
+      random_seed_count: 3,
+    });
   });
 
-  it("refetches a recovered source Run and uses its concrete Random seeds for the first Preview", async () => {
+  it("refetches a recovered source Run but requests fresh Random seeds for Preview", async () => {
     const frozen = runLookupResponse("succeeded", "historical-run", 12);
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
     frozen.plan.jobs = frozen.plan.jobs.map((job, index) => ({ ...job, seed: [303, 404][index] }));
@@ -1444,6 +1445,7 @@ describe("Browser working-session restoration", () => {
     const api = makeApi({
       getRun: vi.fn(async () => frozen),
       getBatchReconstruction: vi.fn(async () => reconstruction),
+      previewBatch: vi.fn(async () => previewResponseWithSeeds([505, 606])),
     });
 
     render(<App api={api} />);
@@ -1453,7 +1455,11 @@ describe("Browser working-session restoration", () => {
     await waitFor(() => expect(api.getBatchReconstruction).toHaveBeenCalledWith("historical-run", expect.any(AbortSignal)));
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
-    expect(vi.mocked(api.previewBatch).mock.calls[0][0].seeds.values).toEqual([303, 404]);
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0].seeds).toEqual({
+      mode: "random",
+      values: [],
+      random_seed_count: 2,
+    });
     expect(loadWorkingSession().sourceRunId).toBe("historical-run");
     expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).not.toContain("303");
   });
@@ -3870,6 +3876,14 @@ function previewResponse(jobCount = 2, imageAssetId: string | null = "asset-1"):
         seed: 1,
       };
     }),
+  };
+}
+
+function previewResponseWithSeeds(seeds: number[]): PreviewResponse {
+  const response = previewResponse(seeds.length);
+  return {
+    ...response,
+    jobs: response.jobs.map((job, index) => ({ ...job, seed: seeds[index] })),
   };
 }
 

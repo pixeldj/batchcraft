@@ -46,7 +46,7 @@ The frontend is responsible for:
 - named Image Input binding;
 - Workflow Profile configuration;
 - Batch construction;
-- materializing Random seed intent into explicit values before Preview;
+- submitting Random seed intent and retaining Preview's exact materialized request for Run creation;
 - compiled-job preview;
 - Run progress visualization;
 - Project history browsing and explicit reindex requests;
@@ -62,6 +62,7 @@ The backend owns:
 - domain rules;
 - persistence;
 - prompt resolution;
+- Random seed materialization for Preview;
 - Batch compilation;
 - Run creation;
 - Job scheduling;
@@ -135,9 +136,10 @@ reconstructed by version ID; detached JSON remains editable draft state. Every c
 Preview. Stored Run identities rebuild a Batch-scoped working-session Results gallery from
 backend-authoritative Run and Result data. Separately, the Project history UI reads rebuildable SQLite
 projections derived from the Project filesystem and does not require browser-held Run IDs. Preview and Run creation use the same complete
-Batch request snapshot plus the required `batch_snapshot` object. Frontend Random seed intent is
-materialized before that snapshot reaches the API; the backend and pure compiler receive only concrete
-Fixed or Explicit seed input. Successful Run publication freezes the durable execution plan and
+Batch request snapshot plus the required `batch_snapshot` object. The frontend sends Random repetition
+intent to Preview. The backend computes the complete non-seed expansion, materializes one unique seed per
+Job, and returns the concrete ordered assignments. The frontend retains those assignments for Run
+creation; the pure compiler never generates randomness. Successful Run publication freezes the durable execution plan and
 provenance into `batchcraft.manifest` v1 with Batch snapshot v1. SQLite owns current Project metadata, the immutable-version Prompt,
 Workflow, and Workflow Profile libraries, mutable Saved Batches, durable Run cancellation intent, and
 non-authoritative historical projections. The Project filesystem remains authoritative for historical

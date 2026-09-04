@@ -85,8 +85,9 @@ against current SQLite identity, content, archive state, Project ID, and filesys
 mutating either authority. Explicit Run-scoped import operations
 reload frozen content server-side and create new mutable library copies. The frontend requires a fresh
 Preview, preserves detached snapshots and explicit import resolutions through working-session recovery v4,
-uses idempotent import operation identities, and uses frozen concrete seeds
-for the first unedited Preview of historical Random intent.
+and uses idempotent import operation identities. ADR 0013 supersedes the initial frozen-seed reuse:
+historical Random intent now requests fresh concrete assignments from Preview, like any other editable
+Random Batch.
 
 Focused automated coverage proves a clean database can import a copied Project, reconstruct and Preview
 the original plan, explicitly import detached resources, create a new Run, and leave every original Run

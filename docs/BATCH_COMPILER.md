@@ -192,9 +192,16 @@ Useful for controlled comparisons.
 
 A selected list of seeds becomes another Batch dimension.
 
-A fixed seed input must contain exactly one seed. An explicit seed list must contain at least one seed, and compilation preserves its order.
+A fixed seed input must contain exactly one seed. An explicit seed list must contain at least one seed,
+and compilation preserves its order. Both modes reuse their configured values for every non-seed
+configuration.
 
-The browser supports Random seed intent without adding randomness to the pure logical compiler. It uses Web Crypto to materialize 1 through 100 unsigned 32-bit seeds into an explicit ordered seed input before Preview. Run creation submits that exact inspected request, and successful Run publication persists the resolved values in Run provenance before execution begins.
+Random x N means N fastest-varying repetitions for every ordered non-seed configuration. The backend
+Preview boundary determines the final Job count and materializes one unique concrete seed per Job within
+`0..2^53-1`. It then passes those ordered assignments to the pure logical compiler; the compiler performs
+no randomness. The frontend submits the exact materialized assignments returned by Preview; Run creation
+rejects unmaterialized or incorrectly sized Random assignments. Successful publication persists each Job
+seed in immutable Run provenance before execution begins.
 
 ## Named Image Input Slots
 

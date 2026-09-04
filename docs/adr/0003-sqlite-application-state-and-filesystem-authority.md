@@ -367,7 +367,8 @@ New editable seed values must use one cross-layer range:
 
 This range is exactly representable by JavaScript and safely representable by Python and SQLite INTEGER.
 
-Frontend Random seed materialization may continue using unsigned 32-bit values.
+ADR 0013 supersedes the prior frontend-materialization latitude. Backend Preview now materializes Random
+seeds across the full safe range after determining the final Job count.
 
 Existing historical Runs with older values remain readable and are not destructively migrated.
 
