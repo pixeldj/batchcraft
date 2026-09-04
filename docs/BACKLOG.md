@@ -124,7 +124,7 @@ Every entry has these fields:
 | --- | --- |
 | ID | BC-003A |
 | Priority | P1 |
-| Status | In Progress |
+| Status | Done |
 | Area | Execution / Cancellation |
 | Summary | Let a user request that a running Run stop after its currently submitted Job reaches a proven terminal state. |
 | Dependencies / Notes | Follow ADR 0003: SQLite owns durable cancellation intent and `execution.json` owns the execution outcome. This operation must not clear unrelated ComfyUI queue work. It may introduce the minimum cancellation-intent storage needed without implementing the complete durable scheduler. |
@@ -343,7 +343,7 @@ The chooser must never silently substitute the latest version for a specifically
 | --- | --- |
 | ID | BC-005 |
 | Priority | P3 |
-| Status | Planned |
+| Status | In Progress |
 | Area | Workflow Library / UX |
 | Summary | Make compatible Workflow and Workflow Profile creation, duplication, and reuse faster. |
 | Dependencies / Notes | Existing selection, immutable versioning, visual mapping, mapping-copy assistance, and rename behavior provide the groundwork. Logical and immutable version identities must remain distinct. No new Workflow/Profile-combination entity is required: a ProfileVersion already targets one exact WorkflowVersion. |
@@ -359,6 +359,16 @@ Add or improve:
 - smoother creation of a new ProfileVersion for a new WorkflowVersion by copying and validating prior mappings.
 
 Duplication starts a new logical history at v1. It must not copy old version numbers or mutate the source Workflow/Profile.
+
+Implementation result: the Batch editor now presents the compatible Workflow/Profile pair as one compact
+`Workflow Setup`, keeps exact revision controls under `History`, and shows newer revisions without silently
+changing a Saved Batch selection. Editing appends immutable Workflow or Profile revisions, with copied
+Profile mappings opened for review after a Workflow edit. Duplication copies the exact selected
+WorkflowVersion into a new v1 history and can copy the exact selected ProfileVersion mappings into a new
+Profile v1. Suggested names are editable and collision-safe, and a failed optional Profile copy preserves
+the new Workflow while opening the visual mapper for repair. No backend API, SQLite schema, or v1 filesystem
+format changed. Verification passed with 619 backend tests, Ruff check/format, mypy, and package build, plus
+356 frontend tests, typecheck, lint, and production build. Manual browser UX acceptance remains pending.
 
 ### BC-006: Historical reuse
 

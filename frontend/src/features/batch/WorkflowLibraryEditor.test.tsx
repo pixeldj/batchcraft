@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { describe, expect, it, vi } from "vitest";
 
 import type { BatchcraftApi } from "../../api/client";
-import type { CreateWorkflowResponse, LibraryWorkflowProfileVersion, LibraryWorkflowVersion, ProjectWorkflow, ProjectWorkflowProfile, WorkflowsResponse } from "../../api/types";
+import type { CreateWorkflowResponse, LibraryWorkflowProfileVersion, LibraryWorkflowVersion, ProjectWorkflow, ProjectWorkflowProfile, Workflow, WorkflowProfile, WorkflowsResponse } from "../../api/types";
 import { initialBatchForm, type BatchFormState } from "./form";
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
@@ -38,11 +38,11 @@ describe("WorkflowLibraryEditor", () => {
     const form = initialBatchForm();
     const view = render(<WorkflowLibraryEditor api={api} projectId="project-a" form={form} onChange={onChange} onMetadataChange={() => undefined} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Import Workflow" }));
-    const dialog = screen.getByRole("dialog", { name: "Import Workflow" });
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "New Workflow" });
     fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Stale import" } });
     fireEvent.change(within(dialog).getByLabelText("Workflow JSON"), { target: { value: '{"node":"stale"}' } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Import Workflow" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Workflow" }));
     await waitFor(() => expect(api.createWorkflow).toHaveBeenCalledOnce());
 
     view.rerender(<WorkflowLibraryEditor api={api} projectId="project-b" form={form} onChange={onChange} onMetadataChange={() => undefined} />);
@@ -83,8 +83,8 @@ describe("WorkflowLibraryEditor", () => {
     function component() { return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(component()); }} onMetadataChange={() => undefined} />; }
 
     fireEvent.change(await screen.findByRole("combobox", { name: "Workflow" }), { target: { value: "workflow-1" } });
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflow Profile" })).toBeEnabled());
-    fireEvent.change(screen.getByRole("combobox", { name: "Workflow Profile" }), { target: { value: "profile-1" } });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Profile" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("combobox", { name: "Profile" }), { target: { value: "profile-1" } });
 
     expect(current.workflowVersionId).toBe("workflow-v1");
     expect(current.workflowProfileVersionId).toBe("profile-v1");
@@ -122,15 +122,16 @@ describe("WorkflowLibraryEditor", () => {
     const rendered = () => <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={onChange} onMetadataChange={() => undefined} />;
     const view = render(rendered());
     await waitFor(() => expect(api.listWorkflowProfileVersions).toHaveBeenCalled());
-    const section = screen.getByRole("group", { name: "Workflow and Profile" });
+    const section = screen.getByRole("group", { name: "Workflow Setup" });
     const change = await within(section).findByRole("button", { name: "Change" });
-    expect(section).toHaveTextContent("Portrait · Workflow v1");
-    expect(section).toHaveTextContent("Mapping · Profile v1");
+    expect(section).toHaveTextContent("Portrait");
+    expect(section).toHaveTextContent("Mapping");
+    expect(section).toHaveTextContent("v1 / v1");
     expect(change).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(change);
-    fireEvent.click(screen.getByRole("button", { name: "New WorkflowVersion" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Workflow" }));
     fireEvent.change(screen.getByLabelText("Workflow JSON", { selector: "textarea.json-editor" }), { target: { value: '{"node":"changed"}' } });
-    fireEvent.click(within(screen.getByRole("dialog", { name: "New WorkflowVersion" })).getByRole("button", { name: "New WorkflowVersion" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Edit Workflow" })).getByRole("button", { name: "Save Workflow" }));
 
     await waitFor(() => expect(api.createWorkflowVersion).toHaveBeenCalled());
     expect(current.workflowVersionId).toBe("workflow-v2");
@@ -142,10 +143,15 @@ describe("WorkflowLibraryEditor", () => {
       { slot_key: "pose", values: ["asset-pose-b", "asset-pose-a"] },
     ]);
     expect(screen.getByText("Profile required")).toBeInTheDocument();
-    expect(await screen.findByRole("option", { name: "Mapping (no compatible version)" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Mapping (needs review)" })).toBeInTheDocument();
     expect(screen.getByTestId("no-compatible-profile-version")).toHaveTextContent(
-      "No compatible ProfileVersion exists for WorkflowVersion v2.",
+      "This Profile needs a compatible revision for Workflow v2.",
     );
+    const repair = screen.getByRole("dialog", { name: "Edit Profile" });
+    expect(repair).toHaveTextContent(
+      "Workflow v2 was saved. Review the copied mappings before saving the next Profile revision.",
+    );
+    expect(within(repair).getByLabelText("Image Input 1 label")).toHaveValue("Style image");
   });
 
   it("restores the existing compatible ProfileVersion when switching back", async () => {
@@ -174,15 +180,15 @@ describe("WorkflowLibraryEditor", () => {
     }
 
     fireEvent.click(await screen.findByRole("button", { name: "Change" }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflow version" })).toBeEnabled());
-    fireEvent.change(screen.getByRole("combobox", { name: "Workflow version" }), { target: { value: v2.id } });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflow revision" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("combobox", { name: "Workflow revision" }), { target: { value: v2.id } });
     expect(current.workflowProfileVersionId).toBeNull();
     expect(current.workflowProfileId).toBe(logicalProfile.id);
     expect(current.workflowProfileJson).toBe("{}");
     await waitFor(() => expect(api.listWorkflowProfiles).toHaveBeenLastCalledWith("workflow-1", v2.id, expect.any(AbortSignal)));
-    expect(await screen.findByRole("option", { name: "Mapping (no compatible version)" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Mapping (needs review)" })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Workflow version" }), { target: { value: v1.id } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Workflow revision" }), { target: { value: v1.id } });
     expect(current.workflowProfileVersionId).toBe(profile.id);
     expect(JSON.parse(current.workflowProfileJson)).toEqual(profile.profile);
   });
@@ -213,13 +219,13 @@ describe("WorkflowLibraryEditor", () => {
       return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
     }
 
-    fireEvent.click(await screen.findByRole("button", { name: "Review mappings for this Workflow version" }));
-    const dialog = await screen.findByRole("dialog", { name: "New ProfileVersion" });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Profile mappings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Profile" });
     expect(within(dialog).getByLabelText("Prompt node")).toHaveValue("34");
     expect(within(dialog).getByLabelText("Image Input 1 label")).toHaveValue("Style image");
     expect(within(dialog).getByLabelText("Image Input 2 label")).toHaveValue("Pose image");
     expect(api.createWorkflowProfileVersion).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "New ProfileVersion" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save Profile" }));
     await waitFor(() => expect(api.createWorkflowProfileVersion).toHaveBeenCalledWith(
       logicalProfile.id,
       {
@@ -261,13 +267,13 @@ describe("WorkflowLibraryEditor", () => {
       return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
     }
 
-    fireEvent.click(await screen.findByRole("button", { name: "Review mappings for this Workflow version" }));
-    const dialog = await screen.findByRole("dialog", { name: "New ProfileVersion" });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Profile mappings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Profile" });
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Node 34 is missing from this WorkflowVersion.");
     expect(within(dialog).getByLabelText("Seed node")).toHaveValue("7");
     fireEvent.change(within(dialog).getByLabelText("Prompt node"), { target: { value: "35" } });
     fireEvent.change(within(dialog).getByLabelText("Prompt input"), { target: { value: "text" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "New ProfileVersion" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save Profile" }));
 
     await waitFor(() => expect(createVersion).toHaveBeenLastCalledWith(
       logicalProfile.id,
@@ -280,6 +286,251 @@ describe("WorkflowLibraryEditor", () => {
       },
     ));
     expect(current.workflowProfileVersionId).toBe(repaired.id);
+  });
+
+  it("prefills a collision-safe Profile name and allows an override", async () => {
+    const workflowV1 = workflowVersion({ workflow: visualWorkflow() });
+    const selectedProfileV1 = profileVersion({ profile: visualProfileSnapshot() });
+    const selected = workflowProfile("profile-1", "Mapping", selectedProfileV1);
+    const collisions = [
+      workflowProfile("profile-2", "Portrait-profile", null),
+      workflowProfile("profile-3", "Portrait-profile-2", null),
+    ];
+    const createdVersion = profileVersion({
+      id: "profile-v1-new",
+      workflow_profile_id: "profile-new",
+      profile: { ...visualProfileSnapshot(), id: "profile-new", name: "Custom Profile" },
+    });
+    const createProfile = vi.fn(async () => ({
+      workflow_profile: {
+        ...workflowProfile("profile-new", "Custom Profile", createdVersion),
+        latest_compatible_version: undefined,
+      },
+      version: createdVersion,
+    }));
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", workflowV1)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [workflowV1] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [selected, ...collisions] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [selectedProfileV1] })),
+      getWorkflowVersion: vi.fn(async () => workflowV1),
+      getWorkflowProfileVersion: vi.fn(async () => selectedProfileV1),
+      createWorkflowProfile: createProfile,
+    });
+    let current = linkedForm(workflowV1, selectedProfileV1);
+    const view = render(rendered());
+    function rendered() {
+      return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
+    }
+
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Profile" }));
+    const dialog = screen.getByRole("dialog", { name: "New Profile" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Portrait-profile-3");
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Custom Profile" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Profile" }));
+
+    await waitFor(() => expect(createProfile).toHaveBeenCalledWith("workflow-1", expect.objectContaining({
+      name: "Custom Profile",
+      workflow_version_id: workflowV1.id,
+    })));
+    expect(current.workflowProfileId).toBe("profile-new");
+    expect(current.workflowProfileVersionId).toBe("profile-v1-new");
+  });
+
+  it("duplicates the exact selected Workflow revision and copies the current Profile into new v1 histories", async () => {
+    const selectedWorkflowVersion = workflowVersion({
+      id: "workflow-v2",
+      version_number: 2,
+      workflow: visualWorkflow(),
+    });
+    const latestWorkflowVersion = workflowVersion({
+      id: "workflow-v4",
+      version_number: 4,
+      workflow: { latest: true },
+    });
+    const selectedProfileVersion = profileVersion({
+      id: "profile-v3",
+      version_number: 3,
+      workflow_version_id: selectedWorkflowVersion.id,
+      profile: visualProfileSnapshot(),
+    });
+    const duplicateVersion = workflowVersion({
+      id: "workflow-copy-v1",
+      workflow_id: "workflow-copy",
+      version_number: 1,
+      name_snapshot: "Custom copy",
+      workflow: visualWorkflow(),
+      content_sha256: "workflow-copy-sha",
+    });
+    const duplicateProfileVersion = profileVersion({
+      id: "profile-copy-v1",
+      workflow_profile_id: "profile-copy",
+      workflow_id: "workflow-copy",
+      workflow_version_id: duplicateVersion.id,
+      version_number: 1,
+      name_snapshot: "Custom mapping",
+      profile: { ...visualProfileSnapshot(), id: "profile-copy", name: "Custom mapping" },
+      content_sha256: "profile-copy-sha",
+    });
+    const duplicateWorkflow = workflow("workflow-copy", "Custom copy", duplicateVersion);
+    const createWorkflow = vi.fn(async () => ({
+      workflow: withoutLatest(duplicateWorkflow),
+      version: duplicateVersion,
+    }));
+    const createProfile = vi.fn(async () => ({
+      workflow_profile: withoutLatest(workflowProfile("profile-copy", "Custom mapping", duplicateProfileVersion)),
+      version: duplicateProfileVersion,
+    }));
+    const sourceWorkflow = workflow("workflow-1", "Portrait", latestWorkflowVersion);
+    const sourceProfile = workflowProfile("profile-1", "Mapping", selectedProfileVersion);
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({
+        workflows: [sourceWorkflow, workflow("workflow-existing-copy", "Portrait copy")],
+      })),
+      listWorkflowVersions: vi.fn(async (workflowId) => ({
+        workflow_versions: workflowId === "workflow-copy"
+          ? [duplicateVersion]
+          : [latestWorkflowVersion, selectedWorkflowVersion],
+      })),
+      listWorkflowProfiles: vi.fn(async (workflowId) => ({
+        workflow_profiles: workflowId === "workflow-copy"
+          ? [workflowProfile("profile-copy", "Custom mapping", duplicateProfileVersion)]
+          : [sourceProfile],
+      })),
+      listWorkflowProfileVersions: vi.fn(async (profileId) => ({
+        workflow_profile_versions: profileId === "profile-copy"
+          ? [duplicateProfileVersion]
+          : [selectedProfileVersion],
+      })),
+      getWorkflowVersion: vi.fn(async (versionId) => versionId === duplicateVersion.id ? duplicateVersion : selectedWorkflowVersion),
+      getWorkflowProfileVersion: vi.fn(async (versionId) => versionId === duplicateProfileVersion.id ? duplicateProfileVersion : selectedProfileVersion),
+      createWorkflow,
+      createWorkflowProfile: createProfile,
+    });
+    let current = linkedForm(selectedWorkflowVersion, selectedProfileVersion);
+    current.workflowJson = '{"stale":"editable workflow snapshot"}';
+    current.workflowProfileJson = '{"stale":"editable profile snapshot"}';
+    const view = render(rendered());
+    function rendered() {
+      return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
+    }
+
+    fireEvent.click(await screen.findByRole("button", { name: "Duplicate Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "Duplicate Workflow" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Portrait copy 2");
+    expect(within(dialog).getByLabelText("Copy current Profile mappings")).toBeChecked();
+    expect(within(dialog).getByLabelText("Copied Profile name")).toHaveValue("Portrait copy 2-profile");
+    expect(JSON.parse((within(dialog).getByLabelText("Workflow JSON") as HTMLTextAreaElement).value)).toEqual(visualWorkflow());
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Custom copy" } });
+    expect(within(dialog).getByLabelText("Copied Profile name")).toHaveValue("Custom copy-profile");
+    fireEvent.change(within(dialog).getByLabelText("Copied Profile name"), { target: { value: "Custom mapping" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Duplicate Workflow" }));
+
+    await waitFor(() => expect(createWorkflow).toHaveBeenCalledWith("project-a", {
+      name: "Custom copy",
+      workflow: visualWorkflow(),
+      note: null,
+    }));
+    expect(createProfile).toHaveBeenCalledWith("workflow-copy", {
+      name: "Custom mapping",
+      workflow_version_id: "workflow-copy-v1",
+      mappings: visualProfileSnapshot().mappings,
+      image_inputs: visualProfileSnapshot().image_inputs,
+      parameters: visualProfileSnapshot().parameters,
+      note: null,
+    });
+    expect(current).toMatchObject({
+      workflowId: "workflow-copy",
+      workflowVersionId: "workflow-copy-v1",
+      workflowVersionNumber: 1,
+      workflowProfileId: "profile-copy",
+      workflowProfileVersionId: "profile-copy-v1",
+      workflowProfileVersionNumber: 1,
+    });
+    expect(createWorkflow).toHaveBeenCalledOnce();
+    expect(createProfile).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a duplicated Workflow and opens Profile repair when optional mapping copy fails", async () => {
+    const sourceWorkflowVersion = workflowVersion({ workflow: visualWorkflow() });
+    const sourceProfileVersion = profileVersion({ profile: visualProfileSnapshot() });
+    const duplicateVersion = workflowVersion({
+      id: "workflow-copy-v1",
+      workflow_id: "workflow-copy",
+      version_number: 1,
+      name_snapshot: "Portrait copy",
+      workflow: visualWorkflow(),
+    });
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", sourceWorkflowVersion)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [sourceWorkflowVersion] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", sourceProfileVersion)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [sourceProfileVersion] })),
+      getWorkflowVersion: vi.fn(async () => sourceWorkflowVersion),
+      getWorkflowProfileVersion: vi.fn(async () => sourceProfileVersion),
+      createWorkflow: vi.fn(async () => ({
+        workflow: withoutLatest(workflow("workflow-copy", "Portrait copy", duplicateVersion)),
+        version: duplicateVersion,
+      })),
+      createWorkflowProfile: vi.fn(async () => { throw new Error("Mapping target is invalid"); }),
+    });
+    let current = linkedForm(sourceWorkflowVersion, sourceProfileVersion);
+    const view = render(rendered());
+    function rendered() {
+      return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
+    }
+
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Duplicate Workflow" })).getByRole("button", { name: "Duplicate Workflow" }));
+
+    const repair = await screen.findByRole("dialog", { name: "New Profile" });
+    expect(within(repair).getByRole("status")).toHaveTextContent(
+      "Portrait copy v1 was created. Review or repair the copied Profile mappings.",
+    );
+    expect(within(repair).getByRole("alert")).toHaveTextContent("Mapping target is invalid");
+    expect(within(repair).getByLabelText("Prompt node")).toHaveValue("34");
+    expect(current.workflowId).toBe("workflow-copy");
+    expect(current.workflowVersionId).toBe("workflow-copy-v1");
+    expect(current.workflowProfileId).toBeNull();
+  });
+
+  it("keeps exact older Saved Batch revisions selected while showing quiet current context", async () => {
+    const selectedWorkflowVersion = workflowVersion({ id: "workflow-v3", version_number: 3 });
+    const currentWorkflowVersion = workflowVersion({ id: "workflow-v5", version_number: 5 });
+    const selectedProfileVersion = profileVersion({
+      id: "profile-v2",
+      version_number: 2,
+      workflow_version_id: selectedWorkflowVersion.id,
+    });
+    const currentProfileVersion = profileVersion({
+      id: "profile-v4",
+      version_number: 4,
+      workflow_version_id: selectedWorkflowVersion.id,
+    });
+    const onChange = vi.fn();
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", currentWorkflowVersion)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [currentWorkflowVersion, selectedWorkflowVersion] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", currentProfileVersion)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [currentProfileVersion, selectedProfileVersion] })),
+      getWorkflowVersion: vi.fn(async () => selectedWorkflowVersion),
+      getWorkflowProfileVersion: vi.fn(async () => selectedProfileVersion),
+    });
+    render(<WorkflowLibraryEditor api={api} projectId="project-a" form={linkedForm(selectedWorkflowVersion, selectedProfileVersion)} onChange={onChange} onMetadataChange={() => undefined} />);
+
+    const section = screen.getByRole("group", { name: "Workflow Setup" });
+    expect(await within(section).findByText("v3 / v2")).toBeInTheDocument();
+    fireEvent.click(await within(section).findByRole("button", { name: "Change" }));
+    expect(await within(section).findByText(
+      "Exact saved setup retained. Workflow v5 is current. Compatible Profile v4 is current.",
+    )).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Workflow revision" })).toHaveValue("workflow-v3");
+    expect(screen.getByRole("combobox", { name: "Profile revision" })).toHaveValue("profile-v2");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "New WorkflowVersion" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New ProfileVersion" })).not.toBeInTheDocument();
   });
 
   it("renames a logical Workflow as metadata without changing either snapshot", async () => {
@@ -708,6 +959,19 @@ function workflowVersion(overrides: Partial<LibraryWorkflowVersion> = {}): Libra
 
 function workflowProfile(id: string, name: string, latest: LibraryWorkflowProfileVersion | null): ProjectWorkflowProfile {
   return { id, workflow_id: "workflow-1", project_id: "project-a", name, description: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", archived_at: null, latest_compatible_version: latest };
+}
+
+function withoutLatest(value: ProjectWorkflow): Workflow;
+function withoutLatest(value: ProjectWorkflowProfile): WorkflowProfile;
+function withoutLatest(value: ProjectWorkflow | ProjectWorkflowProfile): Workflow | WorkflowProfile {
+  if ("latest_active_version" in value) {
+    const { latest_active_version, ...workflowRecord } = value;
+    void latest_active_version;
+    return workflowRecord;
+  }
+  const { latest_compatible_version, ...profileRecord } = value;
+  void latest_compatible_version;
+  return profileRecord;
 }
 
 function profileVersion(overrides: Partial<LibraryWorkflowProfileVersion> = {}): LibraryWorkflowProfileVersion {

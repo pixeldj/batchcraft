@@ -219,6 +219,16 @@ a new immutable version under the same logical Profile. Switching back restores 
 version. Unavailable or integrity-mismatched library records detach without rewriting their exact
 snapshots.
 
+The Batch editor presents the selected Workflow and compatible Profile as one compact `Workflow Setup`.
+Exact Workflow and Profile revision selection remains available under `History`; newer library revisions
+are shown as context and never replace a Saved Batch selection automatically. `Edit Workflow` and
+`Edit Profile` append immutable revisions, and saving a Workflow revision opens the existing Profile
+mappings for review against the new target. `Duplicate Workflow` copies the exact selected
+WorkflowVersion into v1 of a new logical Workflow and can copy the exact selected ProfileVersion
+mappings into v1 of a new logical Profile. Suggested Workflow and Profile names are editable and
+collision-safe. If optional Profile copying fails validation, the new Workflow remains selected and the
+visual Profile mapper opens with the copied mappings for repair.
+
 ### Phase 2.4: Named Image Input Slots Pass 2A
 
 Completed. ProfileVersions keep the three required core mappings and add an ordered `image_inputs`

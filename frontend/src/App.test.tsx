@@ -397,7 +397,7 @@ describe("Batch preview", () => {
     await screen.findByRole("button", { name: "Add portrait.png to Source image" });
 
     for (const [title, action] of [
-      ["Workflow and Profile", "Change"],
+      ["Workflow Setup", "Change"],
       ["Parameters", "Edit"],
       ["Seeds", "Edit"],
       ["Image Inputs", "Change"],
@@ -633,7 +633,7 @@ describe("Batch preview", () => {
     render(<App api={api} />);
 
     const project = screen.getByRole("group", { name: "Project" });
-    const workflow = screen.getByRole("group", { name: "Workflow and Profile" });
+    const workflow = screen.getByRole("group", { name: "Workflow Setup" });
     const savedBatch = screen.getByRole("group", { name: "Batch" });
     const prompts = screen.getByRole("group", { name: "Prompts" });
     const variables = screen.getByRole("group", { name: "Variable bindings" });
