@@ -108,6 +108,7 @@ class SubmissionSpec:
     prompt_id: str | None = None
     status: int | None = 200
     diagnostic: str | None = None
+    response: dict[str, object] | None = None
 
 
 class FakeEventSource:
@@ -220,7 +221,13 @@ class FakeExecutionClient:
             client_id=client_id,
             prompt_id=spec.prompt_id,
             http_status=spec.status,
-            response={"prompt_id": spec.prompt_id} if spec.prompt_id else None,
+            response=(
+                spec.response
+                if spec.response is not None
+                else {"prompt_id": spec.prompt_id}
+                if spec.prompt_id
+                else None
+            ),
             diagnostic=spec.diagnostic,
         )
 
@@ -456,6 +463,26 @@ def _outcome(
             "status_str": status.value,
         },
     )
+
+
+def _validation_rejection(node_id: str, input_name: str) -> dict[str, object]:
+    return {
+        "error": {
+            "type": "prompt_outputs_failed_validation",
+            "message": "Prompt outputs failed validation",
+        },
+        "node_errors": {
+            node_id: {
+                "errors": [
+                    {
+                        "type": "custom_validation_failed",
+                        "message": "Custom validation failed for node",
+                        "extra_info": {"input_name": input_name},
+                    }
+                ]
+            }
+        },
+    }
 
 
 def _run(
@@ -846,6 +873,106 @@ def test_rejected_or_unknown_submission_stops_without_retrying_or_advancing(
     if spec.disposition is SubmissionDisposition.UNKNOWN:
         assert state.jobs[0].prompt_id is None
         assert state.completed_at is None
+
+
+def test_structured_rejection_adds_base_image_input_context(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, with_images=False)
+    response = _validation_rejection("25", "image")
+    client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(
+                SubmissionDisposition.REJECTED,
+                status=400,
+                diagnostic="workflow rejected",
+                response=response,
+            )
+        ],
+        histories={},
+    )
+
+    state = _run(run, client)
+
+    assert state.jobs[0].submission_response == response
+    assert state.jobs[0].diagnostics[0] == "workflow rejected"
+    assert state.jobs[0].diagnostics[1] == (
+        "ComfyUI reported validation for Image Input 'Identity', which used Base workflow · "
+        "original.png. Choose a Project image for Identity or check that workflow value in ComfyUI."
+    )
+    assert state.error == state.jobs[0].error
+
+
+def test_structured_rejection_adds_base_parameter_context(tmp_path: Path) -> None:
+    run, _ = _published_run(tmp_path, job_count=1, parameter_value=None)
+    client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(
+                SubmissionDisposition.REJECTED,
+                status=400,
+                diagnostic="workflow rejected",
+                response=_validation_rejection("7", "steps"),
+            )
+        ],
+        histories={},
+    )
+
+    state = _run(run, client)
+
+    assert state.jobs[0].diagnostics[1] == (
+        "ComfyUI reported validation for parameter 'Steps', which used Base workflow · 20. "
+        "Choose an override for Steps or check that workflow value in ComfyUI."
+    )
+
+
+def test_rejection_does_not_blame_base_for_overrides_or_unstructured_errors(
+    tmp_path: Path,
+) -> None:
+    asset_run, _ = _published_run(tmp_path / "asset", job_count=1)
+    asset_client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(
+                SubmissionDisposition.REJECTED,
+                status=400,
+                diagnostic="asset workflow rejected",
+                response=_validation_rejection("25", "image"),
+            )
+        ],
+        histories={},
+    )
+    unstructured_run, _ = _published_run(tmp_path / "unstructured", job_count=1, with_images=False)
+    unstructured_client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(
+                SubmissionDisposition.REJECTED,
+                status=400,
+                diagnostic="unstructured rejection",
+                response={"error": "custom validation failed"},
+            )
+        ],
+        histories={},
+    )
+    parameter_run, _ = _published_run(tmp_path / "parameter", job_count=1, parameter_value=30)
+    parameter_client = FakeExecutionClient(
+        submissions=[
+            SubmissionSpec(
+                SubmissionDisposition.REJECTED,
+                status=400,
+                diagnostic="parameter workflow rejected",
+                response=_validation_rejection("7", "steps"),
+            )
+        ],
+        histories={},
+    )
+
+    asset_state = _run(asset_run, asset_client)
+    unstructured_state = _run(unstructured_run, unstructured_client)
+    parameter_state = _run(parameter_run, parameter_client)
+
+    assert asset_state.jobs[0].diagnostics == ("asset workflow rejected",)
+    assert asset_state.jobs[0].error == "asset workflow rejected"
+    assert unstructured_state.jobs[0].diagnostics == ("unstructured rejection",)
+    assert unstructured_state.jobs[0].error == "unstructured rejection"
+    assert parameter_state.jobs[0].diagnostics == ("parameter workflow rejected",)
+    assert parameter_state.jobs[0].error == "parameter workflow rejected"
 
 
 def test_websocket_failure_after_acceptance_falls_back_to_successful_history(

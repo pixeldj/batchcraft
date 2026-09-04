@@ -667,6 +667,9 @@ describe("Batch preview", () => {
     const request = vi.mocked(api.previewBatch).mock.calls[0][0];
     expect(request.image_bindings).toEqual([{ slot_key: "source", values: [null, "asset-1"] }]);
     expect(request.seeds).toEqual({ mode: "fixed", values: [1] });
+    const preview = screen.getByRole("heading", { name: "Preview" }).closest("section")!;
+    expect(within(preview).getAllByText("portrait.png").length).toBeGreaterThan(0);
+    expect(within(preview).queryByText(/Base workflow ·/)).not.toBeInTheDocument();
     expect(request.variable_bindings[0]).toEqual(
       { placeholder: "subject", values: ["cat", "dog"] },
     );
@@ -681,7 +684,7 @@ describe("Batch preview", () => {
 
     await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
     expect(vi.mocked(api.previewBatch).mock.calls[0][0].image_bindings).toEqual([{ slot_key: "source", values: [null] }]);
-    expect(screen.getAllByText("Base workflow").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("Base workflow · reference-image.png").length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders backend validation errors near the Batch editor", async () => {
@@ -1060,6 +1063,54 @@ describe("Batch preview", () => {
     expect(request.parameter_bindings.map((binding) => binding.parameter_key)).toEqual(["steps"]);
     expect(request.linked_parameter_sets[0]).toMatchObject({ set_key: "width_height", members: ["width", "height"] });
   });
+
+  it("offers Add Parameter for a Workflow without a Profile and opens New Profile", async () => {
+    const workflowVersion = {
+      id: "workflow-v1",
+      workflow_id: "workflow-1",
+      project_id: "project-1",
+      version_number: 1,
+      name_snapshot: "Portrait workflow",
+      workflow: { "1": { class_type: "KSampler", inputs: { steps: 20 } } },
+      content_sha256: "workflow-sha",
+      note: null,
+      created_at: "2026-08-27T12:00:00Z",
+      archived_at: null,
+    };
+    const form = populatedBatchForm();
+    form.workflowLibraryProjectId = "project-1";
+    form.workflowId = workflowVersion.workflow_id;
+    form.workflowName = workflowVersion.name_snapshot;
+    form.workflowVersionId = workflowVersion.id;
+    form.workflowVersionNumber = workflowVersion.version_number;
+    form.workflowContentSha256 = workflowVersion.content_sha256;
+    form.workflowJson = JSON.stringify(workflowVersion.workflow);
+    form.workflowProfileJson = "{}";
+    form.imageBindings = [];
+    saveWorkingSession(form, null, [], "project-1");
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [{
+        id: workflowVersion.workflow_id,
+        project_id: "project-1",
+        name: workflowVersion.name_snapshot,
+        description: null,
+        created_at: "2026-08-27T12:00:00Z",
+        updated_at: "2026-08-27T12:00:00Z",
+        archived_at: null,
+        latest_active_version: workflowVersion,
+      }] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [workflowVersion] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })),
+      getWorkflowVersion: vi.fn(async () => workflowVersion),
+    });
+    render(<App api={api} />);
+
+    await screen.findByText(/Draft restored/);
+    await expandConfiguration("Parameters");
+    fireEvent.click(screen.getByRole("button", { name: "Add Parameter" }));
+
+    expect(await screen.findByRole("dialog", { name: "New Profile" })).toBeInTheDocument();
+  });
 });
 
 describe("PromptVersion editor", () => {
@@ -1293,9 +1344,11 @@ describe("Browser working-session restoration", () => {
     });
     render(<App api={api} />);
 
+    await waitFor(() => expect(api.getWorkflowProfileVersion).toHaveBeenCalled());
+    await waitFor(() => expect((screen.getByLabelText("Workflow Profile JSON") as HTMLTextAreaElement).value).toContain('"steps"'));
     await screen.findByRole("group", { name: "Parameters" });
     await expandConfiguration("Parameters");
-    expect(screen.getByRole("button", { name: "Range" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: "Range" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Steps range start")).toHaveValue("30.00");
     expect(screen.getByLabelText("Steps range end")).toHaveValue("0.00");
     expect(screen.getByLabelText("Steps range step")).toHaveValue("-2.50");
@@ -1568,7 +1621,7 @@ describe("Image Input controls", () => {
     await screen.findByRole("button", { name: "Create Run" });
 
     const imageInputs = screen.getByRole("group", { name: "Image Inputs" });
-    expect(imageInputs).toHaveTextContent("2 image inputs · 3 alternatives · 1 uses workflow default");
+    expect(imageInputs).toHaveTextContent("2 image inputs · 3 alternatives · 1 uses Base workflow");
     fireEvent.click(within(imageInputs).getByRole("button", { name: "Done" }));
 
     expect(within(imageInputs).queryByRole("heading", { name: "Style" })).not.toBeInTheDocument();
@@ -1631,7 +1684,7 @@ describe("Image Input controls", () => {
     ]);
     const selected = screen.getByRole("list", { name: "Style selected alternatives" });
     expect(within(selected).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      "Base workflowRemove",
+      "Base workflow · reference-image.pngRemove",
       "a.pngRemove",
       "b.pngRemove",
     ]);
@@ -1723,7 +1776,7 @@ describe("Run creation", () => {
           { name: "style", value: "editorial" },
         ],
         resolved_image_inputs: [{ slot_key: "source", label: "Source image", asset_id: null, filename: null }],
-        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: null }, { parameter_key: "width", label: "Width", value: 1024 }, { parameter_key: "height", label: "Height", value: 768 }],
+        resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: null }, { parameter_key: "width", label: "Width", value: 1024 }, { parameter_key: "height", label: "Height", value: null }],
         resolved_parameter_sets: [{ set_key: "resolution", set_label: "Resolution", row_ordinal: 1, row_label: "Landscape" }],
         seed: 123,
       },
@@ -1752,12 +1805,16 @@ describe("Run creation", () => {
       range: { start: "30", end: "0", step: "-15" },
     }];
     frozen.batch_snapshot.linked_parameter_sets = [{ set_key: "resolution", set_label: "Resolution", members: ["width", "height"], rows: [
-      { row_label: "Landscape", values: { width: 1024, height: 768 } },
+      { row_label: "Landscape", values: { width: 1024, height: null } },
       { row_label: null, values: { width: 768, height: 1024 } },
     ] }];
     frozen.batch_snapshot.workflow_selection.workflow_profile = {
       mappings: {}, image_inputs: [{ key: "source", label: "Source image", node_id: "1", input_name: "image" }],
       parameters: [{ key: "steps", label: "Steps", node_id: "2", input_name: "steps", value_type: "integer" }, { key: "width", label: "Width", node_id: "2", input_name: "width", value_type: "integer" }, { key: "height", label: "Height", node_id: "2", input_name: "height", value_type: "integer" }],
+    };
+    frozen.batch_snapshot.workflow_selection.workflow = {
+      "1": { inputs: { image: "old-reference.png" } },
+      "2": { inputs: { steps: 20, width: 1344, height: 768 } },
     };
     frozen.batch_snapshot.seed_intent = { mode: "random", values: [], random_seed_count: 2 };
     frozen.batch_snapshot.variable_bindings.push({ placeholder: "style", values: ["editorial"] });
@@ -1788,7 +1845,9 @@ describe("Run creation", () => {
     expect(within(dialog).getByText("1 value · editorial")).toBeInTheDocument();
     expect(within(dialog).getByText("Random · 2 requested")).toBeInTheDocument();
     expect(within(dialog).getByText("123, 456")).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Base workflow").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Base workflow · 20").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Base workflow · old-reference.png").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText(/Height: Base workflow · 768/).length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("portrait.png").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("asset-1").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("Steps").length).toBeGreaterThan(0);
@@ -1798,7 +1857,6 @@ describe("Run creation", () => {
     expect(within(dialog).getAllByText("Landscape").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("Row 2").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("4 alternatives")).toBeInTheDocument();
-    expect(within(dialog).getByText("Includes Base workflow")).toBeInTheDocument();
     expect(within(dialog).queryByText("steps")).not.toBeInTheDocument();
     expect(within(dialog).getByText("KREA2 Outfit · v4")).toBeInTheDocument();
     expect(within(dialog).getByText("General · v4")).toBeInTheDocument();
@@ -3322,6 +3380,9 @@ describe("Result Details", () => {
     frozen.plan.jobs[0].resolved_image_inputs = [
       { slot_key: "source", label: "Source image", asset_id: null, filename: null },
     ];
+    frozen.batch_snapshot.workflow_selection.workflow = {
+      "1": { inputs: { image: "old-reference.png" } },
+    };
     const api = makeApi({
       getRun: vi.fn(async () => frozen),
       getExecution: vi.fn(async () => execution("succeeded")),
@@ -3337,7 +3398,7 @@ describe("Result Details", () => {
       name: "Details for Job 1, artifact 1",
     }));
     const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
-    expect(within(dialog).getByText("Base workflow")).toBeInTheDocument();
+    expect(within(dialog).getByText("Base workflow · old-reference.png")).toBeInTheDocument();
   });
 
   it("renders a Parameter label and exact value without concatenating its technical key", async () => {
@@ -3346,6 +3407,14 @@ describe("Result Details", () => {
       { parameter_key: "cfg_internal", label: "Guidance", value: null },
       { parameter_key: "caption_internal", label: "Caption", value: "" },
     ];
+    frozen.batch_snapshot.workflow_selection.workflow = {
+      "7": { inputs: { cfg: 7 } },
+    };
+    frozen.batch_snapshot.workflow_selection.workflow_profile = {
+      mappings: {},
+      image_inputs: [],
+      parameters: [{ key: "cfg_internal", label: "Guidance", node_id: "7", input_name: "cfg", value_type: "float" }],
+    };
     const api = makeApi({
       getRun: vi.fn(async () => frozen),
       getExecution: vi.fn(async () => execution("succeeded")),
@@ -3361,7 +3430,7 @@ describe("Result Details", () => {
       name: "Details for Job 1, artifact 1",
     }));
     const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
-    expect(within(dialog).getByText("Guidance").nextElementSibling).toHaveTextContent(/^Base workflow$/);
+    expect(within(dialog).getByText("Guidance").nextElementSibling).toHaveTextContent(/^Base workflow · 7$/);
     expect(within(dialog).getByText("Caption").nextElementSibling).toHaveTextContent(/^"" \(empty string\)$/);
     expect(dialog).not.toHaveTextContent("cfg_internal");
     expect(dialog).not.toHaveTextContent("caption_internal");
@@ -4230,6 +4299,7 @@ function populatedBatchForm() {
   prompt.snapshotName = "Portrait";
   prompt.text = "A studio portrait of {{subject}}.";
   form.prompts = [prompt];
+  form.workflowJson = JSON.stringify({ "1": { inputs: { image: "reference-image.png" } } });
   form.workflowProfileJson = profileJson([
     { key: "source", label: "Source image", node_id: "1", input_name: "image" },
   ]);

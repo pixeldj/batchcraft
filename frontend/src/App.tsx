@@ -1238,6 +1238,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         />
         <PreviewPanel
           preview={previewSnapshot?.response ?? null}
+          batchSnapshot={previewSnapshot?.request.batch_snapshot ?? null}
           creating={creating}
           currentRun={run}
           currentRunStatus={runStatus}

@@ -8,6 +8,8 @@ import type {
 } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
 import { errorMessage } from "../../utils/errors";
+import { formatBaseWorkflowValue } from "../batch/baseWorkflowValue";
+import { profileImageInputs, profileParameters } from "../batch/form";
 import { runDisplayLabel } from "../run/runDisplay";
 
 interface Props {
@@ -162,21 +164,25 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
           </dd>
         </div>
         <Detail label="Seed" value={String(job.seed)} />
-         {job.resolved_image_inputs.map((input) => (
-           <Detail
-              key={input.slot_key}
-              label={input.label}
-              value={input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}
-              code={input.asset_id ?? undefined}
-            />
-         ))}
-        {job.resolved_parameters.map((parameter) => (
-          <Detail
+        {job.resolved_image_inputs.map((input) => {
+          const baseValue = imageBaseValue(run, input.slot_key);
+          return <Detail
+            key={input.slot_key}
+            label={input.label}
+            value={input.filename ?? (input.asset_id ? "Project Asset" : baseValue.text)}
+            title={input.asset_id === null ? baseValue.title : undefined}
+            code={input.asset_id ?? undefined}
+          />;
+        })}
+        {job.resolved_parameters.map((parameter) => {
+          const baseValue = parameterBaseValue(run, parameter.parameter_key);
+          return <Detail
             key={parameter.parameter_key}
             label={parameter.label}
-            value={formatParameterValue(parameter.value)}
-          />
-        ))}
+            value={parameter.value === null ? baseValue.text : formatParameterValue(parameter.value)}
+            title={parameter.value === null ? baseValue.title : undefined}
+          />;
+        })}
         {job.resolved_parameter_sets.map((set) => (
           <Detail key={set.set_key} label={`${set.set_label} preset`} value={set.row_label ?? `Row ${set.row_ordinal}`} />
         ))}
@@ -233,11 +239,11 @@ function TechnicalDetails({
   );
 }
 
-function Detail({ label, value, code }: { label: string; value: string; code?: string }) {
+function Detail({ label, value, title, code }: { label: string; value: string; title?: string; code?: string }) {
   return (
     <div>
       <dt>{label}</dt>
-      <dd className={code ? "detail-value-code" : undefined}>
+      <dd className={code ? "detail-value-code" : undefined} title={title}>
         {code ? (
           <>
             {value === code ? null : <span className="detail-value">{value}</span>}
@@ -267,7 +273,27 @@ function formatBytes(bytes: number): string {
 }
 
 function formatParameterValue(value: string | number | boolean | null): string {
-  if (value === null) return "Base workflow";
+  if (value === null) return "Base workflow · Unavailable";
   if (typeof value === "string") return value === "" ? '"" (empty string)' : value;
   return String(value);
+}
+
+function parameterBaseValue(run: RunResponse, parameterKey: string): ReturnType<typeof formatBaseWorkflowValue> {
+  const selection = run.batch_snapshot.workflow_selection;
+  const parameter = profileParameters(selection.workflow_profile).find((candidate) => candidate.key === parameterKey);
+  return parameter
+    ? formatBaseWorkflowValue(selection.workflow, parameter, parameter.value_type)
+    : unavailableBaseValue();
+}
+
+function imageBaseValue(run: RunResponse, slotKey: string): ReturnType<typeof formatBaseWorkflowValue> {
+  const selection = run.batch_snapshot.workflow_selection;
+  const slot = profileImageInputs(selection.workflow_profile).find((candidate) => candidate.key === slotKey);
+  return slot
+    ? formatBaseWorkflowValue(selection.workflow, slot, "string")
+    : unavailableBaseValue();
+}
+
+function unavailableBaseValue(): ReturnType<typeof formatBaseWorkflowValue> {
+  return { text: "Base workflow · Unavailable", available: false };
 }

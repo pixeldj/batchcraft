@@ -338,6 +338,101 @@ describe("WorkflowLibraryEditor", () => {
     expect(current.workflowProfileVersionId).toBe("profile-v1-new");
   });
 
+  it("opens the selected compatible Profile for editing when requested from Parameters", async () => {
+    const workflowV1 = workflowVersion();
+    const profileV1 = profileVersion({ profile: visualProfileSnapshot() });
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", workflowV1)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [workflowV1] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", profileV1)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [profileV1] })),
+      getWorkflowVersion: vi.fn(async () => workflowV1),
+      getWorkflowProfileVersion: vi.fn(async () => profileV1),
+    });
+
+    render(<WorkflowLibraryEditor
+      api={api}
+      projectId="project-a"
+      form={linkedForm(workflowV1, profileV1)}
+      profileEditorRequest={1}
+      onChange={() => undefined}
+      onMetadataChange={() => undefined}
+    />);
+
+    expect(await screen.findByRole("dialog", { name: "Edit Profile" })).toBeInTheDocument();
+  });
+
+  it("waits for Profile history before editing a selected Profile that needs a compatible revision", async () => {
+    const workflowV2 = workflowVersion({ id: "workflow-v2", version_number: 2 });
+    const sourceProfile = profileVersion({ workflow_version_id: "workflow-v1", profile: visualProfileSnapshot() });
+    const form = {
+      ...workflowOnlyForm(workflowV2),
+      workflowProfileId: "profile-1",
+      workflowProfileName: "Mapping",
+    };
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", workflowV2)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [workflowV2] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", null)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [sourceProfile] })),
+    });
+
+    render(<WorkflowLibraryEditor
+      api={api}
+      projectId="project-a"
+      form={form}
+      profileEditorRequest={1}
+      onChange={() => undefined}
+      onMetadataChange={() => undefined}
+    />);
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit Profile" });
+    expect(within(dialog).getByLabelText("Prompt node")).toHaveValue("34");
+  });
+
+  it("opens a new Profile when the selected Workflow has none", async () => {
+    const workflowV1 = workflowVersion();
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", workflowV1)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [workflowV1] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })),
+    });
+
+    render(<WorkflowLibraryEditor
+      api={api}
+      projectId="project-a"
+      form={workflowOnlyForm(workflowV1)}
+      profileEditorRequest={1}
+      onChange={() => undefined}
+      onMetadataChange={() => undefined}
+    />);
+
+    expect(await screen.findByRole("dialog", { name: "New Profile" })).toBeInTheDocument();
+  });
+
+  it("focuses the Profile chooser when Profiles exist but none is selected", async () => {
+    const workflowV1 = workflowVersion();
+    const profileV1 = profileVersion();
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", workflowV1)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [workflowV1] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", profileV1)] })),
+    });
+
+    render(<WorkflowLibraryEditor
+      api={api}
+      projectId="project-a"
+      form={workflowOnlyForm(workflowV1)}
+      profileEditorRequest={1}
+      onChange={() => undefined}
+      onMetadataChange={() => undefined}
+    />);
+
+    const profileSelect = await screen.findByRole("combobox", { name: "Profile" });
+    await waitFor(() => expect(profileSelect).toHaveFocus());
+    expect(screen.queryByRole("dialog", { name: /Profile/ })).not.toBeInTheDocument();
+  });
+
   it("duplicates the exact selected Workflow revision and copies the current Profile into new v1 histories", async () => {
     const selectedWorkflowVersion = workflowVersion({
       id: "workflow-v2",
@@ -929,6 +1024,18 @@ function editor(api: BatchcraftApi, projectId: string) {
 
 function linkedForm(version: LibraryWorkflowVersion, profile: LibraryWorkflowProfileVersion): BatchFormState {
   return { ...initialBatchForm(), workflowLibraryProjectId: "project-a", workflowId: "workflow-1", workflowName: "Portrait", workflowVersionId: version.id, workflowVersionNumber: version.version_number, workflowJson: JSON.stringify(version.workflow), workflowProfileId: "profile-1", workflowProfileName: "Mapping", workflowProfileVersionId: profile.id, workflowProfileVersionNumber: profile.version_number, workflowProfileWorkflowVersionId: profile.workflow_version_id, workflowProfileJson: JSON.stringify(profile.profile) };
+}
+
+function workflowOnlyForm(version: LibraryWorkflowVersion): BatchFormState {
+  return {
+    ...initialBatchForm(),
+    workflowLibraryProjectId: "project-a",
+    workflowId: version.workflow_id,
+    workflowName: "Portrait",
+    workflowVersionId: version.id,
+    workflowVersionNumber: version.version_number,
+    workflowJson: JSON.stringify(version.workflow),
+  };
 }
 
 function selectProfileForm(

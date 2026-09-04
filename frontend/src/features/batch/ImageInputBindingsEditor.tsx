@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import type { BatchcraftApi } from "../../api/client";
-import type { AssetResponse, ImageBindingRequest, WorkflowProfileImageInput } from "../../api/types";
+import type { AssetResponse, ImageBindingRequest, JsonObject, WorkflowProfileImageInput } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
+import { formatBaseWorkflowValue } from "./baseWorkflowValue";
 import { ConfigurationSection } from "./ConfigurationSection";
 import { profileImageInputs, reconcileImageBindings } from "./form";
 
@@ -10,11 +11,12 @@ interface Props {
   api: BatchcraftApi;
   projectKey: string;
   profileJson: string;
+  workflow: JsonObject;
   imageBindings: ImageBindingRequest[];
   onChange(bindings: ImageBindingRequest[]): void;
 }
 
-export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBindings, onChange }: Props) {
+export function ImageInputBindingsEditor({ api, projectKey, profileJson, workflow, imageBindings, onChange }: Props) {
   let slots: WorkflowProfileImageInput[];
   try {
     slots = profileImageInputs(profileJson);
@@ -139,6 +141,7 @@ export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBi
       </div>
       <div className="image-input-binding-list">
         {slots.map((slot) => {
+          const baseValue = formatBaseWorkflowValue(workflow, slot, "string");
           const binding = bindings.find((candidate) => candidate.slot_key === slot.key);
           const values = binding?.values ?? [];
           const missingIds = values.filter(
@@ -157,11 +160,11 @@ export function ImageInputBindingsEditor({ api, projectKey, profileJson, imageBi
                   {values.map((value, index) => {
                     const asset = value === null ? null : byId.get(value);
                     const displayName = value === null
-                      ? "Base workflow"
+                      ? baseValue.text
                       : asset?.original_filename ?? `Missing Project Asset ${index + 1}`;
                     return (
                       <li className={value !== null && !asset ? "missing-asset" : ""} key={value ?? "base-workflow"}>
-                        <span>{displayName}</span>
+                        <span title={value === null ? baseValue.title : undefined}>{displayName}</span>
                         <button
                           className="button-link compact"
                           type="button"
@@ -228,7 +231,7 @@ function imageInputSummary(bindings: ImageBindingRequest[], slotCount: number): 
   const defaultCount = bindings.filter((binding) => binding.values.includes(null)).length;
   const summary = `${slotCount} image ${slotCount === 1 ? "input" : "inputs"} · ${alternativeCount} ${alternativeCount === 1 ? "alternative" : "alternatives"}`;
   return defaultCount > 0
-    ? `${summary} · ${defaultCount} ${defaultCount === 1 ? "uses" : "use"} workflow default`
+    ? `${summary} · ${defaultCount} ${defaultCount === 1 ? "uses" : "use"} Base workflow`
     : summary;
 }
 

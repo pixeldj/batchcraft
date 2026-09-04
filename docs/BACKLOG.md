@@ -278,6 +278,15 @@ Recommended model:
 
 Prefer explicit rows over merely zipping independent lists by position. Rows are easier to review, label, validate, and preserve in provenance.
 
+Follow-up UX: creating a Preset now copies each selected parameter's saved Values alternatives into
+explicit rows by position. The longest selected list determines row count, and missing cells become
+`Base workflow`; a parameter currently showing Range contributes its retained Values draft without
+frontend Range materialization. Preset override cells keep the frozen Base value visible. The expanded
+Parameters section also links directly to the selected compatible Profile editor, opens New Profile when
+the Workflow has none, or focuses the Profile chooser when a choice is required. Follow-up verification
+passed with 622 backend tests, Ruff check/format, mypy, and package build, plus 373 frontend tests,
+typecheck, lint, and production build.
+
 ### BC-002: Durable queued Runs
 
 | Field | Value |
@@ -343,7 +352,7 @@ The chooser must never silently substitute the latest version for a specifically
 | --- | --- |
 | ID | BC-005 |
 | Priority | P3 |
-| Status | In Progress |
+| Status | Done |
 | Area | Workflow Library / UX |
 | Summary | Make compatible Workflow and Workflow Profile creation, duplication, and reuse faster. |
 | Dependencies / Notes | Existing selection, immutable versioning, visual mapping, mapping-copy assistance, and rename behavior provide the groundwork. Logical and immutable version identities must remain distinct. No new Workflow/Profile-combination entity is required: a ProfileVersion already targets one exact WorkflowVersion. |
@@ -368,7 +377,7 @@ WorkflowVersion into a new v1 history and can copy the exact selected ProfileVer
 Profile v1. Suggested names are editable and collision-safe, and a failed optional Profile copy preserves
 the new Workflow while opening the visual mapper for repair. No backend API, SQLite schema, or v1 filesystem
 format changed. Verification passed with 619 backend tests, Ruff check/format, mypy, and package build, plus
-356 frontend tests, typecheck, lint, and production build. Manual browser UX acceptance remains pending.
+356 frontend tests, typecheck, lint, and production build.
 
 ### BC-006: Historical reuse
 
@@ -512,18 +521,16 @@ Design considerations:
 - never silently remap a ProfileVersion;
 - new mappings still create immutable ProfileVersions after user review.
 
-### BC-010: Base-workflow value visibility and preflight
+### BC-010: Base-workflow value visibility and failure context
 
 | Field | Value |
 | --- | --- |
 | ID | BC-010 |
 | Priority | P3 |
-| Status | Planned |
+| Status | Done |
 | Area | Validation / Batch UX |
-| Summary | Show the actual frozen WorkflowVersion value behind `Base workflow`, then detect stale embedded image/video/file inputs before execution. |
-| Dependencies / Notes | Basic value display can use the immutable WorkflowVersion without contacting ComfyUI. Remote file availability preflight requires verified ComfyUI behavior and may benefit from BC-009. Do not infer remote existence from a filename alone. |
-
-Phase A — value visibility:
+| Summary | Show the actual frozen Workflow value behind `Base workflow` selections and add mapped-slot/parameter context when ComfyUI rejects a Base workflow input. |
+| Dependencies / Notes | Value display uses the exact selected WorkflowVersion or frozen Run provenance without contacting ComfyUI. Rejection context requires an exact structured node/input match plus concrete Job Base state. Proactive remote availability checking is intentionally deferred unless real-world usage justifies it. |
 
 Instead of only:
 
@@ -536,39 +543,46 @@ show something like:
 
 ```text
 CFG
-Use workflow value · 7.0
+Base workflow · 7
 ```
 
 Additional examples:
 
 ```text
 Steps
-Use workflow value · 20
+Base workflow · 20
 
 Enable feature
-Use workflow value · false
+Base workflow · false
 
 LoRA
-Use workflow value · my-lora.safetensors
+Base workflow · my-lora.safetensors
 
 Start Frame
-Use workflow image · frame001.png
+Base workflow · frame001.png
 ```
 
 Requirements:
 
 - derive the value from the exact selected WorkflowVersion;
+- use frozen Run Workflow/Profile provenance for historical Run Plan and Result Details;
 - preserve native types, including empty string, zero, and false;
 - keep `Base workflow` semantics as “do not mutate this target”;
-- display large strings compactly without hiding the fact that a value exists.
+- display large strings compactly without hiding the fact that a value exists;
+- preserve the original diagnostic when ComfyUI rejects a prepared workflow;
+- add mapped slot/parameter label and Base value context only when structured rejection node/input data
+  exactly matches a Profile target that the concrete Job left as Base workflow;
+- never attribute a Project Asset or concrete scalar override failure to Base workflow;
+- do not add Preview connectivity, proactive ComfyUI probing, retries, or changed submission-unknown behavior.
 
-Phase B — remote preflight:
-
-- detect stale embedded image/video/file values before Run execution where ComfyUI provides a reliable verification mechanism;
-- show an actionable warning naming the slot and missing value;
-- distinguish warning from definite failure when remote verification is incomplete;
-- do not alter the frozen WorkflowVersion automatically;
-- offer a path to choose a Project Asset or edit/create a new WorkflowVersion.
+Implementation result: Batch Values, numeric Range inclusion, Preset rows, Preview, frozen Run Plan, and
+Result Details now show the mapped value from the exact current or frozen Workflow/Profile provenance.
+Missing, null, connected, and type-incompatible targets show `Base workflow · Unavailable`; long strings
+remain compact with the full original value available as a title. Definite structured ComfyUI rejections
+append context only for exact mapped targets that the concrete Job left at Base, while preserving the
+original diagnostic and all overridden, unstructured, and ambiguous behavior. No API, SQLite, or v1
+filesystem format changed. Verification passed with 622 backend tests, Ruff check/format, mypy, and
+package build, plus 365 frontend tests, typecheck, lint, and production build.
 
 ### BC-011: Create and Start
 

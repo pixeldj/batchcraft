@@ -501,6 +501,12 @@ values. Profile changes preserve a Preset only when every member key and type re
 incompatible set dissolves to independent Base bindings rather than reinterpreting rows. Any semantic
 Values, Range, or Preset change invalidates Preview. Collapsing the section is local UI state and does not.
 Job count, authoritative Range materialization, and concrete expansion remain backend responsibilities.
+Creating a Preset copies selected members' saved Values alternatives into explicit rows by index, uses the
+longest member list as row count, and fills missing cells with Base workflow. Active Range members use
+their retained Values draft; the frontend does not materialize the Range. Preset cells continue showing
+the frozen Base value beside an override. `Add Parameter` routes through Workflow Setup: it edits the
+selected compatible Profile, creates one when the Workflow has no Profiles, or focuses the chooser when
+multiple existing Profiles require an explicit selection.
 
 Random seed intent remains editable frontend and Batch snapshot state as
 `{ mode: "random", random_seed_count: N }`. Preview sends that intent without concrete values. The
@@ -621,8 +627,10 @@ High-value unit-test areas include:
 - manifest round-tripping;
 - rerun creation;
 - Workflow Profile core and named Image Input mapping;
-- named Image Input key, order, binding, frozen provenance, deterministic upload, and Base workflow behavior.
-- generic parameter key, type, alternatives, deterministic expansion, frozen provenance, scalar execution, and Base workflow behavior.
+- named Image Input key, order, binding, frozen provenance, deterministic upload, and Base workflow behavior;
+- generic parameter key, type, alternatives, deterministic expansion, frozen provenance, scalar execution, and Base workflow behavior;
+- local Base-workflow value display from current and frozen Workflow/Profile provenance, including unavailable targets and native scalar types;
+- definite structured ComfyUI rejection context without changing unstructured, overridden, or ambiguous diagnostics.
 
 A preview and an actual Run must be produced by the same underlying compiler behavior. Tests should protect this invariant.
 

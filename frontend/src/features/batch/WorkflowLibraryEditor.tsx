@@ -21,6 +21,7 @@ interface Props {
   projectId: string;
   form: BatchFormState;
   sourceRunId?: string | null;
+  profileEditorRequest?: number;
   onChange(form: BatchFormState): void;
   onHistoricalImport?(form: BatchFormState): void;
   onMetadataChange(form: BatchFormState): void;
@@ -57,6 +58,11 @@ interface DetailState {
   error: string | null;
 }
 
+interface ProfileHistoryState {
+  profileId: string;
+  loading: boolean;
+}
+
 type LinkStatus = "linked" | "detached" | "incomplete" | "checking" | "integrity";
 
 const EMPTY_DETAIL: DetailState = {
@@ -68,9 +74,10 @@ const EMPTY_DETAIL: DetailState = {
   error: null,
 };
 
-export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
+export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null, profileEditorRequest = 0, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
   const [library, setLibrary] = useState<LibraryState>({ projectId: "", workflows: [], loading: false, error: null });
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL);
+  const [profileHistory, setProfileHistory] = useState<ProfileHistoryState>({ profileId: "", loading: false });
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [linkStatus, setLinkStatus] = useState<LinkStatus>(linkedStatus(form));
@@ -84,6 +91,9 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
   const loadTag = useRef(0);
   const detailTag = useRef(0);
   const integrityTag = useRef(0);
+  const handledProfileEditorRequest = useRef(0);
+  const profileSelectRef = useRef<HTMLSelectElement>(null);
+  const focusProfileSelectOnMount = useRef(false);
   const mutationContext = useRef({ key: "", tag: 0 });
   const formRef = useRef(form);
   const currentForm = useEffectEvent(() => form);
@@ -147,6 +157,19 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
     && !activeLibrary.error
     && !activeDetail.loading
     && !activeDetail.error;
+  const openRequestedProfileEditor = useEffectEvent(() => {
+    setExpanded(true);
+    if (selectedProfile && (compatibleProfileVersion || sourceProfileVersion)) {
+      openDialog("profile-version");
+      return;
+    }
+    if (activeDetail.profiles.length === 0 || selectedProfile) {
+      openDialog("profile");
+      return;
+    }
+    if (profileSelectRef.current) profileSelectRef.current.focus();
+    else focusProfileSelectOnMount.current = true;
+  });
 
   useEffect(() => {
     const requestedProjectId = normalizedProjectId;
@@ -154,6 +177,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
     const controller = new AbortController();
     setDialog(null);
     setDetail(EMPTY_DETAIL);
+    setProfileHistory({ profileId: "", loading: false });
     setLinkStatus(linkedStatus(currentForm()));
     if (!requestedProjectId) {
       setLibrary({ projectId: "", workflows: [], loading: false, error: null });
@@ -226,9 +250,13 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
 
   useEffect(() => {
     const profileId = form.workflowProfileId;
-    if (!profileId || detail.workflowId !== form.workflowId || detail.loading) return;
+    if (!profileId || detail.workflowId !== form.workflowId || detail.loading) {
+      if (!profileId) setProfileHistory({ profileId: "", loading: false });
+      return;
+    }
     const tag = detailTag.current;
     const controller = new AbortController();
+    setProfileHistory({ profileId, loading: true });
     void api.listWorkflowProfileVersions(profileId, true, controller.signal).then(
       (response) => {
         if (tag !== detailTag.current || controller.signal.aborted) return;
@@ -241,16 +269,37 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
             },
           }
           : current);
+        setProfileHistory({ profileId, loading: false });
       },
       (caught: unknown) => {
         if (tag !== detailTag.current || isAbort(caught)) return;
         setDetail((current) => current.workflowId === form.workflowId
           ? { ...current, error: errorMessage(caught) }
           : current);
+        setProfileHistory({ profileId, loading: false });
       },
     );
     return () => controller.abort();
   }, [api, detail.loading, detail.workflowId, form.workflowId, form.workflowProfileId]);
+
+  useEffect(() => {
+    if (profileEditorRequest <= handledProfileEditorRequest.current) return;
+    setExpanded(true);
+    if (!normalizedProjectId || !form.workflowId || !form.workflowVersionId) {
+      handledProfileEditorRequest.current = profileEditorRequest;
+      return;
+    }
+    if (
+      activeLibrary.loading
+      || (selectedWorkflow && (activeDetail.workflowId !== form.workflowId || activeDetail.loading))
+      || (selectedProfile && !compatibleProfileVersion && (
+        profileHistory.profileId !== selectedProfile.id || profileHistory.loading
+      ))
+    ) return;
+    handledProfileEditorRequest.current = profileEditorRequest;
+    if (activeLibrary.error || activeDetail.error || !selectedWorkflow) return;
+    openRequestedProfileEditor();
+  }, [activeDetail.error, activeDetail.loading, activeDetail.workflowId, activeLibrary.error, activeLibrary.loading, compatibleProfileVersion, form.workflowId, form.workflowVersionId, normalizedProjectId, profileEditorRequest, profileHistory.loading, profileHistory.profileId, selectedProfile, selectedWorkflow]);
 
   useEffect(() => {
     const snapshot = currentForm();
@@ -784,7 +833,13 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
       {activeLibrary.workflows.length > 0 ? (
         <div className="workflow-library-grid">
           <label className="field"><span className="field-label">Workflow</span><select aria-label="Workflow" value={selectedWorkflow?.id ?? ""} onChange={(event) => chooseWorkflow(event.target.value)}><option value="">Choose a Workflow</option>{activeLibrary.workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
-          <label className="field"><span className="field-label">Profile</span><select aria-label="Profile" value={selectedProfile?.id ?? ""} disabled={!form.workflowVersionId || activeDetail.loading} onChange={(event) => chooseProfile(event.target.value)}><option value="">Choose a Profile</option>{activeDetail.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.latest_compatible_version ? "" : " (needs review)"}</option>)}</select></label>
+          <label className="field"><span className="field-label">Profile</span><select ref={(element) => {
+            profileSelectRef.current = element;
+            if (element && focusProfileSelectOnMount.current) {
+              focusProfileSelectOnMount.current = false;
+              element.focus();
+            }
+          }} aria-label="Profile" value={selectedProfile?.id ?? ""} disabled={!form.workflowVersionId || activeDetail.loading} onChange={(event) => chooseProfile(event.target.value)}><option value="">Choose a Profile</option>{activeDetail.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.latest_compatible_version ? "" : " (needs review)"}</option>)}</select></label>
         </div>
       ) : null}
       {form.workflowId ? (

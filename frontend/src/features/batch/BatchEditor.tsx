@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import type { BatchcraftApi } from "../../api/client";
-import type { ProjectResponse } from "../../api/types";
+import type { JsonObject, ProjectResponse } from "../../api/types";
 import { Field, TextAreaField } from "../../components/Field";
 import { ProjectSelector } from "../project/ProjectSelector";
 import { ConfigurationSection } from "./ConfigurationSection";
@@ -89,7 +89,9 @@ export function BatchEditor({
   const [variablesExpanded, setVariablesExpanded] = useState(false);
   const [seedsExpanded, setSeedsExpanded] = useState(false);
   const [parametersExpanded, setParametersExpanded] = useState(false);
+  const [profileEditorRequest, setProfileEditorRequest] = useState(0);
   const parameters = safeProfileParameters(form.workflowProfileJson);
+  const workflow = safeWorkflow(form.workflowJson);
   const missingPlaceholders = missingPromptPlaceholders(form.prompts, form.variableBindings);
   const workflowSelectionIncomplete = Boolean(form.workflowLibraryProjectId) && (
     !form.workflowId ||
@@ -206,6 +208,7 @@ export function BatchEditor({
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
         form={form}
         sourceRunId={historicalSourceRunId}
+        profileEditorRequest={profileEditorRequest}
         onChange={onChange}
         onHistoricalImport={onHistoricalResourceChange}
         onMetadataChange={onWorkflowMetadataChange}
@@ -306,7 +309,7 @@ export function BatchEditor({
         </div>
       </ConfigurationSection>
 
-      {parameters.length ? (
+      {parameters.length || form.workflowVersionId ? (
         <ConfigurationSection
           title="Parameters"
           summary={parameterSummary(form.parameterBindings, form.linkedParameterSets, parameters.length)}
@@ -317,8 +320,10 @@ export function BatchEditor({
         >
           <ParameterBindingsEditor
             parameters={parameters}
+            workflow={workflow}
             parameterBindings={form.parameterBindings}
             linkedParameterSets={form.linkedParameterSets}
+            onAddParameter={() => setProfileEditorRequest((request) => request + 1)}
             onChange={(state) => onChange({ ...form, ...state })}
           />
         </ConfigurationSection>
@@ -388,6 +393,7 @@ export function BatchEditor({
         api={api}
         projectKey={projectVerified && selectedProjectId === form.projectId ? form.projectFilesystemKey : ""}
         profileJson={form.workflowProfileJson}
+        workflow={workflow}
         imageBindings={form.imageBindings}
         onChange={(imageBindings) => update("imageBindings", imageBindings)}
       />
@@ -413,6 +419,17 @@ function safeProfileParameters(profileJson: string) {
     return profileParameters(profileJson);
   } catch {
     return [];
+  }
+}
+
+function safeWorkflow(workflowJson: string): JsonObject {
+  try {
+    const parsed: unknown = JSON.parse(workflowJson);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as JsonObject
+      : {};
+  } catch {
+    return {};
   }
 }
 

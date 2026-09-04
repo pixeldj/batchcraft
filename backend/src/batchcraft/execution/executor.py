@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import math
 import mimetypes
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -301,7 +302,9 @@ async def _execute_job(
                 )
                 return _persist_job(run, store, state, unknown)
 
-            state = _persist_submission(run, store, state, ordinal, submission, clock)
+            state = _persist_submission(
+                run, persisted_job, store, state, ordinal, submission, clock
+            )
             current = state.jobs[ordinal - 1]
             if current.status is not JobExecutionStatus.SUBMITTED:
                 return state
@@ -393,6 +396,7 @@ async def _observe_events(
 
 def _persist_submission(
     run: PublishedRun,
+    persisted_job: PersistedJob,
     store: ExecutionStateStore,
     state: RunExecutionState,
     ordinal: int,
@@ -423,6 +427,8 @@ def _persist_submission(
             diagnostics=(submission.diagnostic,) if submission.diagnostic else (),
         )
     else:
+        diagnostic = submission.diagnostic or "prompt submission was rejected"
+        base_context = _base_workflow_rejection_context(run, persisted_job, submission.response)
         updated = replace(
             current,
             status=JobExecutionStatus.FAILED,
@@ -430,10 +436,109 @@ def _persist_submission(
             submission_http_status=submission.http_status,
             submission_response=submission.response,
             completed_at=_timestamp(clock),
-            error=submission.diagnostic or "prompt submission was rejected",
-            diagnostics=(submission.diagnostic,) if submission.diagnostic else (),
+            error="\n\n".join((diagnostic, *base_context)),
+            diagnostics=(diagnostic, *base_context),
         )
     return _persist_job(run, store, state, updated)
+
+
+def _base_workflow_rejection_context(
+    run: PublishedRun,
+    persisted_job: PersistedJob,
+    response: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    rejected_targets = _structured_rejection_targets(response)
+    if not rejected_targets:
+        return ()
+
+    resolved_images = {
+        item.slot_key: item.asset_id is None
+        for item in persisted_job.compiled_job.resolved_image_inputs
+    }
+    persisted_images = {item.slot_key: item.asset is None for item in persisted_job.image_inputs}
+    resolved_parameters = {
+        item.parameter_key: item.value is None
+        for item in persisted_job.compiled_job.resolved_parameters
+    }
+    contexts: list[str] = []
+    for slot in run.compiled_plan.image_input_slots:
+        if (
+            (slot.node_id, slot.input_name) not in rejected_targets
+            or not resolved_images.get(slot.key, False)
+            or not persisted_images.get(slot.key, False)
+        ):
+            continue
+        value = _formatted_workflow_input(run.workflow, slot.node_id, slot.input_name)
+        if value is None:
+            continue
+        contexts.append(
+            f"ComfyUI reported validation for Image Input {slot.label!r}, which used "
+            f"Base workflow · {value}. Choose a Project image for {slot.label} or check "
+            "that workflow value in ComfyUI."
+        )
+    for parameter in run.compiled_plan.parameters:
+        if (
+            parameter.node_id,
+            parameter.input_name,
+        ) not in rejected_targets or not resolved_parameters.get(parameter.key, False):
+            continue
+        value = _formatted_workflow_input(run.workflow, parameter.node_id, parameter.input_name)
+        if value is None:
+            continue
+        contexts.append(
+            f"ComfyUI reported validation for parameter {parameter.label!r}, which used "
+            f"Base workflow · {value}. Choose an override for {parameter.label} or check "
+            "that workflow value in ComfyUI."
+        )
+    return tuple(contexts)
+
+
+def _structured_rejection_targets(
+    response: Mapping[str, object] | None,
+) -> set[tuple[str, str]]:
+    if response is None:
+        return set()
+    node_errors = response.get("node_errors")
+    if not isinstance(node_errors, dict):
+        return set()
+    targets: set[tuple[str, str]] = set()
+    for node_id, node_error in node_errors.items():
+        if not isinstance(node_id, str) or not isinstance(node_error, dict):
+            continue
+        errors = node_error.get("errors")
+        if not isinstance(errors, list):
+            continue
+        for error in errors:
+            if not isinstance(error, dict):
+                continue
+            extra_info = error.get("extra_info")
+            if not isinstance(extra_info, dict):
+                continue
+            input_name = extra_info.get("input_name")
+            if isinstance(input_name, str) and input_name:
+                targets.add((node_id, input_name))
+    return targets
+
+
+def _formatted_workflow_input(
+    workflow: Mapping[str, object], node_id: str, input_name: str
+) -> str | None:
+    node = workflow.get(node_id)
+    if not isinstance(node, dict):
+        return None
+    inputs = node.get("inputs")
+    if not isinstance(inputs, dict) or input_name not in inputs:
+        return None
+    value = inputs[input_name]
+    if isinstance(value, str):
+        return value if value else "Empty string"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float) and math.isfinite(value):
+        return str(int(value)) if value.is_integer() else str(value)
+    return None
 
 
 async def _reconcile_and_ingest(

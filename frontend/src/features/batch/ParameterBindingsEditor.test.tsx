@@ -73,6 +73,108 @@ describe("ParameterBindingsEditor", () => {
     ]);
   });
 
+  it("transfers saved Values alternatives into Preset rows and fills shorter members with Base", () => {
+    const onChange = vi.fn();
+    const steps = binding("steps", "integer", [{ kind: "override", value: "30" }]);
+    steps.mode = "range";
+    const bindings = [
+      binding("caption", "string", [
+        { kind: "override", value: "first" },
+        { kind: "override", value: "second" },
+      ]),
+      binding("enabled", "boolean", [{ kind: "override", value: "false" }]),
+      steps,
+    ];
+    render(<ParameterBindingsEditor parameters={PARAMETERS} parameterBindings={bindings} linkedParameterSets={[]} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create preset" }));
+    const picker = screen.getByRole("group", { name: "Choose at least two independent parameters" });
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Caption" }));
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Steps" }));
+    fireEvent.click(within(picker).getByRole("button", { name: "Create preset" }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      parameterBindings: [bindings[1]],
+      linkedParameterSets: [{
+        setKey: "caption_steps",
+        setLabel: "Caption + Steps",
+        members: [
+          { parameterKey: "caption", valueType: "string" },
+          { parameterKey: "steps", valueType: "integer" },
+        ],
+        rows: [
+          {
+            rowLabel: "",
+            values: {
+              caption: { kind: "override", value: "first" },
+              steps: { kind: "override", value: "30" },
+            },
+          },
+          {
+            rowLabel: "",
+            values: {
+              caption: { kind: "override", value: "second" },
+              steps: { kind: "base" },
+            },
+          },
+        ],
+      }],
+    });
+  });
+
+  it("keeps the frozen Base value visible when a Preset cell uses an override", () => {
+    const onChange = vi.fn();
+    const preset = {
+      setKey: "display",
+      setLabel: "Display",
+      members: [
+        { parameterKey: "caption", valueType: "string" as const },
+        { parameterKey: "enabled", valueType: "boolean" as const },
+      ],
+      rows: [{ rowLabel: "", values: { caption: { kind: "base" as const }, enabled: { kind: "base" as const } } }],
+    };
+    const view = render(<ParameterBindingsEditor
+      parameters={PARAMETERS}
+      workflow={{ "1": { inputs: { caption: "base caption", enabled: false } } }}
+      parameterBindings={[binding("steps", "integer", [{ kind: "base" }])]}
+      linkedParameterSets={[preset]}
+      onChange={onChange}
+    />);
+
+    fireEvent.change(screen.getByLabelText("Display row 1 Caption source"), { target: { value: "override" } });
+    const updated = onChange.mock.calls.at(-1)?.[0].linkedParameterSets[0];
+    view.rerender(<ParameterBindingsEditor
+      parameters={PARAMETERS}
+      workflow={{ "1": { inputs: { caption: "base caption", enabled: false } } }}
+      parameterBindings={[binding("steps", "integer", [{ kind: "base" }])]}
+      linkedParameterSets={[updated]}
+      onChange={onChange}
+    />);
+
+    const cell = screen.getByLabelText("Display row 1 Caption source").closest(".parameter-preset-cell");
+    expect(cell).not.toBeNull();
+    expect(within(cell as HTMLElement).getByText("Base workflow · base caption")).toBeInTheDocument();
+    expect(within(cell as HTMLElement).getByLabelText("Display row 1 Caption value")).toBeInTheDocument();
+  });
+
+  it("places Add Parameter before Create preset and invokes the Profile action", () => {
+    const onAddParameter = vi.fn();
+    render(<ParameterBindingsEditor
+      parameters={[]}
+      parameterBindings={[]}
+      linkedParameterSets={[]}
+      onAddParameter={onAddParameter}
+      onChange={vi.fn()}
+    />);
+
+    const addParameter = screen.getByRole("button", { name: "Add Parameter" });
+    const createPreset = screen.getByRole("button", { name: "Create preset" });
+    expect(addParameter.compareDocumentPosition(createPreset) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(createPreset).toBeDisabled();
+    fireEvent.click(addParameter);
+    expect(onAddParameter).toHaveBeenCalledOnce();
+  });
+
   it("marks Preset table headings as column headers", () => {
     render(<ParameterBindingsEditor
       parameters={PARAMETERS}
@@ -213,6 +315,37 @@ describe("ParameterBindingsEditor", () => {
       expect(screen.getByLabelText(`Steps range ${key}`)).toHaveAttribute("aria-invalid", "true");
       expect(screen.getByLabelText(`Steps range ${key}`)).toHaveAttribute("aria-describedby", error.id);
     }
+  });
+
+  it("shows frozen Base values in Values, Range, and Preset rows", () => {
+    const parameters: WorkflowProfileParameter[] = [
+      ...PARAMETERS,
+      { key: "cfg", label: "CFG", node_id: "1", input_name: "cfg", value_type: "float" },
+    ];
+    const steps = binding("steps", "integer", [{ kind: "base" }]);
+    steps.mode = "range";
+    steps.range.includeBase = true;
+    render(<ParameterBindingsEditor
+      parameters={parameters}
+      workflow={{ "1": { inputs: { caption: "", enabled: false, steps: 20, cfg: 7.25 } } }}
+      parameterBindings={[binding("caption", "string", [{ kind: "base" }]), steps]}
+      linkedParameterSets={[{
+        setKey: "display",
+        setLabel: "Display",
+        members: [
+          { parameterKey: "enabled", valueType: "boolean" },
+          { parameterKey: "cfg", valueType: "float" },
+        ],
+        rows: [{ rowLabel: "Base row", values: { enabled: { kind: "base" }, cfg: { kind: "base" } } }],
+      }]}
+      onChange={vi.fn()}
+    />);
+
+    expect(screen.getByRole("list", { name: "Caption alternatives" })).toHaveTextContent("Base workflow · Empty string");
+    expect(screen.getByText("Base workflow · 20")).toBeInTheDocument();
+    const preset = screen.getByRole("region", { name: "Display preset" });
+    expect(within(preset).getByText("Base workflow · false")).toBeInTheDocument();
+    expect(within(preset).getByText("Base workflow · 7.25")).toBeInTheDocument();
   });
 });
 

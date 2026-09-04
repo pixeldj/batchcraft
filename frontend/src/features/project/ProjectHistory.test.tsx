@@ -100,11 +100,16 @@ describe("ProjectHistory", () => {
     const runRegion = await screen.findByRole("article");
     fireEvent.click(within(runRegion).getByRole("button", { name: "Open" }));
     fireEvent.click(await within(runRegion).findByRole("button", { name: "View Run Plan" }));
-    expect(screen.getByRole("dialog", { name: "Baseline Plan" })).toBeInTheDocument();
+    const plan = screen.getByRole("dialog", { name: "Baseline Plan" });
+    expect(plan).toBeInTheDocument();
+    expect(within(plan).getAllByText("Base workflow · frozen-reference.png").length).toBeGreaterThan(0);
+    expect(within(plan).getAllByText("Base workflow · 20").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(within(runRegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
-    expect(await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" })).toBeInTheDocument();
+    const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(within(details).getByText("Base workflow · frozen-reference.png")).toBeInTheDocument();
+    expect(within(details).getByText("Base workflow · 20")).toBeInTheDocument();
     expect(screen.getByText(/A studio portrait of cat\./)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
@@ -216,8 +221,8 @@ function runResponse(): RunResponse {
     prompt_version_name: "Portrait",
     resolved_prompt: "A studio portrait of cat.",
     resolved_variables: [{ name: "subject", value: "cat" }],
-    resolved_image_inputs: [],
-    resolved_parameters: [],
+    resolved_image_inputs: [{ slot_key: "source", label: "Source image", asset_id: null, filename: null }],
+    resolved_parameters: [{ parameter_key: "steps", label: "Steps", value: null }],
     resolved_parameter_sets: [],
     seed: 1,
   };
@@ -251,8 +256,8 @@ function runResponse(): RunResponse {
         text: "A studio portrait of {{subject}}.",
       }],
       variable_bindings: [{ placeholder: "subject", values: ["cat"] }],
-      image_bindings: [],
-      parameter_bindings: [],
+      image_bindings: [{ slot_key: "source", values: [null] }],
+      parameter_bindings: [{ parameter_key: "steps", mode: "values", values: [null] }],
       linked_parameter_sets: [],
       seed_intent: { mode: "fixed", values: [1], random_seed_count: null },
       workflow_selection: {
@@ -264,8 +269,14 @@ function runResponse(): RunResponse {
         workflow_profile_version_id: null,
         workflow_profile_name: null,
         workflow_profile_version_number: null,
-        workflow: {},
-        workflow_profile: {},
+        workflow: {
+          "10": { class_type: "LoadImage", inputs: { image: "frozen-reference.png" } },
+          "11": { class_type: "KSampler", inputs: { steps: 20 } },
+        },
+        workflow_profile: {
+          image_inputs: [{ key: "source", label: "Source image", node_id: "10", input_name: "image" }],
+          parameters: [{ key: "steps", label: "Steps", node_id: "11", input_name: "steps", value_type: "integer" }],
+        },
       },
     },
     execution: {

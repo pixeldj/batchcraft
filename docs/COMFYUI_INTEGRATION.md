@@ -120,6 +120,12 @@ A timeout, disconnect, HTTP 5xx response, or successful response without a valid
 
 A direct HTTP 4xx response from ComfyUI is a definite rejection. Its response body is diagnostic and need not be valid JSON for that classification.
 
+When a definite rejection includes structured `node_errors` with an exact node ID and input name,
+the executor may append the frozen Profile label and retained Base workflow value for a matching Image
+Input or parameter that the concrete Job left at Base. The original diagnostic remains intact. This
+context is not added for concrete overrides, unrelated targets, unstructured responses, or ambiguous
+submission outcomes, and it does not perform a second ComfyUI request.
+
 The scheduler must reconcile an ambiguous outcome through available prompt IDs, queue state, history, and output metadata. It must not blindly retry the submission. A new submission is allowed only after reconciliation shows that ComfyUI did not accept the prior attempt or after explicit user action creates a new attempt under defined semantics.
 
 ## Production Adapter
@@ -181,6 +187,9 @@ At minimum record:
 - user-readable error summary;
 - raw diagnostic detail where appropriate;
 - timestamps.
+
+Definite structured submission rejections may additionally identify an exact frozen Profile target and
+its retained Base value. Diagnostics must not infer a target from filenames or error prose.
 
 A failed Job remains part of the immutable Run plan and may later be selected for rerun into a new Run.
 

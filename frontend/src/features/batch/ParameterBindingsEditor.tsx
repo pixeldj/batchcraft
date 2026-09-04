@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { ParameterValueType, WorkflowProfileParameter } from "../../api/types";
+import type { JsonObject, ParameterValueType, WorkflowProfileParameter } from "../../api/types";
+import { formatBaseWorkflowValue, type BaseWorkflowValueDisplay } from "./baseWorkflowValue";
 import {
   defaultParameterRange,
   deriveLinkedParameterSetKey,
@@ -13,12 +14,14 @@ import {
 
 interface Props {
   parameters: WorkflowProfileParameter[];
+  workflow?: JsonObject;
   parameterBindings: ParameterBindingForm[];
   linkedParameterSets: LinkedParameterSetForm[];
+  onAddParameter?(): void;
   onChange(state: { parameterBindings: ParameterBindingForm[]; linkedParameterSets: LinkedParameterSetForm[] }): void;
 }
 
-export function ParameterBindingsEditor({ parameters, parameterBindings, linkedParameterSets, onChange }: Props) {
+export function ParameterBindingsEditor({ parameters, workflow = {}, parameterBindings, linkedParameterSets, onAddParameter, onChange }: Props) {
   const [creating, setCreating] = useState(false);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [removeConfirmation, setRemoveConfirmation] = useState<string | null>(null);
@@ -28,7 +31,7 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
     ));
     return binding ? [{ parameter, binding }] : [];
   });
-  if (rows.length === 0 && linkedParameterSets.length === 0) return null;
+  if (rows.length === 0 && linkedParameterSets.length === 0 && !onAddParameter) return null;
 
   function patch(parameterKey: string, next: Partial<ParameterBindingForm>) {
     onChange({
@@ -51,11 +54,22 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
     if (members.length < 2) return;
     const labels = members.map((member) => parameters.find((parameter) => parameter.key === member.parameterKey)?.label ?? member.parameterKey);
     const setLabel = labels.join(" + ");
+    const bindingsByKey = new Map(parameterBindings.map((binding) => [binding.parameterKey, binding]));
+    const rowCount = Math.max(
+      1,
+      ...members.map((member) => bindingsByKey.get(member.parameterKey)?.alternatives.length ?? 0),
+    );
     const preset: LinkedParameterSetForm = {
       setKey: deriveLinkedParameterSetKey(setLabel, linkedParameterSets.map((set) => set.setKey)),
       setLabel,
       members,
-      rows: [{ rowLabel: "", values: Object.fromEntries(members.map((member) => [member.parameterKey, { kind: "base" }])) }],
+      rows: Array.from({ length: rowCount }, (_, index) => ({
+        rowLabel: "",
+        values: Object.fromEntries(members.map((member) => [
+          member.parameterKey,
+          bindingsByKey.get(member.parameterKey)?.alternatives[index] ?? { kind: "base" as const },
+        ])),
+      })),
     };
     onChange({
       linkedParameterSets: [...linkedParameterSets, preset],
@@ -92,7 +106,8 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
     <div className="parameter-bindings">
       <div className="parameter-preset-toolbar">
         <p className="field-hint">Independent alternatives sweep separately. Preset rows keep selected values together.</p>
-        <button className="button-secondary compact" type="button" onClick={() => setCreating((value) => !value)}>Create preset</button>
+        {onAddParameter ? <button className="button-secondary compact" type="button" onClick={onAddParameter}>Add Parameter</button> : null}
+        <button className="button-secondary compact" type="button" disabled={rows.length < 2} onClick={() => setCreating((value) => !value)}>Create preset</button>
       </div>
       {creating ? (
         <fieldset className="parameter-preset-picker">
@@ -116,6 +131,7 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
               key={set.setKey}
               preset={set}
               parameters={parameters}
+              workflow={workflow}
               confirmingRemove={removeConfirmation === set.setKey}
               onChange={(next) => updatePreset(set.setKey, next)}
               onRequestRemove={() => setRemoveConfirmation(set.setKey)}
@@ -127,6 +143,7 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
       ) : null}
       <div className="repeater-stack">
         {rows.map(({ parameter, binding }) => {
+          const baseValue = formatBaseWorkflowValue(workflow, parameter, parameter.value_type);
           const includesBase = binding.alternatives.some((alternative) => alternative.kind === "base");
           const rangeResult = binding.mode === "range" ? rangeValidation(binding) : null;
           const count = binding.mode === "range"
@@ -153,6 +170,7 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
                   range={binding.range}
                   error={rangeResult?.error ?? null}
                   count={rangeResult?.count ?? null}
+                  baseValue={baseValue}
                   onChange={(range) => patch(parameter.key, { range })}
                 />
               ) : (
@@ -192,7 +210,7 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
                   <li key={`${alternative.kind}-${index}`}>
                     <span className="parameter-alternative-order">{index + 1}</span>
                     {alternative.kind === "base" ? (
-                      <span className="parameter-base-value">Base workflow</span>
+                      <BaseValue display={baseValue} className="parameter-base-value" />
                     ) : (
                       <ParameterValueInput
                         valueType={binding.valueType}
@@ -242,9 +260,10 @@ export function ParameterBindingsEditor({ parameters, parameterBindings, linkedP
   );
 }
 
-function PresetEditor({ preset, parameters, confirmingRemove, onChange, onRequestRemove, onCancelRemove, onConfirmRemove }: {
+function PresetEditor({ preset, parameters, workflow, confirmingRemove, onChange, onRequestRemove, onCancelRemove, onConfirmRemove }: {
   preset: LinkedParameterSetForm;
   parameters: WorkflowProfileParameter[];
+  workflow: JsonObject;
   confirmingRemove: boolean;
   onChange(next: LinkedParameterSetForm): void;
   onRequestRemove(): void;
@@ -292,7 +311,11 @@ function PresetEditor({ preset, parameters, confirmingRemove, onChange, onReques
               {preset.members.map((member) => {
                 const value = row.values[member.parameterKey] ?? { kind: "base" as const };
                 const label = `${preset.setLabel} row ${rowIndex + 1} ${labels.get(member.parameterKey) ?? member.parameterKey}`;
-                return <td key={member.parameterKey}><PresetCell label={label} valueType={member.valueType} value={value} onChange={(next) => updateRow(rowIndex, { values: { ...row.values, [member.parameterKey]: next } })} /></td>;
+                const parameter = parameters.find((candidate) => candidate.key === member.parameterKey);
+                const baseValue = parameter
+                  ? formatBaseWorkflowValue(workflow, parameter, parameter.value_type)
+                  : { text: "Base workflow · Unavailable", available: false };
+                return <td key={member.parameterKey}><PresetCell label={label} valueType={member.valueType} value={value} baseValue={baseValue} onChange={(next) => updateRow(rowIndex, { values: { ...row.values, [member.parameterKey]: next } })} /></td>;
               })}
               <td><div className="parameter-row-actions">
                 <button className="button-link" type="button" disabled={rowIndex === 0} aria-label={`Move ${preset.setLabel} row ${rowIndex + 1} up`} onClick={() => onChange({ ...preset, rows: move(preset.rows, rowIndex, rowIndex - 1) })}>Up</button>
@@ -313,24 +336,26 @@ function PresetEditor({ preset, parameters, confirmingRemove, onChange, onReques
   );
 }
 
-function PresetCell({ label, valueType, value, onChange }: { label: string; valueType: ParameterValueType; value: ParameterAlternativeForm; onChange(value: ParameterAlternativeForm): void }) {
+function PresetCell({ label, valueType, value, baseValue, onChange }: { label: string; valueType: ParameterValueType; value: ParameterAlternativeForm; baseValue: BaseWorkflowValueDisplay; onChange(value: ParameterAlternativeForm): void }) {
   return (
     <div className="parameter-preset-cell">
       <select aria-label={`${label} source`} value={value.kind} onChange={(event) => onChange(event.target.value === "base" ? { kind: "base" } : { kind: "override", value: defaultRawValue(valueType) })}>
         <option value="base">Base workflow</option>
         <option value="override">Override</option>
       </select>
+      <BaseValue display={baseValue} />
       {value.kind === "override" ? <ParameterValueInput valueType={valueType} value={value.value} label={`${label} value`} onChange={(next) => onChange({ kind: "override", value: next })} /> : null}
     </div>
   );
 }
 
-function RangeEditor({ parameterKey, label, range, error, count, onChange }: {
+function RangeEditor({ parameterKey, label, range, error, count, baseValue, onChange }: {
   parameterKey: string;
   label: string;
   range: ParameterRangeDraft;
   error: string | null;
   count: number | null;
+  baseValue: BaseWorkflowValueDisplay;
   onChange(range: ParameterRangeDraft): void;
 }) {
   const errorId = `${parameterKey}-range-error`;
@@ -358,11 +383,16 @@ function RangeEditor({ parameterKey, label, range, error, count, onChange }: {
         <input type="checkbox" aria-label={`Include Base workflow for ${label}`} checked={range.includeBase} onChange={(event) => update("includeBase", event.target.checked)} />
         <span>Include Base workflow</span>
       </label>
+      {range.includeBase ? <BaseValue display={baseValue} className="field-hint" /> : null}
       {error
         ? <p className="operation-error" id={errorId} role="alert">{error}</p>
         : <p className="field-hint">{count} {count === 1 ? "alternative" : "alternatives"}{range.includeBase ? " including Base" : ""}</p>}
     </div>
   );
+}
+
+function BaseValue({ display, className }: { display: BaseWorkflowValueDisplay; className?: string }) {
+  return <span className={className} title={display.title}>{display.text}</span>;
 }
 
 function rangeValidation(binding: ParameterBindingForm): { count: number | null; error: string | null } {

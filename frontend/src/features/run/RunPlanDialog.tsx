@@ -2,7 +2,8 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 
 import type { EditableBatchSnapshot, RunPlanJobResponse, RunResponse } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
-import { parameterRangeCount, profileParameters } from "../batch/form";
+import { formatBaseWorkflowValue } from "../batch/baseWorkflowValue";
+import { parameterRangeCount, profileImageInputs, profileParameters } from "../batch/form";
 import { runDisplayLabel, runDisplayName, runNumberLabel } from "./runDisplay";
 
 interface Props {
@@ -78,13 +79,17 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
                     {binding.mode === "values" ? binding.values.map((value, index) => (
                       <span key={`${typeof value}-${String(value)}-${index}`}>
                         <span className="alternative-number">{index + 1}</span>
-                        {formatParameterValue(value)}
+                        {value === null
+                          ? <BaseValue display={parameterBaseValue(run, binding.parameter_key)} />
+                          : formatParameterValue(value)}
                       </span>
                     )) : (
                       <span className="run-plan-range-intent">
                         <strong>{binding.range.start} → {binding.range.end} by {binding.range.step}</strong>
                         <span>{rangeBindingCount(snapshot, binding)} alternatives</span>
-                        <span>{binding.include_base ? "Includes Base workflow" : "Base workflow not included"}</span>
+                        <span>{binding.include_base
+                          ? <BaseValue display={parameterBaseValue(run, binding.parameter_key)} />
+                          : "Base workflow not included"}</span>
                       </span>
                     )}
                   </dd>
@@ -103,7 +108,10 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
               <div className="run-plan-preset" key={set.set_key}>
                 <strong>{set.set_label}</strong>
                 <span>{set.members.map((member) => parameterLabel(run, member)).join(" + ")}</span>
-                <ol>{set.rows.map((row, index) => <li key={index}><strong>{row.row_label ?? `Row ${index + 1}`}</strong><span>{set.members.map((member) => `${parameterLabel(run, member)}: ${formatParameterValue(row.values[member])}`).join(" · ")}</span></li>)}</ol>
+                <ol>{set.rows.map((row, index) => {
+                  const display = linkedRowDisplay(run, set.members, row.values);
+                  return <li key={index}><strong>{row.row_label ?? `Row ${index + 1}`}</strong><span title={display.title}>{display.text}</span></li>;
+                })}</ol>
               </div>
             ))}
           </div>
@@ -152,7 +160,7 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
                 <dd className="run-plan-image-alternatives">
                   {input.values.map((value, index) => (
                     <span key={`${value.assetId ?? "base"}-${index}`}>
-                      {value.name}
+                      <span title={value.title}>{value.name}</span>
                       {value.assetId ? <code>{value.assetId}</code> : null}
                     </span>
                   ))}
@@ -173,7 +181,7 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
       <section className="run-plan-section" aria-labelledby="run-plan-jobs-title">
         <h3 id="run-plan-jobs-title">Concrete Jobs</h3>
         <div className="run-plan-jobs">
-          {run.plan.jobs.map((job) => <RunPlanJob key={job.ordinal} job={job} />)}
+          {run.plan.jobs.map((job) => <RunPlanJob key={job.ordinal} run={run} job={job} />)}
         </div>
       </section>
       </div>
@@ -182,10 +190,26 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
   );
 }
 
-function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
+function RunPlanJob({ run, job }: { run: RunResponse; job: RunPlanJobResponse }) {
   const variables = job.resolved_variables.map((variable) => variable.value).join(" · ");
-  const imageInputs = job.resolved_image_inputs.map((input) => `${input.label}: ${input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}`).join(" · ");
-  const parameters = job.resolved_parameters.map((parameter) => `${parameter.label}: ${formatParameterValue(parameter.value)}`).join(" · ");
+  const imageInputDisplays = job.resolved_image_inputs.map((input) => {
+    const baseValue = imageBaseValue(run, input.slot_key);
+    return {
+      text: `${input.label}: ${input.filename ?? (input.asset_id ? "Project Asset" : baseValue.text)}`,
+      title: input.asset_id === null && baseValue.title ? `${input.label}: ${baseValue.title}` : undefined,
+    };
+  });
+  const parameterDisplays = job.resolved_parameters.map((parameter) => {
+    const baseValue = parameterBaseValue(run, parameter.parameter_key);
+    return {
+      text: `${parameter.label}: ${parameter.value === null ? baseValue.text : formatParameterValue(parameter.value)}`,
+      title: parameter.value === null && baseValue.title ? `${parameter.label}: ${baseValue.title}` : undefined,
+    };
+  });
+  const imageInputs = imageInputDisplays.map((display) => display.text).join(" · ");
+  const imageInputsTitle = summaryTitle(imageInputDisplays);
+  const parameters = parameterDisplays.map((display) => display.text).join(" · ");
+  const parametersTitle = summaryTitle(parameterDisplays);
   const presets = job.resolved_parameter_sets.map((set) => `${set.set_label}: ${set.row_label ?? `Row ${set.row_ordinal}`}`).join(" · ");
   return (
     <details className="run-plan-job">
@@ -193,8 +217,8 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
         <span className="ordinal">{String(job.ordinal).padStart(3, "0")}</span>
         <strong>{job.prompt_version_name}</strong>
         {variables ? <span>{variables}</span> : null}
-        {imageInputs ? <span>{imageInputs}</span> : null}
-        {parameters ? <span>{parameters}</span> : null}
+        {imageInputs ? <span title={imageInputsTitle}>{imageInputs}</span> : null}
+        {parameters ? <span title={parametersTitle}>{parameters}</span> : null}
         {presets ? <span>{presets}</span> : null}
         <code>seed {job.seed}</code>
       </summary>
@@ -208,7 +232,9 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
             <div key={input.slot_key}>
               <dt>{input.label}</dt>
               <dd>
-                {input.filename ?? (input.asset_id ? "Project Asset" : "Base workflow")}
+                {input.filename ?? (input.asset_id
+                  ? "Project Asset"
+                  : <BaseValue display={imageBaseValue(run, input.slot_key)} />)}
                 {input.asset_id ? <code>{input.asset_id}</code> : null}
               </dd>
             </div>
@@ -216,7 +242,9 @@ function RunPlanJob({ job }: { job: RunPlanJobResponse }) {
           {job.resolved_parameters.map((parameter) => (
             <div key={parameter.parameter_key}>
               <dt>{parameter.label}</dt>
-              <dd>{formatParameterValue(parameter.value)}</dd>
+              <dd>{parameter.value === null
+                ? <BaseValue display={parameterBaseValue(run, parameter.parameter_key)} />
+                : formatParameterValue(parameter.value)}</dd>
             </div>
           ))}
           {job.resolved_parameter_sets.map((set) => (
@@ -267,6 +295,30 @@ function parameterLabel(run: RunResponse, parameterKey: string): string {
   return run.plan.jobs[0]?.resolved_parameters.find((parameter) => parameter.parameter_key === parameterKey)?.label ?? parameterKey;
 }
 
+function linkedRowDisplay(
+  run: RunResponse,
+  members: string[],
+  values: Record<string, string | number | boolean | null>,
+): { text: string; title?: string } {
+  const displays = members.map((member) => {
+    const label = parameterLabel(run, member);
+    const value = values[member];
+    const baseValue = parameterBaseValue(run, member);
+    return {
+      text: `${label}: ${value === null ? baseValue.text : formatParameterValue(value)}`,
+      title: value === null && baseValue.title ? `${label}: ${baseValue.title}` : undefined,
+    };
+  });
+  const title = summaryTitle(displays);
+  return { text: displays.map((display) => display.text).join(" · "), ...(title ? { title } : {}) };
+}
+
+function summaryTitle(displays: Array<{ text: string; title?: string }>): string | undefined {
+  return displays.some((display) => display.title)
+    ? displays.map((display) => display.title ?? display.text).join(" · ")
+    : undefined;
+}
+
 function rangeBindingCount(
   snapshot: EditableBatchSnapshot,
   binding: Extract<EditableBatchSnapshot["parameter_bindings"][number], { mode: "range" }>,
@@ -285,7 +337,7 @@ function rangeBindingCount(
 }
 
 function formatParameterValue(value: string | number | boolean | null): string {
-  if (value === null) return "Base workflow";
+  if (value === null) return "Base workflow · Unavailable";
   if (typeof value === "string") return value === "" ? '"" (empty string)' : value;
   return String(value);
 }
@@ -293,7 +345,7 @@ function formatParameterValue(value: string | number | boolean | null): string {
 function imageInputAlternatives(run: RunResponse): Array<{
   slotKey: string;
   label: string;
-  values: Array<{ name: string; assetId: string | null }>;
+  values: Array<{ name: string; title?: string; assetId: string | null }>;
 }> {
   const labels = new Map(
     (run.plan.jobs[0]?.resolved_image_inputs ?? []).map((input) => [input.slot_key, input.label]),
@@ -310,11 +362,39 @@ function imageInputAlternatives(run: RunResponse): Array<{
   return (run.plan.jobs[0]?.resolved_image_inputs ?? []).map((input) => ({
     slotKey: input.slot_key,
     label: labels.get(input.slot_key) ?? input.slot_key,
-    values: (bindings.get(input.slot_key) ?? []).map((value) => ({
-      name: value === null ? "Base workflow" : filenames.get(value) ?? "Project Asset",
-      assetId: value,
-    })),
+    values: (bindings.get(input.slot_key) ?? []).map((value) => {
+      const baseValue = imageBaseValue(run, input.slot_key);
+      return {
+        name: value === null ? baseValue.text : filenames.get(value) ?? "Project Asset",
+        ...(value === null && baseValue.title ? { title: baseValue.title } : {}),
+        assetId: value,
+      };
+    }),
   }));
+}
+
+function parameterBaseValue(run: RunResponse, parameterKey: string): ReturnType<typeof formatBaseWorkflowValue> {
+  const selection = run.batch_snapshot.workflow_selection;
+  const parameter = profileParameters(selection.workflow_profile).find((candidate) => candidate.key === parameterKey);
+  return parameter
+    ? formatBaseWorkflowValue(selection.workflow, parameter, parameter.value_type)
+    : unavailableBaseValue();
+}
+
+function imageBaseValue(run: RunResponse, slotKey: string): ReturnType<typeof formatBaseWorkflowValue> {
+  const selection = run.batch_snapshot.workflow_selection;
+  const slot = profileImageInputs(selection.workflow_profile).find((candidate) => candidate.key === slotKey);
+  return slot
+    ? formatBaseWorkflowValue(selection.workflow, slot, "string")
+    : unavailableBaseValue();
+}
+
+function BaseValue({ display }: { display: ReturnType<typeof formatBaseWorkflowValue> }) {
+  return <span title={display.title}>{display.text}</span>;
+}
+
+function unavailableBaseValue(): ReturnType<typeof formatBaseWorkflowValue> {
+  return { text: "Base workflow · Unavailable", available: false };
 }
 
 function workflowSummary(snapshot: EditableBatchSnapshot): string {

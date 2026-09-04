@@ -7,6 +7,7 @@ import {
   rankWorkflowInputCandidates,
   summarizeLiteralValue,
 } from "./workflowCatalog";
+import { formatBaseWorkflowValue, readFrozenWorkflowInput } from "./baseWorkflowValue";
 
 describe("parseWorkflowNodeCatalog", () => {
   it("extracts valid nodes and inputs in deterministic natural order", () => {
@@ -92,6 +93,54 @@ describe("workflow catalog presentation helpers", () => {
     expect(summarizeLiteralValue([1, 2, 3])).toBe("Array(3)");
     expect(summarizeLiteralValue(null)).toBe("null");
     expect(summarizeLiteralValue(42)).toBe("42");
+  });
+});
+
+describe("Base workflow values", () => {
+  const workflow = {
+    "1": {
+      inputs: {
+        filename: "reference-image.png",
+        empty: "",
+        integer: 20,
+        float: 7.25,
+        enabled: false,
+        unsupported: null,
+      },
+    },
+  };
+
+  it.each([
+    ["filename", "string", "Base workflow · reference-image.png"],
+    ["empty", "string", "Base workflow · Empty string"],
+    ["integer", "integer", "Base workflow · 20"],
+    ["float", "float", "Base workflow · 7.25"],
+    ["enabled", "boolean", "Base workflow · false"],
+  ] as const)("formats the frozen %s input", (input_name, valueType, expected) => {
+    expect(formatBaseWorkflowValue(workflow, { node_id: "1", input_name }, valueType).text).toBe(expected);
+  });
+
+  it("handles missing, null, and type-incompatible mapped inputs without throwing", () => {
+    expect(readFrozenWorkflowInput(workflow, { node_id: "missing", input_name: "value" })).toEqual({ found: false });
+    expect(formatBaseWorkflowValue(workflow, { node_id: "1", input_name: "missing" }).text).toBe("Base workflow · Unavailable");
+    expect(formatBaseWorkflowValue(workflow, { node_id: "1", input_name: "unsupported" }).text).toBe("Base workflow · Unavailable");
+    expect(formatBaseWorkflowValue(workflow, { node_id: "1", input_name: "integer" }, "string").text).toBe("Base workflow · Unavailable");
+  });
+
+  it("truncates long values while retaining the full value in the title", () => {
+    const value = "a".repeat(100);
+    const display = formatBaseWorkflowValue({ "1": { inputs: { value } } }, { node_id: "1", input_name: "value" }, "string");
+
+    expect(display.text).toHaveLength("Base workflow · ".length + 80);
+    expect(display.title).toBe(`Base workflow · ${value}`);
+  });
+
+  it("preserves original whitespace in the full-value title", () => {
+    const value = `${"a".repeat(78)}\nfinal line`;
+    const display = formatBaseWorkflowValue({ "1": { inputs: { value } } }, { node_id: "1", input_name: "value" }, "string");
+
+    expect(display.text).not.toContain("\n");
+    expect(display.title).toBe(`Base workflow · ${value}`);
   });
 });
 

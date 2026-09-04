@@ -170,11 +170,16 @@ Before execution, users should be able to preview at least:
 - total Job count;
 - source PromptVersion identity and name;
 - resolved prompt;
-- every named Image Input label and its selected filename or Base workflow state;
+- every named Image Input label and its selected filename or the mapped value retained by a Base workflow choice;
 - seed;
-- resolved parameters or Base workflow state.
+- resolved parameters or the mapped value retained by a Base workflow choice.
 
 The preview must use the same compiler logic as actual Run creation.
+
+Base values are read locally from the exact Workflow and Workflow Profile used by the Preview request.
+Historical Run Plan and Result views read them from frozen Run provenance instead of current library
+versions. Missing, null, connected, or type-incompatible mapped inputs are shown as unavailable rather
+than guessed. This display does not change the compiler meaning of Base workflow: no override is emitted.
 
 Do not maintain separate preview expansion logic that can disagree with execution.
 

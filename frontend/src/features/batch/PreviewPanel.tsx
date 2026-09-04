@@ -1,9 +1,12 @@
-import type { PreviewResponse, RunCreatedResponse, RunStatus } from "../../api/types";
+import type { EditableBatchSnapshot, PreviewResponse, RunCreatedResponse, RunStatus } from "../../api/types";
 import { Field, TextAreaField } from "../../components/Field";
 import { runDisplayLabel } from "../run/runDisplay";
+import { formatBaseWorkflowValue } from "./baseWorkflowValue";
+import { profileImageInputs, profileParameters } from "./form";
 
 interface Props {
   preview: PreviewResponse | null;
+  batchSnapshot: EditableBatchSnapshot | null;
   creating: boolean;
   currentRun: RunCreatedResponse | null;
   currentRunStatus: RunStatus | null;
@@ -20,6 +23,7 @@ interface Props {
 
 export function PreviewPanel({
   preview,
+  batchSnapshot,
   creating,
   currentRun,
   currentRunStatus,
@@ -44,6 +48,11 @@ export function PreviewPanel({
       </section>
     );
   }
+
+  const workflow = batchSnapshot?.workflow_selection.workflow ?? {};
+  const profile = batchSnapshot?.workflow_selection.workflow_profile ?? {};
+  const imageSlots = new Map(profileImageInputs(profile).map((slot) => [slot.key, slot]));
+  const parameters = new Map(profileParameters(profile).map((parameter) => [parameter.key, parameter]));
 
   return (
     <section className="section-card" aria-labelledby="preview-heading">
@@ -101,7 +110,9 @@ export function PreviewPanel({
                       {job.resolved_image_inputs.map((input) => (
                         <div key={input.slot_key}>
                           <dt>{input.label}</dt>
-                          <dd>{input.asset_id === null ? "Base workflow" : input.filename ?? "Project Asset"}</dd>
+                          <dd>{input.asset_id === null
+                            ? <BaseValue display={imageSlots.get(input.slot_key) ? formatBaseWorkflowValue(workflow, imageSlots.get(input.slot_key)!, "string") : unavailableBaseValue()} />
+                            : input.filename ?? "Project Asset"}</dd>
                         </div>
                       ))}
                     </dl>
@@ -113,7 +124,9 @@ export function PreviewPanel({
                       {job.resolved_parameters.map((parameter) => (
                         <div key={parameter.parameter_key}>
                           <dt>{parameter.label}</dt>
-                          <dd>{formatParameterValue(parameter.value)}</dd>
+                          <dd>{parameter.value === null
+                            ? <BaseValue display={parameters.get(parameter.parameter_key) ? formatBaseWorkflowValue(workflow, parameters.get(parameter.parameter_key)!, parameters.get(parameter.parameter_key)!.value_type) : unavailableBaseValue()} />
+                            : formatParameterValue(parameter.value)}</dd>
                         </div>
                       ))}
                     </dl>
@@ -182,7 +195,15 @@ export function PreviewPanel({
 }
 
 function formatParameterValue(value: string | number | boolean | null): string {
-  if (value === null) return "Base workflow";
+  if (value === null) return "Base workflow · Unavailable";
   if (typeof value === "string") return value === "" ? '"" (empty string)' : value;
   return String(value);
+}
+
+function BaseValue({ display }: { display: ReturnType<typeof formatBaseWorkflowValue> }) {
+  return <span title={display.title}>{display.text}</span>;
+}
+
+function unavailableBaseValue(): ReturnType<typeof formatBaseWorkflowValue> {
+  return { text: "Base workflow · Unavailable", available: false };
 }
