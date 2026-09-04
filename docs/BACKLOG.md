@@ -8,7 +8,7 @@ _Last consolidated: 2026-09-01._
 
 ## Current focus
 
-1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, In Progress)
+1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Done)
 2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, Done)
 3. [BC-003C: Interrupt owned ComfyUI Job](#bc-003c-interrupt-owned-comfyui-job) (P2, Planned)
 4. [BC-002: Durable queued Runs](#bc-002-durable-queued-runs) (P2, Planned)
@@ -138,8 +138,8 @@ unsubmitted Job remains to cancel.
 
 Correctness follow-up: owner testing found that closing and reopening the tab could restore the editable
 draft without restoring the active Run monitor. Process-local active-Run discovery and independent
-draft/monitor reconciliation are implemented with automated coverage. This item remains In Progress until
-the closed-tab owner retest confirms active progress reappears without resubmission.
+draft/monitor reconciliation are implemented with automated coverage, and the closed-tab owner retest
+confirmed active progress reappears without resubmission.
 
 Why this matters:
 
@@ -413,6 +413,11 @@ Keep these operations distinct:
 - allocate new Run/Job identities, timestamps, output namespace, and ComfyUI prompt IDs;
 - never mutate or append to the historical Run.
 
+Implementation progress: BC-021 completed the Run-level `Load Run as Batch` workflow, including frozen
+editable intent, detached resources, exact relinking, explicit historical import, Preview invalidation,
+and cross-instance automated coverage. Result-level `Recreate Result` and `Exact Rerun` remain unimplemented,
+so BC-006 remains `Planned` for those distinct workflows.
+
 ### BC-007: Project-wide Run and Result browser
 
 | Field | Value |
@@ -422,7 +427,7 @@ Keep these operations distinct:
 | Status | Planned |
 | Area | Results / Indexing |
 | Summary | Add rebuildable Run, Job, parameter, Image Input, and Result indexes plus a Project-wide historical browser with useful provenance filters. |
-| Dependencies / Notes | Follow ADR 0003's derived-index rules. The current gallery is limited to Run IDs retained by the working session. Result bytes remain filesystem-owned. BC-015 adds durable stars/favorites on top of this browser. |
+| Dependencies / Notes | Follow ADR 0003's derived-index rules. BC-020 delivered the rebuildable projections and initial Project-wide history browser. Result bytes remain filesystem-owned. BC-015 adds durable stars/favorites on top of this browser. |
 
 Primary product behavior:
 
@@ -455,6 +460,14 @@ Indexing implications:
 - do not make absolute paths portable identity;
 - full reindex must be possible from filesystem Run and execution artifacts;
 - a stale SQLite projection must never override filesystem truth.
+
+Implementation progress: BC-020 delivered rebuildable Run, Job, resolved-parameter, Image Input, Asset-use,
+Result, and diagnostic projections plus explicit Project reindexing. Project History browses every indexed
+Run grouped by Batch, loads its Results without browser-held Run IDs, preserves the image gallery,
+lightbox, Run Plan, and Result Details, orders Runs newest-first, and isolates invalid or degraded history.
+The API and UI still return the complete history without pagination, expose no alternate sort controls,
+and provide none of BC-007's parameter, seed, Prompt, Workflow/Profile, Batch, status/date, Image Input,
+Asset, or future starred-result filters.
 
 ### BC-008: Video and generic file input slots
 

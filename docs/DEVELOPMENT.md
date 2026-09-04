@@ -333,7 +333,7 @@ Project-wide history, or executor restart recovery.
 
 The backend/core portion of BC-003A is implemented. SQLite stores idempotent `after_current_job`
 intent, the application layer serializes durable request acknowledgement against Job submission
-admission, and execution format v1 records the resulting Run and Job outcomes. The executor stops
+admission, and execution format v3 records the resulting Run and Job outcomes. The executor stops
 before another submission when possible, otherwise lets the already admitted Job reach an honest
 terminal or blocked state and ingests successful Results before cancelling the remaining unsubmitted
 Jobs. It never interrupts ComfyUI or clears its queue.
@@ -342,9 +342,9 @@ FastAPI exposes `POST /api/runs/{run_id}/cancel` and merges SQLite request metad
 execution outcome in Run and execution read models. The execution package remains independent of
 SQLite. The frontend confirms the action, reconciles ambiguous responses through execution polling,
 shows durable request and stopping states, restores them after a cold load, preserves Result review, and
-unlocks editing only after a terminal outcome. BC-003A stays `In Progress` until its required live ComfyUI
-verification succeeds. This pass does not add executor restart recovery, retries, a durable scheduler, or
-remote interruption.
+unlocks editing only after a terminal outcome. Automated verification and live owner acceptance are
+complete. This pass does not add executor restart recovery, retries, a durable scheduler, or remote
+interruption.
 
 ### Phase 2.11: Named Runs and human-readable Run folders
 
