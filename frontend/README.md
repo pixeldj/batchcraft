@@ -95,7 +95,7 @@ with empty browser storage.
 
 - Node.js `^20.19.0` or `>=22.12.0`
 - npm
-- the batchcraft API running locally
+- a reachable batchcraft API, normally local
 
 ## Local development
 
@@ -105,11 +105,14 @@ Install the locked dependencies:
 npm install
 ```
 
-The frontend defaults to `http://127.0.0.1:8000`. To use another API address, create an ignored
-`.env.local` file:
+The API client defaults to an empty base URL for same-origin requests, not a hardcoded port 8000.
+The checked-in `.env.development` explicitly selects `http://127.0.0.1:8001` for development. The everyday
+installer builds with `VITE_BATCHCRAFT_API_URL='/'`, which selects same-origin requests even in pinned
+older client code. Prefer the isolated launchers; for an explicit manual override, create an ignored
+`.env.development.local` file:
 
 ```text
-VITE_BATCHCRAFT_API_URL=http://127.0.0.1:8000
+VITE_BATCHCRAFT_API_URL=http://127.0.0.1:8001
 ```
 
 Start Vite:
@@ -118,11 +121,23 @@ Start Vite:
 npm run dev
 ```
 
-Vite serves `http://localhost:5173`, which matches the backend's default
-`BATCHCRAFT_FRONTEND_ORIGIN` setting. If the Vite origin changes, configure the backend origin to
-match it.
+Vite serves `http://127.0.0.1:5174` and fails if that port is occupied. The development launcher configures
+the matching API origin and port. When starting the API manually, set `BATCHCRAFT_SERVER_PORT=8001` and
+`BATCHCRAFT_FRONTEND_ORIGIN=http://127.0.0.1:5174` explicitly.
+
+Only the everyday app supports opt-in trusted-LAN access; development and test stay on loopback.
+See [`../docs/LOCAL_INSTANCES.md`](../docs/LOCAL_INSTANCES.md) for `lan_access`, the unauthenticated-access
+warning, firewall guidance, and the stopped-instance update process. For a future existing-build update,
+run `VITE_BATCHCRAFT_API_URL=/ VITE_BATCHCRAFT_INSTANCE='Everyday app' npm run build` in the installed
+`frontend/` directory after following that process. Unsaved working sessions are separate across browser
+origins and devices, even when they use the same backend.
 
 ## Checks
+
+Real-browser checks and interactive Playwright inspection are described in
+[`../docs/LOCAL_INSTANCES.md`](../docs/LOCAL_INSTANCES.md). Run `npm run browser:install` once, then
+`npm run test:e2e`. This starts isolated FastAPI/Vite instances with a fake ComfyUI client; it never
+reuses the everyday or development servers. `npm test` remains the Vitest suite.
 
 ```bash
 npm run typecheck

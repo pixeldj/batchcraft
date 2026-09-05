@@ -1181,6 +1181,9 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       </header>
 
       <main>
+        {import.meta.env.VITE_BATCHCRAFT_INSTANCE ? (
+          <p className="session-note" role="status">{import.meta.env.VITE_BATCHCRAFT_INSTANCE}</p>
+        ) : null}
         {sessionMessage ? <p className="session-note" role="status">{sessionMessage}</p> : null}
         {savedBatchConflict ? (
           <div className="operation-error" role="alert">

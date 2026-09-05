@@ -5,6 +5,33 @@ import { ApiError, BatchcraftApiClient } from "./client";
 describe("BatchcraftApiClient", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([undefined, "", "/"])("uses same-origin API and images with API override %s", async (baseUrl) => {
+    vi.stubEnv("VITE_BATCHCRAFT_API_URL", baseUrl);
+    const fetchMock = successfulFetch({ projects: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient();
+
+    await client.listProjects();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects", { signal: undefined });
+    expect(client.assetUrl("/api/projects/p/assets/a/content")).toBe("/api/projects/p/assets/a/content");
+    expect(client.resultUrl("api/runs/r/results/image")).toBe("/api/runs/r/results/image");
+  });
+
+  it("keeps an explicit development API origin for requests and images", async () => {
+    vi.stubEnv("VITE_BATCHCRAFT_API_URL", "http://127.0.0.1:8001/");
+    const fetchMock = successfulFetch({ projects: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient();
+
+    await client.listProjects();
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8001/api/projects", { signal: undefined });
+    expect(client.assetUrl("/api/assets/a")).toBe("http://127.0.0.1:8001/api/assets/a");
+    expect(client.resultUrl("/api/results/r")).toBe("http://127.0.0.1:8001/api/results/r");
   });
 
   it("parses a successful API response", async () => {

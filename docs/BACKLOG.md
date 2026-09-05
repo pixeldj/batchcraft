@@ -1017,6 +1017,37 @@ Acceptance requires:
 - immutable Run Jobs and Result provenance retain each exact concrete seed;
 - automated backend/frontend verification and the documented manual browser/live generation check pass.
 
+### BC-023: Isolated local instances and browser verification
+
+| Field | Value |
+| --- | --- |
+| ID | BC-023 |
+| Priority | P1 |
+| Status | Done |
+| Area | Development / Release verification |
+| Summary | Separate everyday code and data from development, and add real-browser testing and agent inspection. |
+| Dependencies / Notes | ADR 0014. Keep the real API, compiler, executor, and stores; inject fake ComfyUI only in isolated development/test tooling. No automatic production promotion or user-data reset. |
+
+Acceptance requires a pinned everyday checkout and built frontend, explicit independent data roots,
+fixed ports with loopback defaults, fake-backed desktop/mobile Playwright smoke tests, and verified MCP screenshot
+capture. Runtime configuration must not inherit live data or ComfyUI settings into tests. Document safe
+startup, shutdown, updates, and backup boundaries in `docs/LOCAL_INSTANCES.md`.
+
+Implementation result: isolated launchers, a new-worktree installer, explicit sandbox seeding, simulated
+ComfyUI, and project-scoped Playwright MCP are implemented. Verification passed with 630 backend tests,
+373 frontend unit tests, four desktop/mobile real-API browser tests, Ruff check/format, mypy, frontend
+lint/typecheck, and both builds. MCP navigation and screenshot capture were verified locally. A pinned
+everyday installation was provisioned with fresh separate data; live connectivity was checked without
+submitting a Job. CI configuration is added but has not yet run on GitHub. This is not the separate v1
+cross-instance recovery release gate.
+
+LAN follow-up: everyday-only `lan_access` opt-in and same-origin frontend builds are verified with 637
+backend tests, 377 frontend tests, and eight desktop/mobile browser scenarios across Vite and built
+same-origin serving. Ruff, mypy, lint/typecheck, and builds pass. The pinned everyday installation was
+backed up and updated without changing application source or data formats. Read-only browser checks
+from the Mac passed at its LAN IP, localhost, and loopback; a second physical device was not tested.
+Development/test listeners remain loopback-only. No authentication or wildcard CORS is added.
+
 ## Maintenance rules
 
 - Update only entries affected by the current task.

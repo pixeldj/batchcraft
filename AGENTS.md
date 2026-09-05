@@ -124,6 +124,10 @@ Integration behavior against ComfyUI should be separated from unit tests and cle
 
 ## Development Workflow
 
+For launching instances, browser verification, or everyday-app provisioning, read
+`docs/LOCAL_INSTANCES.md` first. Use the fake-backed development/test instances for agent browser work.
+Everyday app/data and live ComfyUI work require explicit user authorization; never repoint tests at them.
+
 For substantial tasks:
 
 1. Read `AGENTS.md` and the relevant project docs.

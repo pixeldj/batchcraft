@@ -1,0 +1,54 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.3"
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Backend checks
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run pytest
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy
+          uv build
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run lint
+          npm run build
+      - name: Browser smoke tests (fake ComfyUI)
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+          BATCHCRAFT_E2E_BUILT=1 npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7

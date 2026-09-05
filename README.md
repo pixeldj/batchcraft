@@ -30,12 +30,19 @@ global scheduler, and automatic backend recovery remain unimplemented.
 
 ## Run The API
 
+For an everyday installation with optional trusted-LAN access, separate from this development checkout,
+or browser testing with fake ComfyUI, see [`docs/LOCAL_INSTANCES.md`](docs/LOCAL_INSTANCES.md). The development launcher is
+`./dev.command`; it uses its own data and does not submit GPU work. The commands below are the lower-level
+live API/development-server setup, not the isolated launchers.
+
 From `backend/`:
 
 ```bash
 BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
 BATCHCRAFT_DATABASE_PATH="/path/to/batchcraft.sqlite3" \
 BATCHCRAFT_COMFYUI_BASE_URL="http://<windows-host>:8188" \
+BATCHCRAFT_SERVER_PORT=8001 \
+BATCHCRAFT_FRONTEND_ORIGIN="http://127.0.0.1:5174" \
 uv run batchcraft-api
 ```
 
@@ -50,7 +57,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. The frontend defaults to the API at `http://127.0.0.1:8000`;
+Open `http://127.0.0.1:5174`. The development frontend defaults to the API at `http://127.0.0.1:8001`;
 `VITE_BATCHCRAFT_API_URL` overrides that address. See [`frontend/README.md`](frontend/README.md)
 for frontend checks and first-slice limitations.
 

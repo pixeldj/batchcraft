@@ -57,8 +57,6 @@ import type {
   WorkflowsResponse,
 } from "./types";
 
-const DEFAULT_API_URL = "http://127.0.0.1:8000";
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -153,7 +151,7 @@ export interface RunCancellationApi {
 export class BatchcraftApiClient implements BatchcraftApi {
   readonly baseUrl: string;
 
-  constructor(baseUrl = import.meta.env.VITE_BATCHCRAFT_API_URL || DEFAULT_API_URL) {
+  constructor(baseUrl = import.meta.env.VITE_BATCHCRAFT_API_URL || "") {
     this.baseUrl = baseUrl.replace(/\/$/, "");
   }
 

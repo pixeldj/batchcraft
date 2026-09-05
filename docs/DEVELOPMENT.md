@@ -37,6 +37,10 @@ Agents should plan before implementing non-trivial features and should avoid bro
 
 ## Persistence policy
 
+For concurrent everyday use and development, follow [`LOCAL_INSTANCES.md`](LOCAL_INSTANCES.md).
+`./dev.command` uses isolated persistent sandbox data and simulated ComfyUI. Playwright owns temporary
+test data and separate ports; neither launcher inherits the everyday database or generation host.
+
 Treat user SQLite databases and valid candidate-v1 Project files as durable local data. Keep applied SQL
 migration files byte-stable and make user-database schema changes only through the next contiguous
 forward migration. Unsupported migration history, durable record versions, and malformed data fail
@@ -333,7 +337,7 @@ Project-wide history, or executor restart recovery.
 
 The backend/core portion of BC-003A is implemented. SQLite stores idempotent `after_current_job`
 intent, the application layer serializes durable request acknowledgement against Job submission
-admission, and execution format v3 records the resulting Run and Job outcomes. The executor stops
+admission, and execution format v1 records the resulting Run and Job outcomes. The executor stops
 before another submission when possible, otherwise lets the already admitted Job reach an honest
 terminal or blocked state and ingests successful Results before cancelling the remaining unsubmitted
 Jobs. It never interrupts ComfyUI or clears its queue.
@@ -536,9 +540,10 @@ npm install
 npm run dev
 ```
 
-Vite serves `http://localhost:5173`. The frontend uses `http://127.0.0.1:8000` by default and reads
-an override from `VITE_BATCHCRAFT_API_URL`. Keep the backend's `BATCHCRAFT_FRONTEND_ORIGIN` aligned
-with the Vite origin.
+Vite serves `http://127.0.0.1:5174`. Its development API defaults to `http://127.0.0.1:8001`, with an
+explicit override from `VITE_BATCHCRAFT_API_URL`. Use `./dev.command` for matched ports, origin, isolated
+data, and fake ComfyUI. A manually launched backend must set `BATCHCRAFT_SERVER_PORT=8001` and
+`BATCHCRAFT_FRONTEND_ORIGIN=http://127.0.0.1:5174`. Port 8000 belongs to the separate everyday app.
 
 Run all frontend checks from `frontend/`:
 

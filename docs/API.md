@@ -27,7 +27,7 @@ The OpenAPI document is available at `/docs` while the server is running.
 
 ## Configuration
 
-Configuration is read centrally from environment variables:
+For direct `batchcraft-api` startup, configuration is read centrally from environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -45,9 +45,19 @@ Configuration is read centrally from environment variables:
 
 The real ComfyUI host is never committed to repository configuration.
 
-The Vite frontend defaults to this API at `http://127.0.0.1:8000`. Set
-`VITE_BATCHCRAFT_API_URL` in the frontend environment to use another API address. Its origin must
-match `BATCHCRAFT_FRONTEND_ORIGIN` for browser API requests.
+The frontend API client defaults to an empty base URL for same-origin requests. The checked-in
+`.env.development` explicitly selects `http://127.0.0.1:8001`; the everyday installer builds with
+`VITE_BATCHCRAFT_API_URL='/'` to select same-origin requests even in pinned older client code. Set
+`VITE_BATCHCRAFT_API_URL` at build time to use another API address. For cross-origin requests, the
+frontend's browser origin must match `BATCHCRAFT_FRONTEND_ORIGIN`.
+
+The isolated launchers use explicit settings rather than inherited data and host overrides; see
+[`LOCAL_INSTANCES.md`](LOCAL_INSTANCES.md). Their `settings_for(..., lan_access: bool = False)` option
+allows only the everyday app to bind `0.0.0.0:8000`, all IPv4 interfaces. The everyday `app.local.json`
+accepts optional boolean `lan_access`, defaulting to `false` when omitted. Development and test remain
+loopback-only and reject LAN access. Same-origin everyday requests need no additional CORS origin;
+no wildcard CORS or authentication is added. Enable this only on a trusted LAN: anyone who can reach
+the app can read and modify data and start GPU Jobs. Do not port-forward it or expose it to the internet.
 
 ## Endpoints
 
