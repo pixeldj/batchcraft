@@ -26,6 +26,8 @@ def _copy_fixture(tmp_path: Path) -> tuple[Path, Path]:
     projects.mkdir()
     project = projects / "project_key"
     shutil.copytree(FIXTURE, project)
+    # Git does not preserve the fixture's empty outputs directory.
+    (project / "batches" / "batch_key" / "001-run" / "outputs").mkdir(exist_ok=True)
     return projects, project
 
 

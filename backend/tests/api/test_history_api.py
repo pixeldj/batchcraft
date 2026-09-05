@@ -41,6 +41,8 @@ def _copy_fixture(settings: Settings) -> Path:
     settings.projects_root.mkdir()
     project = settings.projects_root / "project_key"
     shutil.copytree(FIXTURE, project)
+    # Git does not preserve the fixture's empty outputs directory.
+    (project / "batches" / "batch_key" / "001-run" / "outputs").mkdir(exist_ok=True)
     return project
 
 

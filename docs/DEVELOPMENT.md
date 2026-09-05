@@ -608,6 +608,10 @@ Use environment variables or ignored local configuration files when needed.
 
 Test behavior and invariants rather than implementation details.
 
+Tests must pass from a clean Git checkout, not just an existing development directory. Git does not
+preserve empty directories. Fixture setup must create required empty directories, such as Run
+`outputs/`, in the temporary test copy without modifying the committed fixture or user data.
+
 High-value unit-test areas include:
 
 - placeholder validation;
