@@ -52,6 +52,7 @@ from batchcraft.db import (
     WorkflowRecord,
     WorkflowVersionRecord,
 )
+from batchcraft.diagnostics import HISTORY_MESSAGES, public_diagnostic
 from batchcraft.domain import (
     BatchDefinition,
     CompilationError,
@@ -75,7 +76,8 @@ from batchcraft.domain import (
     validate_parameter_scalar,
     validate_stable_key,
 )
-from batchcraft.execution import RunExecutionState
+from batchcraft.execution import JobExecutionState, RunExecutionState
+from batchcraft.execution.executor import base_workflow_rejection_indices
 from batchcraft.files import (
     AdoptableBatch,
     AdoptableProject,
@@ -417,8 +419,8 @@ class HistoryDiagnosticResponse(ApiModel):
             scope=item.scope,
             filesystem_key=item.filesystem_key,
             entity_id=item.entity_id,
-            code=item.code,
-            message=item.message,
+            code=item.code if item.code in HISTORY_MESSAGES else "historical_data_invalid",
+            message=HISTORY_MESSAGES.get(item.code, "Historical data could not be validated"),
         )
 
 
@@ -1132,7 +1134,10 @@ class ComfyUIStatusResponse(ApiModel):
             reachable=status.reachable,
             version=status.version,
             devices=list(status.devices),
-            diagnostic=status.diagnostic,
+            diagnostic=public_diagnostic(
+                status.diagnostic,
+                "ComfyUI status unavailable; check connection and server protocol",
+            ),
         )
 
 
@@ -1306,6 +1311,51 @@ class JobExecutionResponse(ApiModel):
     result_count: int
 
 
+def _job_diagnostic(job: JobExecutionState) -> str:
+    http = job.submission_http_status
+    context = f" (HTTP {http})" if type(http) is int and 100 <= http <= 599 else ""
+    if job.status.value == "succeeded":
+        return "Job completed; additional diagnostic detail omitted"
+    if job.submission_disposition is not None:
+        if job.submission_disposition.value == "rejected":
+            return f"Prompt submission rejected{context}; check workflow validation in ComfyUI"
+        if job.submission_disposition.value == "unknown":
+            return f"Prompt submission outcome unknown{context}; do not retry automatically"
+    if job.status.value == "submitted":
+        return "History could not confirm remote completion; do not resubmit"
+    if job.submission_disposition is None:
+        return "Job preparation or input upload failed; check Project Assets and Workflow Profile"
+    return "Job execution or Result ingestion failed; check ComfyUI history and local storage"
+
+
+def _public_diagnostics(values: tuple[str, ...], fallback: str) -> list[str]:
+    return list(
+        dict.fromkeys(public_diagnostic(value, fallback) or fallback for value in values[:16])
+    )
+
+
+def _public_job_diagnostics(job: JobExecutionState, run: PublishedRun | None) -> list[str]:
+    messages = _public_diagnostics(job.diagnostics, _job_diagnostic(job))
+    if (
+        run is not None
+        and job.submission_disposition is not None
+        and job.submission_disposition.value == "rejected"
+    ):
+        persisted = run.jobs[job.ordinal - 1]
+        images, parameters = base_workflow_rejection_indices(
+            run, persisted, job.submission_response
+        )
+        guidance = [
+            f"Base Image Input {index + 1} failed ComfyUI validation; choose a Project image or check Base workflow in ComfyUI"
+            for index in images[:8]
+        ] + [
+            f"Base parameter {index + 1} failed ComfyUI validation; choose an override or check Base workflow in ComfyUI"
+            for index in parameters[:8]
+        ]
+        messages = guidance + messages
+    return messages[:16]
+
+
 class RunCancellationRequest(ApiModel):
     mode: Literal["after_current_job", "detach"]
 
@@ -1372,6 +1422,7 @@ class ExecutionResponse(ApiModel):
         cancellation: RunCancellation | None = None,
         *,
         execution_task_active: bool,
+        run: PublishedRun | None = None,
     ) -> Self:
         return cls(
             run_id=state.run_id,
@@ -1380,8 +1431,12 @@ class ExecutionResponse(ApiModel):
             started_at=state.started_at,
             completed_at=state.completed_at,
             current_job_ordinal=state.current_job_ordinal,
-            error=state.error,
-            diagnostics=list(state.diagnostics),
+            error=public_diagnostic(
+                state.error, "Run execution needs attention; inspect Job status"
+            ),
+            diagnostics=_public_diagnostics(
+                state.diagnostics, "Run execution diagnostic; inspect Job status"
+            ),
             jobs=[
                 JobExecutionResponse(
                     ordinal=job.ordinal,
@@ -1389,8 +1444,8 @@ class ExecutionResponse(ApiModel):
                     prompt_id=job.prompt_id,
                     started_at=job.started_at,
                     completed_at=job.completed_at,
-                    error=job.error,
-                    diagnostics=list(job.diagnostics),
+                    error=public_diagnostic(job.error, _job_diagnostic(job)),
+                    diagnostics=_public_job_diagnostics(job, run),
                     result_count=len(job.results),
                 )
                 for job in state.jobs
@@ -1526,6 +1581,7 @@ class RunResponse(RunCreatedResponse):
                 state,
                 cancellation,
                 execution_task_active=execution_task_active,
+                run=run,
             ),
         )
 

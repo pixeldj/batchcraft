@@ -7,6 +7,9 @@
 
 ## Context
 
+Current persistence versions and forward-only user-database policy supersede the historical baseline
+replacement below; see `../FILE_FORMAT.md` and `../DEVELOPMENT.md#persistence-policy`.
+
 The first image-input model exposed at most one optional `reference_image` mapping and treated selected
 Reference Assets as a Batch dimension. That model could not describe workflows with distinct image
 roles such as identity, pose, and style. It also tied a workflow target to a hard-coded friendly name

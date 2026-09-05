@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, File, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from starlette.types import Message, Receive, Scope, Send
 
 from batchcraft.application import (
     ApplicationComfyUIClient,
@@ -87,6 +88,7 @@ from batchcraft.db import (
     apply_migrations,
     open_connection,
 )
+from batchcraft.diagnostics import public_error_message, safe_exception
 from batchcraft.domain import CompilationError, SeedInput
 from batchcraft.execution import execute_run
 from batchcraft.files import ProjectOwnerStore
@@ -163,6 +165,7 @@ from .schemas import (
     WorkflowVersionResponse,
     WorkflowVersionsResponse,
 )
+from .security import RequestSecurityMiddleware, artifact_response
 
 logger = logging.getLogger(__name__)
 ClientFactory = Callable[[Settings], ApplicationComfyUIClient]
@@ -182,6 +185,35 @@ def _library(request: Request) -> LibraryService:
 LibraryDependency = Annotated[LibraryService, Depends(_library)]
 
 
+class DiagnosticFastAPI(FastAPI):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await super().__call__(scope, receive, send)
+            return
+        started = False
+
+        async def track_start(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await super().__call__(scope, receive, track_start)
+        except Exception as error:
+            # ServerErrorMiddleware rethrows after sending its 500. Do not let
+            # Uvicorn format that exception or its chain. Incomplete started
+            # responses are closed by the HTTP protocol, not replaced or retried.
+            logger.error("Unhandled HTTP application error: %s", safe_exception(error))
+            if not started:
+                try:
+                    await _error_response(500, "internal_error", "An unexpected error occurred")(
+                        scope, receive, send
+                    )
+                except Exception as send_error:
+                    logger.error("HTTP error response failed: %s", safe_exception(send_error))
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -192,6 +224,7 @@ def create_app(
 ) -> FastAPI:
     configured = settings or Settings.from_env()
     make_client = client_factory or _create_comfyui_client
+    saved_batch_store = SavedBatchStore(configured.database_path, max_jobs=configured.max_jobs)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -210,13 +243,14 @@ def create_app(
             executor=executor,
             clock=clock,
             random_seed_source=random_seed_source,
+            max_jobs=configured.max_jobs,
         )
         app.state.library_service = LibraryService(
             project_store=ProjectStore(configured.database_path),
             prompt_store=PromptStore(configured.database_path),
             workflow_store=WorkflowStore(configured.database_path),
             workflow_profile_store=WorkflowProfileStore(configured.database_path),
-            saved_batch_store=SavedBatchStore(configured.database_path),
+            saved_batch_store=saved_batch_store,
             owner_store=ProjectOwnerStore(configured.projects_root),
         )
         try:
@@ -225,11 +259,12 @@ def create_app(
             await registry.shutdown()
             await client.aclose()
 
-    app = FastAPI(
+    app = DiagnosticFastAPI(
         title="batchcraft API",
         version=_package_version(),
         lifespan=lifespan,
     )
+    app.add_middleware(RequestSecurityMiddleware, settings=configured)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[configured.frontend_origin],
@@ -401,11 +436,14 @@ def create_app(
         request: SavedBatchCreateRequest,
         library: LibraryDependency,
     ) -> SavedBatchDetailResponse:
+        definition = request.to_definition()
+        # Reject oversized validation before the library publishes a Batch owner.
+        await asyncio.to_thread(saved_batch_store.check_materialization_budget, definition)
         batch = await asyncio.to_thread(
             library.create_saved_batch,
             project_id,
             filesystem_key=request.filesystem_key,
-            definition=request.to_definition(),
+            definition=definition,
         )
         return SavedBatchDetailResponse.from_detail(batch)
 
@@ -419,12 +457,14 @@ def create_app(
         request: SavedBatchAdoptRequest,
         library: LibraryDependency,
     ) -> SavedBatchDetailResponse:
+        definition = request.to_definition()
+        await asyncio.to_thread(saved_batch_store.check_materialization_budget, definition)
         batch = await asyncio.to_thread(
             library.adopt_saved_batch,
             project_id,
             filesystem_key=request.filesystem_key,
             batch_id=request.batch_id,
-            definition=request.to_definition(),
+            definition=definition,
         )
         return SavedBatchDetailResponse.from_detail(batch)
 
@@ -880,7 +920,7 @@ def create_app(
         return Response(content=content, media_type=asset.mime_type)
 
     @app.post("/api/batches/preview", response_model=PreviewResponse)
-    async def preview_batch(
+    def preview_batch(
         request: BatchRequest,
         service: ServiceDependency,
     ) -> PreviewResponse:
@@ -1041,6 +1081,7 @@ def create_app(
             state,
             cancellation,
             execution_task_active=service.execution_task_active(run_id),
+            run=run,
         )
 
     @app.post(
@@ -1092,11 +1133,7 @@ def create_app(
     ) -> Response:
         run = service.get_run(run_id)
         result, content = service.get_result(run, job_ordinal, artifact_ordinal)
-        return Response(
-            content=content,
-            media_type=result.content_type or "application/octet-stream",
-            headers={"Content-Disposition": f'inline; filename="{Path(result.local_path).name}"'},
-        )
+        return artifact_response(content, result.content_type, result.local_path)
 
     return app
 
@@ -1253,7 +1290,7 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def project_discovery_failed(
         _request: Request, error: ProjectDiscoveryError
     ) -> JSONResponse:
-        logger.error("Project discovery failed: %s", error)
+        logger.error("Project discovery failed")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "project_discovery_failed",
@@ -1300,7 +1337,7 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def saved_batch_discovery_failed(
         _request: Request, error: SavedBatchDiscoveryError
     ) -> JSONResponse:
-        logger.error("Saved Batch discovery failed: %s", error)
+        logger.error("Saved Batch discovery failed")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "saved_batch_discovery_failed",
@@ -1337,7 +1374,7 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AssetDataError)
     async def invalid_asset_data(_request: Request, error: AssetDataError) -> JSONResponse:
-        logger.error("Invalid Project asset data: %s", error)
+        logger.error("Invalid Project asset data")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "invalid_asset_data",
@@ -1348,7 +1385,7 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def asset_publication_failed(
         _request: Request, error: AssetPublicationError
     ) -> JSONResponse:
-        logger.error("Project asset publication failed: %s", error)
+        logger.error("Project asset publication failed")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "asset_publication_failed",
@@ -1409,7 +1446,7 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def run_cancellation_store_failed(
         _request: Request, error: RunCancellationStoreError
     ) -> JSONResponse:
-        logger.error("Run cancellation persistence failed: %s", error)
+        logger.error("Run cancellation persistence failed")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "run_cancellation_store_failed",
@@ -1418,7 +1455,7 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RunCreationError)
     async def invalid_run(_request: Request, error: RunCreationError) -> JSONResponse:
-        logger.info("Run creation rejected: %s", error)
+        logger.info("Run creation rejected")
         return _error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "run_creation_failed",
@@ -1427,7 +1464,7 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RunPublicationError)
     async def publication_failed(_request: Request, error: RunPublicationError) -> JSONResponse:
-        logger.error("Run publication failed: %s", error)
+        logger.error("Run publication failed")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "run_publication_failed",
@@ -1436,7 +1473,7 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RunDataError)
     async def invalid_stored_run(_request: Request, error: RunDataError) -> JSONResponse:
-        logger.error("Invalid durable Run data: %s", error)
+        logger.error("Invalid durable Run data")
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "invalid_run_data",
@@ -1445,10 +1482,6 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unexpected_error(_request: Request, error: Exception) -> JSONResponse:
-        logger.error(
-            "Unhandled API error",
-            exc_info=(type(error), error, error.__traceback__),
-        )
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1457,7 +1490,7 @@ def _register_error_handlers(app: FastAPI) -> None:
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
-    body = ErrorResponse(error=ErrorDetail(code=code, message=message))
+    body = ErrorResponse(error=ErrorDetail(code=code, message=public_error_message(code, message)))
     return JSONResponse(status_code=status_code, content=body.model_dump())
 
 

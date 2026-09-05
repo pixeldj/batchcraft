@@ -1,10 +1,8 @@
 import asyncio
 import hashlib
 import json
-import os
 import re
 import secrets
-import stat
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -82,6 +80,7 @@ from batchcraft.files import (
     RunStoreError,
     is_safe_filesystem_key,
 )
+from batchcraft.files._io import open_regular_file
 from batchcraft.files.history import (
     ProjectHistoryScan,
     ProjectHistoryScanError,
@@ -223,6 +222,12 @@ class BatchReconstruction:
 
 
 class BatchcraftService:
+    """Application materialization is limited to 10,000 Jobs by default.
+
+    ``max_jobs`` is a positive, configurable safety budget for new plans, including
+    Random Preview assignments, not a limit on reading valid historical Runs.
+    """
+
     def __init__(
         self,
         *,
@@ -236,7 +241,11 @@ class BatchcraftService:
         executor: RunExecutor = execute_run,
         clock: Callable[[], datetime] | None = None,
         random_seed_source: RandomSeedSource = secrets.randbelow,
+        max_jobs: int = 10_000,
     ) -> None:
+        if isinstance(max_jobs, bool) or not isinstance(max_jobs, int) or max_jobs < 1:
+            raise ValueError("max_jobs must be a positive integer")
+        self.max_jobs = max_jobs
         self.projects_root = projects_root
         self.comfyui_client = comfyui_client
         self.task_registry = task_registry
@@ -266,7 +275,7 @@ class BatchcraftService:
             raise RunCreationError("Random seed count must be positive")
         base_plan = compile_batch(
             creation.definition,
-            max_jobs=_SEED_SPACE_SIZE // random_seed_count,
+            max_jobs=min(self.max_jobs, _SEED_SPACE_SIZE) // random_seed_count,
         )
         seeds = materialize_random_seeds(
             base_plan.job_count * random_seed_count,
@@ -371,7 +380,7 @@ class BatchcraftService:
             raise RunCreationError(f"Run could not be published: {error}") from error
 
     def _compile_and_validate(self, creation: RunCreationInput) -> CompiledRunPlan:
-        plan = compile_batch(creation.definition)
+        plan = compile_batch(creation.definition, max_jobs=self.max_jobs)
         first_job = plan.jobs[0]
         prepare_workflow(
             creation.workflow,
@@ -840,7 +849,7 @@ class BatchcraftService:
         for job in state.jobs:
             for result in job.results:
                 try:
-                    _read_result(run.path / result.local_path, result)
+                    _read_result(run.path / result.local_path, result, include_content=False)
                 except RunDataError:
                     path = run.path / result.local_path
                     integrity: Literal["verified", "missing", "corrupt"] = (
@@ -1415,19 +1424,24 @@ def _has_os_error_cause(error: BaseException) -> bool:
     return False
 
 
-def _read_result(path: Path, result: ResultRecord) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _read_result(path: Path, result: ResultRecord, *, include_content: bool = True) -> bytes:
+    digest = hashlib.sha256()
+    size = 0
+    chunks: list[bytes] = []
     try:
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                raise RunDataError(f"recorded Result is not a regular file: {result.local_path}")
-            content = file.read()
+        with open_regular_file(path) as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                size += len(chunk)
+                digest.update(chunk)
+                if include_content:
+                    chunks.append(chunk)
+    except ValueError as error:
+        raise RunDataError(f"recorded Result is not a regular file: {result.local_path}") from error
     except OSError as error:
         raise RunDataError(f"recorded Result cannot be read: {result.local_path}") from error
-    if len(content) != result.byte_size or hashlib.sha256(content).hexdigest() != result.sha256:
+    if size != result.byte_size or digest.hexdigest() != result.sha256:
         raise RunDataError(f"recorded Result integrity check failed: {result.local_path}")
-    return content
+    return b"".join(chunks)
 
 
 def _validate_image_file(source: Path, declared_content_type: str) -> None:
@@ -1461,13 +1475,11 @@ def _is_supported_image_record(record: AssetRecord) -> bool:
 
 
 def _read_asset_content(path: Path, record: AssetRecord) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                raise AssetDataError(f"Project asset is not a regular file: {record.asset_id}")
+        with open_regular_file(path) as file:
             content = file.read()
+    except ValueError as error:
+        raise AssetDataError(f"Project asset is not a regular file: {record.asset_id}") from error
     except OSError as error:
         raise AssetDataError(f"Project asset cannot be read: {record.asset_id}") from error
     if len(content) != record.byte_size or hashlib.sha256(content).hexdigest() != record.sha256:

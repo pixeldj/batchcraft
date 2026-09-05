@@ -7,6 +7,9 @@
 
 ## Context
 
+Current persistence versions and forward-only user-database policy supersede the historical baseline
+replacement below; see `../FILE_FORMAT.md` and `../DEVELOPMENT.md#persistence-policy`.
+
 Pass 3A established typed Profile parameter definitions, one scalar or Base workflow value per Batch
 binding, scalar-resolved Job provenance, and type-safe ComfyUI mutation. Its reserved `values` arrays
 and normalized Saved Batch rows anticipated alternatives, but compilation deliberately treated each

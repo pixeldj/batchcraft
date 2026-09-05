@@ -1,14 +1,12 @@
 import hashlib
-import os
 import re
-import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from batchcraft.execution import ExecutionStateError, ExecutionStateStore, ResultRecord
-from batchcraft.files._io import is_safe_filesystem_key
+from batchcraft.files._io import is_safe_filesystem_key, open_regular_file
 from batchcraft.files.assets import AssetStoreError, ProjectAssetStore
 from batchcraft.files.batch_owners import BatchOwnerError, BatchOwnerStore
 from batchcraft.files.models import AssetRecord, BatchIdentity, ProjectIdentity, PublishedRun
@@ -399,17 +397,15 @@ def _result_integrity(run_path: Path, result: ResultRecord) -> tuple[IntegritySt
     path = run_path / result.local_path
     if path.is_symlink() or not path.exists():
         return "missing", f"Recorded Result is missing or unsafe: {result.local_path}"
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                return "corrupt", f"Recorded Result is not a regular file: {result.local_path}"
+        with open_regular_file(path) as file:
             digest = hashlib.sha256()
             size = 0
             for chunk in iter(lambda: file.read(1024 * 1024), b""):
                 size += len(chunk)
                 digest.update(chunk)
+    except ValueError:
+        return "corrupt", f"Recorded Result is not a regular file: {result.local_path}"
     except OSError as error:
         return "missing", f"Recorded Result cannot be read: {result.local_path}: {error}"
     if size != result.byte_size or digest.hexdigest() != result.sha256:

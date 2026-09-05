@@ -200,12 +200,12 @@
       },
       "lora_2": {
         "on": false,
-        "lora": "krea2\\bkjx-photo-krea2-2500.safetensors",
+        "lora": "krea2\\jmlx-photo-krea2-2500.safetensors",
         "strength": 0.9
       },
       "lora_3": {
         "on": true,
-        "lora": "krea2\\bkjx-general-krea2-1500.safetensors",
+        "lora": "krea2\\jmlx-general-krea2-1500.safetensors",
         "strength": 1
       },
       "➕ Add Lora": "",

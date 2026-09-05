@@ -1,7 +1,19 @@
 .DS_Store
 .env
-.env.*.local
-.env.local
+.env.*
+*.env
+*.env.*
+.envrc
+# These tracked frontend files contain public configuration only, never secrets.
+!/frontend/.env.development
+!/frontend/.env.example
+secrets/
+secrets.*
+credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
 .venv/
 __pycache__/
 *.pyc

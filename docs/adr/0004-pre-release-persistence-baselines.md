@@ -7,6 +7,11 @@
 
 ## Context
 
+Current persistence supersession: `../DEVELOPMENT.md` now requires preserving applied migration bytes
+and valid candidate-v1 Project data. `0001_initial.sql` is preserved; `0002_historical_projections.sql`
+is a forward migration. `../FILE_FORMAT.md` defines current named v1 records, and browser recovery is
+v4. The baseline replacement and reset decisions below are historical, not current user-data policy.
+
 batchcraft is under active local development and has not released a persistence compatibility
 contract. Several short-lived representations accumulated while the compiler, Run store, execution
 state, frontend session, and SQLite-backed Saved Batches were built. Reading each development format

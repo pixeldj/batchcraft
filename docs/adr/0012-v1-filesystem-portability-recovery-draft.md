@@ -6,6 +6,12 @@
 
 ## Context
 
+Current policy supersedes the prerelease reset latitude recorded below: user SQLite databases and valid
+candidate-v1 Project files are already durable data. Preserve applied migration bytes and add contiguous
+forward migrations under `../DEVELOPMENT.md#persistence-policy`. This protection does not depend on
+accepting this ADR. BC-025 tracks public v1 release hardening and the still-unpassed gate in
+`../V1_CROSS_INSTANCE_ACCEPTANCE.md`.
+
 batchcraft deliberately separates mutable application state from immutable historical experiment provenance.
 
 SQLite owns mutable application concepts such as Projects' current metadata, Prompt/PromptVersion libraries, Workflow/WorkflowProfile libraries, Saved Batches, and execution-control or scheduler intent.
@@ -90,7 +96,7 @@ historical Random intent now requests fresh concrete assignments from Preview, l
 Random Batch.
 
 Focused automated coverage proves a clean database can import a copied Project, reconstruct and Preview
-the original plan, explicitly import detached resources, create a new Run, and leave every original Run
+its editable intent, explicitly import detached resources, create a new Run, and leave every original Run
 file hash unchanged. The complete realistic fixture, repeat-fresh-instance proof, and live ComfyUI smoke
 test remain release-level checks. This ADR therefore remains Proposed.
 
@@ -150,11 +156,11 @@ The Run must preserve the distinction between:
 - **editable Batch intent**, such as Random seed count, numeric Range definitions, ordered Image/Input alternatives, Parameter alternatives, and Linked Parameter Set rows; and
 - **concrete Job provenance**, such as the exact seed, exact resolved parameters, exact selected Assets, resolved prompt text, and exact Job order used for execution.
 
-This enables different future operations:
+This supports distinct operations:
 
-- `Load Run as Batch` restores editable historical intent;
-- `Recreate Result` restores one concrete Job as an editable starting point;
-- `Exact Rerun` replays concrete historical execution inputs into a new Run.
+- `Load Run as Batch` is implemented and restores editable historical intent with fresh Random seeds;
+- `Recreate Result` would restore one concrete Job as an editable starting point and remains deferred;
+- `Exact Rerun` would replay concrete historical execution inputs into a new Run and is deferred beyond v1.
 
 Historical Runs are never modified by these operations.
 
@@ -283,6 +289,9 @@ A fresh-instance Project import must work with empty browser storage.
 The importer must not require stale browser IDs to reconstruct historical Runs.
 
 ### 10. V1 freezes the compatibility policy
+
+The original timing below is superseded by the current persistence note at the top of this ADR.
+User-data protection and forward migrations already apply; only final release acceptance remains open.
 
 Before v1:
 
@@ -425,4 +434,8 @@ The corresponding stable backlog items are BC-018 through BC-021. BC-020 coordin
 broader Project-wide browser work, and BC-021 supplies the portability-specific part of BC-006's
 historical reuse work.
 
-Only after these phases pass should batchcraft declare the Project persistence contract v1 and begin treating valid v1 persisted data as compatibility-sensitive user data.
+BC-021's reconstruction implementation is complete. BC-025 now owns the remaining release acceptance
+from the sequence above; the release gate has not passed.
+
+Only after the release gate passes should batchcraft declare the Project persistence contract v1.
+Valid candidate-v1 persisted data is already compatibility-sensitive user data under the current policy.

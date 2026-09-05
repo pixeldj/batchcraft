@@ -12,6 +12,8 @@ reconstruction, conflict-aware detached resources, explicit historical import, a
 clean-instance Preview/new-Run proof are implemented. The complete realistic fixture,
 repeat-fresh-instance, and live execution proof remain release-level checks. This is still an acceptance
 contract, not a passed release gate.
+BC-025 tracks public v1 release hardening and completion of this gate. Exact Rerun is deferred
+beyond v1 and is not required by this editable-reconstruction scenario. ADR 0012 remains Proposed.
 
 ## Current BC-020 evidence
 
@@ -111,7 +113,8 @@ The import passes when:
 - Run number, immutable filesystem key, name, description, Project identity, and Batch identity match;
 - Project Asset metadata and bytes pass size and SHA-256 validation;
 - Run files pass path, identity, version, hash, and plan validation;
-- the pristine Run loads as created without manufacturing `execution.json`;
+- the pristine Run has unavailable execution in Project history, while direct Run/execution reads derive
+  `created` without manufacturing `execution.json`;
 - Run, Job, Result, parameter, Image Input, and Asset-use index rows can be rebuilt from filesystem data;
 - repeating import and reindex is idempotent;
 - no importer step rewrites immutable Run provenance;
@@ -124,10 +127,12 @@ Using only Instance B APIs and UI, verify:
 - all imported Runs are browsable from the Project without browser-held Run IDs;
 - Run Plan renders ordered Prompt snapshots, variables, Image Inputs, parameters, Linked Parameter Set
   rows, seeds, and Job order;
-- succeeded, cancelled, blocked or detached, and created outcomes render honestly;
+- succeeded, cancelled, and blocked or detached outcomes render honestly; absent execution is unavailable
+  in Project history, distinct from derived `created` state in direct detail;
 - Result galleries render all verified Result records;
 - Result Details shows the producing Run and Job plus complete frozen provenance;
-- verified Result bytes download with the recorded content type, size, and SHA-256;
+- verified Result bytes download with the recorded size and SHA-256; recorded MIME remains inspectable,
+  while HTTP MIME and disposition follow the passive-artifact serving policy in `API.md`;
 - missing current Prompt, Workflow, or Workflow Profile library rows do not trigger a not-found failure
   during inspection.
 
@@ -152,8 +157,15 @@ The reconstructed Batch passes when:
 - frozen Workflow and Workflow Profile content load as detached historical resources when library rows
   are absent;
 - detached resources are not inserted into mutable libraries automatically;
-- Preview recompiles to the historical concrete Job plan before any edit;
+- Preview preserves non-seed Job order and resolved choices before any edit; Fixed and Explicit seeds
+  match historical values, while Random intent generates fresh assignments;
 - saving remains blocked or explicit until detached resources are deliberately imported or relinked.
+
+Exact seed comparison applies to historical inspection above, not editable Random reconstruction.
+For Random Preview, verify one unique seed per final Job within `0..2^53-1` and the original repetition
+count. Fresh materialization does not guarantee that no value overlaps an earlier Run's seeds.
+The new Run must freeze the exact assignments from its own Preview. Preview has no historical Run/Job
+execution identities to preserve; a new Run allocates new ones.
 
 ## Relinking checks
 
@@ -172,7 +184,7 @@ the historical Run snapshot.
 
 From the reconstructed Batch:
 
-1. Preview the unedited reconstruction and compare its concrete plan with the historical Run.
+1. Preview the unedited reconstruction and compare using the seed-mode rules above.
 2. Make one deliberate edit that changes the new plan.
 3. Preview again.
 4. Create a new Run with new Run and Job identities and a new immutable output namespace.
@@ -215,7 +227,7 @@ Run IDs fails the gate.
 
 Current gate status: BC-020 import, reindex, inspection, idempotency, and degraded-content coverage is
 implemented. Completed BC-021 covers frozen-intent reconstruction, exact/missing/conflicting resource
-classification, explicit server-sourced historical import, exact pre-edit Preview, new Run creation, and
-original-Run hash preservation in focused automated tests. Complete realistic-fixture coverage,
+classification, explicit server-sourced historical import, pre-edit Preview under the seed-mode rules
+above, new Run creation, and original-Run hash preservation in focused automated tests. Complete realistic-fixture coverage,
 repeat-fresh Instance B proof, and the live ComfyUI smoke test remain incomplete. No final manual
 cross-instance acceptance is claimed.

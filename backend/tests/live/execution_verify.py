@@ -8,17 +8,20 @@ from typing import cast
 
 from batchcraft.comfyui import ComfyUIClient
 from batchcraft.domain import (
-    CompiledJob,
-    CompiledRunPlan,
+    BatchDefinition,
+    ImageBinding,
     ImageInputSlot,
     PromptVersion,
-    ResolvedImageInput,
+    SeedInput,
+    compile_batch,
 )
 from batchcraft.execution import ExecutionConfig, RunExecutionStatus, execute_run
 from batchcraft.files import (
     BatchIdentity,
     ProjectAssetStore,
     ProjectIdentity,
+    ProjectOwnerStore,
+    PublishedRun,
     RunFilesystemStore,
 )
 
@@ -56,17 +59,7 @@ def _load_json_object(path: Path) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-async def verify() -> dict[str, object]:
-    base_url = os.environ.get("COMFYUI_BASE_URL")
-    if not base_url:
-        raise RuntimeError("set COMFYUI_BASE_URL to opt into live execution verification")
-    image_path = _configured_path("COMFYUI_LIVE_IMAGE", DEFAULT_IMAGE)
-    workflow_path = _configured_path("COMFYUI_LIVE_WORKFLOW", DEFAULT_WORKFLOW)
-    output_root = _configured_path(
-        "BATCHCRAFT_LIVE_OUTPUT_ROOT", REPO_ROOT / "outputs" / "comfyui-execution"
-    )
-    http_timeout = float(os.environ.get("COMFYUI_LIVE_HTTP_TIMEOUT", "30"))
-    execution_timeout = float(os.environ.get("COMFYUI_LIVE_EXECUTION_TIMEOUT", "900"))
+def prepare_run(*, image_path: Path, workflow_path: Path, output_root: Path) -> PublishedRun:
     if not image_path.is_file() or not workflow_path.is_file():
         raise FileNotFoundError("live verification requires the configured image and workflow")
     workflow = _load_json_object(workflow_path)
@@ -83,33 +76,25 @@ async def verify() -> dict[str, object]:
         filesystem_key="live_batch",
         name="Two sequential Jobs",
     )
+    ProjectOwnerStore(projects_path).create(project)
     asset = ProjectAssetStore(projects_path / project.filesystem_key).import_file(image_path)
-    plan = CompiledRunPlan(
+    definition = BatchDefinition(
         prompt_versions=(
             PromptVersion(
                 id="live-prompt-version",
                 name="Live verification prompt",
-                text="live verification prompt",
+                text=(
+                    "Turn the reference into a polished character illustration. "
+                    f"[batchcraft sequential live verification {verification_id}]"
+                ),
             ),
         ),
         image_input_slots=(ImageInputSlot("reference", "Reference", "25", "image"),),
-        jobs=tuple(
-            CompiledJob(
-                ordinal=ordinal,
-                prompt_version_id="live-prompt-version",
-                resolved_prompt=(
-                    "Turn the reference into a polished character illustration. "
-                    f"[batchcraft sequential live verification {verification_id} Job {ordinal}]"
-                ),
-                resolved_variables=(),
-                resolved_image_inputs=(ResolvedImageInput("reference", asset.asset_id),),
-                seed=123456788 + ordinal,
-            )
-            for ordinal in (1, 2)
-        ),
-        warnings=(),
+        variable_bindings=(),
+        image_bindings=(ImageBinding("reference", (asset.asset_id,)),),
+        seeds=SeedInput.explicit((123456789, 123456790)),
     )
-    run = RunFilesystemStore(projects_path).create_run(
+    return RunFilesystemStore(projects_path).create_run(
         project=project,
         batch=batch,
         batch_snapshot={
@@ -129,20 +114,24 @@ async def verify() -> dict[str, object]:
             },
             "prompt_versions": [
                 {
-                    "id": "live-prompt-version",
+                    "id": prompt.id,
                     "prompt_id": None,
                     "version_number": None,
-                    "name": "Live verification prompt",
-                    "text": "live verification prompt",
+                    "name": prompt.name,
+                    "text": prompt.text,
                 }
+                for prompt in definition.prompt_versions
             ],
             "variable_bindings": [],
-            "image_bindings": [{"slot_key": "reference", "values": [asset.asset_id]}],
+            "image_bindings": [
+                {"slot_key": binding.slot_key, "values": list(binding.values)}
+                for binding in definition.image_bindings
+            ],
             "parameter_bindings": [],
             "linked_parameter_sets": [],
             "seed_intent": {
-                "mode": "explicit",
-                "values": [123456789, 123456790],
+                "mode": definition.seeds.mode.value,
+                "values": list(definition.seeds.values),
                 "random_seed_count": None,
             },
             "workflow_selection": {
@@ -158,11 +147,25 @@ async def verify() -> dict[str, object]:
                 "workflow_profile": WORKFLOW_PROFILE,
             },
         },
-        plan=plan,
+        plan=compile_batch(definition),
         image_assets={asset.asset_id: asset},
         workflow=workflow,
         workflow_profile=WORKFLOW_PROFILE,
     )
+
+
+async def verify() -> dict[str, object]:
+    base_url = os.environ.get("COMFYUI_BASE_URL")
+    if not base_url:
+        raise RuntimeError("set COMFYUI_BASE_URL to opt into live execution verification")
+    image_path = _configured_path("COMFYUI_LIVE_IMAGE", DEFAULT_IMAGE)
+    workflow_path = _configured_path("COMFYUI_LIVE_WORKFLOW", DEFAULT_WORKFLOW)
+    output_root = _configured_path(
+        "BATCHCRAFT_LIVE_OUTPUT_ROOT", REPO_ROOT / "outputs" / "comfyui-execution"
+    )
+    http_timeout = float(os.environ.get("COMFYUI_LIVE_HTTP_TIMEOUT", "30"))
+    execution_timeout = float(os.environ.get("COMFYUI_LIVE_EXECUTION_TIMEOUT", "900"))
+    run = prepare_run(image_path=image_path, workflow_path=workflow_path, output_root=output_root)
     immutable = {
         name: (run.path / name).read_bytes()
         for name in (

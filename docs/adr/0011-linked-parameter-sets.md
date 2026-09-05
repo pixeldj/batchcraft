@@ -6,6 +6,9 @@
 
 ## Context
 
+Current persistence versions and forward-only user-database policy supersede the historical baseline
+replacement below; see `../FILE_FORMAT.md` and `../DEVELOPMENT.md#persistence-policy`.
+
 Independent parameter alternatives are correct for ordinary sweeps but wrong for values that form named
 tuples. Width and Height presets illustrate the problem: three intended resolution rows currently become
 nine combinations. Zipping separate `values` arrays by position would hide the relationship, make row

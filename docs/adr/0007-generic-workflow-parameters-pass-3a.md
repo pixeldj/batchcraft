@@ -7,6 +7,9 @@
 
 ## Context
 
+Current persistence versions and forward-only user-database policy supersede the historical baseline
+replacement below; see `../FILE_FORMAT.md` and `../DEVELOPMENT.md#persistence-policy`.
+
 Workflow Profiles could expose prompts, seeds, output prefixes, and named Image Input slots, but normal
 scalar workflow inputs such as CFG, steps, denoise, duration, and LoRA settings remained fixed inside the
 base workflow. Parameter sweeps are a separate decision because they affect Job counts and ordering.

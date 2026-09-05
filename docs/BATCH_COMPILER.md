@@ -161,7 +161,13 @@ ordered typed scalar or `null` alternative after editable intent has been materi
 
 The UI should prominently display the resulting count.
 
-Large job counts should produce a warning threshold rather than an arbitrary hard limit initially.
+The application enforces a default safety budget of 10,000 materialized Jobs for new Preview and Run
+creation requests. Direct API startup can configure the positive `BATCHCRAFT_MAX_JOBS` value; isolated
+launchers use the default. This supersedes the earlier warning-only policy: eager Cartesian expansion
+must not attempt unbounded allocation. Counts above the budget fail before Job expansion and publication,
+including Random repetition. Saved Batch writes apply the budget to parameter combinations while
+allowing incomplete drafts; Preview checks the complete plan. Valid persisted Saved Batches and historical
+Runs remain readable regardless of the current budget. See ADR 0015.
 
 ## Preview
 
@@ -293,8 +299,9 @@ The compiler should be a pure or near-pure domain service wherever possible.
 
 Given the same immutable input snapshot, it should produce the same ordered Job plan.
 
-Exact rerun preserves generation inputs, base workflow, Workflow Profile mappings and named image
-slots, selected Reference Assets, variables, parameters, seeds, and ordering. It allocates new Run and
+Exact Rerun is deferred beyond v1. Its future contract preserves generation inputs, base workflow,
+Workflow Profile mappings and named image slots, selected Reference Assets, variables, parameters,
+seeds, and ordering. It allocates new Run and
 Job IDs, timestamps, ComfyUI prompt IDs, and output namespace.
 
 For multi-prompt Runs, generation inputs include the exact ordered PromptVersion snapshots and every

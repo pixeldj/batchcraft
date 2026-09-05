@@ -1,10 +1,12 @@
 import hashlib
 import json
 import os
-from collections.abc import Callable
+import stat
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import BinaryIO, cast
 
 _FILESYSTEM_KEY_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -43,6 +45,24 @@ def write_bytes(path: Path, content: bytes) -> None:
 
 def write_json(path: Path, value: object) -> None:
     write_bytes(path, canonical_json_bytes(value))
+
+
+@contextmanager
+def open_regular_file(path: Path) -> Iterator[BinaryIO]:
+    """Open a non-symlink regular file without waiting for a FIFO writer.
+
+    Callers remain responsible for validating parent directories and containment.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"not a regular file: {path}")
+        file = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with file:
+        yield file
 
 
 def read_json_object(path: Path) -> dict[str, object]:

@@ -15,12 +15,16 @@ Initial development target:
 
 - development host: macOS;
 - shell: normal macOS terminal environment;
-- Python tooling: `uv`;
-- Node tooling: Node.js `^20.19.0` or `>=22.12.0` with npm;
+- Python tooling: `uv` with Python 3.13 or newer;
+- Node tooling: Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` with npm for the locked dependencies;
 - generation host: ComfyUI on a Windows workstation reachable over the local LAN;
 - source control: Git.
 
 Do not make the production architecture depend on a particular terminal, IDE, or coding-agent harness.
+
+Recommend Node 24.15+ in the 24.x line. The current everyday installer requires a Git clone and existing
+destination parent directories, and creates a linked worktree rather than a standalone app bundle.
+See `LOCAL_INSTANCES.md` for setup and the isolated fake-backed development launcher.
 
 ## Coding Agents
 
@@ -50,6 +54,8 @@ Historical SQLite tables are non-authoritative projections and may be replaced a
 filesystem truth. Temporary file-backed test databases remain disposable. Browser working-session
 recovery is versioned convenience state; unsupported or malformed records may reset to an empty session.
 ADR 0012 remains Proposed until the full cross-instance release gate passes.
+BC-025 tracks public v1 release hardening and that still-unpassed gate in
+`V1_CROSS_INSTANCE_ACCEPTANCE.md`. Exact Rerun is deferred beyond v1.
 
 ## Repository Shape
 
@@ -70,6 +76,10 @@ batchcraft/
 Do not create directories merely to match this diagram. Add them when a real implementation requires them.
 
 ## Development Phases
+
+The phase notes below record the formats and policies in force at each milestone. Their old baseline
+replacement and reset instructions are historical, not permission to reset current user data. The
+persistence policy above and `FILE_FORMAT.md` supersede those instructions and version numbers.
 
 ### Phase 0: design foundation
 
@@ -435,9 +445,37 @@ uv run mypy
 
 pytest covers behavior, Ruff owns formatting and linting, and mypy checks the typed domain boundary. Add another tool only when it covers a distinct need.
 
+### Distribution notice checks
+
+From the checkout root, after installing locked development dependencies:
+
+```bash
+npm --prefix frontend run build
+uv run --offline --no-sync --directory backend python -m tools.check_distribution
+```
+
+The checker builds wheel and sdist artifacts in a temporary directory, verifies GPL-3.0-only metadata
+and the complete license bytes, and rejects unexpected package inputs. `backend/LICENSE` is a checked
+copy of the root license so the backend sdist can build independently; tests reject copy drift.
+
+Frontend builds emit `LICENSE`, `THIRD-PARTY-NOTICES.json`, and `BUILD-TOOL-NOTICES.json`. Vite's native
+license output covers the bundled React, React DOM, and Scheduler packages; separate complete installed
+tool notices cover injected Vite/Rolldown helpers. New bundled dependencies require review rather than
+silently shipping without notices. `npm --prefix frontend run check:distribution` checks actual output,
+negative notice cases, and a disposable source-map build. Normal builds do not emit source maps.
+
+CI runs the backend artifact tests and frontend distribution checks. These checks require a Git checkout,
+installed dependencies, and the root license; they are not application runtime requirements. They verify
+these artifacts' contents, not GPL corresponding-source delivery or a complete bundled Python/browser/OS
+distribution. Runtime Python dependencies are declared, not vendored into the wheel. Review notices and
+source obligations separately if packaging those components later.
+
 ### Local API
 
-From `backend/`, start the local API with explicit storage and ComfyUI configuration:
+These are manual API-only commands with a real ComfyUI client, not the fake-backed development
+launcher. They do not start Vite; execution requests can submit GPU work. For agent browser work use
+`./dev.command` as documented in `LOCAL_INSTANCES.md` instead.
+From `backend/`, start the API with explicit separate storage and ComfyUI configuration:
 
 ```bash
 BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
@@ -558,7 +596,7 @@ validation.
 From `frontend/`, install and run the development server:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -665,7 +703,8 @@ High-value unit-test areas include:
 
 A preview and an actual Run must be produced by the same underlying compiler behavior. Tests should protect this invariant.
 
-Tests for exact rerun must verify preserved generation inputs and ordering alongside newly allocated Run/Job IDs, timestamps, prompt IDs, and output namespace.
+When Exact Rerun is implemented after v1, its tests must verify preserved generation inputs and ordering
+alongside newly allocated Run/Job IDs, timestamps, prompt IDs, and output namespace.
 
 Tests for ComfyUI submission must treat ambiguous outcomes separately from definite rejection. Automatic retries must not turn an uncertain accepted submission into duplicate work.
 
@@ -683,9 +722,9 @@ When changing a durable format:
 6. state whether a compatibility path is explicitly required;
 7. document compatibility and migration behavior.
 
-During pre-release development, old Run readability is not the default requirement. Unsupported data
-must fail closed without automatic deletion or rewriting. Do not infer durable format versions solely
-from the absence of fields.
+Superseded prerelease formats remain unsupported, but valid candidate-v1 Project files are durable user
+data under the persistence policy above. Unsupported data must fail closed without automatic deletion
+or rewriting. Do not infer durable format versions solely from the absence of fields.
 
 ## Architecture Changes
 

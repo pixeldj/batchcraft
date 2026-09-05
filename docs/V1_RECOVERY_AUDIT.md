@@ -9,6 +9,9 @@ The audit is descriptive. BC-019 closed the record-level format gaps, and BC-020
 import, historical reindex, and Project history inspection. BC-021 completed editable reconstruction and
 detached-resource relinking/import; final cross-instance release validation remains open.
 ADR 0012 therefore remains Proposed.
+BC-025 tracks public v1 release hardening and the still-unpassed gate in
+`V1_CROSS_INSTANCE_ACCEPTANCE.md`. Editable reconstruction uses fresh Random seeds under ADR 0013;
+historical inspection preserves exact frozen seeds. Exact Rerun is deferred beyond v1.
 
 ## Audit conclusion
 
@@ -136,9 +139,9 @@ Batch snapshot v1 preserves:
 - fixed, explicit, or Random seed intent;
 - frozen Workflow and Workflow Profile content plus optional library identity metadata.
 
-The loader materializes this intent and requires it to reproduce the exact immutable Job plan. This is
-strong evidence that a modern Run can support `Load Run as Batch` without reading its original mutable
-library.
+The historical loader validates this intent against the exact immutable Job plan using the manifest's
+concrete seeds. Editable `Load Run as Batch` instead restores Random count intent and requests fresh
+seeds on Preview. Neither operation requires the original mutable library.
 
 ### Preserved concrete provenance
 
@@ -214,7 +217,8 @@ BC-020 classifies discovered content instead of silently trusting it:
 | V1-001 Filesystem Recovery Audit & Contract | BC-018 | Audit current records, settle the proposed contract, and define the release test. |
 | V1-002 V1 Format Consolidation | BC-019 | Close record-level gaps, assign explicit format identities, reset v1 versions, add producer metadata, and add fixtures. |
 | V1-003 Project Import & Historical Reindex | BC-020 | Validate a copied Project, discover healthy and degraded Runs, and rebuild disposable historical indexes. |
-| V1-004 Load Run as Batch & Cross-Instance Acceptance | BC-021 | Reconstruct editable intent with detached resources and pass the clean-instance release test. |
+| V1-004 Load Run as Batch | BC-021 | Reconstruct editable intent with detached resources and verify focused automated clean-instance behavior. |
+| Public v1 release hardening and acceptance | BC-025 | Complete the realistic cross-instance fixture, repeat-fresh-instance proof, and separately authorized live execution gate. |
 
 BC-020 is the portability prerequisite for the broader BC-007 browser. BC-021 implements the
 portability-specific `Load Run as Batch` slice already described by BC-006. It does not include

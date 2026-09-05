@@ -18,6 +18,14 @@ class Settings:
     server_port: int
     data_root: Path = Path("data")
     database_path: Path = Path("data/batchcraft.sqlite3")
+    max_request_bytes: int = 64 * 1024 * 1024
+    max_jobs: int = 10_000
+
+    def __post_init__(self) -> None:
+        if type(self.max_request_bytes) is not int or self.max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be a positive integer")
+        if type(self.max_jobs) is not int or self.max_jobs <= 0:
+            raise ValueError("max_jobs must be a positive integer")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -34,6 +42,8 @@ class Settings:
             frontend_origin=os.environ.get("BATCHCRAFT_FRONTEND_ORIGIN", "http://localhost:5173"),
             server_host=os.environ.get("BATCHCRAFT_SERVER_HOST", "127.0.0.1"),
             server_port=_port("BATCHCRAFT_SERVER_PORT", 8000),
+            max_request_bytes=int(os.environ.get("BATCHCRAFT_MAX_REQUEST_BYTES", 64 * 1024 * 1024)),
+            max_jobs=_positive_integer("BATCHCRAFT_MAX_JOBS", 10_000),
             data_root=data_root,
             database_path=Path(
                 os.environ.get("BATCHCRAFT_DATABASE_PATH", str(data_root / "batchcraft.sqlite3"))
@@ -47,6 +57,16 @@ class Settings:
             history_timeout_seconds=self.history_timeout_seconds,
             history_poll_interval_seconds=self.history_poll_interval_seconds,
         )
+
+
+def _positive_integer(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
 def _positive_float(name: str, default: float) -> float:

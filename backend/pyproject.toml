@@ -2,6 +2,8 @@
 name = "batchcraft"
 version = "0.1.0"
 description = "Local-first experiment and batch orchestration for ComfyUI"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",

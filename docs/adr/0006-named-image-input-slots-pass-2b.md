@@ -7,6 +7,9 @@
 
 ## Context
 
+For current persistence versions and user-data policy, use `../FILE_FORMAT.md` and
+`../DEVELOPMENT.md#persistence-policy`, not the historical baseline references below.
+
 Pass 2A established ordered Profile-defined Image Input slots, stable slot keys, Base workflow as
 `null`, scalar-resolved Job inputs, and durable binding arrays reserved for later alternatives. It did
 not define how multiple values across slots combine.

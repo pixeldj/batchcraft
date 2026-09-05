@@ -58,7 +58,7 @@ def test_malformed_websocket_event_fails_actionably() -> None:
 def test_clean_websocket_closure_is_an_observation_error() -> None:
     async def scenario() -> None:
         stream = ExecutionEventStream(cast(ClientConnection, _ClosedConnection()))
-        with pytest.raises(ExecutionObservationError, match="closed.*'owned'"):
+        with pytest.raises(ExecutionObservationError, match="closed while observing prompt"):
             _ = [event async for event in stream.events("owned")]
 
     asyncio.run(scenario())
