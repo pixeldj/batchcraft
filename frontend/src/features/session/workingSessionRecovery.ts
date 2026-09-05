@@ -35,6 +35,7 @@ interface WorkingSessionRecoveryV4 {
   updated_at: string;
   draft: StoredBatchForm;
   current_run_id: string | null;
+  // Deprecated v4 wire field: validate old membership, but never restore or fetch its Runs.
   session_run_ids: string[];
   selected_project_id: string | null;
   selected_saved_batch_id: string | null;
@@ -45,7 +46,6 @@ interface WorkingSessionRecoveryV4 {
 export interface RestoredWorkingSession {
   form: BatchFormState;
   currentRunId: string | null;
-  sessionRunIds: string[];
   selectedProjectId: string | null;
   selectedSavedBatchId: string | null;
   savedBatchBaseRevision: number | null;
@@ -79,7 +79,6 @@ export function loadWorkingSessionRecovery(
 export function saveWorkingSessionRecovery(
   form: BatchFormState,
   currentRunId: string | null,
-  sessionRunIds: string[] = [],
   selectedProjectId: string | null = null,
   storage: Storage | null = browserLocalStorage(),
   selectedSavedBatchId: string | null = null,
@@ -89,16 +88,12 @@ export function saveWorkingSessionRecovery(
   if (!storage) {
     return;
   }
-  const normalizedRunIds = uniqueStrings(sessionRunIds);
-  if (currentRunId && !normalizedRunIds.includes(currentRunId)) {
-    normalizedRunIds.push(currentRunId);
-  }
   const envelope: WorkingSessionRecoveryV4 = {
     format_version: WORKING_SESSION_RECOVERY_VERSION,
     updated_at: new Date().toISOString(),
     draft: dehydrateForm(form),
     current_run_id: currentRunId,
-    session_run_ids: normalizedRunIds,
+    session_run_ids: currentRunId === null ? [] : [currentRunId],
     selected_project_id: selectedProjectId,
     selected_saved_batch_id: selectedSavedBatchId,
     saved_batch_base_revision: savedBatchBaseRevision,
@@ -221,7 +216,6 @@ function defaultSession(): RestoredWorkingSession {
   return {
     form: initialBatchForm(),
     currentRunId: null,
-    sessionRunIds: [],
     selectedProjectId: null,
     selectedSavedBatchId: null,
     savedBatchBaseRevision: null,
@@ -236,7 +230,6 @@ function restoredSession(value: WorkingSessionRecoveryV4): RestoredWorkingSessio
   return {
     form: hydrateForm(value.draft),
     currentRunId: value.current_run_id,
-    sessionRunIds: uniqueStrings(value.session_run_ids),
     selectedProjectId: value.selected_project_id,
     selectedSavedBatchId: value.selected_saved_batch_id,
     savedBatchBaseRevision: value.saved_batch_base_revision,
@@ -554,10 +547,6 @@ function isNullableInteger(value: unknown): value is number | null {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

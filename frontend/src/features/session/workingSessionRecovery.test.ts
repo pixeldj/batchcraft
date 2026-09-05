@@ -38,7 +38,6 @@ describe("durable browser working-session recovery", () => {
     saveWorkingSession(
       form,
       "run-42",
-      ["run-40", "run-42", "run-40"],
       "selected-project",
       storage,
       "saved-batch-1",
@@ -55,7 +54,7 @@ describe("durable browser working-session recovery", () => {
     expect(stored.updated_at).toEqual(expect.any(String));
     expect(stored).toMatchObject({
       current_run_id: "run-42",
-      session_run_ids: ["run-40", "run-42"],
+      session_run_ids: ["run-42"],
       selected_project_id: "selected-project",
       selected_saved_batch_id: "saved-batch-1",
       saved_batch_base_revision: 7,
@@ -99,7 +98,6 @@ describe("durable browser working-session recovery", () => {
     expect(restored.form.historicalImportCopyResolutions).toEqual(form.historicalImportCopyResolutions);
     expect(restored).toMatchObject({
       currentRunId: "run-42",
-      sessionRunIds: ["run-40", "run-42"],
       selectedProjectId: "selected-project",
       selectedSavedBatchId: "saved-batch-1",
       savedBatchBaseRevision: 7,
@@ -108,11 +106,64 @@ describe("durable browser working-session recovery", () => {
       profileSnapshotRecoveryRequired: true,
       draftRestored: true,
     });
+    expect(restored).not.toHaveProperty("sessionRunIds");
+  });
+
+  it.each(["run-42", null])("loads legacy v4 membership and trims it on save without resetting the draft (current Run: %s)", (currentRunId) => {
+    const storage = new MemoryStorage();
+    const form = populatedForm();
+    saveWorkingSession(form, currentRunId, "selected-project", storage, "saved-batch-1", 7, "source-run-9");
+    const legacy = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<string, unknown>;
+    legacy.session_run_ids = ["run-40", "run-41", "run-42"];
+    const legacyJson = JSON.stringify(legacy);
+    storage.setItem(WORKING_SESSION_KEY, legacyJson);
+
+    const restored = loadWorkingSession(storage);
+
+    expect(WORKING_SESSION_KEY).toBe("batchcraft.working-session-recovery.v4");
+    expect(restored).toMatchObject({
+      form: {
+        ...form,
+        workflowJson: "{}",
+        workflowProfileJson: "{}",
+        prompts: form.prompts.map((prompt) => ({ ...prompt, key: expect.any(Number), placeholders: [] })),
+        variableBindings: form.variableBindings.map((binding) => ({ ...binding, key: expect.any(Number) })),
+      },
+      currentRunId,
+      selectedProjectId: "selected-project",
+      selectedSavedBatchId: "saved-batch-1",
+      savedBatchBaseRevision: 7,
+      sourceRunId: "source-run-9",
+      workflowSnapshotRecoveryRequired: true,
+      profileSnapshotRecoveryRequired: true,
+      draftRestored: true,
+    });
+    expect(restored).not.toHaveProperty("sessionRunIds");
+    expect(storage.getItem(WORKING_SESSION_KEY)).toBe(legacyJson);
+
+    saveWorkingSession(
+      restored.form,
+      restored.currentRunId,
+      restored.selectedProjectId,
+      storage,
+      restored.selectedSavedBatchId,
+      restored.savedBatchBaseRevision,
+      restored.sourceRunId,
+    );
+
+    expect(JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}")).toEqual({
+      ...legacy,
+      updated_at: expect.any(String),
+      session_run_ids: currentRunId === null ? [] : [currentRunId],
+    });
+    const reloaded = loadWorkingSession(storage);
+    expect(reloaded.draftRestored).toBe(true);
+    expect(reloaded).not.toHaveProperty("sessionRunIds");
   });
 
   it("stores no Preview, execution, Result, or artifact response fields", () => {
     const storage = new MemoryStorage();
-    saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
+    saveWorkingSession(populatedForm(), "run-42", "selected-project", storage);
 
     const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as unknown;
     const keys = collectKeys(stored);
@@ -149,7 +200,7 @@ describe("durable browser working-session recovery", () => {
     form.workflowJson = '{"detached":"workflow"}';
     form.workflowProfileJson = '{"mappings":{},"image_inputs":[],"parameters":[]}';
 
-    saveWorkingSession(form, null, [], "selected-project", storage);
+    saveWorkingSession(form, null, "selected-project", storage);
 
     const restored = loadWorkingSession(storage);
     expect(restored.form.workflowJson).toBe(form.workflowJson);
@@ -172,7 +223,7 @@ describe("durable browser working-session recovery", () => {
       copiedVersionId: "copied-workflow-version",
     };
 
-    saveWorkingSession(form, null, [], "selected-project", storage, null, null, "source-run");
+    saveWorkingSession(form, null, "selected-project", storage, null, null, "source-run");
 
     const stored = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as {
       draft: { workflowJson: string | null; workflowProfileJson: string | null };
@@ -195,7 +246,7 @@ describe("durable browser working-session recovery", () => {
     form.workflowProfileVersionId = null;
     form.workflowProfileJson = "{}";
 
-    saveWorkingSession(form, null, [], "project-1", storage);
+    saveWorkingSession(form, null, "project-1", storage);
 
     const restored = loadWorkingSession(storage);
     expect(restored.draftRestored).toBe(true);
@@ -213,7 +264,7 @@ describe("durable browser working-session recovery", () => {
       workflowProfileVersion: { historicalVersionId: "historical-profile", copiedVersionId: "no-longer-selected" },
     };
 
-    saveWorkingSession(form, null, [], "selected-project", storage, null, null, "source-run");
+    saveWorkingSession(form, null, "selected-project", storage, null, null, "source-run");
 
     const restored = loadWorkingSession(storage);
     expect(restored.form.historicalImportCopyResolutions).toEqual({
@@ -233,7 +284,7 @@ describe("durable browser working-session recovery", () => {
     form.prompts = [];
     form.variableBindings = [];
 
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
 
     const restored = loadWorkingSession(storage);
     expect(restored.form.prompts).toEqual([]);
@@ -254,7 +305,7 @@ describe("durable browser working-session recovery", () => {
       parameterBinding("steps", "integer", [{ kind: "base" }, { kind: "override", value: "30" }, { kind: "override", value: "0" }]),
     ];
 
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
 
     expect(loadWorkingSession(storage).form.parameterBindings).toEqual([
       parameterBinding("unknown", "string", [{ kind: "override", value: "remove me" }]),
@@ -272,7 +323,7 @@ describe("durable browser working-session recovery", () => {
       range: { start: "30.00", end: "0.00", step: "-2.50", includeBase: true },
     };
 
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
 
     expect(loadWorkingSession(storage).form.parameterBindings[0]).toEqual(form.parameterBindings[0]);
   });
@@ -286,7 +337,7 @@ describe("durable browser working-session recovery", () => {
       members: [{ parameterKey: "steps", valueType: "integer" }, { parameterKey: "enabled", valueType: "boolean" }],
       rows: [{ rowLabel: "Draft", values: { steps: { kind: "override", value: "30" }, enabled: { kind: "base" } } }],
     }];
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
     expect(loadWorkingSession(storage).form.linkedParameterSets).toEqual(form.linkedParameterSets);
 
     const oldStorage = new MemoryStorage();
@@ -314,7 +365,7 @@ describe("durable browser working-session recovery", () => {
       ],
       rows: [{ rowLabel: "Draft", values: { steps: { kind: "base" }, enabled: { kind: "base" } } }],
     }];
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as {
       draft: { linkedParameterSets: Array<{ setKey: string; members: Array<{ parameterKey: string }> }> };
     };
@@ -322,7 +373,7 @@ describe("durable browser working-session recovery", () => {
     storage.setItem(WORKING_SESSION_KEY, JSON.stringify(envelope));
     expectFreshSession(loadWorkingSession(storage));
 
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
     const memberEnvelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as typeof envelope;
     memberEnvelope.draft.linkedParameterSets[0].members[0].parameterKey = invalidKey;
     storage.setItem(WORKING_SESSION_KEY, JSON.stringify(memberEnvelope));
@@ -337,7 +388,7 @@ describe("durable browser working-session recovery", () => {
       { ...newVariableBinding(), placeholder: "style", values: [""] },
     ];
 
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
 
     expect(loadWorkingSession(storage).form.variableBindings.map((binding) => binding.values))
       .toEqual([[], [""]]);
@@ -349,7 +400,7 @@ describe("durable browser working-session recovery", () => {
     form.variableBindings[0].placeholder = " subject ";
     form.variableBindings[0].values = [" first ", "first", "   "];
 
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
 
     expect(loadWorkingSession(storage).form.variableBindings[0]).toMatchObject({
       placeholder: " subject ",
@@ -364,7 +415,7 @@ describe("durable browser working-session recovery", () => {
     form.variableBindings.push({ ...newVariableBinding(), placeholder: "style" });
     const storedPromptKeys = form.prompts.map((prompt) => prompt.key);
     const storedBindingKeys = form.variableBindings.map((binding) => binding.key);
-    saveWorkingSession(form, null, [], null, storage);
+    saveWorkingSession(form, null, null, storage);
 
     const restored = loadWorkingSession(storage).form;
     const restoredPromptKeys = restored.prompts.map((prompt) => prompt.key);
@@ -416,6 +467,21 @@ describe("durable browser working-session recovery", () => {
     ["duplicate session Run IDs", (envelope: Record<string, unknown>) => {
       envelope.session_run_ids = ["run-42", "run-42"];
     }],
+    ["missing session Run IDs", (envelope: Record<string, unknown>) => {
+      delete envelope.session_run_ids;
+    }],
+    ["non-array session Run IDs", (envelope: Record<string, unknown>) => {
+      envelope.session_run_ids = "run-42";
+    }],
+    ["non-string session Run ID", (envelope: Record<string, unknown>) => {
+      envelope.session_run_ids = ["run-42", 40];
+    }],
+    ["empty session Run ID", (envelope: Record<string, unknown>) => {
+      envelope.session_run_ids = ["run-42", ""];
+    }],
+    ["current Run absent from session membership", (envelope: Record<string, unknown>) => {
+      envelope.session_run_ids = ["run-40", "run-41"];
+    }],
     ["unknown envelope field", (envelope: Record<string, unknown>) => {
       envelope.legacy = true;
     }],
@@ -448,7 +514,6 @@ describe("durable browser working-session recovery", () => {
     saveWorkingSession(
       populatedForm(),
       "run-42",
-      ["run-42"],
       "selected-project",
       storage,
       "saved-batch-1",
@@ -466,7 +531,7 @@ describe("durable browser working-session recovery", () => {
 
   it.each([0, 1, 2, 3, 13, 99])("resets an unsupported recovery version %i", (version) => {
     const storage = new MemoryStorage();
-    saveWorkingSession(populatedForm(), "run-42", ["run-42"], "selected-project", storage);
+    saveWorkingSession(populatedForm(), "run-42", "selected-project", storage);
     const envelope = JSON.parse(storage.getItem(WORKING_SESSION_KEY) ?? "{}") as Record<
       string,
       unknown
@@ -491,7 +556,7 @@ describe("durable browser working-session recovery", () => {
     const unavailable = new ThrowingStorage();
 
     expect(() =>
-      saveWorkingSession(populatedForm(), "run-42", ["run-42"], null, unavailable),
+      saveWorkingSession(populatedForm(), "run-42", null, unavailable),
     ).not.toThrow();
     expectFreshSession(loadWorkingSession(unavailable));
   });
@@ -562,7 +627,7 @@ function parameterBinding(
 function expectFreshSession(restored: ReturnType<typeof loadWorkingSession>): void {
   expect(restored.draftRestored).toBe(false);
   expect(restored.currentRunId).toBeNull();
-  expect(restored.sessionRunIds).toEqual([]);
+  expect(restored).not.toHaveProperty("sessionRunIds");
   expect(restored.selectedProjectId).toBeNull();
   expect(restored.selectedSavedBatchId).toBeNull();
   expect(restored.savedBatchBaseRevision).toBeNull();

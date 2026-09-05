@@ -106,10 +106,15 @@ describe("ProjectHistory", () => {
     expect(within(plan).getAllByText("Base workflow · 20").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
+    const card = runRegion.querySelector(".result-card");
+    expect(card).not.toHaveTextContent(/Job|verified/i);
     fireEvent.click(within(runRegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
     const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(within(details).getByText("Base workflow · frozen-reference.png")).toBeInTheDocument();
     expect(within(details).getByText("Base workflow · 20")).toBeInTheDocument();
+    fireEvent.click(within(details).getByText("Technical details"));
+    expect(within(details).getByText("Job ordinal").nextElementSibling).toHaveTextContent("1");
+    expect(within(details).getByText("Integrity").nextElementSibling).toHaveTextContent("verified");
     expect(screen.getByText(/A studio portrait of cat\./)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();

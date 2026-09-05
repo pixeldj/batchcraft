@@ -445,7 +445,8 @@ An execution request is accepted only when `execution.json` does not yet exist. 
 A refreshed browser discovers the Run already executing in the same backend process, reconciles it with
 any persisted browser pointer, reads its Run and execution state, and resumes polling without calling the
 execution-start endpoint. Process-local discovery takes monitor precedence over a different persisted
-pointer, while draft identity controls only working-session gallery association. Result loading is
+pointer, independently of editable draft identity. The retired Batch Results session gallery is not part
+of monitor reconnection, and the browser no longer prefetches historical Runs from session IDs. Result loading is
 independent and cannot delay execution-state hydration. Definitive missing or invalid Run data may clear
 a pointer; draft mismatch and transient Project or network failures retain it for bounded retry and later
 revalidation.
@@ -463,6 +464,12 @@ unavailable bytes. The frontend renders only verified artifacts and shows an una
 missing or corrupt Results. File retrieval accepts integer Job and artifact ordinals, resolves only a
 matching `ResultRecord`, and validates the selected regular file's path, size, and SHA-256 before returning
 it. Arbitrary filesystem paths are never accepted.
+
+The scoped frontend cleanup retains current Results and Project History and removes Batch Results.
+Thumbnail cards omit visible `Verified` badges and `Job` captions; the info popup, accessible
+descriptions, lightbox labels, and unavailable-artifact placeholders remain. This presentation change
+does not remove `integrity_status`, Job/artifact ordinals, or provenance from Result DTOs, and does not
+weaken listing or download validation. Cancellation and historical detail endpoints are unchanged.
 
 ## Errors
 

@@ -469,6 +469,13 @@ The API and UI still return the complete history without pagination, expose no a
 and provide none of BC-007's parameter, seed, Prompt, Workflow/Profile, Batch, status/date, Image Input,
 Asset, or future starred-result filters.
 
+Results UI cleanup is complete: thumbnail Job/Verified labels moved to detail inspection, and the
+Batch Results gallery, accumulated state, and restoration requests were removed. Current Results,
+Project History, integrity checks, cancellation, and current-Run recovery remain. Existing valid v4
+drafts are preserved while obsolete gallery membership is ignored. Verification passed with 384
+frontend tests, eight desktop/mobile browser tests across Vite and built same-origin modes, lint,
+typecheck, and production build. BC-007 remains Planned for pagination, sorting, and filters.
+
 ### BC-008: Video and generic file input slots
 
 | Field | Value |
@@ -820,7 +827,8 @@ Additional requirements:
 - do not derive the Run name automatically from every generation setting;
 - keep detailed generation settings in existing provenance rather than encoding them into filenames;
 - use the human-readable Run name throughout normal UI where useful, while keeping the Run number visible but secondary;
-- update Run Plan, Result Details, Batch Results, and future Project-wide Run history to display the Run name;
+- display the Run name in Run Plan, Result Details, and Project History; the separate
+  Batch Results session gallery is retired by the scoped Results cleanup;
 - preserve exact Run/Job/Result provenance regardless of the display name.
 
 Recommended filesystem layout:

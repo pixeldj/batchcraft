@@ -22,12 +22,6 @@ interface Props {
   onStatusChange(status: RunStatus | null): void;
   onCreatedUnavailableChange(runId: string, unavailable: boolean): void;
   onExecutionControlUnavailableChange(runId: string, unavailable: boolean): void;
-  onResultsChange(
-    runId: string,
-    execution: ExecutionResponse | null,
-    results: ResultResponse[],
-    error: string | null,
-  ): void;
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
   batchDiverged: boolean;
@@ -43,7 +37,6 @@ export function RunWorkspace({
   onStatusChange,
   onCreatedUnavailableChange,
   onExecutionControlUnavailableChange,
-  onResultsChange,
   getCachedRun,
   loadRun,
   batchDiverged,
@@ -57,17 +50,6 @@ export function RunWorkspace({
     initialResultsError,
     onStatusChange,
   );
-
-  useEffect(() => {
-    if (run) {
-      onResultsChange(
-        run.run_id,
-        execution.execution,
-        execution.results,
-        execution.resultsError,
-      );
-    }
-  }, [execution.execution, execution.results, execution.resultsError, onResultsChange, run]);
 
   useEffect(() => {
     if (run) {

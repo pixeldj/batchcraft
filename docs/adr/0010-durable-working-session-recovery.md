@@ -16,6 +16,9 @@ owners.
 
 ## Decision
 
+The original v1 decision below is historical. Later recovery revisions and the amendments below govern
+current behavior; the Results cleanup amendment specifically retires its session-gallery requirements.
+
 The frontend writes one strict record under `batchcraft.working-session-recovery.v1` in `localStorage`:
 
 ```json
@@ -88,3 +91,36 @@ Run without local task ownership remains visible as control unavailable.
 This addendum supersedes the earlier statement that no backend API change was required. Active discovery
 is process-local task-registry visibility only. It is not durable scheduler state, remote ComfyUI
 authority, or backend executor restart recovery, all of which remain outside this decision.
+
+## 2026-09-05 Results cleanup amendment
+
+Retire the separate Batch Results working-session gallery. Keep current Results and Project History.
+Remove session-gallery runtime state, public runtime `sessionRunIds`, and startup historical-ID prefetch.
+On-demand historical Run Plan/Result Details and source-Run reads for detached-resource recovery remain.
+This supersedes the earlier gallery membership, restoration, matching, and displaced-pointer retention
+requirements only; it does not remove draft or observed-Run recovery.
+
+Retain `batchcraft.working-session-recovery.v4` and `format_version: 4`. Existing valid v4 records are a
+concrete compatibility requirement, so keep the old strict reader rather than dropping the wire field
+or resetting those records:
+
+- `session_run_ids` remains required and must be an array of unique non-empty strings.
+- A non-null `current_run_id` must still occur in that array. Existing valid arrays may contain other IDs.
+- Validate the deprecated array but do not restore it into runtime state or use it to fetch Runs/Results.
+- New writes store `session_run_ids: []` when `current_run_id` is null, otherwise `[current_run_id]`.
+- All other strict v4 validation remains in force; malformed or unsupported records still fail closed.
+
+Preserve editable `draft`, `current_run_id`, historical `source_run_id` and explicit import resolutions,
+selected Project, selected Saved Batch, and Saved Batch base revision. Linked snapshot reconstruction,
+detached draft content, invalid Preview on cold load, and best-effort writes are unchanged.
+
+Current/active Run restoration remains independent of draft identity. Process-local active discovery
+takes monitor precedence over a different stored current pointer without retaining the displaced Run in
+a session gallery. Project History remains available for older Runs. Draft mismatch, transient startup
+failure, or an empty active-task discovery response must not erase a recoverable pointer. Preserve
+Run/execution hydration before Results, bounded transient retry, stale-response protection, polling,
+and cancellation behavior. This remains browser reconnection, not backend executor restart recovery.
+
+Thumbnail cards omit visible `Verified` badges and `Job` captions. The info popup, accessible
+descriptions, lightbox labels, integrity validation, and unavailable-artifact placeholders remain.
+No SQLite schema, filesystem format, or backend API DTO changes are required.
