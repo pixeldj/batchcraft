@@ -167,7 +167,9 @@ Completed.
 Production code under `frontend/` provides one screen for ComfyUI status, ephemeral Batch editing,
 Project image import and backend-compiled Job preview,
 durable Run creation, repeated terminal Run creation, execution start and polling, non-cropping
-Result rendering, and a tab-scoped Batch Results gallery across session Runs. The browser uses only
+Result rendering, and originally a tab-scoped Batch Results gallery across session Runs. The scoped
+Results cleanup retires that gallery in favor of current Results and Project History; see the current
+Frontend Conventions below. The browser uses only
 the FastAPI endpoints documented in `docs/API.md`.
 
 Batch editing includes an ordered repeatable list of immutable PromptVersion snapshots. The current
@@ -333,6 +335,10 @@ Running Runs enter the normal polling hook without another execution start. Miss
 Run pointers are pruned independently. This phase adds no backend endpoint, SQLite migration, Run index,
 Project-wide history, or executor restart recovery.
 
+This phase describes the original recovery implementation. The Results cleanup amendment to ADR 0010
+retires session gallery membership while retaining the strict v4 reader and independent current-Run
+monitor recovery. It supersedes the gallery restoration and identity-pruning behavior described here.
+
 ### Phase 2.10: Stop after current Job
 
 The backend/core portion of BC-003A is implemented. SQLite stores idempotent `after_current_job`
@@ -468,20 +474,36 @@ execution transitions, and Result provenance on the backend.
 Browser working-session recovery is a pointer/cache, not runtime authority. Store the strict recovery
 v4 record under `batchcraft.working-session-recovery.v4` in localStorage. It may contain semantic form
 values, selected Project and Saved Batch pointers, a historical source Run ID for detached-resource
-imports, explicit validated historical-to-copy resolution IDs, current Run ID, and ordered unique Run
-IDs for the current Batch working session. It must not
+imports, explicit validated historical-to-copy resolution IDs, and current Run ID. Retain the v4 key and
+schema and strictly validate the deprecated required wire field `session_run_ids` in existing records:
+it must be an array of unique non-empty strings and include `current_run_id` when non-null. Do not restore
+or use those IDs, expose public runtime `sessionRunIds`, or prefetch historical Runs from them. New
+writes store only `[]` when `current_run_id` is null or `[current_run_id]` otherwise. The record must not
 contain Preview, execution, Job, Result, frozen Run response, or materialized Random seed data. Detached
 Workflow/Profile JSON remains in the record even when historical version IDs exist. Reconnect a saved
 Project only by exact Project ID and filesystem-key match. Keep Project-scoped Prompt and Asset requests
-blank until that verification succeeds. Treat editable draft identity, observed Run identity, and
-Batch-scoped gallery membership independently. Discover the process-local active Run on startup and
-foreground re-entry; it takes monitor precedence over a different persisted pointer. A frozen Project or
-Batch mismatch prevents gallery association but not Run monitoring or pointer retention. Hydrate Run and
-execution state before Results, retry only transient startup failures with bounded backoff, and clear a
+blank until that verification succeeds. Treat editable draft identity and observed Run identity
+independently. Discover the process-local active Run on startup and foreground re-entry; it takes monitor
+precedence over a different persisted pointer. A frozen Project or Batch mismatch does not prevent Run
+monitoring or pointer retention. Hydrate Run and execution state before Results, retry only transient
+startup failures with bounded backoff, and clear a
 pointer only after definitive missing or invalid Run evidence. Require a fresh compiler Preview after every cold load. Switching
 Project starts a fresh Batch identity and clears Project-scoped Prompt, Workflow/Profile, Image Input,
-Parameter, Run, and gallery state. Changing Batch identity resets the gallery; semantic edits within the
-same Batch retain it and invalidate Preview. Presentation-only collapse changes do neither.
+and Parameter selections under the existing navigation guards. Draft reconciliation must not erase a
+recoverable observed Run. Semantic edits invalidate Preview; presentation-only collapse changes do not.
+
+The scoped Results cleanup removes Batch Results, all session-gallery runtime state, and its historical
+prefetch effects. Keep current Results and Project History, including on-demand frozen Run detail and
+source-Run reads needed for detached-resource recovery. Thumbnail cards omit visible `Verified` badges
+and `Job` captions; keep the info popup, accessible descriptions, lightbox labels, integrity validation,
+unavailable-artifact placeholders, and image-load failure handling. Cancellation behavior is unchanged.
+This cleanup changes no SQLite schema, filesystem format, or backend API DTO.
+
+Regression checks cover absence of Batch Results and
+visible card labels, retained detail/lightbox accessibility and unavailable placeholders, strict reading
+of older valid v4 records without gallery fetches, malformed-record rejection, minimal new wire writes,
+independent current/active Run restoration, cancellation, and historical detail. Run the frontend checks
+below and fake-backed browser verification from `LOCAL_INSTANCES.md`.
 
 Execution responses distinguish durable status from the ephemeral active-task ownership of the current
 API process. A restored `running` Run without an active task remains historically unchanged, but the UI

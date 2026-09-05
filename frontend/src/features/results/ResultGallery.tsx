@@ -16,8 +16,8 @@ interface Props {
 }
 
 /**
- * Shared image-first Result gallery used by both the current-Run Results
- * panel and the accumulated Batch Results gallery. Deterministic ordering is
+ * Shared image-first Result gallery used by the current-Run Results
+ * panel and Project History. Deterministic ordering is
  * Job ordinal, then artifact ordinal. Result Details joins each card back to
  * its owning frozen Run by Run ID and Job ordinal.
  */
@@ -90,8 +90,6 @@ export function ResultGallery({
         {ordered.map((result) => {
           const key = itemKey(result);
           const itemIndex = imageItems.findIndex((item) => item.key === key);
-          const multi =
-            ordered.filter((other) => other.job_ordinal === result.job_ordinal).length > 1;
           const failed = failedKeys.has(key);
           return (
             <article className="result-card" key={key}>
@@ -139,10 +137,6 @@ export function ResultGallery({
                   <strong>Open artifact</strong>
                 </a>
               )}
-              <span className="result-label">{itemLabel(result, multi)}</span>
-              <span className={`result-integrity-badge ${result.integrity_status}`}>
-                {result.integrity_status}
-              </span>
               {runId ? (
                 <button
                   className="result-info-button"

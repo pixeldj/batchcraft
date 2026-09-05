@@ -130,13 +130,15 @@ The first application slice follows this split. `api/` owns HTTP DTOs, routes, s
 
 Saved Batch definitions are durably persisted in SQLite with a monotonic `revision`. The browser also
 retains one strict working-session recovery v4 record in `localStorage`. That record contains editable
-Batch intent plus stable Project, Saved Batch, historical source Run, current Run, and ordered session Run identity pointers.
+Batch intent plus stable Project, Saved Batch, historical source Run, and current Run identity pointers.
 It contains no Preview, execution, Job, Result, or frozen Run response. Linked Workflow/Profile JSON is
 reconstructed by version ID; detached JSON remains editable draft state. Every cold load requires a new
-Preview. Stored Run identities rebuild a Batch-scoped working-session Results gallery from
-backend-authoritative Run and Result data. Separately, the Project history UI reads rebuildable SQLite
-projections derived from the Project filesystem and does not require browser-held Run IDs. Preview and Run creation use the same complete
-Batch request snapshot plus the required `batch_snapshot` object. The frontend sends Random repetition
+Preview. Current Results reads backend-authoritative Run and Result data for the observed Run. The
+Project History UI reads rebuildable SQLite projections derived from the Project filesystem and does
+not require browser-held Run IDs. There is no Batch Results session gallery or restoration of older
+Run IDs from browser storage.
+Preview and Run creation use the same complete Batch request snapshot plus the required `batch_snapshot`
+object. The frontend sends Random repetition
 intent to Preview. The backend computes the complete non-seed expansion, materializes one unique seed per
 Job, and returns the concrete ordered assignments. The frontend retains those assignments for Run
 creation; the pure compiler never generates randomness. Successful Run publication freezes the durable execution plan and
@@ -145,6 +147,14 @@ Workflow, and Workflow Profile libraries, mutable Saved Batches, durable Run can
 non-authoritative historical projections. The Project filesystem remains authoritative for historical
 provenance, execution outcomes, Asset bytes, and Result bytes.
 
+Recovery retains key `batchcraft.working-session-recovery.v4` and schema v4. The existing strict reader
+still requires `session_run_ids` to be an array of unique non-empty strings containing `current_run_id`
+when non-null, including in older valid v4 records. The field is deprecated wire compatibility only:
+it is not restored, exposed as public runtime `sessionRunIds`, or used for gallery membership or
+prefetch. New writes contain `[]` when there is no current Run and `[current_run_id]` otherwise. Draft,
+source-Run, Project, and Saved Batch recovery state remain intact. This cleanup requires no SQLite,
+filesystem-format, or API DTO changes. ADR 0010 records the narrow amendment.
+
 Historical Batch reconstruction is read-only until the user explicitly imports detached resources. The
 backend classifies exact links and identity conflicts against SQLite while the frontend retains frozen
 content as an unsaved draft. Preview and Run creation continue through the normal compiler boundary; no
@@ -152,12 +162,17 @@ historical execution bypass exists. Explicit copy imports use deterministic oper
 ambiguous retry returns the same mutable resource. Draft-only historical import resolutions survive
 browser recovery, including a Workflow copy completed before its dependent Profile copy.
 
-Editable draft identity, Batch-scoped gallery identity, and the observed Run monitor are independent.
+Editable draft identity and the observed Run monitor are independent.
 On startup and foreground re-entry, the frontend may discover the one process-local active Run from the
-backend task registry. That Run takes monitor precedence over a different browser pointer, but joins the
-working-session gallery only when its frozen Project and Batch identity match. Mismatch or transient
-Project/network failure never erases a recoverable pointer. Run and execution state hydrate before
+backend task registry. That Run takes monitor precedence over a different browser pointer; there is no
+session gallery to retain the displaced pointer. Older Runs remain accessible through Project History.
+Draft mismatch or transient Project/network failure never erases a recoverable pointer. Run and execution state hydrate before
 Results, and transient startup reads use bounded retry with stale-response cancellation.
+
+Thumbnail presentation omits visible `Verified` badges and `Job` captions while preserving info-popup
+provenance, accessible descriptions, and lightbox labels. Integrity classification and strict Result
+retrieval remain backend responsibilities; unavailable-artifact placeholders remain in the frontend.
+Removing Batch Results does not remove current-Run cancellation or historical Run Plan/Result Details.
 
 ## Application Queue
 

@@ -2,21 +2,23 @@
 
 The frontend is the first browser workflow for importing Reference Assets and binding them to named Image Inputs,
 selecting and configuring a saved or new Saved Batch, previewing its compiled Jobs, creating durable
-Runs, watching Job state, viewing the current Run's Results, reviewing accumulated Batch Results from
-this browser working session, and browsing filesystem-indexed Project history. It communicates only
-with the batchcraft FastAPI application.
+Runs, watching Job state, viewing the current Run's Results, and browsing filesystem-indexed Project
+History. The frontend communicates only with the batchcraft FastAPI application.
 
 The browser stores one strict working-session recovery v4 record under
 `batchcraft.working-session-recovery.v4` in `localStorage`. It contains editable Batch intent, selected
-Project and Saved Batch pointers, historical source Run identity, current Run ID, and ordered unique
-session Run IDs. Explicit historical-to-copy resolution IDs make partial detached-resource imports
-resumable after a refresh. Linked
-Workflow/Profile JSON is reconstructed by immutable version ID; detached JSON remains draft state.
+Project and Saved Batch pointers, historical source Run identity, and current Run ID. The key and schema
+remain v4. The deprecated wire field `session_run_ids` stays required and strictly validated: an array of
+unique non-empty strings that includes `current_run_id` when non-null. Existing valid v4 records may
+contain older Run IDs, but the reader does not restore or use that array. New writes store `[]` when
+`current_run_id` is null and `[current_run_id]` otherwise. Explicit historical-to-copy resolution IDs make partial detached-resource imports
+resumable after a refresh. Linked Workflow/Profile JSON is reconstructed by immutable version ID;
+detached JSON remains draft state.
 Unsupported or malformed records start a clean working session. Refreshing or reopening a tab restores
 the draft and independently discovers any Run owned by the current backend process. Run and execution
-state load before Results, and transient startup failures receive bounded retries. Draft identity controls
-gallery association but never by itself hides or erases a valid observed Run. Result metadata and bytes
-are never stored as browser truth. Preview is never restored as valid; the user must compile the recovered
+state load before Results, and transient startup failures receive bounded retries. Draft identity never
+by itself hides or erases a valid observed Run. Result metadata and bytes are never stored as browser
+truth. Preview is never restored as valid; the user must compile the recovered
 draft again. Older browser recovery formats are discarded rather than migrated.
 
 The selected ProfileVersion defines zero or more ordered, named Image Inputs. Each slot selects one or
@@ -39,12 +41,12 @@ rows. Each Image Input slot, independent Parameter, and Preset row axis multipli
 
 Generated image cards render at their intrinsic aspect ratio without a fixed preview frame. Reference
 Asset cards retain a uniform contained thumbnail frame, so neither generated nor input images are
-cropped. The current Results section shows the active Run. The separate Batch Results section
-accumulates Runs for the current stable Project/Batch identity in session order and restores them once
-from FastAPI after refresh. Run restoration requires the stored Run to match the selected Project and
-Batch. Changing the Project resets Project-scoped PromptVersion and Image Input selections plus
-the gallery; changing Batch identity resets the gallery. Prompt, image, seed, and display-name
-edits retain it.
+cropped. Thumbnail cards omit visible `Verified` badges and `Job` captions. The info button still opens
+Result Details; accessible descriptions and lightbox labels retain Job/artifact identity. Integrity
+validation, missing/corrupt-artifact placeholders, and image-load failure handling remain unchanged.
+The current Results section shows the observed current Run, independently of editable draft identity.
+Project History provides older Runs and their Results. There is no accumulated Batch Results section,
+session gallery membership, or startup prefetch of historical IDs from browser recovery.
 
 The Project selector lists active SQLite Projects and exposes compact create and adoption flows.
 An owned v1 Project already copied directly under the configured Projects root can be imported by its
@@ -87,9 +89,11 @@ validated by the backend during Preview. ComfyUI remains the workflow editor.
 
 Closing a tab does not cancel or restart backend execution. On reopen, the current Run is fetched from
 FastAPI with its execution and Results. Running state resumes the same polling loop used after a new Run
-starts. The ordered stored Run IDs rebuild only the prior working-session gallery; they do not query or
-control Project history. Project history is loaded independently for the selected Project and works
-with empty browser storage.
+starts. Process-local active-Run discovery takes precedence over a different stored current pointer;
+there is no session gallery to retain that other Run. Project History remains the way to browse older
+Runs and works with empty browser storage. Draft mismatch, transient startup failure, or an empty
+active-task discovery response does not erase a recoverable current pointer. Cancellation controls,
+historical Run Plan/Result Details, and source-Run loading for detached-resource recovery remain intact.
 
 ## Requirements
 
@@ -157,6 +161,5 @@ Frontend tests mock the typed API client. They do not require FastAPI or ComfyUI
   alternatives: Base workflow and Project Assets.
 - Workflow snapshots can be edited as JSON. Workflow Profile mappings use the visual mapper. ComfyUI
   remains the workflow editor.
-- Batch Results remain a browser-session gallery; the separate Project History section provides the
-  durable Project-scoped view.
+- Current Results covers the observed Run; Project History provides the durable Project-scoped view.
 - The screen has no backend executor restart recovery, execution retry, rating, or Project-history filtering.

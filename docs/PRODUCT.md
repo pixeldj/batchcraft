@@ -224,6 +224,11 @@ Input slots form separate independent dimensions after prompt-variable expansion
 
 A Run should be reviewable as a visual grid.
 
+Result review uses current-Run Results and Project History, without a separate Batch Results session
+gallery. Thumbnail cards omit visible `Verified` badges and `Job` captions; the info popup retains that
+metadata. Accessible descriptions, lightbox labels, integrity checks, and unavailable-artifact
+placeholders remain.
+
 The Results Viewer should eventually support:
 
 - thumbnail grid;

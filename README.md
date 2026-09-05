@@ -21,10 +21,10 @@ Project-scoped Prompt, Workflow, and Workflow Profile libraries with immutable v
 SQLite-backed Saved Batches with the Saved Batch selector, visual Workflow Profile building, ordered multi-prompt Batch
 editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, frontend Random seed
-materialization, repeated Run creation, and a Batch Results gallery restored within the current tab
-session. The frontend also provides Project history grouped by Batch, frozen Run Plan and Result detail,
-explicit unavailable execution state, and Result integrity status. The backend includes mutable Project
-metadata, distinct ownerless adoption, immutable-version libraries, durable Saved Batches, and
+materialization, and repeated Run creation. Result review uses current-Run Results and Project History
+grouped by Batch. Thumbnails are image-first, with Job and integrity metadata available in Result Details.
+Frozen Run Plan inspection and explicit unavailable execution state remain available. The backend includes
+mutable Project metadata, distinct ownerless adoption, immutable-version libraries, durable Saved Batches, and
 rebuildable historical projections. Editable `Load Run as Batch`, broader Project-history filtering, a
 global scheduler, and automatic backend recovery remain unimplemented.
 

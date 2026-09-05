@@ -469,6 +469,29 @@ The API and UI still return the complete history without pagination, expose no a
 and provide none of BC-007's parameter, seed, Prompt, Workflow/Profile, Batch, status/date, Image Input,
 Asset, or future starred-result filters.
 
+Results UI cleanup is complete: thumbnail Job/Verified labels moved to detail inspection, and the
+Batch Results gallery, accumulated state, and restoration requests were removed. Current Results,
+Project History, integrity checks, cancellation, and current-Run recovery remain. Existing valid v4
+drafts are preserved while obsolete gallery membership is ignored. Verification passed with 384
+frontend tests, eight desktop/mobile browser tests across Vite and built same-origin modes, lint,
+typecheck, and production build. BC-007 remains Planned for automatic history freshness, pagination,
+sorting, and filters.
+
+Next slice: automatic history freshness for the current registered Project (P2, Planned).
+
+- Existing Results should appear without pressing Reindex Project. Restarting or updating with the same
+  database and data root should retain history; reconcile missing or stale projections automatically.
+- Show indexed history immediately, then reconcile against filesystem Runs when opening Project History.
+  Indicate that history is being checked, and refresh after Run publication and execution completion.
+- Serialize scan-and-replace operations per Project so an older scan cannot overwrite newer history.
+- Preserve the prior index on inaccessible storage or failed scans, with an actionable stale/unavailable
+  warning. Distinguish a confirmed empty Project from storage that could not be read.
+- Keep manual reindex as a repair/retry tool. Do not rewrite historical artifacts or auto-import other
+  Projects; new Project discovery and full-database-loss recovery retain the explicit import boundary.
+- Verify same-data restart/update, missing index recovery, completed Run visibility, failed/concurrent
+  scans, Project switching, and unchanged historical files. Measure larger-history scan cost before
+  adding incremental indexing; startup-wide scans and filesystem watchers are outside this slice.
+
 ### BC-008: Video and generic file input slots
 
 | Field | Value |
@@ -820,7 +843,8 @@ Additional requirements:
 - do not derive the Run name automatically from every generation setting;
 - keep detailed generation settings in existing provenance rather than encoding them into filenames;
 - use the human-readable Run name throughout normal UI where useful, while keeping the Run number visible but secondary;
-- update Run Plan, Result Details, Batch Results, and future Project-wide Run history to display the Run name;
+- display the Run name in Run Plan, Result Details, and Project History; the separate
+  Batch Results session gallery is retired by the scoped Results cleanup;
 - preserve exact Run/Job/Result provenance regardless of the display name.
 
 Recommended filesystem layout:
@@ -1047,6 +1071,32 @@ same-origin serving. Ruff, mypy, lint/typecheck, and builds pass. The pinned eve
 backed up and updated without changing application source or data formats. Read-only browser checks
 from the Mac passed at its LAN IP, localhost, and loopback; a second physical device was not tested.
 Development/test listeners remain loopback-only. No authentication or wildcard CORS is added.
+
+### BC-024: Live current-node progress
+
+| Field | Value |
+| --- | --- |
+| ID | BC-024 |
+| Priority | P3 |
+| Status | Planned |
+| Area | Execution / ComfyUI / UI |
+| Summary | Show reported progress for the current Job's executing node, separately from Run-level completed-Job progress. |
+| Dependencies / Notes | Lower priority than BC-007 automatic history freshness. Reuse backend ComfyUI WebSocket observations and existing frontend execution polling. No direct browser-to-ComfyUI connection. |
+
+Acceptance and scope:
+
+- Display validated, prompt-correlated node progress counters and percentage when available. Label them
+  as node progress, not overall Job completion; use sampling-step wording only where semantics are known.
+- Preserve the separate Run-level completed-Job indicator. Multiple samplers, decoding, saving, and
+  Result downloads mean a node reaching 100% does not complete the Job; execution history stays authoritative.
+- Reset counters on node/Job changes and prevent late events from appearing on another Job. Show an
+  indeterminate or explicitly stale/unavailable state when counters are absent, old, or disconnected.
+- Keep observations ephemeral and nonfatal. Do not add them to SQLite, execution artifacts, frozen Run
+  provenance, or browser recovery; backend restart must not restore falsely live progress.
+- Test deterministic fake events for counter updates/resets, malformed or unrelated events, missing
+  progress, disconnects, completion, and browser reload. Confirm installed ComfyUI/custom-node payloads
+  only in a separately authorized live check.
+- Whole-Job percentage estimates, ETA, durable telemetry history, and WebSocket reconnection are deferred.
 
 ## Maintenance rules
 

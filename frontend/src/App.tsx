@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -40,10 +40,6 @@ import {
 } from "./features/batch/savedBatch";
 import type { SavedBatchCreateInput } from "./features/batch/SavedBatchSelector";
 import { ProjectHistory } from "./features/project/ProjectHistory";
-import {
-  BatchResultsGallery,
-  type BatchGalleryRun,
-} from "./features/results/BatchResultsGallery";
 import { RunWorkspace } from "./features/run/RunWorkspace";
 import {
   loadWorkingSessionRecovery,
@@ -112,12 +108,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   );
   const [projectVerified, setProjectVerified] = useState(false);
   const [currentRunId, setCurrentRunId] = useState<string | null>(initialSession.currentRunId);
-  const [sessionRunIds, setSessionRunIds] = useState<string[]>(initialSession.sessionRunIds);
-  const [galleryRunsById, setGalleryRunsById] = useState<Record<string, BatchGalleryRun>>(() =>
-    Object.fromEntries(
-      initialSession.sessionRunIds.map((runId) => [runId, loadingGalleryRun(runId)]),
-    ),
-  );
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
@@ -168,18 +158,12 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const runRevision = useRef(0);
   const frozenRunCache = useRef(new Map<string, RunResponse>());
   const frozenRunRequests = useRef(new Map<string, Promise<RunResponse>>());
-  const initialBatchIdentity = useRef(batchIdentity(initialSession.form));
-  const batchIdentityChanged = useRef(false);
   const currentBatchIdentity = batchIdentity(form);
   const currentBatchIdentityRef = useRef(currentBatchIdentity);
-  currentBatchIdentityRef.current = currentBatchIdentity;
   const projectContextRef = useRef({ selectedProjectId, projectVerified });
-  projectContextRef.current = { selectedProjectId, projectVerified };
   const historicalSourceRunIdRef = useRef(historicalSourceRunId);
-  historicalSourceRunIdRef.current = historicalSourceRunId;
   const recoveredHistoricalRun = useRef<string | null>(null);
   const currentRunIdRef = useRef(currentRunId);
-  currentRunIdRef.current = currentRunId;
   const monitoredRunIdRef = useRef<string | null>(null);
 
   const cacheFrozenRun = useCallback((frozenRun: RunResponse) => {
@@ -229,25 +213,15 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const recoveryStateRef = useRef({
     form,
     currentRunId,
-    sessionRunIds,
     selectedProjectId,
     savedBatchRecoveryPointer,
     historicalSourceRunId,
   });
-  recoveryStateRef.current = {
-    form,
-    currentRunId,
-    sessionRunIds,
-    selectedProjectId,
-    savedBatchRecoveryPointer,
-    historicalSourceRunId,
-  };
   const persistRecovery = useCallback(() => {
     const state = recoveryStateRef.current;
     saveWorkingSessionRecovery(
       state.form,
       state.currentRunId,
-      state.sessionRunIds,
       state.selectedProjectId,
       undefined,
       state.savedBatchRecoveryPointer?.id ?? null,
@@ -258,7 +232,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
   useEffect(() => {
     persistRecovery();
-  }, [currentRunId, form, historicalSourceRunId, persistRecovery, savedBatchRecoveryPointer, selectedProjectId, sessionRunIds]);
+  }, [currentRunId, form, historicalSourceRunId, persistRecovery, savedBatchRecoveryPointer, selectedProjectId]);
 
   useEffect(() => {
     window.addEventListener("pagehide", persistRecovery);
@@ -266,7 +240,18 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }, [persistRecovery]);
 
   const formRef = useRef(form);
-  formRef.current = form;
+
+  // Publish committed draft pointers before passive recovery effects and browser events read them.
+  useLayoutEffect(() => {
+    currentBatchIdentityRef.current = currentBatchIdentity;
+    projectContextRef.current = { selectedProjectId, projectVerified };
+    historicalSourceRunIdRef.current = historicalSourceRunId;
+    currentRunIdRef.current = currentRunId;
+    formRef.current = form;
+    recoveryStateRef.current = {
+      form, currentRunId, selectedProjectId, savedBatchRecoveryPointer, historicalSourceRunId,
+    };
+  }, [currentBatchIdentity, currentRunId, form, historicalSourceRunId, projectVerified, savedBatchRecoveryPointer, selectedProjectId]);
 
   useEffect(() => {
     if (!snapshotRecoveryPending || !projectVerified) return;
@@ -390,7 +375,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     if (selectedProjectId !== formRef.current.projectId) return;
     const batchId = initialSession.selectedSavedBatchId;
     if (!batchId) {
-      setSavedBatchRestorePending(false);
       return;
     }
     const baseRevision = initialSession.savedBatchBaseRevision;
@@ -437,74 +421,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }, [api, initialSession, projectVerified, savedBatchRestorePending, selectedProjectId]);
 
   useEffect(() => {
-    if (
-      restoringRun ||
-      !projectVerified ||
-      !selectedProjectId ||
-      batchIdentityChanged.current ||
-      currentBatchIdentity !== initialBatchIdentity.current
-    ) {
-      return;
-    }
-    const historicalRunIds = initialSession.sessionRunIds.filter(
-      (runId) => runId !== monitoredRunIdRef.current,
-    );
-    if (historicalRunIds.length === 0) {
-      return;
-    }
-    const controller = new AbortController();
-
-    for (const runId of historicalRunIds) {
-      void restoreHistoricalGalleryRun(runId, controller.signal);
-    }
-
-    async function restoreHistoricalGalleryRun(runId: string, signal: AbortSignal) {
-      try {
-        const restoredRun = cacheFrozenRun(await api.getRun(runId, signal));
-        if (!runMatchesBatch(restoredRun, currentBatchIdentityRef.current)) {
-          setGalleryRunsById((current) => withoutGalleryRun(current, runId));
-          return;
-        }
-        const restoredResults = await api.getResults(runId, signal);
-        if (signal.aborted) {
-          return;
-        }
-        setGalleryRunsById((current) => ({
-          ...current,
-          [runId]: {
-            runId,
-            runNumber: restoredRun.run_number,
-            runName: restoredRun.run_name,
-            results: restoredResults.results,
-            execution: restoredRun.execution,
-            loading: false,
-            error: null,
-          },
-        }));
-      } catch (caught) {
-        if (isAbort(caught) || signal.aborted) {
-          return;
-        }
-        if (caught instanceof ApiError && caught.code === "run_not_found") {
-          setSessionRunIds((current) => current.filter((candidate) => candidate !== runId));
-          setGalleryRunsById((current) => withoutGalleryRun(current, runId));
-          return;
-        }
-        setGalleryRunsById((current) => ({
-          ...current,
-          [runId]: {
-            ...(current[runId] ?? loadingGalleryRun(runId)),
-            loading: false,
-            error: errorMessage(caught),
-          },
-        }));
-      }
-    }
-
-    return () => controller.abort();
-  }, [api, cacheFrozenRun, currentBatchIdentity, initialSession, projectVerified, restoringRun, selectedProjectId]);
-
-  useEffect(() => {
     const controller = new AbortController();
     let inFlight: Promise<void> | null = null;
     let trailingRevalidation = false;
@@ -534,18 +450,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
         if (matchesDraft) {
           setCurrentRunId(runId);
-          setSessionRunIds((current) => current.includes(runId) ? current : [...current, runId]);
-          setGalleryRunsById((current) => ({
-            ...current,
-            [runId]: {
-              ...(current[runId] ?? loadingGalleryRun(runId)),
-              runNumber: restoredRun.run_number,
-              runName: restoredRun.run_name,
-              execution,
-            },
-          }));
         } else {
-          setGalleryRunsById((current) => withoutGalleryRun(current, runId));
           setSessionMessage(
             discoveredActive
               ? "An active Run from another Project or Batch is being monitored. The current draft and saved Run pointer were left unchanged."
@@ -560,8 +465,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         );
         if (definitive && currentRunIdRef.current === runId) {
           setCurrentRunId(null);
-          setSessionRunIds((current) => current.filter((candidate) => candidate !== runId));
-          setGalleryRunsById((current) => withoutGalleryRun(current, runId));
         } else if (!definitive) {
           setRunRestoreUnresolved(true);
         }
@@ -625,11 +528,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   function changeForm(next: BatchFormState) {
     batchReplacementGeneration.current += 1;
     formRevision.current += 1;
-    if (batchIdentity(form) !== batchIdentity(next)) {
-      batchIdentityChanged.current = true;
-      setSessionRunIds([]);
-      setGalleryRunsById({});
-    }
     setForm(next);
     setPreviewSnapshot(null);
     setPreviewRunAssociation(null);
@@ -689,8 +587,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setSelectedProjectId(project.id);
     setProjectVerified(true);
     setCurrentRunId(null);
-    setSessionRunIds([]);
-    setGalleryRunsById({});
     setRun(null);
     setRunStatus(null);
     setRunSnapshotIdentity(null);
@@ -941,11 +837,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
     runRevision.current += 1;
     formRevision.current += 1;
-    if (batchIdentity(formRef.current) !== batchIdentity(nextForm)) {
-      batchIdentityChanged.current = true;
-      setSessionRunIds([]);
-      setGalleryRunsById({});
-    }
     setForm(nextForm);
     setHistoricalSourceRunId(runId);
     recoveredHistoricalRun.current = runId;
@@ -1008,32 +899,15 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       setRunSnapshotIdentity({ runId: nextRun.run_id, snapshot: snapshot.request.batch_snapshot });
       setRestoredRunSeed(null);
       setCurrentRunId(nextRun.run_id);
-      const nextSessionRunIds = sessionRunIds.includes(nextRun.run_id)
-        ? sessionRunIds
-        : [...sessionRunIds, nextRun.run_id];
       saveWorkingSessionRecovery(
         formRef.current,
         nextRun.run_id,
-        nextSessionRunIds,
         selectedProjectId,
         undefined,
         savedBatchRecoveryPointer?.id ?? null,
         savedBatchRecoveryPointer?.revision ?? null,
         historicalSourceRunId,
       );
-      setSessionRunIds(nextSessionRunIds);
-      setGalleryRunsById((current) => ({
-        ...current,
-        [nextRun.run_id]: {
-          runId: nextRun.run_id,
-          runNumber: nextRun.run_number,
-          runName: nextRun.run_name,
-          results: [],
-          execution: null,
-          loading: false,
-          error: null,
-        },
-      }));
       if (snapshot.singleUse) {
         setPreviewSnapshot((current) => current === snapshot ? null : current);
         setPreviewRunAssociation(null);
@@ -1080,11 +954,11 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     || currentRunExecutionControlUnavailable
     || (runStatus !== null && TERMINAL_RUN_STATUSES.has(runStatus));
   const currentIntent = canonicalBatchIntent(form);
-  const pristineIntent = useRef(canonicalBatchIntent(initialBatchForm()));
+  const [pristineIntent] = useState(() => canonicalBatchIntent(initialBatchForm()));
   const savedBatchDirty = savedBatchLink !== null && currentIntent !== savedBatchLink.baseline;
   const hasUnsavedChanges = savedBatchLink
     ? savedBatchDirty
-    : currentIntent !== pristineIntent.current;
+    : currentIntent !== pristineIntent;
   const projectSwitchingBlocked =
     restoringRun ||
     runRestoreUnresolved ||
@@ -1129,43 +1003,6 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     currentSnapshotIdentity === null ||
     currentSnapshotIdentity !== editableBatchSnapshotIdentity(currentRunSnapshot)
   );
-
-  function updateCurrentRunGalleryResults(
-    runId: string,
-    execution: ExecutionResponse | null,
-    results: ResultResponse[],
-    error: string | null,
-  ) {
-    if (
-      !sessionRunIds.includes(runId)
-      || (run?.run_id === runId && !runMatchesBatch(run, currentBatchIdentityRef.current))
-    ) {
-      return;
-    }
-    setGalleryRunsById((current) => {
-      const existing = current[runId] ?? loadingGalleryRun(runId);
-      if (
-        existing.execution === execution &&
-        existing.results === results &&
-        !existing.loading &&
-        existing.error === error
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        [runId]: {
-          ...existing,
-          runNumber: existing.runNumber ?? (run?.run_id === runId ? run.run_number : null),
-          runName: existing.runName ?? (run?.run_id === runId ? run.run_name : null),
-          results,
-          execution,
-          loading: false,
-          error,
-        },
-      };
-    });
-  }
 
   return (
     <>
@@ -1269,17 +1106,9 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           onStatusChange={setRunStatus}
           onCreatedUnavailableChange={changeCreatedUnavailable}
           onExecutionControlUnavailableChange={changeExecutionControlUnavailable}
-          onResultsChange={updateCurrentRunGalleryResults}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
           batchDiverged={batchDiverged}
-        />
-        <BatchResultsGallery
-          api={api}
-          runIds={sessionRunIds.filter((runId) => galleryRunsById[runId] !== undefined)}
-          runsById={galleryRunsById}
-          getCachedRun={getCachedFrozenRun}
-          loadRun={loadFrozenRun}
         />
         <ProjectHistory
           api={api}
@@ -1373,25 +1202,4 @@ function runMatchesBatch(run: RunCreatedResponse, identity: string): boolean {
     snapshot.batch.id === batchId &&
     snapshot.batch.filesystem_key === batchFilesystemKey
   );
-}
-
-function loadingGalleryRun(runId: string): BatchGalleryRun {
-  return {
-    runId,
-    runNumber: null,
-    runName: null,
-    results: [],
-    execution: null,
-    loading: true,
-    error: null,
-  };
-}
-
-function withoutGalleryRun(
-  runsById: Record<string, BatchGalleryRun>,
-  runId: string,
-): Record<string, BatchGalleryRun> {
-  const next = { ...runsById };
-  delete next[runId];
-  return next;
 }
