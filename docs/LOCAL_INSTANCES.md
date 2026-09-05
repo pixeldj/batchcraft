@@ -170,6 +170,9 @@ actual image decoding, lightbox, cold-tab restoration, Stop-after-current cancel
 Batch reconstruction. They run in desktop Chromium and mobile-emulated Chromium. They do not replace
 Safari testing, live ComfyUI checks, or the separate v1 cross-instance release gate.
 
+Editor regressions also verify that Workflow/Profile dialogs paint above Reference thumbnails and that
+Prompt duplicates are editable before and after creation without changing the source or Batch selection.
+
 Screenshots and failure traces go to ignored `frontend/test-results/`; the HTML report goes to ignored
 `frontend/playwright-report/`. Open the latter with `npx playwright show-report`. CI runs the same tests
 against a fake client and retains browser artifacts for seven days. Ordinary `npm test` still runs only

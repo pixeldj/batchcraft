@@ -225,40 +225,75 @@ describe("PromptLibraryEditor creation and revisions", () => {
     expect(screen.getByLabelText("Prompts selected for Batch")).toHaveTextContent("Portrait v1");
   });
 
-  it("duplicates an old viewed history revision with collision-safe naming as a new v1 without changing the Batch", async () => {
+  it.each(["  old exact text\n\nlast line  ", "  edited duplicate text\n\nlast line  "])("duplicates an old history revision as a new v1 with text %j and keeps subsequent edits separate from the source and Batch", async (text) => {
     const current = version({ id: "portrait-v3", version_number: 3, text: "current text" });
-    const old = version({ id: "portrait-v1", version_number: 1, text: "old exact text" });
+    const old = version({ id: "portrait-v1", version_number: 1, text: "  old exact text\n\nlast line  " });
+    const selected = formPrompt({ versionId: old.id, text: old.text, placeholders: old.placeholders });
     const source = { ...libraryPrompt("prompt-1", "Portrait", current), description: "source description" };
     const existingCopy = libraryPrompt("copy", "Portrait copy");
-    const createdVersion = version({ id: "copy2-v1", prompt_id: "copy-2", version_number: 1, name_snapshot: "Portrait copy 2", text: "old exact text" });
+    const createdVersion = version({ id: "copy2-v1", prompt_id: "copy-2", version_number: 1, name_snapshot: "Portrait copy 2", text });
     const createdPrompt = prompt("copy-2", "Portrait copy 2");
     const createPrompt = vi.fn<BatchcraftApi["createPrompt"]>(async () => ({ prompt: createdPrompt, version: createdVersion }));
+    const createPromptVersion = vi.fn<BatchcraftApi["createPromptVersion"]>(async () => ({
+      ...createdVersion, id: "copy2-v2", version_number: 2, text: "duplicate revision text",
+    }));
     const callbacks = callbackProps();
     const api = makeApi({
       listPrompts: vi.fn(async () => ({ prompts: [source, existingCopy] })),
       listPromptVersions: vi.fn(async () => ({ prompt_versions: [current, old] })),
+      getPromptVersion: vi.fn(async () => old),
       createPrompt,
+      createPromptVersion,
     });
-    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[selected]} {...callbacks} />);
 
     await openLibrary();
     fireEvent.click(screen.getByRole("button", { name: "History" }));
-    const oldCard = (await screen.findByText("old exact text")).closest("article")!;
+    const oldCard = (await screen.findByRole("button", { name: "Inspect revision 1" })).closest("article")!;
     fireEvent.click(within(oldCard).getByRole("button", { name: "Duplicate" }));
     expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait copy 2");
-    expect(screen.getByLabelText("Prompt template")).toHaveValue("old exact text");
-    expect(screen.getByLabelText("Prompt template")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Prompt template")).toHaveValue(old.text);
+    expect(screen.getByLabelText("Prompt template")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("Description (optional)")).toHaveValue("source description");
+    if (text !== old.text) {
+      fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: text } });
+    }
+    expect(createPrompt).not.toHaveBeenCalled();
+    expect(createPromptVersion).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Duplicate Prompt" }));
 
     expect(await screen.findByRole("heading", { name: "Portrait copy 2" })).toBeInTheDocument();
-    expect(screen.getByText("v1", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("v1", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(document.querySelector(".prompt-library-text")?.textContent).toBe(text);
+    expect(createPrompt).toHaveBeenCalledTimes(1);
     expect(createPrompt).toHaveBeenCalledWith("project-1", {
       name: "Portrait copy 2",
-      text: "old exact text",
+      text,
       description: "source description",
     });
+    expect(createPromptVersion).not.toHaveBeenCalled();
     expect(callbacks.onChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Prompt" }));
+    expect(screen.getByLabelText("Prompt template")).toHaveValue(text);
+    fireEvent.change(screen.getByLabelText("Prompt template"), { target: { value: "duplicate revision text" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+
+    await waitFor(() => expect(document.querySelector(".prompt-library-text")?.textContent).toBe("duplicate revision text"));
+    expect(screen.getByText("v2", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(createPromptVersion).toHaveBeenCalledTimes(1);
+    expect(createPromptVersion).toHaveBeenCalledWith("copy-2", { text: "duplicate revision text", note: null });
+
+    const sidebar = screen.getByRole("complementary", { name: "Prompt library" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: /Portrait.*v3.*In Batch: v1/ }));
+    expect(document.querySelector(".prompt-library-text")?.textContent).toBe("current text");
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    const sourceOldCard = screen.getByRole("button", { name: "Inspect revision 1" }).closest("article")!;
+    expect(sourceOldCard.querySelector("pre")?.textContent).toBe("  old exact text\n\nlast line  ");
+    expect(document.querySelector(".prompt-card .prompt-editor")?.textContent).toBe("  old exact text\n\nlast line  ");
+    expect(screen.getByLabelText("Prompts selected for Batch")).toHaveTextContent("Portrait v1");
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+    expect(callbacks.onMetadataChange).not.toHaveBeenCalled();
   });
 
   it("locks workspace navigation while an immutable revision save is in flight", async () => {

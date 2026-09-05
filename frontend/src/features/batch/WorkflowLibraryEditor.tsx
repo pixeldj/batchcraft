@@ -11,6 +11,7 @@ import type {
   WorkflowProfileImageInput,
   WorkflowProfileParameter,
 } from "../../api/types";
+import { OverlayPortal } from "../../components/OverlayPortal";
 import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
 import { reconcileFormBindings, type BatchFormState } from "./form";
@@ -943,7 +944,7 @@ function WorkflowDialog({ state, workflow, canCopyProfile, sourceWorkflowVersion
   const showsWorkflow = state.kind === "import" || state.kind === "duplicate-workflow" || state.kind === "workflow-version" || state.kind === "raw";
   const showsProfileMapper = state.kind === "profile" || state.kind === "profile-version";
   const showsName = state.kind === "import" || state.kind === "duplicate-workflow" || state.kind === "profile" || state.kind.startsWith("rename-");
-  return <dialog className={`prompt-dialog${showsProfileMapper ? " workflow-profile-dialog" : ""}`} open aria-label={title}><h2>{title}</h2><form onSubmit={onSubmit}>
+  return <OverlayPortal level="workflow-editor"><dialog className={`prompt-dialog${showsProfileMapper ? " workflow-profile-dialog" : ""}`} open aria-label={title}><h2>{title}</h2><form onSubmit={onSubmit}>
     {state.message ? <p className="workflow-dialog-message" role="status">{state.message}</p> : null}
     {state.kind === "workflow-version" ? <p className="mapping-intro">Saving creates a new Workflow revision and preserves v{sourceWorkflowVersion}.</p> : null}
     {state.kind === "profile-version" ? <p className="mapping-intro">Saving creates a new Profile revision for Workflow v{sourceWorkflowVersion} and preserves the previous revision.</p> : null}
@@ -966,7 +967,7 @@ function WorkflowDialog({ state, workflow, canCopyProfile, sourceWorkflowVersion
     {state.kind !== "raw" && !state.kind.startsWith("rename-") ? <label className="field"><span className="field-label">Version note (optional)</span><textarea value={state.note} onChange={(event) => setState({ ...state, note: event.target.value })} /></label> : null}
     {state.error ? <p className="operation-error" role="alert">{state.error}</p> : null}
     <button className="button-primary" type="submit" disabled={state.saving}>{state.saving ? "Saving..." : submitLabel}</button>
-  </form><button className="button-link" type="button" onClick={onCancel}>Cancel</button></dialog>;
+  </form><button className="button-link" type="button" onClick={onCancel}>Cancel</button></dialog></OverlayPortal>;
 }
 
 function applyProfile(form: BatchFormState, profile: ProjectWorkflowProfile, version: LibraryWorkflowProfileVersion): BatchFormState {

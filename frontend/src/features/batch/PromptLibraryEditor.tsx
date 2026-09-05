@@ -834,7 +834,6 @@ export function PromptLibraryEditor({
                     })}
                     onSubmit={duplicatePrompt}
                     onCancel={() => setWorkspacePanel("browse")}
-                    lockTemplate
                   />
                 ) : null}
 
@@ -982,7 +981,6 @@ function PromptCreateForm({
   onDraftChange,
   onSubmit,
   onCancel,
-  lockTemplate = false,
 }: {
   title: string;
   draft: CreateDraft;
@@ -990,7 +988,6 @@ function PromptCreateForm({
   onDraftChange(value: CreateDraft | ((current: CreateDraft) => CreateDraft)): void;
   onSubmit(event: FormEvent<HTMLFormElement>): void;
   onCancel(): void;
-  lockTemplate?: boolean;
 }) {
   return (
     <section aria-labelledby="prompt-form-title">
@@ -1004,12 +1001,10 @@ function PromptCreateForm({
           <span className="field-label">Prompt template</span>
           <textarea
             required
-            readOnly={lockTemplate}
             value={draft.text}
             onChange={(event) => onDraftChange((current) => ({ ...current, text: event.target.value }))}
           />
         </label>
-        {lockTemplate ? <p className="prompt-library-helper">The inspected revision becomes v1 unchanged. Edit the duplicate afterward to create another revision.</p> : null}
         <label className="field">
           <span className="field-label">Description (optional)</span>
           <textarea value={draft.description} onChange={(event) => onDraftChange((current) => ({ ...current, description: event.target.value }))} />

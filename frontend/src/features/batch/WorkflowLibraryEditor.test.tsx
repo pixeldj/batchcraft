@@ -7,6 +7,37 @@ import { initialBatchForm, type BatchFormState } from "./form";
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
 describe("WorkflowLibraryEditor", () => {
+  it.each(["Edit Workflow", "Edit Profile"])("keeps %s in a body-level overlay and cancels without changing bindings", async (title) => {
+    const first = workflowVersion({ workflow: visualWorkflow() });
+    const profile = profileVersion({ profile: visualProfileSnapshot() });
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", first)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [first] })),
+      listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", profile)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [profile] })),
+      getWorkflowVersion: vi.fn(async () => first),
+      getWorkflowProfileVersion: vi.fn(async () => profile),
+    });
+    const form = linkedForm(first, profile);
+    form.imageBindings = [{ slot_key: "style", values: [null, "asset-1"] }];
+    const original = structuredClone(form);
+    const onChange = vi.fn();
+    const { container } = render(<WorkflowLibraryEditor api={api} projectId="project-a" form={form} onChange={onChange} onMetadataChange={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    fireEvent.click(await screen.findByRole("button", { name: title }));
+    const dialog = screen.getByRole("dialog", { name: title });
+    expect(dialog.parentElement).toHaveClass("overlay-layer-workflow-editor");
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+    expect(container).not.toContainElement(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog", { name: title })).not.toBeInTheDocument();
+    expect(document.querySelector(".overlay-layer-workflow-editor")).not.toBeInTheDocument();
+    expect(form).toEqual(original);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("ignores an A-B-A stale Workflow response", async () => {
     const stale = deferred<WorkflowsResponse>();
     let firstProjectLoads = 0;

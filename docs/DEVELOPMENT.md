@@ -172,9 +172,11 @@ the FastAPI endpoints documented in `docs/API.md`.
 
 Batch editing includes an ordered repeatable list of immutable PromptVersion snapshots. The current
 Project's persistent Prompt library opens as a searchable modal workspace with exact template previews,
-direct Prompt creation, lazy version history, immutable revision creation, and exact-revision
-duplication into a new logical Prompt. Inspecting, searching, creating a revision, and duplicating do not
-change the Batch selection. Explicit additions, removals, and ordering changes invalidate Preview; exact
+direct Prompt creation, lazy version history, immutable revision creation, and duplication seeded from
+the exact inspected revision into an editable draft. Saving the draft creates a new logical Prompt at
+v1; later edits create revisions of that copy without changing the source. Inspecting, searching,
+creating a revision, and duplicating do not change the Batch selection. Explicit additions, removals,
+and ordering changes invalidate Preview; exact
 library reconciliation does not. The browser session restoration stores library linkage and exact
 immutable snapshots without UI keys. Named Image Input binding and browser session v10 supersede the
 original picker and session shape in Phase 2.4.

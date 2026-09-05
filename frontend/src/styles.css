@@ -283,6 +283,7 @@ dialog form { display: grid; gap: 0.9rem; }
   padding: 1rem;
   background: rgba(20, 24, 22, 0.64);
 }
+.overlay-layer-workflow-editor { z-index: 90; }
 .overlay-layer-lightbox { z-index: 100; background: rgba(20, 24, 22, 0.72); }
 .overlay-layer-details { z-index: 110; }
 .overlay-layer-run-plan { z-index: 120; }

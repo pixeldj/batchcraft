@@ -326,7 +326,7 @@ Initial non-goals:
 | Status | Done |
 | Area | Prompt Library / UX |
 | Summary | Improve Prompt selection, creation, and duplication while keeping immutable version history available when needed. |
-| Dependencies / Notes | The modal Prompt Library workspace, exact-revision duplication, collision-safe copy naming, lazy history selection, direct Prompt creation, and ordered Batch-selection controls are implemented. Automatic placeholder binding assistance remains tracked separately in BC-014. |
+| Dependencies / Notes | The modal Prompt Library workspace, duplication seeded from the inspected revision, collision-safe copy naming, lazy history selection, direct Prompt creation, and ordered Batch-selection controls are implemented. Automatic placeholder binding assistance remains tracked separately in BC-014. |
 
 The first-Prompt transition now keeps the Prompt section explicitly expanded while its modal workspace
 is open, so conditional section collapse cannot orphan the body scroll lock. Focus restoration and the
@@ -338,13 +338,18 @@ Improve the normal flow to:
 - show a useful template-text preview on each Prompt card;
 - provide a visible `New Prompt` action in the library view;
 - provide `Add`, `Edit Prompt`, `Duplicate`, and `History` actions without exposing opaque IDs;
-- duplicate the currently selected PromptVersion into a new logical Prompt starting at v1;
+- seed an editable duplicate draft from the inspected PromptVersion, saving it as a new logical Prompt starting at v1;
 - suggest a unique editable name such as `Portrait copy`, `Portrait copy 2`, and so on;
 - preserve the source Prompt and all of its versions unchanged;
 - de-emphasize version terminology in normal use while retaining a subtle version badge and access to history;
 - use language such as `Edit Prompt` while explaining secondarily that saving creates a new immutable revision.
 
 The chooser must never silently substitute the latest version for a specifically selected historical version.
+
+P3 bug follow-up: duplicate drafts now allow text edits before saving, and subsequent edits target the
+new Prompt's history. Source revisions, Batch selection, and Preview remain unchanged. Verification
+passed with 380 frontend unit tests, typecheck, lint, production build, and desktop/mobile browser
+coverage in both Vite and built same-origin modes.
 
 ### BC-005: Workflow library convenience
 
@@ -378,6 +383,12 @@ Profile v1. Suggested names are editable and collision-safe, and a failed option
 the new Workflow while opening the visual mapper for repair. No backend API, SQLite schema, or v1 filesystem
 format changed. Verification passed with 619 backend tests, Ruff check/format, mypy, and package build, plus
 356 frontend tests, typecheck, lint, and production build.
+
+P2 bug follow-up: Workflow and Profile editors now use the existing body-level overlay system so
+Reference Asset thumbnails and selection badges stay behind the editor. Cancel preserves bindings and
+Preview. Desktop/mobile paint-order, viewport sizing, and Cancel checks pass in both Vite and built
+same-origin browser modes, alongside 380 frontend unit tests, typecheck, lint, and production build.
+No library redesign is required for this fix.
 
 ### BC-006: Historical reuse
 
