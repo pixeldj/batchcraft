@@ -1,8 +1,10 @@
 from batchcraft.domain.compiler import (
     CompilationError,
     compile_batch,
+    count_batch,
     extract_placeholder_names,
     preview_batch,
+    validate_batch_plan,
 )
 from batchcraft.domain.image_slots import (
     IMAGE_INPUT_SLOT_KEY_PATTERN,
@@ -44,6 +46,7 @@ from batchcraft.domain.parameter_intents import (
     ParameterRangeIntent,
     ParameterValuesIntent,
     materialize_parameter_bindings,
+    parameter_binding_counts,
 )
 
 __all__ = [
@@ -78,6 +81,9 @@ __all__ = [
     "VariableBinding",
     "WorkflowParameter",
     "compile_batch",
+    "count_batch",
+    "validate_batch_plan",
+    "parameter_binding_counts",
     "materialize_parameter_bindings",
     "preview_batch",
     "IMAGE_INPUT_SLOT_KEY_PATTERN",

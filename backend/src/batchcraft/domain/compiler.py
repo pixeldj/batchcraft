@@ -1,5 +1,7 @@
 import math
 import re
+from collections import Counter
+from collections.abc import Iterator, Mapping
 from itertools import product
 from typing import cast
 
@@ -21,6 +23,7 @@ from batchcraft.domain.models import (
     ResolvedVariable,
     SeedMode,
     VariableBinding,
+    parameter_value_key,
     validate_parameter_alternatives,
     validate_parameter_scalar,
 )
@@ -37,6 +40,7 @@ class CompilationError(ValueError):
 
 def extract_placeholder_names(template: str) -> tuple[str, ...]:
     names: list[str] = []
+    seen: set[str] = set()
     previous_end = 0
 
     for match in _PLACEHOLDER_PATTERN.finditer(template):
@@ -47,8 +51,9 @@ def extract_placeholder_names(template: str) -> tuple[str, ...]:
         name = match.group(1)
         if _IDENTIFIER_PATTERN.fullmatch(name) is None:
             raise CompilationError(f"prompt contains malformed placeholder: {match.group(0)!r}")
-        if name not in names:
+        if name not in seen:
             names.append(name)
+            seen.add(name)
         previous_end = match.end()
 
     remaining = template[previous_end:]
@@ -94,13 +99,110 @@ def _seed_values(batch: BatchDefinition) -> tuple[int, ...]:
 
 
 def _resolve_prompt(template: str, assignments: dict[str, str]) -> str:
-    return _PLACEHOLDER_PATTERN.sub(
-        lambda match: assignments[match.group(1)],
-        template,
+    return "".join(_prompt_chunks(template, assignments))
+
+
+def _prompt_chunks(template: str, assignments: Mapping[str, str]) -> Iterator[str]:
+    end = 0
+    for match in _PLACEHOLDER_PATTERN.finditer(template):
+        yield template[end : match.start()]
+        yield assignments[match.group(1)]
+        end = match.end()
+    yield template[end:]
+
+
+def _utf8_size(text: str) -> int:
+    return sum(
+        len(text[index : index + 4096].encode("utf-8")) for index in range(0, len(text), 4096)
     )
 
 
-def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> CompiledRunPlan:
+def _prompt_matches(template: str, assignments: Mapping[str, str], stored: str) -> bool:
+    if sum(map(len, _prompt_chunks(template, assignments))) != len(stored):
+        return False
+    position = 0
+    for chunk in _prompt_chunks(template, assignments):
+        if not stored.startswith(chunk, position):
+            return False
+        position += len(chunk)
+    return True
+
+
+def compile_batch(
+    batch: BatchDefinition,
+    *,
+    max_jobs: int | None = None,
+    max_prompt_bytes: int | None = None,
+    max_resolved_text_bytes: int | None = None,
+) -> CompiledRunPlan:
+    """Budget raw UTF-8 prompt + variable values + string parameter values per Job.
+
+    Repeated placeholders count at every occurrence in the prompt; variable provenance
+    counts once per used name. Every Job counts again, even when strings are shared.
+    JSON escaping, keys, labels, snapshots, Base values and object overhead are excluded.
+    None disables each independent budget, for pure callers and historical validation.
+    """
+    return cast(
+        CompiledRunPlan,
+        _compile_batch(
+            batch,
+            max_jobs=max_jobs,
+            max_prompt_bytes=max_prompt_bytes,
+            max_resolved_text_bytes=max_resolved_text_bytes,
+        ),
+    )
+
+
+def count_batch(
+    batch: BatchDefinition,
+    *,
+    max_jobs: int | None = None,
+    parameter_counts: Mapping[str, int] | None = None,
+    max_prompt_bytes: int | None = None,
+    max_resolved_text_bytes: int | None = None,
+) -> CompilationPreview:
+    """Validate structure/count without resolving prompts or constructing Jobs.
+
+    parameter_counts supplies preflight Range cardinalities for Base stand-ins.
+    It does not validate the eventual resolved prompt or generated numeric values.
+    """
+    return cast(
+        CompilationPreview,
+        _compile_batch(
+            batch,
+            max_jobs=max_jobs,
+            count_only=True,
+            parameter_counts=parameter_counts,
+            max_prompt_bytes=max_prompt_bytes,
+            max_resolved_text_bytes=max_resolved_text_bytes,
+        ),
+    )
+
+
+def validate_batch_plan(batch: BatchDefinition, plan: CompiledRunPlan) -> None:
+    """Compare against stored truth without expanding strings or retaining another plan."""
+    _compile_batch(batch, max_jobs=plan.job_count, expected_plan=plan)
+
+
+def _compile_batch(
+    batch: BatchDefinition,
+    *,
+    max_jobs: int | None = None,
+    max_prompt_bytes: int | None = None,
+    max_resolved_text_bytes: int | None = None,
+    count_only: bool = False,
+    parameter_counts: Mapping[str, int] | None = None,
+    expected_plan: CompiledRunPlan | None = None,
+) -> CompiledRunPlan | CompilationPreview:
+    if expected_plan is not None and (
+        batch.prompt_versions != expected_plan.prompt_versions
+        or batch.image_input_slots != expected_plan.image_input_slots
+        or batch.parameters != expected_plan.parameters
+    ):
+        raise CompilationError("Batch snapshot metadata does not match the compiled Run plan")
+    for limit in (max_prompt_bytes, max_resolved_text_bytes):
+        if limit is not None and (type(limit) is not int or limit < 0):
+            raise CompilationError("text byte budgets must be nonnegative integers")
     if not batch.prompt_versions:
         raise CompilationError("Batch must contain at least one PromptVersion")
     prompt_ids: set[str] = set()
@@ -256,7 +358,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             raise CompilationError(
                 f"linked parameter set {linked_set.key!r} must contain at least one row"
             )
-        seen_rows: list[tuple[object, ...]] = []
+        seen_rows: set[tuple[tuple[type, object], ...]] = set()
         definitions = {parameter.key: parameter for parameter in batch.parameters}
         for row_ordinal, row in enumerate(linked_set.rows, 1):
             if row.label is not None and not row.label.strip():
@@ -271,11 +373,12 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                 _validate_parameter_value(
                     member_key, definitions[member_key].value_type.value, value
                 )
-            if any(_parameter_rows_equal(row.values, prior) for prior in seen_rows):
+            row_key = tuple(parameter_value_key(value) for value in row.values)
+            if row_key in seen_rows:
                 raise CompilationError(
                     f"linked parameter set {linked_set.key!r} contains duplicate row tuples"
                 )
-            seen_rows.append(row.values)
+            seen_rows.add(row_key)
         linked_sets_by_key[linked_set.key] = linked_set
         linked_set_by_member.update({key: linked_set for key in linked_set.member_keys})
 
@@ -315,6 +418,19 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             emitted_sets.add(axis_linked_set.key)
 
     seeds = _seed_values(batch)
+    if parameter_counts is not None and any(
+        key not in parameter_values or type(size) is not int or size < 1
+        for key, size in parameter_counts.items()
+    ):
+        raise CompilationError(
+            "parameter preflight counts must be positive integers for independent bindings"
+        )
+    axis_counts = tuple(
+        parameter_counts[key]
+        if parameter_counts is not None and key is not None and key in parameter_counts
+        else len(axis)
+        for key, axis in zip(parameter_axis_keys, parameter_axes, strict=True)
+    )
     seed_axis_count = (
         batch.seeds.random_seed_count
         if batch.seeds.mode is SeedMode.MATERIALIZED_RANDOM
@@ -338,10 +454,10 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
             if remaining_jobs is not None and prompt_jobs > remaining_jobs // len(image_axis):
                 raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
             prompt_jobs *= len(image_axis)
-        for parameter_axis in parameter_axes:
-            if remaining_jobs is not None and prompt_jobs > remaining_jobs // len(parameter_axis):
+        for axis_count in axis_counts:
+            if remaining_jobs is not None and prompt_jobs > remaining_jobs // axis_count:
                 raise CompilationError(f"Batch expands beyond the maximum of {max_jobs} Jobs")
-            prompt_jobs *= len(parameter_axis)
+            prompt_jobs *= axis_count
         expected_jobs += prompt_jobs
     if batch.seeds.mode is SeedMode.MATERIALIZED_RANDOM and len(seeds) != expected_jobs:
         raise CompilationError(
@@ -361,7 +477,63 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
         if binding.placeholder not in globally_used_placeholders
     )
 
+    if expected_plan is not None and (
+        expected_jobs != expected_plan.job_count or warnings != expected_plan.warnings
+    ):
+        raise CompilationError(
+            "Batch snapshot count or warnings do not match the compiled Run plan"
+        )
+    if max_prompt_bytes is not None or max_resolved_text_bytes is not None:
+        total_text = 0
+        copies = seed_axis_count * math.prod(map(len, image_axes)) * math.prod(axis_counts)
+        for prompt, text_names in zip(batch.prompt_versions, prompt_placeholders, strict=True):
+            occurrences = Counter(
+                match.group(1) for match in _PLACEHOLDER_PATTERN.finditer(prompt.text)
+            )
+            literal = sum(
+                _utf8_size(chunk)
+                for chunk in _prompt_chunks(prompt.text, dict.fromkeys(text_names, ""))
+            )
+            sizes = {
+                name: tuple(_utf8_size(value) for value in binding_values[name])
+                for name in text_names
+            }
+            largest = literal + sum(occurrences[name] * max(sizes[name]) for name in text_names)
+            if max_prompt_bytes is not None and largest > max_prompt_bytes:
+                raise CompilationError(
+                    f"resolved prompt exceeds the maximum of {max_prompt_bytes} UTF-8 bytes"
+                )
+            variants = math.prod(len(binding_values[name]) for name in text_names)
+            total_text += copies * (
+                literal * variants
+                + sum(
+                    (occurrences[name] + 1) * sum(sizes[name]) * (variants // len(sizes[name]))
+                    for name in text_names
+                )
+            )
+        for axis, linked in zip(parameter_axes, parameter_axis_sets, strict=True):
+            text_size = sum(
+                _utf8_size(value)
+                for item in axis
+                for value in (cast(LinkedParameterRow, item).values if linked else (item,))
+                if isinstance(value, str)
+            )
+            total_text += text_size * (expected_jobs // len(axis))
+        if max_resolved_text_bytes is not None and total_text > max_resolved_text_bytes:
+            raise CompilationError(
+                f"resolved text exceeds the maximum of {max_resolved_text_bytes} UTF-8 bytes"
+            )
+
+    if count_only:
+        return CompilationPreview(job_count=expected_jobs, warnings=warnings)
+
     jobs: list[CompiledJob] = []
+    ordinal = 0
+    row_ordinals = {
+        (linked_set.key, id(row)): index
+        for linked_set in batch.linked_parameter_sets
+        for index, row in enumerate(linked_set.rows, 1)
+    }
     random_seed_position = 0
 
     for prompt_version, placeholder_names in zip(
@@ -370,7 +542,14 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
         value_axes = tuple(binding_values[name] for name in placeholder_names)
         for variable_values in product(*value_axes):
             assignments = dict(zip(placeholder_names, variable_values, strict=True))
-            resolved_prompt = _resolve_prompt(prompt_version.text, assignments)
+            if expected_plan is None:
+                resolved_prompt = _resolve_prompt(prompt_version.text, assignments)
+            else:
+                resolved_prompt = expected_plan.jobs[ordinal].resolved_prompt
+                if not _prompt_matches(prompt_version.text, assignments, resolved_prompt):
+                    raise CompilationError(
+                        "Batch snapshot prompt does not match the compiled Run plan"
+                    )
             unresolved = extract_placeholder_names(resolved_prompt)
             if unresolved:
                 names = ", ".join(repr(name) for name in unresolved)
@@ -408,7 +587,7 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                             ResolvedParameterSet(
                                 set_key=axis_linked_set.key,
                                 set_label=axis_linked_set.label,
-                                row_ordinal=axis_linked_set.rows.index(row) + 1,
+                                row_ordinal=row_ordinals[(axis_linked_set.key, id(row))],
                                 row_label=row.label,
                             )
                         )
@@ -423,19 +602,38 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
                         ]
                         random_seed_position += seed_axis_count
                     for seed in seeds_for_configuration:
-                        jobs.append(
-                            CompiledJob(
-                                ordinal=len(jobs) + 1,
-                                prompt_version_id=prompt_version.id,
-                                resolved_prompt=resolved_prompt,
-                                resolved_variables=resolved_variables,
-                                resolved_image_inputs=resolved_image_inputs,
-                                resolved_parameters=resolved_parameters,
-                                resolved_parameter_sets=tuple(resolved_parameter_sets),
-                                seed=seed,
-                            )
+                        ordinal += 1
+                        job = CompiledJob(
+                            ordinal=ordinal,
+                            prompt_version_id=prompt_version.id,
+                            resolved_prompt=resolved_prompt,
+                            resolved_variables=resolved_variables,
+                            resolved_image_inputs=resolved_image_inputs,
+                            resolved_parameters=resolved_parameters,
+                            resolved_parameter_sets=tuple(resolved_parameter_sets),
+                            seed=seed,
                         )
+                        if expected_plan is None:
+                            jobs.append(job)
+                        else:
+                            stored = expected_plan.jobs[ordinal - 1]
+                            if job != stored or any(
+                                type(left.value) is not type(right.value)
+                                or (
+                                    isinstance(left.value, float)
+                                    and isinstance(right.value, float)
+                                    and left.value.hex() != right.value.hex()
+                                )
+                                for left, right in zip(
+                                    job.resolved_parameters, stored.resolved_parameters, strict=True
+                                )
+                            ):
+                                raise CompilationError(
+                                    "Batch snapshot does not reconstruct the compiled Run plan"
+                                )
 
+    if expected_plan is not None:
+        return expected_plan
     return CompiledRunPlan(
         prompt_versions=batch.prompt_versions,
         image_input_slots=batch.image_input_slots,
@@ -445,8 +643,19 @@ def compile_batch(batch: BatchDefinition, *, max_jobs: int | None = None) -> Com
     )
 
 
-def preview_batch(batch: BatchDefinition) -> CompilationPreview:
-    plan = compile_batch(batch)
+def preview_batch(
+    batch: BatchDefinition,
+    *,
+    max_jobs: int | None = None,
+    max_prompt_bytes: int | None = None,
+    max_resolved_text_bytes: int | None = None,
+) -> CompilationPreview:
+    plan = compile_batch(
+        batch,
+        max_jobs=max_jobs,
+        max_prompt_bytes=max_prompt_bytes,
+        max_resolved_text_bytes=max_resolved_text_bytes,
+    )
     return CompilationPreview(job_count=plan.job_count, warnings=plan.warnings)
 
 
@@ -474,20 +683,3 @@ def _validate_parameter_value(key: str, value_type: str, value: object) -> None:
         valid = isinstance(value, bool)
     if not valid:
         raise CompilationError(f"parameter binding for {key!r} must be {value_type} or null")
-
-
-def _parameter_rows_equal(left: tuple[object, ...], right: tuple[object, ...]) -> bool:
-    return all(
-        _parameter_values_equal(left_value, right_value)
-        for left_value, right_value in zip(left, right, strict=True)
-    )
-
-
-def _parameter_values_equal(left: object, right: object) -> bool:
-    if left is None or right is None:
-        return left is right
-    if isinstance(left, bool) or isinstance(right, bool):
-        return isinstance(left, bool) and isinstance(right, bool) and left == right
-    if isinstance(left, str) or isinstance(right, str):
-        return isinstance(left, str) and isinstance(right, str) and left == right
-    return isinstance(left, (int, float)) and isinstance(right, (int, float)) and left == right

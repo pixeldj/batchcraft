@@ -228,11 +228,15 @@ Run IDs fails the gate.
 Current gate status: BC-020 import, reindex, inspection, idempotency, and degraded-content coverage is
 implemented. Completed BC-021 covers frozen-intent reconstruction, exact/missing/conflicting resource
 classification, explicit server-sourced historical import, pre-edit Preview under the seed-mode rules
-above, new Run creation, and original-Run hash preservation in focused automated tests. Complete realistic-fixture coverage,
-repeat-fresh Instance B proof, and the live ComfyUI smoke test remain incomplete. No final manual
-cross-instance acceptance is claimed.
+above, new Run creation, and original-Run hash preservation in focused automated tests. The owner now
+confirms that the portability requirements work on their instance. This is owner-reported manual
+acceptance, not an independently observed live test or a retained archive-hash report. Final candidate
+acceptance remains pending the owner's planned test after resource-fix CI; tagging and deployment are
+not authorized by this confirmation alone.
 
 Owner-reported smoke evidence after PR #3 merged: a fresh temporary source checkout was installed,
 a copied Project imported with its history, and `Load Run as Batch` plus Prompt/Workflow resource import
-worked. No independent archive-hash comparison, repeat-fresh Instance B proof, or successful live Run
-was reported. This supports the installation/recovery path but does not change the unpassed gate status.
+worked. The subsequent owner confirmation covers the portability requirements as a whole; the exact
+tested revision and individual test artifacts were not supplied. Do not require the completed manual
+work to be repeated merely because it was owner-reported. Record the next candidate revision and its
+final test outcome before resolving ADR 0012 and the release gate.

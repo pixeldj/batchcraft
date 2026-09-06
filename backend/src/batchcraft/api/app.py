@@ -253,6 +253,8 @@ def create_app(
             clock=clock,
             random_seed_source=random_seed_source,
             max_jobs=configured.max_jobs,
+            max_prompt_bytes=configured.max_prompt_bytes,
+            max_resolved_text_bytes=configured.max_resolved_text_bytes,
         )
         app.state.library_service = LibraryService(
             project_store=ProjectStore(configured.database_path),
@@ -916,16 +918,22 @@ def create_app(
         service: ServiceDependency,
         files: Annotated[list[UploadFile], File()],
     ) -> AssetsResponse:
-        with tempfile.TemporaryDirectory(prefix="batchcraft-assets-") as temporary_directory:
+        def import_assets() -> AssetsResponse:
             try:
-                staged = await _stage_asset_uploads(files, Path(temporary_directory))
-                assets = service.import_project_assets(project_key, staged)
+                with tempfile.TemporaryDirectory(
+                    prefix="batchcraft-assets-"
+                ) as temporary_directory:
+                    staged = _stage_asset_uploads(files, Path(temporary_directory))
+                    assets = service.import_project_assets(project_key, staged)
+                return AssetsResponse(
+                    assets=[AssetResponse.from_asset(project_key, asset) for asset in assets]
+                )
             finally:
+                # Multipart parsing is complete; retain its files until the joined worker ends.
                 for upload in files:
-                    await upload.close()
-        return AssetsResponse(
-            assets=[AssetResponse.from_asset(project_key, asset) for asset in assets]
-        )
+                    upload.file.close()
+
+        return await file_operation(import_assets)
 
     @app.get("/api/projects/{project_key}/assets/{asset_id}/content")
     async def get_project_asset_content(
@@ -946,13 +954,22 @@ def create_app(
     ) -> PreviewResponse:
         if request.seeds.needs_materialization:
             assert request.seeds.random_seed_count is not None
-            creation = request.to_creation_input(seed_override=SeedInput.fixed(0))
+            creation = request.to_creation_input(
+                seed_override=SeedInput.fixed(0),
+                max_jobs=configured.max_jobs,
+                max_prompt_bytes=configured.max_prompt_bytes,
+                max_resolved_text_bytes=configured.max_resolved_text_bytes,
+            )
             plan, image_assets = service.preview_random_batch(
                 creation,
                 request.seeds.random_seed_count,
             )
         else:
-            creation = request.to_creation_input()
+            creation = request.to_creation_input(
+                max_jobs=configured.max_jobs,
+                max_prompt_bytes=configured.max_prompt_bytes,
+                max_resolved_text_bytes=configured.max_resolved_text_bytes,
+            )
             plan, image_assets = service.preview_batch(creation)
         return PreviewResponse.from_plan(plan, image_assets)
 
@@ -965,7 +982,11 @@ def create_app(
         request: RunCreateRequest,
         service: ServiceDependency,
     ) -> RunCreatedResponse:
-        creation = request.to_creation_input()
+        creation = request.to_creation_input(
+            max_jobs=configured.max_jobs,
+            max_prompt_bytes=configured.max_prompt_bytes,
+            max_resolved_text_bytes=configured.max_resolved_text_bytes,
+        )
         run = await file_operation(lambda: service.create_run(creation))
         return RunCreatedResponse.from_run(run)
 
@@ -1194,6 +1215,9 @@ def _create_comfyui_client(settings: Settings) -> ComfyUIClient:
     return ComfyUIClient(
         settings.comfyui_base_url,
         timeout=settings.comfyui_timeout_seconds,
+        max_json_response_bytes=settings.comfyui_max_json_response_bytes,
+        max_artifact_bytes=settings.comfyui_max_artifact_bytes,
+        max_websocket_message_bytes=settings.comfyui_max_websocket_message_bytes,
     )
 
 
@@ -1561,7 +1585,7 @@ def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body.model_dump())
 
 
-async def _stage_asset_uploads(
+def _stage_asset_uploads(
     uploads: list[UploadFile], temporary_root: Path
 ) -> tuple[AssetImportInput, ...]:
     staged: list[AssetImportInput] = []
@@ -1570,7 +1594,7 @@ async def _stage_asset_uploads(
         upload_path = temporary_root / str(index) / filename
         upload_path.parent.mkdir()
         with upload_path.open("xb") as output:
-            while chunk := await upload.read(1024 * 1024):
+            while chunk := upload.file.read(1024 * 1024):
                 output.write(chunk)
         staged.append(AssetImportInput(source=upload_path, content_type=upload.content_type or ""))
     return tuple(staged)

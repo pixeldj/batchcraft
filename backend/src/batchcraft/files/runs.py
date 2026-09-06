@@ -45,8 +45,8 @@ from batchcraft.domain import (
     SeedInput,
     VariableBinding,
     WorkflowParameter,
-    compile_batch,
     materialize_parameter_bindings,
+    validate_batch_plan,
     validate_image_input_slot_key,
     validate_parameter_scalar,
 )
@@ -1491,6 +1491,14 @@ def _validate_batch_snapshot_consistency(
     selection = parsed.workflow_selection
     if selection.workflow != workflow or selection.workflow_profile != workflow_profile:
         raise RunStoreError("Batch snapshot Workflow selection does not match the Run snapshots")
+    prompts = tuple(PromptVersion(item.id, item.name, item.text) for item in parsed.prompt_versions)
+    if (
+        prompts != plan.prompt_versions
+        or _profile_parameters(workflow_profile) != plan.parameters
+        or tuple(ImageInputSlot(*item) for item in _profile_image_inputs(workflow_profile))
+        != plan.image_input_slots
+    ):
+        raise RunStoreError("Batch snapshot metadata does not match the compiled Run plan")
 
     seed_intent = parsed.seed_intent
     if seed_intent.mode == "random":
@@ -1509,12 +1517,9 @@ def _validate_batch_snapshot_consistency(
         seeds = SeedInput.explicit(tuple(seed_intent.values))
 
     try:
-        snapshot_plan = compile_batch(
+        validate_batch_plan(
             BatchDefinition(
-                prompt_versions=tuple(
-                    PromptVersion(id=item.id, name=item.name, text=item.text)
-                    for item in parsed.prompt_versions
-                ),
+                prompt_versions=prompts,
                 variable_bindings=tuple(
                     VariableBinding(placeholder=item.placeholder, values=tuple(item.values))
                     for item in parsed.variable_bindings
@@ -1531,32 +1536,17 @@ def _validate_batch_snapshot_consistency(
                 parameter_bindings=materialize_parameter_bindings(
                     _profile_parameters(workflow_profile),
                     tuple(_snapshot_parameter_intent(item) for item in parsed.parameter_bindings),
+                    max_combinations=plan.job_count,
                 ),
                 linked_parameter_sets=tuple(
                     _snapshot_linked_parameter_set(item) for item in parsed.linked_parameter_sets
                 ),
                 seeds=seeds,
             ),
-            max_jobs=plan.job_count,
+            plan,
         )
     except (CompilationError, ValueError) as error:
         raise RunStoreError(f"Batch snapshot does not compile: {error}") from error
-    if not _compiled_plans_match_exactly(snapshot_plan, plan):
-        raise RunStoreError("Batch snapshot does not reconstruct the compiled Run plan")
-
-
-def _compiled_plans_match_exactly(left: CompiledRunPlan, right: CompiledRunPlan) -> bool:
-    if left != right:
-        return False
-    left_values = tuple(
-        tuple(canonical_json_bytes(parameter.value) for parameter in job.resolved_parameters)
-        for job in left.jobs
-    )
-    right_values = tuple(
-        tuple(canonical_json_bytes(parameter.value) for parameter in job.resolved_parameters)
-        for job in right.jobs
-    )
-    return left_values == right_values
 
 
 def _snapshot_linked_parameter_set(item: SnapshotLinkedParameterSet) -> LinkedParameterSet:

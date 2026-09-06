@@ -42,7 +42,10 @@ For direct `batchcraft-api` startup, configuration is read centrally from enviro
 | `BATCHCRAFT_DATABASE_PATH` | `<data-root>/batchcraft.sqlite3` | SQLite application-state database |
 | `BATCHCRAFT_PROJECTS_ROOT` | `<data-root>/projects` | Project and Run filesystem root; independently configurable |
 | `BATCHCRAFT_COMFYUI_BASE_URL` | `http://127.0.0.1:8188` | Backend-owned ComfyUI endpoint |
-| `BATCHCRAFT_COMFYUI_TIMEOUT` | `30` | ComfyUI HTTP timeout in seconds |
+| `BATCHCRAFT_COMFYUI_TIMEOUT` | `30` | ComfyUI HTTP inactivity/transport-phase timeout in seconds, not a whole-response deadline |
+| `BATCHCRAFT_COMFYUI_MAX_JSON_RESPONSE_BYTES` | `8388608` (8 MiB) | Positive integer cap per ComfyUI JSON/error response body |
+| `BATCHCRAFT_COMFYUI_MAX_ARTIFACT_BYTES` | `268435456` (256 MiB) | Positive integer cap per successful ComfyUI artifact response body |
+| `BATCHCRAFT_COMFYUI_MAX_WEBSOCKET_MESSAGE_BYTES` | `4194304` (4 MiB) | Positive integer cap per ComfyUI WebSocket message |
 | `BATCHCRAFT_WEBSOCKET_TIMEOUT` | `21600` | Advisory WebSocket observation bound |
 | `BATCHCRAFT_HISTORY_TIMEOUT` | `21600` | Authoritative history reconciliation bound |
 | `BATCHCRAFT_HISTORY_POLL_INTERVAL` | `1` | History polling interval in seconds |
@@ -50,6 +53,8 @@ For direct `batchcraft-api` startup, configuration is read centrally from enviro
 | `BATCHCRAFT_SERVER_HOST` | `127.0.0.1` | API bind host |
 | `BATCHCRAFT_SERVER_PORT` | `8000` | API bind port |
 | `BATCHCRAFT_MAX_JOBS` | `10000` | Positive materialization budget for new Job plans and Saved Batch parameter validation |
+| `BATCHCRAFT_MAX_PROMPT_BYTES` | `1048576` (1 MiB) | Positive integer cap per new resolved prompt, measured in raw UTF-8 |
+| `BATCHCRAFT_MAX_RESOLVED_TEXT_BYTES` | `33554432` (32 MiB) | Positive integer aggregate resolved-text cap across a new plan |
 | `BATCHCRAFT_MAX_REQUEST_BYTES` | `67108864` | Positive total request-body budget, including multipart overhead |
 | `BATCHCRAFT_MAX_INFLIGHT_REQUEST_BODIES` | `4` | Positive per-process capacity for requests retaining admitted bodies |
 | `BATCHCRAFT_REQUEST_BODY_TIMEOUT` | `120` | Positive finite deadline in seconds for receiving and spooling a body |
@@ -98,10 +103,15 @@ closing the spool and releasing capacity; a stalled filesystem operation can del
 the error response. Isolated app/dev/test launchers retain the default budgets and do not inherit these
 environment overrides. See ADR 0015 for the boundary and remaining limits.
 
-Preview and Run creation reject plans exceeding the configured Job budget before expansion/publication.
-Saved Batch writes enforce it on parameter combinations even for incomplete drafts; Preview checks all
-dimensions. Existing valid Saved Batches and historical Runs remain readable after lowering the budget.
-Preview runs in a worker thread; this does not make all filesystem or compilation work nonblocking.
+Preview and Run creation pass all three configured plan limits into count-only preflight before numeric
+Range allocation, prompt resolution, Job expansion, or Random assignment. Over-budget plans return
+`422 invalid_batch` without publication. The service also enforces the limits during compilation.
+Saved Batch writes enforce the Job budget on parameter combinations even for incomplete drafts;
+Preview checks all dimensions. Existing valid Saved Batches and historical Runs remain readable after
+lowering the budget. Preview runs in a worker thread.
+`BATCH_COMPILER.md` defines the raw UTF-8 accounting and exclusions; it is not a process-memory cap.
+`COMFYUI_INTEGRATION.md` defines identity-only HTTP encoding, response-body caps, finite WebSocket
+messages, and the remaining transfer-duration limitation.
 
 Read-only Project Run history, Run detail, Batch reconstruction, Result listing/download, and Project
 Asset listing/download share four active slots and at most eight FIFO waiters per application process.
@@ -114,14 +124,19 @@ requiring an image retry, while bounding larger bursts. Waiting allocates no rea
 snapshot. Cancelled and timed-out waiters leave the queue; a cancelled grant returns its reserved slot
 to the next waiter. A download retains its active slot through verification, streaming, and tempfile
 cleanup. The five-second deadline limits queue waiting only, not read/stream duration or historical size.
+At most four verified download snapshots can occupy these bulk slots, but each may be arbitrarily
+large. Temporary disk demand is their combined size, not a fixed byte quota; slow active streams can
+retain both disk and capacity. No new historical artifact cap or active-stream deadline is imposed.
 
 These reads and their JSON serialization use the asyncio executor rather than the shared AnyIO
 worker pool. Service/library dependencies and execution task-registry reads stay on the event loop.
 Health, active-execution discovery, and mutation/control routes do not acquire a read slot or join a
 read queue; execution polling never joins the bulk queue. This is not a general latency
 guarantee: persisted parsing still does full validation, unrelated work can use worker capacity, and
-existing mutation paths are not made nonblocking by this policy. Cancellation joins an active file
-operation before releasing its slot or closing its tempfile, without blocking the event loop.
+this policy does not make all mutation or compilation work nonblocking. Run creation, Project Asset
+import, and cancellation validation use joined file workers for their filesystem work. Cancellation
+joins an active file operation before releasing its slot or closing its tempfile, without blocking the
+event loop.
 
 Project History fetches Result lists for at most two Runs concurrently and stops queued work when its
 Project changes or the view unmounts. The frontend HTTP client retries only GET responses carrying

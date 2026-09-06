@@ -3749,6 +3749,7 @@ describe("Current Results without Batch Results", () => {
     expect(within(currentResultsSection()).getByAltText("Result 1 from Job 2: a2.png")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Batch Results" })).not.toBeInTheDocument();
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create Another Run" }));
     await screen.findByRole("heading", { name: "Run 11" });
     expect(within(currentResultsSection()).queryByRole("img")).not.toBeInTheDocument();

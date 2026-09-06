@@ -72,21 +72,23 @@ def validate_parameter_alternatives(values: Sequence[object]) -> None:
     for value in values:
         if value is not None:
             validate_parameter_scalar(value)
-    for position, value in enumerate(values):
-        if any(_parameter_values_equal(value, prior) for prior in values[:position]):
+    seen: set[tuple[type, object]] = set()
+    for value in values:
+        key = parameter_value_key(value)
+        if key in seen:
             raise ValueError("parameter binding values must not contain exact duplicates")
+        seen.add(key)
     if None in values and values[0] is not None:
         raise ValueError("parameter binding values must place Base workflow first")
 
 
-def _parameter_values_equal(left: object, right: object) -> bool:
-    if left is None or right is None:
-        return left is right
-    if isinstance(left, bool) or isinstance(right, bool):
-        return isinstance(left, bool) and isinstance(right, bool) and left == right
-    if isinstance(left, str) or isinstance(right, str):
-        return isinstance(left, str) and isinstance(right, str) and left == right
-    return isinstance(left, (int, float)) and isinstance(right, (int, float)) and left == right
+def parameter_value_key(value: object) -> tuple[type, object]:
+    """Duplicate identity: numbers compare together; booleans remain distinct."""
+    if isinstance(value, bool):
+        return bool, value
+    if isinstance(value, str):
+        return str, value
+    return (float if isinstance(value, (int, float)) else type(value)), value
 
 
 @dataclass(frozen=True, slots=True)

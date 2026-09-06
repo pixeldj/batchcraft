@@ -169,6 +169,27 @@ including Random repetition. Saved Batch writes apply the budget to parameter co
 allowing incomplete drafts; Preview checks the complete plan. Valid persisted Saved Batches and historical
 Runs remain readable regardless of the current budget. See ADR 0015.
 
+### Resolved text budgets
+
+New Preview and Run creation also default to 1 MiB per resolved prompt and 32 MiB of resolved text
+across the final plan. `BATCHCRAFT_MAX_PROMPT_BYTES` and `BATCHCRAFT_MAX_RESOLVED_TEXT_BYTES` configure
+these positive integer byte limits. The request boundary passes these limits and the Job budget into
+count-only preflight before allocating any numeric Range values, resolved prompts, Jobs, or Random seeds.
+Random repetition counts toward the final plan, not just the non-seed configurations. The service applies
+the same limits during compilation; pure compiler callers may leave individual limits unset.
+
+Accounting uses raw UTF-8 bytes. Each Job counts its resolved prompt, each used variable value once per
+placeholder name in provenance, and each concrete string parameter value, including Linked Parameter
+Set cells. Repeated placeholders count at every occurrence in the resolved prompt, but only once in
+variable provenance. Identical text counts again for every Job even if objects share storage. Unused
+variable bindings do not contribute. JSON escapes, keys, labels, snapshots, Base workflow strings,
+non-string scalar values, and Python object overhead are excluded. These are logical payload budgets,
+not a bound on serialized JSON size or process memory.
+
+Historical validation checks the frozen Jobs against Batch intent without allocating a second complete
+Job plan or re-resolving full prompt strings. Saved Batch validation uses counts rather than Job
+construction. Neither path applies new historical size caps or rewrites valid persisted data.
+
 ## Preview
 
 Before execution, users should be able to preview at least:

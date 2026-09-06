@@ -14,6 +14,7 @@ from typing import BinaryIO, Literal, Protocol, cast
 from uuid import UUID, uuid5
 from weakref import WeakValueDictionary
 
+from batchcraft._async_io import file_operation
 from batchcraft.comfyui import (
     ComfyUIError,
     ServerInfo,
@@ -246,10 +247,20 @@ class BatchcraftService:
         clock: Callable[[], datetime] | None = None,
         random_seed_source: RandomSeedSource = secrets.randbelow,
         max_jobs: int = 10_000,
+        max_prompt_bytes: int = 1024 * 1024,
+        max_resolved_text_bytes: int = 32 * 1024 * 1024,
     ) -> None:
         if isinstance(max_jobs, bool) or not isinstance(max_jobs, int) or max_jobs < 1:
             raise ValueError("max_jobs must be a positive integer")
         self.max_jobs = max_jobs
+        for name, value in (
+            ("max_prompt_bytes", max_prompt_bytes),
+            ("max_resolved_text_bytes", max_resolved_text_bytes),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        self.max_prompt_bytes = max_prompt_bytes
+        self.max_resolved_text_bytes = max_resolved_text_bytes
         self.projects_root = projects_root
         self.comfyui_client = comfyui_client
         self.task_registry = task_registry
@@ -277,11 +288,15 @@ class BatchcraftService:
         creation: RunCreationInput,
         random_seed_count: int,
     ) -> tuple[CompiledRunPlan, dict[str, AssetRecord]]:
+        from batchcraft.domain import count_batch
+
         if random_seed_count < 1:
             raise RunCreationError("Random seed count must be positive")
-        base_plan = compile_batch(
+        base_plan = count_batch(
             creation.definition,
             max_jobs=min(self.max_jobs, _SEED_SPACE_SIZE) // random_seed_count,
+            max_prompt_bytes=self.max_prompt_bytes,
+            max_resolved_text_bytes=self.max_resolved_text_bytes // random_seed_count,
         )
         seeds = materialize_random_seeds(
             base_plan.job_count * random_seed_count,
@@ -405,7 +420,12 @@ class BatchcraftService:
             raise RunCreationError(f"Run could not be published: {error}") from error
 
     def _compile_and_validate(self, creation: RunCreationInput) -> CompiledRunPlan:
-        plan = compile_batch(creation.definition, max_jobs=self.max_jobs)
+        plan = compile_batch(
+            creation.definition,
+            max_jobs=self.max_jobs,
+            max_prompt_bytes=self.max_prompt_bytes,
+            max_resolved_text_bytes=self.max_resolved_text_bytes,
+        )
         first_job = plan.jobs[0]
         prepare_workflow(
             creation.workflow,
@@ -768,8 +788,8 @@ class BatchcraftService:
         run_id: str,
         mode: RunCancellationMode = RunCancellationMode.AFTER_CURRENT_JOB,
     ) -> RunCancellationRequestResult:
-        run = self.get_run(run_id)
-        state = self.get_execution_state(run)
+        run = await file_operation(lambda: self.get_run(run_id))
+        state = await file_operation(lambda: self.get_execution_state(run))
         intent = await asyncio.to_thread(self._get_cancellation_intent, run_id, mode)
         if intent is not None:
             return _cancellation_request_result(state, intent, created=False)
@@ -816,11 +836,11 @@ class BatchcraftService:
         if requested is not None:
             record, created = requested
             return _cancellation_request_result(
-                self.get_execution_state(run), record, created=created
+                await file_operation(lambda: self.get_execution_state(run)), record, created=created
             )
 
         # The execution may have reached a terminal state while this request was admitted.
-        state = self.get_execution_state(run)
+        state = await file_operation(lambda: self.get_execution_state(run))
         intent = await asyncio.to_thread(self._get_cancellation_intent, run_id, mode)
         if intent is not None:
             return _cancellation_request_result(state, intent, created=False)

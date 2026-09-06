@@ -171,6 +171,29 @@ local outcome. It does not call a ComfyUI interrupt, clear a queue, claim remote
 submission, or prevent the remote Job from continuing. Ownership-safe remote interruption remains
 deferred to BC-003C.
 
+## Response Budgets
+
+The production client defaults to 8 MiB per JSON/error HTTP response, 256 MiB per successful artifact
+HTTP response, and 4 MiB per WebSocket message. All three are strict positive integer constructor
+settings; the direct-start environment variables and exact byte defaults are listed in `API.md`.
+These limits apply to newly received ComfyUI data, not existing historical Results or metadata.
+
+HTTP requests advertise `Accept-Encoding: identity` and reject other response content encodings.
+Responses are read as raw streamed bytes with a declared-length early check and an authoritative
+received-byte check before buffering beyond the cap. Error bodies use the JSON/error cap even for an
+artifact request. Redirects are not followed. These are body-byte caps, not bounds on headers, transport
+buffers, decoded object overhead, or total process memory. WebSocket messages have a finite transport
+limit, including binary preview messages that the application otherwise ignores.
+
+An oversized, encoded, or interrupted submission response retains the existing classification:
+received HTTP 4xx status is definite rejection; acceptance not established by a valid prompt ID remains
+ambiguous otherwise. Response-limit failures do not authorize automatic resubmission. A WebSocket
+limit failure remains advisory and leaves authoritative history reconciliation in charge.
+
+The HTTP timeout is an inactivity/transport-phase timeout, not an absolute whole-response deadline.
+A peer that keeps making progress can retain a request longer than that timeout. Byte limits do not
+bound active transfer duration; the separate execution observation/reconciliation policies still apply.
+
 ## Execution Monitoring
 
 Use ComfyUI's real-time execution events where practical, with history/status queries available for reconciliation.

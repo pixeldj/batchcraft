@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
@@ -36,8 +37,9 @@ from batchcraft.domain import (
     PromptVersion,
     SeedInput,
     WorkflowParameter,
-    compile_batch,
+    count_batch,
     materialize_parameter_bindings,
+    parameter_binding_counts,
     validate_image_input_slot_key,
     validate_parameter_alternatives,
     validate_parameter_scalar,
@@ -104,12 +106,12 @@ class SavedBatchStore:
             parameters = tuple(
                 _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
             )
-            bindings = materialize_parameter_bindings(parameters, definition.parameter_bindings)
+            counts = parameter_binding_counts(parameters, definition.parameter_bindings)
         except ValueError as error:
             raise SavedBatchValidationError(str(error)) from error
         count = 1
         for size in (
-            *(len(binding.values) for binding in bindings),
+            *counts.values(),
             *(len(linked_set.rows) for linked_set in definition.linked_parameter_sets),
         ):
             if size and count > self.max_jobs // size:
@@ -668,8 +670,15 @@ def _validate_library_selections(
             parameters = tuple(
                 _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
             )
-            bindings = materialize_parameter_bindings(parameters, definition.parameter_bindings)
-            compile_batch(
+            bindings = materialize_parameter_bindings(
+                parameters,
+                definition.parameter_bindings,
+                max_combinations=None
+                if max_jobs is None
+                else max_jobs
+                // max(1, math.prod(len(item.rows) for item in definition.linked_parameter_sets)),
+            )
+            count_batch(
                 BatchDefinition(
                     prompt_versions=(PromptVersion("saved-batch-validation", "Validation", ""),),
                     variable_bindings=(),
@@ -1322,7 +1331,7 @@ def _validate_persisted_parameter_bindings(
             _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
         )
         materialized = materialize_parameter_bindings(parameters, bindings)
-        compile_batch(
+        count_batch(
             BatchDefinition(
                 prompt_versions=(PromptVersion("saved-batch-load", "Load", ""),),
                 variable_bindings=(),

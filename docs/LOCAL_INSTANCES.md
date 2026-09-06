@@ -86,11 +86,17 @@ Host checks accept loopback names and the actual local destination IP for LAN ac
 LAN IP above, not an arbitrary DNS alias or reverse proxy. Mutation Origin checks permit the validated
 same origin and the configured development frontend, but do not authenticate clients. Isolated launchers
 use a 64 MiB total request-body limit and a 10,000-Job new-plan limit; inherited environment values do not
-change these defaults. Body admission permits four in-flight bodies with a 120-second receive/spool
+change these defaults. New plans also use 1 MiB per resolved prompt and 32 MiB aggregate resolved text.
+Real ComfyUI clients default to 8 MiB JSON/error bodies, 256 MiB artifact bodies, and 4 MiB WebSocket
+messages; simulated clients perform no network requests. Direct-start environment knobs and exact byte
+defaults are listed once in `API.md`; they are not additional `app.local.json` fields.
+Body admission permits four in-flight bodies with a 120-second receive/spool
 deadline. Bulk reads allow four active requests and eight waiters; execution polling has two active
 slots and four separate waiters. Read queue waits expire after five seconds. Historical artifacts have
 no new size cap: downloads verify into temporary disk snapshots and stream with bounded buffers.
-Temporary disk usage depends on artifact size. See `API.md` and ADR 0015 for error and cleanup behavior.
+Up to four such snapshots can coexist, with disk usage equal to their combined sizes and no active-stream
+deadline. The ComfyUI HTTP timeout is inactivity-based, not an absolute transfer deadline. See `API.md`
+and ADR 0015 for accounting, exclusions, error, and cleanup behavior.
 
 Close the terminal with Ctrl+C only after active work has finished. Closing a browser tab does not stop
 the backend. Stopping the backend does not interrupt the remote ComfyUI Job, and automatic executor
