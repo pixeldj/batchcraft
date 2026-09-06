@@ -282,8 +282,8 @@ replayable provenance remains required; an exact replay action is not a v1 relea
 The cross-instance gate is Passed on owner-reported candidate acceptance in
 `V1_CROSS_INSTANCE_ACCEPTANCE.md`; ADR 0012 is Accepted. v1.0.0 is a source-only macOS release.
 Browser automation covers Chromium desktop and mobile viewports, not Safari or a Windows batchcraft
-application. The repository remains private; its v1.0.0 tag is separate from future public publication.
-BC-025 retains only public-publication settings, licensing/distribution review, and final scans.
+application. The repository, v1.0.0 tag, and GitHub Release are public.
+BC-025 records publication evidence and completion status, separately from portability acceptance.
 
 ## Reproducibility Scope
 

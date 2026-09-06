@@ -13,7 +13,8 @@ forward migrations under `../DEVELOPMENT.md#persistence-policy`. This protection
 accepting this ADR. The gate in [V1_CROSS_INSTANCE_ACCEPTANCE.md](../V1_CROSS_INSTANCE_ACCEPTANCE.md)
 is Passed on owner-reported acceptance of candidate `79190ebadeb47c952e3bfeec23bfe15d3123d971`;
 PR #5 merged as `3eeb87a77e823c866bcf161313394d4af79059f1` with green checks.
-BC-025 retains only public-publication work, separate from the private v1.0.0 tag.
+The repository, v1.0.0 tag, and GitHub Release are public.
+BC-025 records publication evidence and completion status separately from this portability decision.
 
 The following Context and implementation-progress notes record proposal-time and intermediate findings.
 Their unresolved-gap and Proposed-status statements are historical, not the current decision status.
@@ -443,5 +444,5 @@ historical reuse work.
 
 BC-021's reconstruction implementation and the portability release gate are complete. The Project
 persistence contract is v1, with every durable format remaining independently at version 1 and applied
-SQLite migrations unchanged. BC-025 remains In Progress for public-publication settings,
-licensing/distribution review, and final scans, not portability acceptance or the private v1.0.0 tag.
+SQLite migrations unchanged. BC-025 records publication evidence and completion status,
+not portability acceptance. The repository and v1.0.0 GitHub Release are public.

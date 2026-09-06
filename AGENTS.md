@@ -215,5 +215,5 @@ persistence rules.
 
 The v1 portability gate in `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md` has passed through automated checks
 and owner acceptance of candidate `79190eb`; ADR 0012 is Accepted. Preserve the v1 persistence contract.
-BC-025 in `docs/BACKLOG.md` tracks remaining public-publication checks; a release tag does not authorize
-changing repository visibility or updating an everyday installation.
+BC-025 in `docs/BACKLOG.md` records completed public v1 publication and its verification. Publishing a
+release does not authorize updating an everyday installation or changing the v1 persistence contract.

@@ -8,8 +8,8 @@ _Last consolidated: 2026-09-01._
 
 ## Current focus
 
-Public v1 preparation is tracked by [BC-025](#bc-025-public-v1-release-hardening-and-acceptance).
-Its portability gate is Passed; public publication remains open, separate from the private v1.0.0 tag.
+Public v1 publication is complete under [BC-025](#bc-025-public-v1-release-hardening-and-acceptance).
+Its portability gate is Passed; the repository, v1.0.0 tag, and GitHub Release are public.
 Earlier entry-level gate notes record their milestone-time status; BC-025 holds current acceptance.
 
 1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Done)
@@ -1126,10 +1126,10 @@ Acceptance and scope:
 | --- | --- |
 | ID | BC-025 |
 | Priority | P1 |
-| Status | In Progress |
+| Status | Done |
 | Area | Security / Licensing / Release / Documentation |
 | Summary | Resolve the public-source audit findings and pass candidate-specific installation, privacy, security, and cross-instance release acceptance. |
-| Dependencies / Notes | Builds on BC-021 and BC-023. ADR 0015 defines local browser defenses and runtime budgets. ADR 0012 is Accepted and `V1_CROSS_INSTANCE_ACCEPTANCE.md` is Passed. Remaining work concerns public publication, not the private v1.0.0 tag. No history rewrite, visibility change, or everyday/live promotion is authorized by this entry. |
+| Dependencies / Notes | Builds on BC-021 and BC-023. ADR 0015 defines local browser defenses and runtime budgets. ADR 0012 is Accepted and `V1_CROSS_INSTANCE_ACCEPTANCE.md` is Passed. Public v1.0.0 publication completed with explicit owner authorization. History and the release tag are unchanged; everyday/live promotion remains a separate operation. |
 
 Scope decisions:
 
@@ -1187,16 +1187,16 @@ four concurrent download snapshots have no combined disk cap or active-stream de
 HTTP inactivity timeouts are not whole-transfer deadlines. Payload and admission limits are not a
 whole-process memory bound or a complete denial-of-service defense.
 
-Remaining public-publication work:
+Public publication completed on 2026-09-06 with explicit owner authorization:
 
-- Obtain final owner authorization to change repository visibility, then enable and verify GitHub
-  private vulnerability reporting and available hosted secret scanning/push protection immediately
-  afterward, before announcing the release. Private vulnerability reporting requires a public
-  repository; it cannot be enabled first on this private repository. Read-only API inspection shows
-  the repository is PRIVATE,
-  `security_and_analysis` is `null`, and private vulnerability reporting returns HTTP 404. These are
-  not verified enabled settings. No repository visibility change is authorized.
-- Repeat release-content scans if code or dependencies change before public publication.
+- Repository visibility is public, with the existing Git history retained as approved.
+- GitHub API readback confirms private vulnerability reporting, secret scanning, and repository push
+  protection enabled. Dependency vulnerability alerts are enabled (HTTP 204 verification). Reporting
+  was enabled immediately after the visibility change because GitHub requires a public repository.
+- GitHub returned zero secret-scanning alerts at verification time; this does not prove an exhaustive
+  scan has completed or that all sensitive information is detected.
+- The stable [v1.0.0 Release](https://github.com/pixeldj/batchcraft/releases/tag/v1.0.0) is published with
+  source downloads and no uploaded binary assets. No everyday installation or user data was changed.
 
 Publication clearance: the owner confirms authorship of `spikes/comfyui-client/test-workflow.json`
 and accepts the existing one-pixel PNG in `backend/tests/live/test_execution_setup.py` for inclusion.
@@ -1209,8 +1209,8 @@ approved Git-history preservation remains in effect; no fresh exhaustive Actions
 audit is claimed.
 Both main CI (`34012870732`) and tag CI (`34013189097`) passed at release commit
 `ed601f626f2d6d81f24f7d40584e35588c0f3303`. Final hosted secret scans covered the checkout and 56 fetched
-history commits with no detected leaks. Draft Release-page text is in `V1_RELEASE_NOTES.md`; the existing
-annotated `v1.0.0` tag is unchanged. Visibility and Release-page publication still await final approval.
+history commits with no detected leaks. Published Release-page text is in `V1_RELEASE_NOTES.md`; the
+existing annotated `v1.0.0` tag is unchanged.
 
 V1 tag preparation: production/full npm audits and pinned pip-audit 2.9.0 scans of the locked Python
 production/development dependencies found no known advisories. Gitleaks 8.30.1 found no secrets in the
@@ -1267,8 +1267,8 @@ Project import, `Load Run as Batch`, resource import, and successful new Job exe
 `3eeb87a77e823c866bcf161313394d4af79059f1` with green checks. The portability gate is Passed and ADR 0012
 is Accepted. This is owner-reported manual evidence, not an independently observed live test or retained
 archive-hash report. No repeat is required merely because acceptance was owner-reported.
-BC-025 remains In Progress only for the public-publication work above; it does not block the private
-v1.0.0 tag. Final release-check evidence will be added when supplied, not inferred from prior checks.
+BC-025 is Done for the source-only v1.0.0 publication scope. Future releases require fresh checks;
+the verification above is not perpetual security, licensing, or platform certification.
 
 ## Maintenance rules
 

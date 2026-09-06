@@ -12,8 +12,8 @@ Input slots.
 ## Supported Development Environment
 
 v1.0.0 is source-only on macOS. Automated browser verification covers Chromium desktop and mobile
-viewports; it does not establish Safari or Windows application support. The private v1.0.0 tag and
-future public repository publication are separate milestones.
+viewports; it does not establish Safari or Windows application support. The repository and v1.0.0 tag
+and GitHub Release are public. BC-025 records publication evidence and completion status.
 
 Development environment:
 
@@ -58,8 +58,8 @@ Historical SQLite tables are non-authoritative projections and may be replaced a
 filesystem truth. Temporary file-backed test databases remain disposable. Browser working-session
 recovery is versioned convenience state; unsupported or malformed records may reset to an empty session.
 ADR 0012 is Accepted. The cross-instance gate is Passed on owner-reported candidate acceptance in
-`V1_CROSS_INSTANCE_ACCEPTANCE.md`. BC-025 retains public-publication settings, licensing/distribution
-review, and final scans. Durable format versions remain 1; applied migrations are unchanged.
+`V1_CROSS_INSTANCE_ACCEPTANCE.md`. BC-025 records publication evidence and completion status,
+separately from portability acceptance. Durable format versions remain 1; applied migrations are unchanged.
 Exact Rerun is deferred beyond v1.
 
 The API resolves only trusted configured storage roots at `Settings` construction, including macOS

@@ -14,7 +14,7 @@ orchestration application for ComfyUI. ComfyUI remains the workflow editor and g
 
 ## Installation
 
-Follow [Install From Source (macOS)](https://github.com/pixeldj/batchcraft/tree/v1.0.0#install-from-source-macos)
+Follow [Install From Source (macOS)](https://github.com/pixeldj/batchcraft#install-from-source-macos)
 and select `--revision v1.0.0`. Git, uv with Python 3.13 or newer, and a supported Node.js/npm version
 are required. ComfyUI, custom nodes, and models must be installed separately.
 

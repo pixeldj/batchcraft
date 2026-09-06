@@ -14,10 +14,10 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 ## Status
 
-v1.0.0 is a source-only macOS release. The [cross-instance portability gate](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md)
+Source-only macOS v1.0.0 is available from the public `v1.0.0` tag. The [cross-instance portability gate](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md)
 has passed with owner-reported candidate acceptance, and ADR 0012 is Accepted.
-The repository remains private: the v1.0.0 tag is separate from future public repository publication.
-BC-025 remains In Progress for public-publication settings, licensing/distribution review, and final scans.
+The [GitHub Release page](https://github.com/pixeldj/batchcraft/releases/tag/v1.0.0) contains release notes and source downloads.
+See BC-025 in [BACKLOG.md](docs/BACKLOG.md) for publication evidence and completion status.
 Automated browser coverage is Chromium at desktop and mobile viewport sizes; this is not Safari or
 Windows application acceptance.
 
@@ -55,7 +55,7 @@ Node 24.15 or newer in the 24.x line is recommended for the locked frontend depe
 ComfyUI must be installed separately; see its [installation guide](https://docs.comfy.org/installation/overview).
 batchcraft does not install GPUs, models, or custom nodes. Replace the URL below with the ComfyUI
 engine's base URL reachable from this Mac, such as `http://<generation-host>:8188`, not batchcraft's URL.
-Use the `v1.0.0` tag for `--revision`. Cloning currently requires access to the private repository.
+Use the `v1.0.0` tag for `--revision`.
 
 ```bash
 git clone https://github.com/pixeldj/batchcraft.git

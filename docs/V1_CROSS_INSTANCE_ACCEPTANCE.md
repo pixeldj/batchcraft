@@ -11,7 +11,7 @@ read-only Project history needed for the first half of this scenario. BC-021 is 
 reconstruction, conflict-aware detached resources, explicit historical import, and focused automated
 clean-instance Preview/new-Run proof are implemented. The release gate is Passed on the owner-reported
 candidate acceptance recorded below. This document retains the acceptance procedure and its evidence limits.
-BC-025 tracks the remaining public-publication work, separately from this passed portability gate.
+BC-025 records publication evidence and completion status, separately from this passed portability gate.
 Exact Rerun is deferred beyond v1 and is not required by this scenario. ADR 0012 is Accepted.
 
 ## Current BC-020 evidence
@@ -241,8 +241,8 @@ Automated BC-020/BC-021 coverage supplies import, reindex, inspection, idempoten
 reconstruction, relinking, Preview/new-Run, and original-Run hash-preservation evidence. Browser
 automation covers Chromium desktop and mobile viewports, not Safari or a Windows-hosted batchcraft app.
 
-The final v1.0.0 release is source-only on macOS. A private-repository v1.0.0 tag is not public
-publication. BC-025 remains In Progress only for public-publication hosted settings, licensing and
-distribution review, and final release scans. Repository visibility changes are not authorized.
-Final release-check outcomes will be recorded when supplied; this acceptance record does not claim
-those later checks have run.
+Source-only macOS v1.0.0 is available from the public tag at `ed601f6`. The owner explicitly authorized
+public repository visibility. GitHub API verification confirmed private vulnerability reporting enabled,
+secret scanning enabled, and secret scanning push protection enabled. The GitHub Release was published
+on 2026-09-06 without moving the existing tag. See BC-025 in `BACKLOG.md` for publication evidence and
+completion status. These publication checks are separate from the portability acceptance above.

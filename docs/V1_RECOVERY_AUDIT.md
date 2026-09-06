@@ -10,7 +10,7 @@ import, historical reindex, and Project history inspection. BC-021 completed edi
 detached-resource relinking/import. The cross-instance gate is Passed on owner-reported acceptance of
 candidate `79190ebadeb47c952e3bfeec23bfe15d3123d971`, merged through PR #5 as
 `3eeb87a77e823c866bcf161313394d4af79059f1` with green checks; see
-`V1_CROSS_INSTANCE_ACCEPTANCE.md` for evidence limits. BC-025 retains only public-publication work.
+`V1_CROSS_INSTANCE_ACCEPTANCE.md` for evidence limits. BC-025 records publication evidence and completion status.
 Editable reconstruction uses fresh Random seeds under ADR 0013;
 historical inspection preserves exact frozen seeds. Exact Rerun is deferred beyond v1.
 
@@ -218,7 +218,7 @@ BC-020 classifies discovered content instead of silently trusting it:
 | V1-002 V1 Format Consolidation | BC-019 | Close record-level gaps, assign explicit format identities, reset v1 versions, add producer metadata, and add fixtures. |
 | V1-003 Project Import & Historical Reindex | BC-020 | Validate a copied Project, discover healthy and degraded Runs, and rebuild disposable historical indexes. |
 | V1-004 Load Run as Batch | BC-021 | Reconstruct editable intent with detached resources and verify focused automated clean-instance behavior. |
-| Public v1 release hardening and acceptance | BC-025 | Portability gate Passed; public-publication settings, licensing/distribution review, and final scans remain. |
+| Public v1 release hardening and acceptance | BC-025 | Portability gate Passed; repository public with verified reporting/scanning protections; v1.0.0 GitHub Release published. |
 
 BC-020 is the portability prerequisite for the broader BC-007 browser. BC-021 implements the
 portability-specific `Load Run as Batch` slice already described by BC-006. It does not include
@@ -252,5 +252,5 @@ The main implementation evidence is in:
 
 V1-001 is complete. BC-019 and BC-020 provide accepted v1 records, owned Project import, rebuildable
 history, and degraded inspection. BC-021 reconstruction and the portability gate are complete.
-Acceptance changes neither format versions (all remain 1) nor applied migration bytes. The private
-v1.0.0 tag does not complete BC-025's future public-publication work.
+Acceptance changes neither format versions (all remain 1) nor applied migration bytes. The repository
+and v1.0.0 tag are public; BC-025 records publication evidence and completion status separately.
