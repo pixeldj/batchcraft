@@ -33,8 +33,19 @@ plans, and filesystem paths can refer to special files that block before validat
 - Default new-plan materialization to at most 10,000 Jobs. Direct startup can configure
   `BATCHCRAFT_MAX_JOBS`. Enforce the final Random count before expansion. Saved Batch writes bound
   parameter combinations while preserving incomplete drafts; Preview checks every dimension.
+- Default new resolved prompts to 1 MiB each and aggregate resolved text to 32 MiB per final plan.
+  Pass all three plan limits into request preflight before Range allocation, then enforce them in the
+  service compiler. Raw UTF-8 accounting includes each Job's prompt, used variable values once per name,
+  and string parameters including linked cells. `BATCH_COMPILER.md` defines exclusions; this is not a
+  serialized-size or process-memory limit. `API.md` lists the direct-start configuration knobs.
+- Bound newly received ComfyUI JSON/error bodies to 8 MiB, successful artifact bodies to 256 MiB, and
+  WebSocket messages to 4 MiB by default. Require identity HTTP content encoding and check raw received
+  bytes before over-cap buffering. Preserve definite 4xx rejection versus ambiguous submission outcomes
+  and advisory WebSocket failure; never retry a submission merely because its response exceeds a cap.
 - Preserve readability of valid historical Runs and Saved Batches independent of the new-plan budget.
   Do not rewrite migrations, historical files, or stored intent to impose this runtime policy.
+  Validate historical Jobs against intent without building another full Job plan or full resolved prompt
+  strings; Saved Batch validation uses counts rather than Job construction.
 - Use nonblocking, no-follow regular-file descriptors for Result/Asset serving and Result integrity
   scans. Canonicalize only trusted configured storage anchors at Settings construction, including
   macOS `/var` aliases; reject symlinks within the store rather than resolving artifact paths.
@@ -50,6 +61,9 @@ plans, and filesystem paths can refer to special files that block before validat
   serialization without consuming the shared AnyIO pool. Trivial dependencies and task-registry reads
   remain on the event loop; health, discovery, and control bypass these read limits. Join file workers
   before releasing capacity or closing request-owned tempfiles, including during shutdown cancellation.
+- Offload Run creation, Project Asset import, and cancellation filesystem validation through joined
+  workers. Keep multipart files open until import workers finish, including on request cancellation.
+  This is scoped filesystem offloading, not a claim that every mutation or compiler step is nonblocking.
 - Limit Project History Result-list fan-out to two Runs. Retry only structured read-capacity GET failures
   at most twice with abortable 1-5 second delays. Do not retry mutations or other errors; do not turn
   image failures into an unbounded retry loop.
@@ -70,17 +84,21 @@ These controls do not authenticate reachable clients, sandbox ComfyUI workflows,
 for malware, or make all application work nonblocking. Arbitrary LAN DNS aliases and reverse proxies
 are not supported. A browser may not expose telemetry from a rejected request to an untrusted origin.
 
-Request admission does not bound connection count, transport buffering, handler time, downloaded ComfyUI
-artifacts, historical metadata, or the total bytes in a resolved plan. An OS file operation cannot be
-forcibly interrupted; timeout/cancellation waits for it before cleanup and can exceed the nominal
-admission deadline. Persisted reads may still recompile complete
-plans. Verified download snapshots require disk space proportional to artifact size and finish
-verification before responding; there is no historical size cap. Read concurrency limits do not bound
+Request admission does not bound connection count, transport buffering, or handler time. Separate
+ComfyUI body/message and logical resolved-text caps do not bound headers, decoded object overhead,
+historical metadata, serialization, or process memory. ComfyUI HTTP timeouts govern inactivity/transport
+phases, not absolute whole-response duration; a progressing transfer can outlast the timeout.
+An OS file operation cannot be forcibly interrupted; timeout/cancellation waits for it before cleanup
+and can exceed the nominal
+admission deadline. Persisted reads still parse and validate complete metadata.
+Verified download snapshots finish verification before responding; there is no historical size cap.
+At most four download snapshots occupy bulk read slots, but their combined disk size is unbounded.
+Slow streams retain disk and capacity until completion/cleanup. Read concurrency limits do not bound
 metadata size or active read/stream duration, guarantee control latency under unrelated load, or make
-mutation paths nonblocking. The five-second deadline applies only to waiting for read capacity.
-Those resource-control tasks remain explicit BC-025 follow-ups rather than completed security
-guarantees. Public diagnostic summarization does not
-redact on-disk evidence, access logs, startup/lifespan errors, or independent dependency logs.
+all mutation paths nonblocking. The five-second deadline applies only to waiting for read capacity.
+Disk quotas, active-stream duration, and whole-process resource bounds remain BC-025 follow-ups rather
+than completed security guarantees. Public diagnostic summarization does not redact on-disk evidence,
+access logs, startup/lifespan errors, or independent dependency logs.
 
 Verification uses isolated fake-backed tests for hostile Hosts/Origins, admission without side effects,
 chunked and multipart limits, HTML/SVG downloads without execution, PNG decoding, FIFO rejection,

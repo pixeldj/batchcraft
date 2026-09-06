@@ -1,5 +1,4 @@
 import hashlib
-import json
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
@@ -47,14 +46,33 @@ class ExecutionEventStream:
             ) from error
 
 
+class _ResponseReadError(Exception):
+    def __init__(self, diagnostic: str, status: int | None) -> None:
+        super().__init__(diagnostic)
+        self.status = status
+
+
 class ComfyUIClient:
     def __init__(
         self,
         base_url: str,
         *,
         timeout: float = 30.0,
+        max_json_response_bytes: int = 8 * 1024 * 1024,
+        max_artifact_bytes: int = 256 * 1024 * 1024,
+        max_websocket_message_bytes: int = 4 * 1024 * 1024,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        for name, value in (
+            ("max_json_response_bytes", max_json_response_bytes),
+            ("max_artifact_bytes", max_artifact_bytes),
+            ("max_websocket_message_bytes", max_websocket_message_bytes),
+        ):
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        self.max_json_response_bytes = max_json_response_bytes
+        self.max_artifact_bytes = max_artifact_bytes
+        self.max_websocket_message_bytes = max_websocket_message_bytes
         normalized_base_url = base_url.strip().rstrip("/")
         parsed = urlsplit(normalized_base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -84,9 +102,11 @@ class ComfyUIClient:
 
     async def get_server_info(self) -> ServerInfo:
         try:
-            response = await self._http.get(self._url("/system_stats"))
-        except httpx.RequestError as error:
-            raise ComfyUIConnectionError("cannot connect to ComfyUI") from error
+            response = await self._request("GET", "/system_stats")
+        except _ResponseReadError as error:
+            raise ComfyUIConnectionError(f"ComfyUI system information failed: {error}") from (
+                error.__cause__ or error
+            )
         if not response.is_success:
             raise ComfyUIConnectionError(
                 f"ComfyUI system information failed with HTTP {response.status_code}"
@@ -109,13 +129,16 @@ class ComfyUIClient:
         ):
             raise UploadError("upload filename must be a non-empty basename")
         try:
-            response = await self._http.post(
-                self._url("/upload/image"),
+            response = await self._request(
+                "POST",
+                "/upload/image",
                 data={"type": "input", "subfolder": subfolder, "overwrite": "false"},
                 files={"image": (filename, content, mime_type)},
             )
-        except httpx.RequestError as error:
-            raise UploadError("ComfyUI input upload failed: transport failure") from error
+        except _ResponseReadError as error:
+            raise UploadError(f"ComfyUI input upload failed: {error}") from (
+                error.__cause__ or error
+            )
         if not response.is_success:
             raise UploadError(f"ComfyUI input upload failed with HTTP {response.status_code}")
         body = _response_object(response, "input upload", error_type=UploadError)
@@ -140,18 +163,26 @@ class ComfyUIClient:
         client_id: str,
     ) -> PromptSubmission:
         try:
-            response = await self._http.post(
-                self._url("/prompt"),
+            response = await self._request(
+                "POST",
+                "/prompt",
                 json={"prompt": dict(workflow), "client_id": client_id},
             )
-        except httpx.RequestError:
+        except _ResponseReadError as error:
+            rejected = error.status is not None and 400 <= error.status < 500
             return PromptSubmission(
-                disposition=SubmissionDisposition.UNKNOWN,
+                disposition=(
+                    SubmissionDisposition.REJECTED if rejected else SubmissionDisposition.UNKNOWN
+                ),
                 client_id=client_id,
                 prompt_id=None,
-                http_status=None,
+                http_status=error.status,
                 response=None,
-                diagnostic="prompt submission transport failure; outcome unknown; do not retry",
+                diagnostic=(
+                    f"prompt submission rejected with HTTP {error.status}: {error}"
+                    if rejected
+                    else f"prompt submission {error}; outcome unknown; do not retry"
+                ),
             )
 
         body, parse_error = _try_response_object(response)
@@ -214,7 +245,7 @@ class ComfyUIClient:
                 self.websocket_url(client_id),
                 open_timeout=self.timeout,
                 close_timeout=5,
-                max_size=None,
+                max_size=self.max_websocket_message_bytes,
                 proxy=None,
             )
         except (OSError, TimeoutError, WebSocketException) as error:
@@ -226,9 +257,11 @@ class ComfyUIClient:
 
     async def get_history(self, prompt_id: str) -> ExecutionOutcome | None:
         try:
-            response = await self._http.get(self._url(f"/history/{prompt_id}"))
-        except httpx.RequestError as error:
-            raise HistoryError("ComfyUI history lookup failed: transport failure") from error
+            response = await self._request("GET", f"/history/{prompt_id}")
+        except _ResponseReadError as error:
+            raise HistoryError(f"ComfyUI history lookup failed: {error}") from (
+                error.__cause__ or error
+            )
         if not response.is_success:
             raise HistoryError(f"ComfyUI history lookup failed with HTTP {response.status_code}")
         payload = _response_object(response, "history", error_type=HistoryError)
@@ -248,18 +281,20 @@ class ComfyUIClient:
 
     async def download_artifact(self, artifact: RemoteOutputArtifact) -> DownloadedArtifact:
         try:
-            response = await self._http.get(
-                self._url("/view"),
+            response = await self._request(
+                "GET",
+                "/view",
+                artifact=True,
                 params={
                     "filename": artifact.filename,
                     "subfolder": artifact.subfolder,
                     "type": artifact.remote_type,
                 },
             )
-        except httpx.RequestError as error:
-            raise ArtifactDownloadError(
-                "failed to download ComfyUI artifact: transport failure"
-            ) from error
+        except _ResponseReadError as error:
+            raise ArtifactDownloadError(f"failed to download ComfyUI artifact: {error}") from (
+                error.__cause__ or error
+            )
         if not response.is_success:
             raise ArtifactDownloadError(
                 f"failed to download ComfyUI artifact with HTTP {response.status_code}"
@@ -270,6 +305,64 @@ class ComfyUIClient:
             content_type=response.headers.get("content-type"),
             sha256=hashlib.sha256(response.content).hexdigest(),
         )
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        artifact: bool = False,
+        json: object = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        status = None
+        try:
+            async with self._http.stream(
+                method,
+                self._url(path),
+                json=json,
+                data=data,
+                files=files,
+                params=params,
+                headers={"Accept-Encoding": "identity"},
+                follow_redirects=False,
+            ) as response:
+                status = response.status_code
+                limit = (
+                    self.max_artifact_bytes
+                    if artifact and response.is_success
+                    else self.max_json_response_bytes
+                )
+                if (
+                    response.headers.get("content-encoding", "identity").strip().lower()
+                    != "identity"
+                ):
+                    raise _ResponseReadError("unsupported response content encoding", status)
+                length = response.headers.get("content-length", "")
+                # Ignore malformed declarations; actual received bytes remain authoritative.
+                if length.isascii() and length.isdecimal():
+                    normalized = length.lstrip("0") or "0"
+                    maximum = str(limit)
+                    if len(normalized) > len(maximum) or (
+                        len(normalized) == len(maximum) and normalized > maximum
+                    ):
+                        raise _ResponseReadError("response byte limit exceeded", status)
+                content = bytearray()
+                # MockTransport may supply an already buffered Response. Real HTTP remains raw
+                # and streamed, so no HTTPX decompressor can amplify a received chunk.
+                if response.is_stream_consumed:
+                    if len(response.content) > limit:
+                        raise _ResponseReadError("response byte limit exceeded", status)
+                    return response
+                async for chunk in response.aiter_raw():
+                    if len(chunk) > limit - len(content):
+                        raise _ResponseReadError("response byte limit exceeded", status)
+                    content.extend(chunk)
+                return httpx.Response(status, headers=response.headers, content=bytes(content))
+        except httpx.RequestError as error:
+            raise _ResponseReadError("transport failure", status) from error
 
     def websocket_url(self, client_id: str) -> str:
         parsed = urlsplit(self.base_url)
@@ -376,7 +469,7 @@ def _response_object(
 def _try_response_object(response: httpx.Response) -> tuple[dict[str, object] | None, str | None]:
     try:
         value: object = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return None, "invalid JSON"
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         return None, f"expected a JSON object, got {type(value).__name__}"

@@ -1168,13 +1168,21 @@ Implemented groundwork on the cleanup branch:
 - BC-007's automatic current-Project history freshness slice is complete. README now includes basic
   macOS source installation and launch instructions. This is not clean-machine installation acceptance
   or permission to update the everyday installation.
+- New-plan request preflight passes Job and resolved-text budgets before Range allocation, with defaults
+  of 1 MiB per prompt and 32 MiB aggregate raw UTF-8 text. ComfyUI responses have configurable 8 MiB
+  JSON/error, 256 MiB artifact, and 4 MiB WebSocket caps with identity-only HTTP content encoding.
+  Historical validation avoids a second complete plan and full prompt re-resolution; Saved Batch
+  validation uses counts. Run creation, Asset import, and cancellation filesystem validation use joined
+  workers. ADR 0015 and the focused compiler/integration docs record accounting and remaining limits.
+
+The focused resource review is complete. Remaining operational limits are documented rather than
+addressed by new historical format restrictions: full historical metadata parsing still uses memory,
+four concurrent download snapshots have no combined disk cap or active-stream deadline, and ComfyUI
+HTTP inactivity timeouts are not whole-transfer deadlines. Payload and admission limits are not a
+whole-process memory bound or a complete denial-of-service defense.
 
 Remaining release work:
 
-- Complete resource review of persisted-data validation, remote ComfyUI response sizes, resolved-plan
-  byte sizes, remaining synchronous mutation work, and temporary snapshot disk usage/active stream
-  duration. Local read/admission limits are not a complete denial-of-service defense; do not impose
-  new historical format restrictions or rewrite valid user data to add runtime limits.
 - Preserve raw historical CSV, document text-only spreadsheet import, and decide whether a separate
   spreadsheet-safe export is required. Never rewrite old manifests to neutralize formula cells.
 - Audit the final release for GPL corresponding-source delivery and any separately bundled dependencies,
@@ -1205,8 +1213,27 @@ pass. The test suite reports an upstream Starlette/httpx deprecation warning. On
 snapshot-divergence test failed once during parallel checks, then passed in isolation and in a full
 rerun without changes; it also passed in this resource pass. Watch for recurrence in candidate CI rather
 than treating its cause as resolved.
-Hosted CI, complete distribution acceptance, and the separately authorized live release gate have not
-run for this cleanup. BC-025 remains In Progress.
+PR #3 hosted checks passed and the PR was merged. The owner reports installing from a fresh temporary
+source checkout, copying and importing a Project, browsing its full history, loading a Run as a Batch,
+and importing its Prompt/Workflow resources successfully. This is useful source-install and recovery
+smoke evidence. The owner subsequently confirmed that the portability requirements work on their
+instance. Manual portability acceptance is owner-reported; the tested revision and individual artifacts
+were not supplied. Final candidate acceptance awaits hosted resource-fix CI and the owner's planned
+test before v1 tagging/deployment. BC-025 remains In Progress.
+
+Owner-feedback polish: production installer builds omit the internal instance badge while sandbox
+labels remain. Session notices are dismissible; the restored-draft reminder clears after a successful
+current Preview without changing recovery data or weakening Preview requirements.
+Verification passes with 924 backend tests, 427 frontend tests, eight desktop/mobile browser checks,
+lint/type checks, frontend build, and distribution checks. Desktop/mobile notice screenshots were
+inspected. This follow-up does not modify existing installed builds or user data.
+
+Resource-fix verification: 1,147 backend tests, 427 frontend tests, and eight fake-backed desktop/mobile
+browser cases across Vite and built same-origin modes pass. Ruff lint/format, mypy, frontend lint and
+typecheck, frontend build, wheel/sdist distribution checks, three frontend distribution checks, and
+`git diff --check` pass. The successive-Run test now waits for the enabled Create Another Run button
+before clicking; ten focused repetitions pass. This fixes its readiness race, not the separate
+snapshot-divergence test noted above. No live ComfyUI or everyday-data verification was performed.
 
 ## Maintenance rules
 

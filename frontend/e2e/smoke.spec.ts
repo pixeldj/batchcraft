@@ -120,6 +120,11 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
   const reopened = await context.newPage();
   await reopened.goto("/");
   await expect(reopened.getByText("Succeeded", { exact: true })).toBeVisible();
+  await expect(reopened.getByText("Draft restored from this browser. Preview to verify the Job plan.", { exact: true })).toBeVisible();
+  await reopened.locator(".dismissible-note").screenshot({ path: testInfo.outputPath("recovery-notice.png"), scale: "css" });
+  await reopened.getByRole("button", { name: "Dismiss session notification" }).click();
+  await expect(reopened.getByText(/Draft restored from this browser/)).toHaveCount(0);
+  await expect(reopened.getByText("Browser test - simulated ComfyUI")).toBeVisible();
   await expect(reopened.getByRole("region", { name: "Batch Results", exact: true })).toHaveCount(0);
   await expect(reopened.getByRole("button", { name: "Create Run", exact: true })).toHaveCount(0);
   const history = reopened.getByRole("region", { name: "Project History" });
@@ -128,6 +133,8 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
   await expect(history.locator(".result-card").first()).not.toContainText(/Job|verified/i);
   await history.getByRole("button", { name: "Load Run as Batch", exact: true }).click();
   await expect(reopened.getByText(/loaded as an unsaved Batch draft/)).toBeVisible();
+  await reopened.getByRole("button", { name: "Dismiss session notification" }).click();
+  await expect(reopened.getByText(/loaded as an unsaved Batch draft/)).toHaveCount(0);
   await reopened.getByRole("button", { name: "Preview Batch", exact: true }).click();
   await expect(reopened.getByRole("button", { name: "Create Run", exact: true })).toBeEnabled();
   await reopened.screenshot({ path: testInfo.outputPath("restored-batch.png"), fullPage: true });

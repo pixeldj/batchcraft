@@ -30,9 +30,67 @@ import {
 } from "./features/session/workingSessionRecovery";
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   localStorage.clear();
   sessionStorage.clear();
   saveWorkingSession(populatedBatchForm(), null, "project-1");
+});
+
+describe("Session notices", () => {
+  it.each(["", "Development - simulated ComfyUI"])("only shows an explicit instance label: %s", async (label) => {
+    vi.stubEnv("VITE_BATCHCRAFT_INSTANCE", label);
+    render(<App api={makeApi()} />);
+    await screen.findByRole("button", { name: "Preview Batch" });
+    expect(screen.queryByText("Everyday app")).not.toBeInTheDocument();
+    if (label) expect(screen.getByText(label)).toBeInTheDocument();
+    else expect(screen.queryByText("Development - simulated ComfyUI")).not.toBeInTheDocument();
+  });
+
+  it("dismisses the restored-draft notice without clearing the draft or verifying Preview", async () => {
+    const api = makeApi();
+    const view = render(<App api={api} />);
+    await screen.findByText(/Draft restored from this browser/);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss session notification" }));
+    expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Batch name")).toHaveValue("First experiment");
+    expect(loadWorkingSession().form.batchName).toBe("First experiment");
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+
+    view.unmount();
+    render(<App api={api} />);
+    expect(await screen.findByText(/Draft restored from this browser/)).toBeInTheDocument();
+  });
+
+  it("clears the restored-draft reminder after a successful current Preview", async () => {
+    render(<App api={makeApi()} />);
+    await screen.findByText(/Draft restored from this browser/);
+    await reachPreview();
+    expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the restored-draft reminder when Preview fails", async () => {
+    render(<App api={makeApi({ previewBatch: vi.fn().mockRejectedValue(new Error("Preview unavailable")) })} />);
+    const preview = await screen.findByRole("button", { name: "Preview Batch" });
+    await waitFor(() => expect(preview).toBeEnabled());
+    fireEvent.click(preview);
+    await screen.findByText("Preview unavailable");
+    expect(screen.getByText(/Draft restored from this browser/)).toBeInTheDocument();
+  });
+
+  it("keeps the reminder when an obsolete Preview finishes", async () => {
+    const pending = deferred<PreviewResponse>();
+    const api = makeApi({ previewBatch: vi.fn(() => pending.promise) });
+    render(<App api={api} />);
+    const preview = await screen.findByRole("button", { name: "Preview Batch" });
+    await waitFor(() => expect(preview).toBeEnabled());
+    fireEvent.click(preview);
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledOnce());
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Changed draft" } });
+    await act(async () => pending.resolve(previewResponse()));
+    expect(screen.getByText(/Draft restored from this browser/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+  });
 });
 
 describe("ComfyUI status", () => {
@@ -3691,6 +3749,7 @@ describe("Current Results without Batch Results", () => {
     expect(within(currentResultsSection()).getByAltText("Result 1 from Job 2: a2.png")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Batch Results" })).not.toBeInTheDocument();
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create Another Run" }));
     await screen.findByRole("heading", { name: "Run 11" });
     expect(within(currentResultsSection()).queryByRole("img")).not.toBeInTheDocument();

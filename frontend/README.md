@@ -141,9 +141,14 @@ the matching API origin and port. When starting the API manually, set `BATCHCRAF
 Only the everyday app supports opt-in trusted-LAN access; development and test stay on loopback.
 See [`../docs/LOCAL_INSTANCES.md`](../docs/LOCAL_INSTANCES.md) for `lan_access`, the unauthenticated-access
 warning, firewall guidance, and the stopped-instance update process. For a future existing-build update,
-run `VITE_BATCHCRAFT_API_URL=/ VITE_BATCHCRAFT_INSTANCE='Everyday app' npm run build` in the installed
+run `VITE_BATCHCRAFT_API_URL=/ VITE_BATCHCRAFT_INSTANCE='' npm run build` in the installed
 `frontend/` directory after following that process. Unsaved working sessions are separate across browser
 origins and devices, even when they use the same backend.
+
+Production builds have no instance badge; development/test labels remain visible. Session notifications
+can be dismissed without changing draft or execution state. The restored-draft reminder also clears
+after a successful current Preview, but not after a failed or obsolete response. Dismissal is not
+persisted: a later cold load can show a new restoration notice and still requires a new Preview.
 
 ## Checks
 

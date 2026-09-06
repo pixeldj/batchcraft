@@ -11,7 +11,7 @@ def parse_execution_event(message: str | bytes, prompt_id: str) -> ExecutionEven
         return None
     try:
         value: object = json.loads(message)
-    except json.JSONDecodeError as error:
+    except (ValueError, RecursionError) as error:
         raise ExecutionObservationError("ComfyUI WebSocket returned invalid JSON") from error
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ExecutionObservationError("ComfyUI WebSocket event must be a JSON object")

@@ -63,6 +63,7 @@ from batchcraft.domain import (
     ImageInputSlot,
     LinkedParameterRow,
     LinkedParameterSet,
+    ParameterBinding,
     ParameterDecimalRange,
     ParameterRangeIntent,
     ParameterValuesIntent,
@@ -70,8 +71,10 @@ from batchcraft.domain import (
     SeedInput,
     VariableBinding,
     WorkflowParameter,
+    count_batch,
     extract_placeholder_names,
     materialize_parameter_bindings,
+    parameter_binding_counts,
     validate_parameter_alternatives,
     validate_parameter_scalar,
     validate_stable_key,
@@ -287,7 +290,7 @@ class BatchRequest(ApiModel):
         workflow = snapshot.workflow_selection
         if workflow.workflow != self.workflow or workflow.workflow_profile != self.workflow_profile:
             raise ValueError("Batch snapshot Workflow selection does not match")
-        materialize_parameter_bindings(
+        parameter_binding_counts(
             _profile_parameters(self.workflow_profile),
             tuple(_parameter_intent(binding) for binding in self.parameter_bindings),
         )
@@ -302,9 +305,18 @@ class BatchRequest(ApiModel):
             raise ValueError("Batch snapshot seed intent does not match request seeds")
         return self
 
-    def to_creation_input(self, *, seed_override: SeedInput | None = None) -> RunCreationInput:
+    def to_creation_input(
+        self,
+        *,
+        seed_override: SeedInput | None = None,
+        max_jobs: int | None = None,
+        max_prompt_bytes: int | None = None,
+        max_resolved_text_bytes: int | None = None,
+    ) -> RunCreationInput:
         parameters = _profile_parameters(self.workflow_profile)
-        return RunCreationInput(
+        intents = tuple(_parameter_intent(binding) for binding in self.parameter_bindings)
+        counts = parameter_binding_counts(parameters, intents)
+        creation = RunCreationInput(
             project=ProjectIdentity(
                 id=self.project.id,
                 filesystem_key=self.project.filesystem_key,
@@ -338,9 +350,12 @@ class BatchRequest(ApiModel):
                     for binding in self.image_bindings
                 ),
                 parameters=parameters,
-                parameter_bindings=materialize_parameter_bindings(
-                    parameters,
-                    tuple(_parameter_intent(binding) for binding in self.parameter_bindings),
+                parameter_bindings=tuple(
+                    ParameterBinding(
+                        intent.parameter_key,
+                        intent.values if isinstance(intent, ParameterValuesIntent) else (None,),
+                    )
+                    for intent in intents
                 ),
                 linked_parameter_sets=tuple(
                     _linked_parameter_set(item) for item in self.linked_parameter_sets
@@ -350,6 +365,24 @@ class BatchRequest(ApiModel):
             workflow=self.workflow,
             workflow_profile=self.workflow_profile,
             batch_snapshot=self.batch_snapshot.model_dump(mode="json"),
+        )
+        repetitions = self.seeds.random_seed_count if self.seeds.needs_materialization else 1
+        assert repetitions is not None
+        count_batch(
+            creation.definition,
+            parameter_counts=counts,
+            max_jobs=None if max_jobs is None else max_jobs // repetitions,
+            max_prompt_bytes=max_prompt_bytes,
+            max_resolved_text_bytes=None
+            if max_resolved_text_bytes is None
+            else max_resolved_text_bytes // repetitions,
+        )
+        return replace(
+            creation,
+            definition=replace(
+                creation.definition,
+                parameter_bindings=materialize_parameter_bindings(parameters, intents),
+            ),
         )
 
 
@@ -372,9 +405,21 @@ class RunCreateRequest(BatchRequest):
             )
         return self
 
-    def to_creation_input(self, *, seed_override: SeedInput | None = None) -> RunCreationInput:
+    def to_creation_input(
+        self,
+        *,
+        seed_override: SeedInput | None = None,
+        max_jobs: int | None = None,
+        max_prompt_bytes: int | None = None,
+        max_resolved_text_bytes: int | None = None,
+    ) -> RunCreationInput:
         return replace(
-            super().to_creation_input(seed_override=seed_override),
+            super().to_creation_input(
+                seed_override=seed_override,
+                max_jobs=max_jobs,
+                max_prompt_bytes=max_prompt_bytes,
+                max_resolved_text_bytes=max_resolved_text_bytes,
+            ),
             name=self.run_name,
             description=self.run_description,
         )

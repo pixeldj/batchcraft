@@ -23,6 +23,11 @@ class Settings:
     max_jobs: int = 10_000
     max_inflight_request_bodies: int = 4
     request_body_timeout_seconds: float = 120.0
+    max_prompt_bytes: int = 1024 * 1024
+    max_resolved_text_bytes: int = 32 * 1024 * 1024
+    comfyui_max_json_response_bytes: int = 8 * 1024 * 1024
+    comfyui_max_artifact_bytes: int = 256 * 1024 * 1024
+    comfyui_max_websocket_message_bytes: int = 4 * 1024 * 1024
 
     def __post_init__(self) -> None:
         # Configuration is trusted. Canonicalize these anchors once, including
@@ -33,6 +38,16 @@ class Settings:
             raise ValueError("max_request_bytes must be a positive integer")
         if type(self.max_jobs) is not int or self.max_jobs <= 0:
             raise ValueError("max_jobs must be a positive integer")
+        for name in (
+            "max_prompt_bytes",
+            "max_resolved_text_bytes",
+            "comfyui_max_json_response_bytes",
+            "comfyui_max_artifact_bytes",
+            "comfyui_max_websocket_message_bytes",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         if (
             type(self.max_inflight_request_bodies) is not int
             or self.max_inflight_request_bodies <= 0
@@ -62,6 +77,19 @@ class Settings:
             server_port=_port("BATCHCRAFT_SERVER_PORT", 8000),
             max_request_bytes=int(os.environ.get("BATCHCRAFT_MAX_REQUEST_BYTES", 64 * 1024 * 1024)),
             max_jobs=_positive_integer("BATCHCRAFT_MAX_JOBS", 10_000),
+            max_prompt_bytes=_positive_integer("BATCHCRAFT_MAX_PROMPT_BYTES", 1024 * 1024),
+            max_resolved_text_bytes=_positive_integer(
+                "BATCHCRAFT_MAX_RESOLVED_TEXT_BYTES", 32 * 1024 * 1024
+            ),
+            comfyui_max_json_response_bytes=_positive_integer(
+                "BATCHCRAFT_COMFYUI_MAX_JSON_RESPONSE_BYTES", 8 * 1024 * 1024
+            ),
+            comfyui_max_artifact_bytes=_positive_integer(
+                "BATCHCRAFT_COMFYUI_MAX_ARTIFACT_BYTES", 256 * 1024 * 1024
+            ),
+            comfyui_max_websocket_message_bytes=_positive_integer(
+                "BATCHCRAFT_COMFYUI_MAX_WEBSOCKET_MESSAGE_BYTES", 4 * 1024 * 1024
+            ),
             max_inflight_request_bodies=_positive_integer(
                 "BATCHCRAFT_MAX_INFLIGHT_REQUEST_BODIES", 4
             ),

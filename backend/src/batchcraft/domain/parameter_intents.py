@@ -45,15 +45,38 @@ EditableParameterBinding = ParameterValuesIntent | ParameterRangeIntent
 def materialize_parameter_bindings(
     parameters: tuple[WorkflowParameter, ...],
     intents: tuple[EditableParameterBinding, ...],
+    *,
+    max_combinations: int | None = None,
 ) -> tuple[ParameterBinding, ...]:
+    counts = parameter_binding_counts(parameters, intents)
+    if max_combinations is not None and math.prod(counts.values()) > max_combinations:
+        raise ValueError(f"Batch expands beyond the maximum of {max_combinations} Jobs")
     parameters_by_key = {parameter.key: parameter for parameter in parameters}
-    bindings: list[ParameterBinding] = []
-    seen: set[str] = set()
+    return tuple(
+        ParameterBinding(
+            intent.parameter_key,
+            intent.values
+            if isinstance(intent, ParameterValuesIntent)
+            else _materialize_range(parameters_by_key[intent.parameter_key], intent),
+        )
+        for intent in intents
+    )
+
+
+def parameter_binding_counts(
+    parameters: tuple[WorkflowParameter, ...],
+    intents: tuple[EditableParameterBinding, ...],
+) -> dict[str, int]:
+    """Validate intent metadata and count all axes without generating Range values.
+
+    Numeric JSON representability is checked by materialization, not this preflight.
+    """
+    definitions = {parameter.key: parameter for parameter in parameters}
+    counts: dict[str, int] = {}
     for intent in intents:
-        if intent.parameter_key in seen:
+        if intent.parameter_key in counts:
             raise ValueError("parameter bindings must have unique parameter keys")
-        seen.add(intent.parameter_key)
-        parameter = parameters_by_key.get(intent.parameter_key)
+        parameter = definitions.get(intent.parameter_key)
         if parameter is None:
             raise ValueError(
                 f"parameter binding references unknown parameter {intent.parameter_key!r}"
@@ -64,15 +87,16 @@ def materialize_parameter_bindings(
             validate_parameter_alternatives(intent.values)
             for value in intent.values:
                 _validate_parameter_value(parameter, value)
-            values = intent.values
+            counts[intent.parameter_key] = len(intent.values)
         elif isinstance(intent, ParameterRangeIntent):
             if intent.mode != "range":
                 raise ValueError("parameter range intent must use range mode")
-            values = _materialize_range(parameter, intent)
+            counts[intent.parameter_key] = _range_metadata(parameter, intent)[3] + int(
+                intent.include_base
+            )
         else:
             raise ValueError("parameter bindings must use values or range intent")
-        bindings.append(ParameterBinding(intent.parameter_key, values))
-    return tuple(bindings)
+    return counts
 
 
 def _validate_parameter_value(parameter: WorkflowParameter, value: ParameterScalar | None) -> None:
@@ -93,6 +117,37 @@ def _validate_parameter_value(parameter: WorkflowParameter, value: ParameterScal
 def _materialize_range(
     parameter: WorkflowParameter, intent: ParameterRangeIntent
 ) -> tuple[ParameterScalar | None, ...]:
+    start_value, step_value, scale, count = _range_metadata(parameter, intent)
+    divisor = 10**scale
+    numeric: list[int | float] = []
+    for index in range(count):
+        scaled = start_value + index * step_value
+        if parameter.value_type is ParameterValueType.INTEGER:
+            value = scaled // divisor
+            if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
+                raise ValueError(
+                    f"integer parameter range values must be from {-MAX_SAFE_INTEGER} through "
+                    f"{MAX_SAFE_INTEGER}"
+                )
+            numeric.append(value)
+        else:
+            decimal_text = _scaled_decimal_string(scaled, scale)
+            value = float(decimal_text)
+            if not math.isfinite(value) or Decimal(str(value)) != Decimal(decimal_text):
+                raise ValueError(
+                    "float parameter range values must round-trip through JSON without precision loss"
+                )
+            numeric.append(0.0 if value == 0 else value)
+    values: tuple[ParameterScalar | None, ...] = tuple(numeric)
+    if intent.include_base:
+        values = (None, *values)
+    validate_parameter_alternatives(values)
+    return values
+
+
+def _range_metadata(
+    parameter: WorkflowParameter, intent: ParameterRangeIntent
+) -> tuple[int, int, int, int]:
     if parameter.value_type in {ParameterValueType.STRING, ParameterValueType.BOOLEAN}:
         raise ValueError(
             f"parameter {parameter.key!r} cannot use a range because its type is "
@@ -121,30 +176,7 @@ def _materialize_range(
             f"This range produces {count:,} values. Reduce the range or increase the step."
         )
 
-    numeric: list[int | float] = []
-    for index in range(count):
-        scaled = start_value + index * step_value
-        if parameter.value_type is ParameterValueType.INTEGER:
-            value = scaled // divisor
-            if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
-                raise ValueError(
-                    f"integer parameter range values must be from {-MAX_SAFE_INTEGER} through "
-                    f"{MAX_SAFE_INTEGER}"
-                )
-            numeric.append(value)
-        else:
-            decimal_text = _scaled_decimal_string(scaled, scale)
-            value = float(decimal_text)
-            if not math.isfinite(value) or Decimal(str(value)) != Decimal(decimal_text):
-                raise ValueError(
-                    "float parameter range values must round-trip through JSON without precision loss"
-                )
-            numeric.append(0.0 if value == 0 else value)
-    values: tuple[ParameterScalar | None, ...] = tuple(numeric)
-    if intent.include_base:
-        values = (None, *values)
-    validate_parameter_alternatives(values)
-    return values
+    return start_value, step_value, scale, count
 
 
 def _parse_decimal(value: str, part: str) -> tuple[int, int]:
