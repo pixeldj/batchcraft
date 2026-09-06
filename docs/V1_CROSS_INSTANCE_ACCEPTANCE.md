@@ -231,3 +231,8 @@ classification, explicit server-sourced historical import, pre-edit Preview unde
 above, new Run creation, and original-Run hash preservation in focused automated tests. Complete realistic-fixture coverage,
 repeat-fresh Instance B proof, and the live ComfyUI smoke test remain incomplete. No final manual
 cross-instance acceptance is claimed.
+
+Owner-reported smoke evidence after PR #3 merged: a fresh temporary source checkout was installed,
+a copied Project imported with its history, and `Load Run as Batch` plus Prompt/Workflow resource import
+worked. No independent archive-hash comparison, repeat-fresh Instance B proof, or successful live Run
+was reported. This supports the installation/recovery path but does not change the unpassed gate status.

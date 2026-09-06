@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 from api_client import LoopbackTestClient as TestClient
@@ -134,3 +135,40 @@ def test_install_refuses_existing_destinations(
     assert error.value.code == 2
     assert marker.read_text() == "untouched"
     assert not (tmp_path / ("data" if existing == "app" else "app")).exists()
+
+
+def test_installer_builds_without_an_inherited_instance_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = tmp_path / "app"
+    builds: list[dict[str, str]] = []
+
+    def run(command: list[str], **kwargs: object) -> None:
+        if command[:3] == ["git", "worktree", "add"]:
+            (app / "backend").mkdir(parents=True)
+            (app / "frontend").mkdir()
+        elif command == ["npm", "run", "build"]:
+            builds.append(cast(dict[str, str], kwargs["env"]))
+
+    monkeypatch.setenv("VITE_BATCHCRAFT_INSTANCE", "Development - simulated ComfyUI")
+    monkeypatch.setattr("tools.install_app.subprocess.run", run)
+    monkeypatch.setattr(
+        "tools.install_app.subprocess.check_output", lambda *args, **kwargs: "a" * 40
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "install_app",
+            "--app-path",
+            str(app),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--comfyui-url",
+            "http://comfy.invalid",
+        ],
+    )
+    install_app()
+    assert len(builds) == 1
+    assert builds[0]["VITE_BATCHCRAFT_INSTANCE"] == ""
+    assert builds[0]["VITE_BATCHCRAFT_API_URL"] == "/"

@@ -96,6 +96,7 @@ interface RunSnapshotIdentity {
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "blocked", "cancelled"]);
 const EMPTY_RESULTS: ResultResponse[] = [];
+const RESTORED_DRAFT_MESSAGE = "Draft restored from this browser. Preview to verify the Job plan.";
 
 export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [initialSession] = useState(loadWorkingSessionRecovery);
@@ -130,7 +131,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [runRestoreUnresolved, setRunRestoreUnresolved] = useState(false);
   const [sessionMessage, setSessionMessage] = useState<string | null>(
     initialSession.draftRestored
-      ? "Draft restored from this browser. Preview to verify the Job plan."
+      ? RESTORED_DRAFT_MESSAGE
       : null,
   );
   const [batchError, setBatchError] = useState<string | null>(null);
@@ -796,6 +797,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           singleUse: form.seedMode === "random",
         });
         setPreviewRunAssociation(null);
+        setSessionMessage((message) => message === RESTORED_DRAFT_MESSAGE ? null : message);
         setRunName("");
         setRunDescription("");
       }
@@ -1026,7 +1028,19 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         {import.meta.env.VITE_BATCHCRAFT_INSTANCE ? (
           <p className="session-note" role="status">{import.meta.env.VITE_BATCHCRAFT_INSTANCE}</p>
         ) : null}
-        {sessionMessage ? <p className="session-note" role="status">{sessionMessage}</p> : null}
+        {sessionMessage ? (
+          <div className="session-note dismissible-note">
+            <span role="status">{sessionMessage}</span>
+            <button
+              className="button-secondary compact"
+              type="button"
+              aria-label="Dismiss session notification"
+              onClick={() => setSessionMessage(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
         {savedBatchConflict ? (
           <div className="operation-error" role="alert">
             <p>

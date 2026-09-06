@@ -1205,8 +1205,19 @@ pass. The test suite reports an upstream Starlette/httpx deprecation warning. On
 snapshot-divergence test failed once during parallel checks, then passed in isolation and in a full
 rerun without changes; it also passed in this resource pass. Watch for recurrence in candidate CI rather
 than treating its cause as resolved.
-Hosted CI, complete distribution acceptance, and the separately authorized live release gate have not
-run for this cleanup. BC-025 remains In Progress.
+PR #3 hosted checks passed and the PR was merged. The owner reports installing from a fresh temporary
+source checkout, copying and importing a Project, browsing its full history, loading a Run as a Batch,
+and importing its Prompt/Workflow resources successfully. This is useful source-install and recovery
+smoke evidence, not the full gate: independent archive hashes, a repeat-fresh instance, and successful
+live execution were not reported. Complete distribution acceptance and the live release gate remain
+open; BC-025 remains In Progress.
+
+Owner-feedback polish: production installer builds omit the internal instance badge while sandbox
+labels remain. Session notices are dismissible; the restored-draft reminder clears after a successful
+current Preview without changing recovery data or weakening Preview requirements.
+Verification passes with 924 backend tests, 427 frontend tests, eight desktop/mobile browser checks,
+lint/type checks, frontend build, and distribution checks. Desktop/mobile notice screenshots were
+inspected. This follow-up does not modify existing installed builds or user data.
 
 ## Maintenance rules
 

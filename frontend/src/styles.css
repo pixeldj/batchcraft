@@ -81,6 +81,7 @@ pre.prompt-editor { font-family: "SFMono-Regular", Consolas, "Liberation Mono", 
 
 main { width: min(1440px, calc(100% - 2.5rem)); margin: 1.5rem auto 5rem; }
 .session-note { margin: -0.3rem 0 1rem; padding: 0.65rem 0.8rem; color: var(--accent); background: rgba(200, 240, 75, 0.14); border-left: 4px solid var(--accent); font-size: 0.78rem; }
+.dismissible-note { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem; }
 
 .section-card {
   margin-bottom: 1.25rem;

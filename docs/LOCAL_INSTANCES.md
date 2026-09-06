@@ -63,6 +63,10 @@ shell expansion other than a leading `~` in the path. It must not be committed. 
 defaults to `false`, so existing configurations remain loopback-only. The frontend build uses the
 browser's origin for API requests.
 
+Installed frontend builds have no instance badge. Development and browser-test builds keep their
+explicit environment labels so simulated ComfyUI remains distinguishable. The installer sets
+`VITE_BATCHCRAFT_INSTANCE` to an empty string rather than inheriting a label from the shell.
+
 ### Trusted-LAN access
 
 With a LAN-capable launcher, setting `"lan_access": true` in the installed `app.local.json` binds the
@@ -119,7 +123,7 @@ For a future existing-build update, follow the shutdown, backup, and revision ch
 this in the installed checkout's `frontend/` directory before restarting:
 
 ```bash
-VITE_BATCHCRAFT_API_URL=/ VITE_BATCHCRAFT_INSTANCE='Everyday app' npm run build
+VITE_BATCHCRAFT_API_URL=/ VITE_BATCHCRAFT_INSTANCE='' npm run build
 ```
 
 The explicit `/` also selects same-origin requests in pinned older client code. Rebuilding the frontend

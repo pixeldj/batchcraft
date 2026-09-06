@@ -79,7 +79,7 @@ def main() -> None:
         env={
             **os.environ,
             "VITE_BATCHCRAFT_API_URL": "/",
-            "VITE_BATCHCRAFT_INSTANCE": "Everyday app",
+            "VITE_BATCHCRAFT_INSTANCE": "",
         },
     )
     print(f"Installed application commit {revision}")
