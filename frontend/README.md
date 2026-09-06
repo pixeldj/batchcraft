@@ -58,11 +58,16 @@ both values exactly match an active Project. Until that check succeeds, Prompt a
 requests remain unscoped. Switching Project is unavailable while a Run is active and requires
 confirmation when Project-scoped selections would be cleared.
 
-The seed editor supports Fixed, Explicit list, and frontend-only Random intent. Random accepts a count
-from 1 through 100 and uses Web Crypto to materialize unsigned 32-bit values into the backend's
-explicit seed contract when Preview runs. Run creation reuses that exact inspected request. A
+The seed editor supports Fixed, Explicit list, and Random intent. Random accepts 1 through 100
+repetitions per non-seed configuration. Backend Preview assigns one unique seed per final Job within
+`0..2^53-1`. Run creation reuses that exact inspected request. A
 successful Random Run creation consumes its Preview; a failed creation retains it for retry. Fixed
 and Explicit Previews remain reusable for repeated Runs.
+
+`Load Run as Batch` restores frozen editable intent with linked, detached, or conflicting historical
+resources. Detached resources require explicit import or relinking before saving a Saved Batch.
+A fresh Preview of restored Random intent generates fresh seeds, not historical assignments.
+Exact Rerun is a separate operation deferred beyond v1.
 
 The prompt editor selects from the current Project's persistent Prompt library and stores an ordered
 list of exact PromptVersion snapshots. The working selection may be empty, but Preview requires at
@@ -97,16 +102,20 @@ historical Run Plan/Result Details, and source-Run loading for detached-resource
 
 ## Requirements
 
-- Node.js `^20.19.0` or `>=22.12.0`
+- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` for the locked dependencies; recommend Node 24.15+ in the 24.x line
 - npm
 - a reachable batchcraft API, normally local
 
 ## Local development
 
+Prefer `./dev.command` from the repository root after dependency setup in
+[`../docs/LOCAL_INSTANCES.md`](../docs/LOCAL_INSTANCES.md). It starts the isolated fake-backed API and
+Vite together. The manual commands below start only Vite and require a separately running API.
+
 Install the locked dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 The API client defaults to an empty base URL for same-origin requests, not a hardcoded port 8000.

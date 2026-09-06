@@ -40,12 +40,10 @@ class ExecutionEventStream:
         try:
             async for event in correlated_execution_events(self._connection, prompt_id):
                 yield event
-            raise ExecutionObservationError(
-                f"ComfyUI WebSocket closed while observing prompt {prompt_id!r}"
-            )
+            raise ExecutionObservationError("ComfyUI WebSocket closed while observing prompt")
         except WebSocketException as error:
             raise ExecutionObservationError(
-                f"ComfyUI WebSocket disconnected while observing prompt {prompt_id!r}: {error}"
+                "ComfyUI WebSocket disconnected while observing prompt"
             ) from error
 
 
@@ -88,11 +86,10 @@ class ComfyUIClient:
         try:
             response = await self._http.get(self._url("/system_stats"))
         except httpx.RequestError as error:
-            raise ComfyUIConnectionError(f"cannot connect to ComfyUI: {error}") from error
+            raise ComfyUIConnectionError("cannot connect to ComfyUI") from error
         if not response.is_success:
             raise ComfyUIConnectionError(
-                f"ComfyUI system information failed with HTTP {response.status_code}: "
-                f"{_response_detail(response)}"
+                f"ComfyUI system information failed with HTTP {response.status_code}"
             )
         return ServerInfo(data=_response_object(response, "system information"))
 
@@ -118,12 +115,9 @@ class ComfyUIClient:
                 files={"image": (filename, content, mime_type)},
             )
         except httpx.RequestError as error:
-            raise UploadError(f"ComfyUI input upload failed: {error}") from error
+            raise UploadError("ComfyUI input upload failed: transport failure") from error
         if not response.is_success:
-            raise UploadError(
-                f"ComfyUI input upload failed with HTTP {response.status_code}: "
-                f"{_response_detail(response)}"
-            )
+            raise UploadError(f"ComfyUI input upload failed with HTTP {response.status_code}")
         body = _response_object(response, "input upload", error_type=UploadError)
         remote_name = _required_string(body, "name", "input upload", UploadError)
         remote_subfolder = _optional_string(body, "subfolder", "input upload", UploadError)
@@ -150,14 +144,14 @@ class ComfyUIClient:
                 self._url("/prompt"),
                 json={"prompt": dict(workflow), "client_id": client_id},
             )
-        except httpx.RequestError as error:
+        except httpx.RequestError:
             return PromptSubmission(
                 disposition=SubmissionDisposition.UNKNOWN,
                 client_id=client_id,
                 prompt_id=None,
                 http_status=None,
                 response=None,
-                diagnostic=f"prompt submission transport failure: {error}",
+                diagnostic="prompt submission transport failure; outcome unknown; do not retry",
             )
 
         body, parse_error = _try_response_object(response)
@@ -168,7 +162,10 @@ class ComfyUIClient:
                 prompt_id=None,
                 http_status=response.status_code,
                 response=body,
-                diagnostic=parse_error or _response_detail(response),
+                diagnostic=(
+                    f"prompt submission rejected with HTTP {response.status_code}"
+                    + (f": {parse_error}" if parse_error else "; check workflow in ComfyUI")
+                ),
             )
         if not response.is_success:
             return PromptSubmission(
@@ -177,7 +174,10 @@ class ComfyUIClient:
                 prompt_id=None,
                 http_status=response.status_code,
                 response=body,
-                diagnostic=parse_error or _response_detail(response),
+                diagnostic=(
+                    f"prompt submission outcome unknown with HTTP {response.status_code}; "
+                    "do not retry"
+                ),
             )
         if body is None:
             return PromptSubmission(
@@ -218,9 +218,7 @@ class ComfyUIClient:
                 proxy=None,
             )
         except (OSError, TimeoutError, WebSocketException) as error:
-            raise ExecutionObservationError(
-                f"cannot open ComfyUI WebSocket event stream: {error}"
-            ) from error
+            raise ExecutionObservationError("cannot open ComfyUI WebSocket event stream") from error
         try:
             yield ExecutionEventStream(connection)
         finally:
@@ -230,19 +228,14 @@ class ComfyUIClient:
         try:
             response = await self._http.get(self._url(f"/history/{prompt_id}"))
         except httpx.RequestError as error:
-            raise HistoryError(
-                f"ComfyUI history lookup failed for {prompt_id!r}: {error}"
-            ) from error
+            raise HistoryError("ComfyUI history lookup failed: transport failure") from error
         if not response.is_success:
-            raise HistoryError(
-                f"ComfyUI history lookup for {prompt_id!r} failed with HTTP "
-                f"{response.status_code}: {_response_detail(response)}"
-            )
+            raise HistoryError(f"ComfyUI history lookup failed with HTTP {response.status_code}")
         payload = _response_object(response, "history", error_type=HistoryError)
         entry_value = payload.get(prompt_id)
         if entry_value is None:
             return None
-        entry = _as_object(entry_value, f"history entry for {prompt_id!r}", HistoryError)
+        entry = _as_object(entry_value, "history entry", HistoryError)
         status_data = _as_object(entry.get("status"), "history status", HistoryError)
         status = _history_status(status_data)
         artifacts = _history_artifacts(entry)
@@ -265,12 +258,11 @@ class ComfyUIClient:
             )
         except httpx.RequestError as error:
             raise ArtifactDownloadError(
-                f"failed to download ComfyUI artifact {artifact.filename!r}: {error}"
+                "failed to download ComfyUI artifact: transport failure"
             ) from error
         if not response.is_success:
             raise ArtifactDownloadError(
-                f"failed to download ComfyUI artifact {artifact.filename!r} with HTTP "
-                f"{response.status_code}: {_response_detail(response)}"
+                f"failed to download ComfyUI artifact with HTTP {response.status_code}"
             )
         return DownloadedArtifact(
             remote=artifact,
@@ -309,7 +301,7 @@ def _history_status(status: Mapping[str, object]) -> ExecutionStatus:
     if status_string in {"error", "failed", "interrupted"}:
         return ExecutionStatus.FAILED
     if completed:
-        raise HistoryError(f"ComfyUI history has unknown terminal status {status_string!r}")
+        raise HistoryError("ComfyUI history has unknown terminal status")
     return ExecutionStatus.PENDING
 
 
@@ -319,7 +311,7 @@ def _history_artifacts(entry: Mapping[str, object]) -> tuple[RemoteOutputArtifac
     artifacts: list[RemoteOutputArtifact] = []
     seen_descriptors: set[tuple[str, str, str, str, str]] = set()
     for node_id, node_output_value in outputs.items():
-        node_output = _as_object(node_output_value, f"output node {node_id!r}", HistoryError)
+        node_output = _as_object(node_output_value, "output node", HistoryError)
         for output_name, output_value in node_output.items():
             values = output_value if isinstance(output_value, list) else [output_value]
             for descriptor_value in values:
@@ -327,26 +319,26 @@ def _history_artifacts(entry: Mapping[str, object]) -> tuple[RemoteOutputArtifac
                     continue
                 descriptor = _as_object(
                     descriptor_value,
-                    f"artifact descriptor from node {node_id!r}",
+                    "artifact descriptor",
                     HistoryError,
                 )
                 filename = _required_string(
                     descriptor,
                     "filename",
-                    f"artifact descriptor from node {node_id!r}",
+                    "artifact descriptor",
                     HistoryError,
                 )
                 subfolder = _optional_string(
                     descriptor,
                     "subfolder",
-                    f"artifact descriptor from node {node_id!r}",
+                    "artifact descriptor",
                     HistoryError,
                 )
                 remote_type = (
                     _optional_string(
                         descriptor,
                         "type",
-                        f"artifact descriptor from node {node_id!r}",
+                        "artifact descriptor",
                         HistoryError,
                     )
                     or "output"
@@ -384,8 +376,8 @@ def _response_object(
 def _try_response_object(response: httpx.Response) -> tuple[dict[str, object] | None, str | None]:
     try:
         value: object = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        return None, f"invalid JSON: {error}; body={response.text!r}"
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "invalid JSON"
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         return None, f"expected a JSON object, got {type(value).__name__}"
     return cast(dict[str, object], value), None
@@ -423,10 +415,3 @@ def _optional_string(
     if not isinstance(value, str):
         raise error_type(f"ComfyUI {context} has invalid {name!r}")
     return value
-
-
-def _response_detail(response: httpx.Response) -> str:
-    body, error = _try_response_object(response)
-    if body is not None:
-        return repr(body)
-    return error or response.text

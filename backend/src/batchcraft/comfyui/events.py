@@ -12,9 +12,7 @@ def parse_execution_event(message: str | bytes, prompt_id: str) -> ExecutionEven
     try:
         value: object = json.loads(message)
     except json.JSONDecodeError as error:
-        raise ExecutionObservationError(
-            f"ComfyUI WebSocket returned invalid JSON: {error}"
-        ) from error
+        raise ExecutionObservationError("ComfyUI WebSocket returned invalid JSON") from error
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ExecutionObservationError("ComfyUI WebSocket event must be a JSON object")
     event = cast(dict[str, object], value)
@@ -23,17 +21,13 @@ def parse_execution_event(message: str | bytes, prompt_id: str) -> ExecutionEven
     if not isinstance(event_type, str) or not event_type:
         raise ExecutionObservationError("ComfyUI WebSocket event has no valid type")
     if not isinstance(data_value, dict) or not all(isinstance(key, str) for key in data_value):
-        raise ExecutionObservationError(
-            f"ComfyUI WebSocket event {event_type!r} has no valid data object"
-        )
+        raise ExecutionObservationError("ComfyUI WebSocket event has no valid data object")
     data = cast(dict[str, object], data_value)
     if data.get("prompt_id") != prompt_id:
         return None
     node = data.get("node")
     if node is not None and not isinstance(node, (str, int)):
-        raise ExecutionObservationError(
-            f"ComfyUI WebSocket event {event_type!r} has an invalid node ID"
-        )
+        raise ExecutionObservationError("ComfyUI WebSocket event has an invalid node ID")
     return ExecutionEvent(
         event_type=event_type,
         prompt_id=prompt_id,

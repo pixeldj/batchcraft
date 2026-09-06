@@ -1,5 +1,4 @@
 import hashlib
-import os
 import re
 import stat
 from collections.abc import Iterable
@@ -8,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from batchcraft.execution import ExecutionStateError, ExecutionStateStore, ResultRecord
-from batchcraft.files._io import is_safe_filesystem_key
+from batchcraft.files._io import is_safe_filesystem_key, open_regular_file
 from batchcraft.files.assets import AssetStoreError, ProjectAssetStore
 from batchcraft.files.batch_owners import BatchOwnerError, BatchOwnerStore
 from batchcraft.files.models import AssetRecord, BatchIdentity, ProjectIdentity, PublishedRun
@@ -60,10 +59,12 @@ class ScannedRun:
 class ProjectHistoryScan:
     project: ProjectIdentity
     project_path: Path
+    directory_identity: tuple[int, int, int, int]
     batches: tuple[BatchIdentity, ...]
     assets: tuple[ScannedAsset, ...]
     runs: tuple[ScannedRun, ...]
     diagnostics: tuple[HistoryDiagnostic, ...]
+    batches_root_missing: bool = False
 
 
 class ProjectHistoryScanError(ValueError):
@@ -77,7 +78,9 @@ class ProjectHistoryScanner:
         self.projects_root = projects_root
         self._run_store = RunFilesystemStore(projects_root)
 
-    def scan(self, filesystem_key: str) -> ProjectHistoryScan:
+    def _read_project_context(
+        self, filesystem_key: str
+    ) -> tuple[ProjectIdentity, tuple[int, int, int, int]]:
         if not is_safe_filesystem_key(filesystem_key):
             raise ProjectHistoryScanError("Project filesystem key is not path-safe")
         if self.projects_root.is_symlink():
@@ -97,13 +100,46 @@ class ProjectHistoryScanner:
                 "Imported Project must be an immediate, non-symlink directory under Projects root"
             )
         try:
+            root_stat = self.projects_root.lstat()
+            project_stat = project_path.lstat()
+            if not stat.S_ISDIR(root_stat.st_mode) or not stat.S_ISDIR(project_stat.st_mode):
+                raise ProjectHistoryScanError("Project directory is missing or unsafe")
             project = ProjectOwnerStore(self.projects_root).read(filesystem_key)
         except ProjectOwnerError as error:
             raise ProjectHistoryScanError(f"Project owner identity is invalid: {error}") from error
+        for path, before in ((self.projects_root, root_stat), (project_path, project_stat)):
+            after = path.lstat()
+            if not stat.S_ISDIR(after.st_mode) or (after.st_dev, after.st_ino) != (
+                before.st_dev,
+                before.st_ino,
+            ):
+                raise ProjectHistoryScanError("Project directory changed while reading owner")
+        return project, (
+            root_stat.st_dev,
+            root_stat.st_ino,
+            project_stat.st_dev,
+            project_stat.st_ino,
+        )
+
+    def validate_project_context(self, scan: ProjectHistoryScan) -> None:
+        """Reject a scan whose owner or directory was replaced; no external-writer lock is implied."""
+        project, directory_identity = self._read_project_context(scan.project.filesystem_key)
+        if (
+            project != scan.project
+            or directory_identity != scan.directory_identity
+            or scan.project_path != self.projects_root / project.filesystem_key
+        ):
+            raise ProjectHistoryScanError(
+                "Project owner or directory changed during scan; prior history retained. Reindex again"
+            )
+
+    def scan(self, filesystem_key: str) -> ProjectHistoryScan:
+        project, directory_identity = self._read_project_context(filesystem_key)
+        project_path = self.projects_root / filesystem_key
 
         diagnostics: list[HistoryDiagnostic] = []
         assets = self._scan_assets(project_path, diagnostics)
-        batches, runs = self._scan_batches(project_path, diagnostics)
+        batches, runs, batches_root_missing = self._scan_batches(project_path, diagnostics)
         duplicate_run_ids = _duplicates(item.run.run_id for item in runs)
         if duplicate_run_ids:
             retained: list[ScannedRun] = []
@@ -142,27 +178,61 @@ class ProjectHistoryScanner:
         return ProjectHistoryScan(
             project=project,
             project_path=project_path,
+            directory_identity=directory_identity,
             batches=tuple(batches),
             assets=tuple(sorted(assets_by_id.values(), key=lambda item: item.record.asset_id)),
             runs=tuple(runs),
             diagnostics=tuple(diagnostics),
+            batches_root_missing=batches_root_missing,
         )
 
     def _scan_assets(
         self, project_path: Path, diagnostics: list[HistoryDiagnostic]
     ) -> list[ScannedAsset]:
         root = project_path / "assets" / "sha256"
-        if not root.exists():
+        if (project_path / "assets").is_symlink():
+            raise ProjectHistoryScanError("Asset root is unsafe; prior history retained")
+        try:
+            mode = root.lstat().st_mode
+        except FileNotFoundError:
             return []
-        if root.is_symlink() or not root.is_dir():
-            diagnostics.append(
-                HistoryDiagnostic("asset", None, None, "unsafe_asset_root", "Asset root is unsafe")
-            )
-            return []
+        if not stat.S_ISDIR(mode):
+            raise ProjectHistoryScanError("Asset root is unsafe; prior history retained")
         store = ProjectAssetStore(project_path)
         assets: list[ScannedAsset] = []
         seen_ids: set[str] = set()
-        for metadata_path in sorted(root.glob("*/*/asset.json")):
+        # glob suppresses directory enumeration errors, which could erase a prior index.
+        metadata_paths = []
+        for prefix in sorted(root.iterdir()):
+            if prefix.is_symlink():
+                diagnostics.append(
+                    HistoryDiagnostic(
+                        "asset",
+                        prefix.name,
+                        None,
+                        "unsafe_asset_path",
+                        "Asset path contains a symlink",
+                    )
+                )
+                continue
+            if not prefix.is_dir():
+                continue
+            for asset_path in sorted(prefix.iterdir()):
+                if asset_path.is_symlink():
+                    diagnostics.append(
+                        HistoryDiagnostic(
+                            "asset",
+                            asset_path.name,
+                            None,
+                            "unsafe_asset_path",
+                            "Asset path contains a symlink",
+                        )
+                    )
+                    continue
+                if not asset_path.is_dir():
+                    continue
+                metadata_paths.append(asset_path / "asset.json")
+        for metadata_path in metadata_paths:
             digest = metadata_path.parent.name
             if any(
                 path.is_symlink()
@@ -209,17 +279,14 @@ class ProjectHistoryScanner:
 
     def _scan_batches(
         self, project_path: Path, diagnostics: list[HistoryDiagnostic]
-    ) -> tuple[list[BatchIdentity], list[ScannedRun]]:
+    ) -> tuple[list[BatchIdentity], list[ScannedRun], bool]:
         batches_root = project_path / "batches"
-        if not batches_root.exists():
-            return [], []
-        if batches_root.is_symlink() or not batches_root.is_dir():
-            diagnostics.append(
-                HistoryDiagnostic(
-                    "batch", None, None, "unsafe_batches_root", "Batches root is unsafe"
-                )
-            )
-            return [], []
+        try:
+            mode = batches_root.lstat().st_mode
+        except FileNotFoundError:
+            return [], [], True
+        if not stat.S_ISDIR(mode):
+            raise ProjectHistoryScanError("Batches root is unsafe; prior history retained")
         batches: list[BatchIdentity] = []
         runs: list[ScannedRun] = []
         seen_batch_ids: set[str] = set()
@@ -267,7 +334,7 @@ class ProjectHistoryScanner:
                 scanned = self._scan_run(project_path, run_path, diagnostics)
                 if scanned is not None:
                     runs.append(scanned)
-        return batches, runs
+        return batches, runs, False
 
     def _scan_run(
         self,
@@ -399,17 +466,15 @@ def _result_integrity(run_path: Path, result: ResultRecord) -> tuple[IntegritySt
     path = run_path / result.local_path
     if path.is_symlink() or not path.exists():
         return "missing", f"Recorded Result is missing or unsafe: {result.local_path}"
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                return "corrupt", f"Recorded Result is not a regular file: {result.local_path}"
+        with open_regular_file(path) as file:
             digest = hashlib.sha256()
             size = 0
             for chunk in iter(lambda: file.read(1024 * 1024), b""):
                 size += len(chunk)
                 digest.update(chunk)
+    except ValueError:
+        return "corrupt", f"Recorded Result is not a regular file: {result.local_path}"
     except OSError as error:
         return "missing", f"Recorded Result cannot be read: {result.local_path}: {error}"
     if size != result.byte_size or digest.hexdigest() != result.sha256:

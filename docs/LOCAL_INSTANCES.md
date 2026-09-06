@@ -18,9 +18,15 @@ different browser storage even when they reach the same backend.
 
 ## Everyday app
 
-Provision a new instance from the development checkout:
+The current installer is source-based, not a standalone app bundle. Use a Git clone on macOS, `uv`
+with Python 3.13 or newer, and npm with Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` for the locked
+frontend dependencies. Node 24.15+ in the 24.x line is recommended.
+
+Provision a new instance from the repository root. Create the destination parent directories first;
+for these example paths they share `$HOME/ai`:
 
 ```bash
+mkdir -p "$HOME/ai"
 uv run --directory backend python -m tools.install_app \
   --app-path "$HOME/ai/batchcraft-app" \
   --data-root "$HOME/ai/batchcraft-data" \
@@ -29,6 +35,8 @@ uv run --directory backend python -m tools.install_app \
 
 The installer requires both destination paths to be absent. It creates a detached Git worktree at the
 selected commit (`--revision`, default `HEAD`), installs locked dependencies, and builds the frontend.
+The installed worktree shares the source repository's Git metadata. Retain that repository; this is
+not an independent clone that can be copied elsewhere as a standalone installation.
 Add `--lan-access` only to enable trusted-LAN access for this everyday instance. The installer writes
 the choice to `app.local.json` and builds with `VITE_BATCHCRAFT_API_URL='/'` to select same-origin API
 requests even with pinned older client code.
@@ -69,6 +77,16 @@ modify its data and start GPU Jobs. Do not port-forward it or expose it to the i
 neither authentication nor wildcard CORS. The built frontend and API share one origin, so LAN access
 needs no additional CORS origin. Unsaved working sessions do not transfer between devices or origins;
 Saved Batches and Run history remain shared through the same backend.
+
+Host checks accept loopback names and the actual local destination IP for LAN access. Use the literal
+LAN IP above, not an arbitrary DNS alias or reverse proxy. Mutation Origin checks permit the validated
+same origin and the configured development frontend, but do not authenticate clients. Isolated launchers
+use a 64 MiB total request-body limit and a 10,000-Job new-plan limit; inherited environment values do not
+change these defaults. Body admission permits four in-flight bodies with a 120-second receive/spool
+deadline. Bulk reads allow four active requests and eight waiters; execution polling has two active
+slots and four separate waiters. Read queue waits expire after five seconds. Historical artifacts have
+no new size cap: downloads verify into temporary disk snapshots and stream with bounded buffers.
+Temporary disk usage depends on artifact size. See `API.md` and ADR 0015 for error and cleanup behavior.
 
 Close the terminal with Ctrl+C only after active work has finished. Closing a browser tab does not stop
 the backend. Stopping the backend does not interrupt the remote ComfyUI Job, and automatic executor
@@ -176,6 +194,18 @@ against a fake client and retains browser artifacts for seven days. Ordinary `np
 the fast Vitest suite.
 
 ### Interactive agent browser
+
+An additional artifact-security browser regression uses the built frontend, real stored HTML/SVG/PNG
+Results, and temporary fake-backed data on port 8002. After building the frontend and installing its
+Playwright Chromium, run from `backend/`:
+
+```bash
+PYTHONPATH=. uv run python tests/api/check_artifact_browser.py
+```
+
+Run it separately from Playwright smoke tests because it uses the same test port. It refuses an occupied
+port, verifies dangerous artifacts download without execution and PNG decodes, and removes its own
+temporary data. This is not a live ComfyUI check.
 
 The project `opencode.json` registers `batchcraft-browser`, using the locally installed, locked
 `@playwright/mcp` package. Quit and restart OpenCode after changing its configuration; an existing session

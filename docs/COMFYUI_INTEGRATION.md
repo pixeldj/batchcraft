@@ -122,9 +122,15 @@ A direct HTTP 4xx response from ComfyUI is a definite rejection. Its response bo
 
 When a definite rejection includes structured `node_errors` with an exact node ID and input name,
 the executor may append the frozen Profile label and retained Base workflow value for a matching Image
-Input or parameter that the concrete Job left at Base. The original diagnostic remains intact. This
+Input or parameter that the concrete Job left at Base. Existing durable diagnostic evidence remains intact. This
 context is not added for concrete overrides, unrelated targets, unstructured responses, or ambiguous
 submission outcomes, and it does not perform a second ComfyUI request.
+
+Public API responses do not echo that raw prose or Base value. They derive fixed Image Input/parameter
+guidance with one-based Profile positions from the same structured target match. The client itself uses
+bounded operation/status messages instead of embedding upstream bodies or transport exception text.
+This supersedes the earlier assumption that the original diagnostic is displayed verbatim; it does not
+change submission classification or rewrite historical execution files.
 
 The scheduler must reconcile an ambiguous outcome through available prompt IDs, queue state, history, and output metadata. It must not blindly retry the submission. A new submission is allowed only after reconciliation shows that ComfyUI did not accept the prior attempt or after explicit user action creates a new attempt under defined semantics.
 
@@ -187,6 +193,11 @@ At minimum record:
 - user-readable error summary;
 - raw diagnostic detail where appropriate;
 - timestamps.
+
+Raw submission/history evidence belongs to controlled local execution records, not public diagnostic
+responses or automatic exception logs. The API summarizes unapproved text while preserving honest
+outcomes and safe context. See `API.md` for the response and logging boundaries. Local artifacts and
+logs remain potentially sensitive and are not safe to publish without review.
 
 Definite structured submission rejections may additionally identify an exact frozen Profile target and
 its retained Base value. Diagnostics must not infer a target from filenames or error prose.

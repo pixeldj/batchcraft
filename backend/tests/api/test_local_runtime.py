@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from api_client import LoopbackTestClient as TestClient
 
 from batchcraft.comfyui import SubmissionDisposition
 from tools.fake_comfyui import FakeComfyUIClient, sample_png

@@ -6,7 +6,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from fastapi.testclient import TestClient
+from api_client import LoopbackTestClient as TestClient
 
 from batchcraft.api import Settings, create_app
 from batchcraft.application import ApplicationComfyUIClient

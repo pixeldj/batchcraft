@@ -7,6 +7,9 @@
 
 ## Context
 
+Current persistence versions and forward-only user-database policy supersede the historical baseline
+replacement below; see `../FILE_FORMAT.md` and `../DEVELOPMENT.md#persistence-policy`.
+
 Pass 3B-1 made generic parameters deterministic Cartesian dimensions backed by ordered explicit typed
 alternatives. Entering long numeric progressions manually is inconvenient, but teaching the compiler or
 executor to understand ranges would violate the requirement that every Job be fully resolved before

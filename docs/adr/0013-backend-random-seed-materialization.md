@@ -35,7 +35,7 @@ generates a fresh set.
 Saved Batches, Batch snapshots, historical reconstruction, and browser recovery preserve only Random
 count intent. Immutable Run Jobs and Result provenance preserve the exact concrete seed per Job. Loading a
 historical Run as a Batch restores Random count intent and generates fresh seeds on Preview; exact replay
-remains a separate operation over frozen concrete provenance.
+remains a separate operation over frozen concrete provenance, deferred beyond v1.
 
 ## Consequences
 

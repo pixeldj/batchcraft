@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,31 @@ class Settings:
     server_port: int
     data_root: Path = Path("data")
     database_path: Path = Path("data/batchcraft.sqlite3")
+    max_request_bytes: int = 64 * 1024 * 1024
+    max_jobs: int = 10_000
+    max_inflight_request_bodies: int = 4
+    request_body_timeout_seconds: float = 120.0
+
+    def __post_init__(self) -> None:
+        # Configuration is trusted. Canonicalize these anchors once, including
+        # macOS /var -> /private/var, never a request's artifact path below them.
+        for name in ("data_root", "database_path", "projects_root"):
+            object.__setattr__(self, name, getattr(self, name).expanduser().resolve())
+        if type(self.max_request_bytes) is not int or self.max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be a positive integer")
+        if type(self.max_jobs) is not int or self.max_jobs <= 0:
+            raise ValueError("max_jobs must be a positive integer")
+        if (
+            type(self.max_inflight_request_bodies) is not int
+            or self.max_inflight_request_bodies <= 0
+        ):
+            raise ValueError("max_inflight_request_bodies must be a positive integer")
+        if (
+            type(self.request_body_timeout_seconds) not in {int, float}
+            or not math.isfinite(self.request_body_timeout_seconds)
+            or self.request_body_timeout_seconds <= 0
+        ):
+            raise ValueError("request_body_timeout_seconds must be positive and finite")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -34,6 +60,12 @@ class Settings:
             frontend_origin=os.environ.get("BATCHCRAFT_FRONTEND_ORIGIN", "http://localhost:5173"),
             server_host=os.environ.get("BATCHCRAFT_SERVER_HOST", "127.0.0.1"),
             server_port=_port("BATCHCRAFT_SERVER_PORT", 8000),
+            max_request_bytes=int(os.environ.get("BATCHCRAFT_MAX_REQUEST_BYTES", 64 * 1024 * 1024)),
+            max_jobs=_positive_integer("BATCHCRAFT_MAX_JOBS", 10_000),
+            max_inflight_request_bodies=_positive_integer(
+                "BATCHCRAFT_MAX_INFLIGHT_REQUEST_BODIES", 4
+            ),
+            request_body_timeout_seconds=_positive_float("BATCHCRAFT_REQUEST_BODY_TIMEOUT", 120.0),
             data_root=data_root,
             database_path=Path(
                 os.environ.get("BATCHCRAFT_DATABASE_PATH", str(data_root / "batchcraft.sqlite3"))
@@ -49,14 +81,24 @@ class Settings:
         )
 
 
+def _positive_integer(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
 def _positive_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     try:
         value = default if raw is None else float(raw)
     except ValueError as error:
         raise ValueError(f"{name} must be a number") from error
-    if value <= 0:
-        raise ValueError(f"{name} must be positive")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be positive and finite")
     return value
 
 

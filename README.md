@@ -8,7 +8,9 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 ## Status
 
-Early production development.
+Early production development. The public v1 release gate has not passed; BC-025 tracks public
+v1 release hardening and the remaining gate in
+[`V1_CROSS_INSTANCE_ACCEPTANCE.md`](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md). ADR 0012 remains Proposed.
 
 The disposable remote ComfyUI spike, deterministic Batch compiler, Run filesystem store, production
 ComfyUI adapter, sequential Run executor, FastAPI application boundary, and first React workflow are
@@ -20,20 +22,82 @@ filesystem adoption, Project image import and Profile-driven named Image Input b
 Project-scoped Prompt, Workflow, and Workflow Profile libraries with immutable version history,
 SQLite-backed Saved Batches with the Saved Batch selector, visual Workflow Profile building, ordered multi-prompt Batch
 editing, deterministic Job preview, durable Run creation,
-background execution start, Job progress, uncropped Result viewing, frontend Random seed
-materialization, and repeated Run creation. Result review uses current-Run Results and Project History
-grouped by Batch. Thumbnails are image-first, with Job and integrity metadata available in Result Details.
+background execution start, Job progress, uncropped Result viewing, backend Random seed
+materialization, and repeated Run creation. Random assigns one unique seed per final Job within
+`0..2^53-1`; Run creation uses the exact assignments inspected in Preview.
+Result review uses current-Run Results and Project History grouped by Batch. History refreshes
+automatically when opening a registered Project and after local Run creation or execution finishes;
+normal use does not require pressing Reindex Project. Thumbnails are image-first, with Job and
+integrity metadata available in Result Details.
 Frozen Run Plan inspection and explicit unavailable execution state remain available. The backend includes
 mutable Project metadata, distinct ownerless adoption, immutable-version libraries, durable Saved Batches, and
-rebuildable historical projections. Editable `Load Run as Batch`, broader Project-history filtering, a
-global scheduler, and automatic backend recovery remain unimplemented.
+rebuildable historical projections. `Load Run as Batch` restores editable intent, with detached-resource
+relinking and explicit import; Random intent requests fresh seeds on Preview. Exact Rerun is deferred
+beyond v1. Broader Project-history filtering, a global scheduler, and automatic backend recovery remain
+unimplemented. Stop-after-current and local `Stop waiting` detach are supported; neither interrupts ComfyUI.
+
+## Install From Source (macOS)
+
+V1 is source-only on macOS, not a standalone app bundle. Prerequisites: Git,
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/) with Python 3.13 or newer,
+and Node.js with npm satisfying `^22.22.2 || ^24.15.0 || >=26.0.0`.
+Node 24.15 or newer in the 24.x line is recommended for the locked frontend dependencies.
+
+ComfyUI must be installed separately; see its [installation guide](https://docs.comfy.org/installation/overview).
+batchcraft does not install GPUs, models, or custom nodes. Replace the URL below with the ComfyUI
+engine's base URL reachable from this Mac, such as `http://<generation-host>:8188`, not batchcraft's URL.
+Choose a checked commit for `--revision`; a tested public v1 revision/release is still forthcoming.
+
+```bash
+git clone https://github.com/pixeldj/batchcraft.git
+cd batchcraft
+mkdir -p "$HOME/ai"
+uv run --directory backend python -m tools.install_app \
+  --app-path "$HOME/ai/batchcraft-app" \
+  --data-root "$HOME/ai/batchcraft-data" \
+  --comfyui-url "http://<generation-host>:8188" \
+  --revision "<chosen-commit>"
+```
+
+`--revision` is optional and defaults to the source clone's `HEAD`, which is not a release guarantee.
+Both destination paths must be absent. The installer creates a separate, commit-pinned Git worktree,
+installs locked dependencies, builds the frontend, and creates a separate data root for SQLite and
+Projects. Retain the source clone and its Git metadata: the installed worktree depends on them.
+
+Double-click `app.command` in the installed `batchcraft-app` folder, or run:
+
+```bash
+"$HOME/ai/batchcraft-app/app.command"
+```
+
+Open `http://127.0.0.1:8000`. Access is loopback-only by default. Add `--lan-access` during installation
+only for a trusted LAN: there is no authentication, and anyone who can reach the app can read or modify
+data and start GPU Jobs. Do not expose it to the internet.
+
+There are no automatic updates, and the installer does not reuse existing destinations. Follow
+[updating and backing up](docs/LOCAL_INSTANCES.md#updating-and-backing-up) before changing an installation.
+
+### Development Sandbox
+
+For fake-backed development without GPU work, install dependencies from the source repository root,
+then launch:
+
+```bash
+uv sync --frozen --directory backend
+npm ci --prefix frontend
+./dev.command
+```
+
+See [`LOCAL_INSTANCES.md`](docs/LOCAL_INSTANCES.md) for instance isolation, shutdown, and browser testing.
 
 ## Run The API
 
 For an everyday installation with optional trusted-LAN access, separate from this development checkout,
 or browser testing with fake ComfyUI, see [`docs/LOCAL_INSTANCES.md`](docs/LOCAL_INSTANCES.md). The development launcher is
 `./dev.command`; it uses its own data and does not submit GPU work. The commands below are the lower-level
-live API/development-server setup, not the isolated launchers.
+API-only setup using a real ComfyUI client, not the isolated fake launcher. Starting it does not itself
+submit a Job, but execution requests can submit GPU work. Use separate explicit data paths and avoid
+ports already occupied by another instance.
 
 From `backend/`:
 
@@ -53,7 +117,7 @@ See [`docs/API.md`](docs/API.md) for configuration, endpoints, and current limit
 With the API running, use a second terminal from `frontend/`:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -155,14 +219,14 @@ A Run is compiled before execution into explicit Jobs. Its plan and provenance f
 
 Completed Runs are saved in self-describing filesystem artifacts so historical experiments remain understandable and can be re-indexed if the local SQLite database is unavailable. Reproducibility preserves the execution specification and provenance; it does not promise byte-identical pixels across changes to ComfyUI, models, custom nodes, or GPU behavior.
 
-A typical Run will eventually resemble:
+A published Run uses this layout, with `execution.json` absent until execution state is written:
 
 ```text
 projects/
 └── <stable-project-key>/
     └── batches/
         └── <stable-batch-key>/
-            └── run-001/
+            └── 001-run/
                 ├── run.json
                 ├── manifest.json
                 ├── manifest.csv
@@ -212,7 +276,11 @@ HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects, Pro
 Workflow Profiles, and Saved Batches, a thin FastAPI boundary under `backend/`, and the first browser
 workflow under `frontend/`.
 
-Later application slices will add editable historical reconstruction, broader history filtering,
+Later application slices may add exact replay, broader history filtering,
 scheduler selection, and deeper Result review.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.
+
+## License
+
+batchcraft is licensed under GNU GPL version 3 only (`GPL-3.0-only`). See [`LICENSE`](LICENSE).

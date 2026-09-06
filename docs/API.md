@@ -9,12 +9,16 @@ browser never communicates directly with ComfyUI. SQLite owns current Project me
 Workflow, and Workflow Profile libraries, Saved Batches, durable Run cancellation intent, and rebuildable
 historical projections. Project filesystem records remain authoritative for historical provenance,
 execution outcomes, Assets, and Results.
-Authentication, a global scheduler, executor restart recovery, force-stopping local waiting, and remote
-ComfyUI interruption remain deferred. Stop-after-current cancellation is available at the backend boundary.
+Authentication, a global scheduler, executor restart recovery, and remote ComfyUI interruption remain
+deferred. Stop-after-current cancellation and local `Stop waiting` detach are supported.
 
 ## Local Startup
 
-From `backend/`:
+These manual commands start only the API with a real ComfyUI client. They do not launch Vite or isolate
+data automatically, and execution requests can submit GPU work. For fake-backed development and agent
+browser checks, use `./dev.command` via [`LOCAL_INSTANCES.md`](LOCAL_INSTANCES.md) instead.
+
+From `backend/`, with separate explicit data paths:
 
 ```bash
 BATCHCRAFT_PROJECTS_ROOT="/path/to/projects" \
@@ -24,6 +28,9 @@ uv run batchcraft-api
 ```
 
 The OpenAPI document is available at `/docs` while the server is running.
+The API-only default is `127.0.0.1:8000`. To pair it with the checked-in Vite development configuration,
+set `BATCHCRAFT_SERVER_PORT=8001` and `BATCHCRAFT_FRONTEND_ORIGIN=http://127.0.0.1:5174`.
+Do not start a second instance on a port or data root already in use.
 
 ## Configuration
 
@@ -42,8 +49,20 @@ For direct `batchcraft-api` startup, configuration is read centrally from enviro
 | `BATCHCRAFT_FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed local development CORS origin |
 | `BATCHCRAFT_SERVER_HOST` | `127.0.0.1` | API bind host |
 | `BATCHCRAFT_SERVER_PORT` | `8000` | API bind port |
+| `BATCHCRAFT_MAX_JOBS` | `10000` | Positive materialization budget for new Job plans and Saved Batch parameter validation |
+| `BATCHCRAFT_MAX_REQUEST_BYTES` | `67108864` | Positive total request-body budget, including multipart overhead |
+| `BATCHCRAFT_MAX_INFLIGHT_REQUEST_BODIES` | `4` | Positive per-process capacity for requests retaining admitted bodies |
+| `BATCHCRAFT_REQUEST_BODY_TIMEOUT` | `120` | Positive finite deadline in seconds for receiving and spooling a body |
 
 The real ComfyUI host is never committed to repository configuration.
+
+`Settings` canonicalizes the trusted configured `data_root`, `database_path`, and `projects_root`
+once at construction, before creating stores. Relative paths become absolute and configured aliases
+such as macOS `/var` become `/private/var`. This does not move files or change registered Project
+filesystem keys, stored relative artifact paths, or historical provenance. Repointing an alias after
+construction does not repoint the running instance. Artifact paths inside the configured store are
+never resolved to bypass validation: descriptor traversal rejects internal symlinks and parent traversal.
+Low-level filesystem callers outside the API must supply a canonical trusted storage anchor too.
 
 The frontend API client defaults to an empty base URL for same-origin requests. The checked-in
 `.env.development` explicitly selects `http://127.0.0.1:8001`; the everyday installer builds with
@@ -58,6 +77,58 @@ accepts optional boolean `lan_access`, defaulting to `false` when omitted. Devel
 loopback-only and reject LAN access. Same-origin everyday requests need no additional CORS origin;
 no wildcard CORS or authentication is added. Enable this only on a trusted LAN: anyone who can reach
 the app can read and modify data and start GPU Jobs. Do not port-forward it or expose it to the internet.
+
+Request defenses validate Host against loopback names, the explicitly configured bind host, or, for a
+wildcard LAN listener, the literal local destination IP. Arbitrary LAN DNS aliases and reverse-proxy
+deployments are not supported. Forwarded Host headers are not trusted. Mutations with an Origin header
+require the validated same origin or configured frontend origin; malformed, duplicate, and `null`
+Origins are rejected. Requests without Origin remain available to CLI clients. This is not authentication.
+
+Bodies are admitted before handlers run, with both declared and received byte limits. The default is
+64 MiB per request, not per file; chunked and multipart uploads count toward it. At most four requests
+can retain admitted bodies at once; excess body requests fail immediately with
+`429 request_capacity_exceeded` and `Retry-After: 1`, without a capacity waiting queue. A lease remains
+held through body consumption, handler completion, and spool cleanup. Immediately completed empty
+bodies bypass this budget, including bodyless control requests; GET bodies cannot bypass admission.
+
+Receiving and spooling have a 120-second total deadline, not an idle timer reset by progress. Expiry
+returns `408 request_body_timeout` without running handlers. This is not a handler deadline or a bound
+on connection count or transport buffers. Cancellation and timeout join active file operations before
+closing the spool and releasing capacity; a stalled filesystem operation can delay that cleanup and
+the error response. Isolated app/dev/test launchers retain the default budgets and do not inherit these
+environment overrides. See ADR 0015 for the boundary and remaining limits.
+
+Preview and Run creation reject plans exceeding the configured Job budget before expansion/publication.
+Saved Batch writes enforce it on parameter combinations even for incomplete drafts; Preview checks all
+dimensions. Existing valid Saved Batches and historical Runs remain readable after lowering the budget.
+Preview runs in a worker thread; this does not make all filesystem or compilation work nonblocking.
+
+Read-only Project Run history, Run detail, Batch reconstruction, Result listing/download, and Project
+Asset listing/download share four active slots and at most eight FIFO waiters per application process.
+Execution-detail polling at `GET /api/runs/{run_id}/execution` has two separate active slots and at
+most four FIFO waiters. A waiter has five seconds to acquire a slot. Queue overflow fails immediately;
+expiration of the wait deadline fails without starting the read. Both return
+`503 {"error":{"code":"read_capacity_exceeded","message":"Read capacity is busy; retry later"}}`
+with `Retry-After: 1`. These fixed limits allow ordinary six-image browser bursts to complete without
+requiring an image retry, while bounding larger bursts. Waiting allocates no read worker or artifact
+snapshot. Cancelled and timed-out waiters leave the queue; a cancelled grant returns its reserved slot
+to the next waiter. A download retains its active slot through verification, streaming, and tempfile
+cleanup. The five-second deadline limits queue waiting only, not read/stream duration or historical size.
+
+These reads and their JSON serialization use the asyncio executor rather than the shared AnyIO
+worker pool. Service/library dependencies and execution task-registry reads stay on the event loop.
+Health, active-execution discovery, and mutation/control routes do not acquire a read slot or join a
+read queue; execution polling never joins the bulk queue. This is not a general latency
+guarantee: persisted parsing still does full validation, unrelated work can use worker capacity, and
+existing mutation paths are not made nonblocking by this policy. Cancellation joins an active file
+operation before releasing its slot or closing its tempfile, without blocking the event loop.
+
+Project History fetches Result lists for at most two Runs concurrently and stops queued work when its
+Project changes or the view unmounts. The frontend HTTP client retries only GET responses carrying
+`503 read_capacity_exceeded`, at most twice, with abortable delays of 1-5 seconds based on Retry-After.
+Other errors and all mutations are not retried by this policy. Ordinary image bursts use the backend's
+bounded wait queue; image elements do not gain an automatic retry loop. Sustained overload can still
+surface an error or unavailable image, rather than retrying indefinitely.
 
 ## Endpoints
 
@@ -263,7 +334,7 @@ every image. Invalid unrelated records are omitted; duplicate valid Asset IDs ma
 data invalid.
 
 `GET /api/projects/{project_key}/assets/{asset_id}/content` resolves only an Asset in the requested
-Project, performs full size and SHA-256 verification through `ProjectAssetStore.load()`, rejects
+Project, performs full size and SHA-256 verification into an owned disk snapshot, rejects
 unsafe files, and verifies the selected image signature before serving it. Arbitrary local paths are
 never accepted.
 
@@ -331,14 +402,45 @@ ordinary fastest-varying seed dimensions reused for every non-seed configuration
 ## Project history and Run lookup
 
 `POST /api/projects/{project_id}/reindex` resolves the registered filesystem key, rescans filesystem
-truth, and atomically replaces that Project's historical projection. Repeated import/reindex is
-idempotent. A failed scan or transaction leaves the prior projection intact.
+truth, and atomically replaces that Project's historical projection. It requires the same registered
+Project ID and filesystem key; it cannot create registration or import another Project. Repeated
+import/reindex is idempotent. A failed scan or transaction leaves the prior projection intact.
+
+Per-Project locks serialize the entire scan-and-replace cycle across explicit import, registered
+reindex, and Run publication refresh. Ownership, safe paths, and directory identities are rechecked
+before replacement. A changed owner/directory, failed enumeration, unsafe root, or missing `batches/`
+root with previously indexed history rejects reconciliation rather than replacing history with empty
+rows. A new Project without batches remains valid empty history. Individually malformed Runs remain
+isolated with diagnostics. This is not an atomic transaction against arbitrary external filesystem
+writers; they can still race a final check. Run creation, import, and reindex workers remain owned until
+completion even if the request is cancelled. Published Runs are never rolled back by cancellation or
+an indexing failure; indexing failure emits a safe warning and can be repaired on the next refresh.
+
+The frontend first reads indexed history when opening a registered Project, then automatically calls
+reindex and reads the refreshed index. It shows a checking indicator while retaining known content.
+Run creation and observed terminal execution changes, including discard and durable detach, trigger
+another check for the Run's frozen Project identity. Ordinary execution polls do not trigger scans.
+Dispatched reindex requests are joined before newer checks in the same view; obsolete Result responses
+cannot replace newer history. No startup-wide scan, filesystem watcher, timer, focus refresh, or
+automatic import of other Projects is introduced. Changes made elsewhere are discovered on reopening
+history or using the retained manual Reindex Project repair/retry action.
+
+Failed refreshes keep known history with an explicit stale/unavailable warning. When execution metadata
+is unavailable, an empty Result response is not treated as proof of no Results. The view preserves
+last-known metadata without images, artifact links, or current-verification claims until an available
+execution record and a successful fresh Result read agree. Overlapping older requests cannot clear
+that state or restore images early. Nothing is written to historical artifacts by these UI checks.
 
 `GET /api/projects/{project_id}/runs` returns Runs grouped by their recorded Batch identity in the UI,
 plus Project diagnostics. A Run is `verified` or `degraded`; structurally invalid Runs are excluded and
 reported by diagnostic. `execution_available: false` and null execution fields explicitly represent a
 missing or invalid execution record. This endpoint needs neither browser `localStorage` Run IDs nor
 mutable Prompt, Workflow, Profile, or Saved Batch rows.
+
+Direct Run and execution reads differ from this history projection: if `execution.json` is absent,
+they derive pristine `created` state from the frozen Run without writing a file. Invalid execution
+records fail direct reads rather than being replaced with created state. Neither a missing history
+record nor derived created state proves what happened remotely.
 
 `GET /api/runs/{run_id}/batch-reconstruction` loads the validated historical Run without changing its
 files or mutable libraries. It returns the frozen Batch snapshot plus ordered PromptVersion,
@@ -406,35 +508,55 @@ The task registry:
 
 Start admission and discard are serialized by the same task-registry lock, so a Run cannot start and be discarded concurrently. Discard independently verifies that no task for the Run is active and that execution state is either absent or exactly the initial state derived from the frozen Run. It rejects any progression or submission evidence, including modified pending state, with `409 run_discard_not_eligible`.
 
-`POST /api/runs/{run_id}/cancel` accepts exactly:
+`POST /api/runs/{run_id}/cancel` accepts one of two modes:
 
 ```json
 {"mode":"after_current_job"}
 ```
 
+or:
+
+```json
+{"mode":"detach"}
+```
+
 The endpoint returns `202 Accepted` with `run_id`, `mode`, nullable `requested_at`, `created`, and
-`state`. A new request is eligible only while the Run has an active task in this API process. The
+`state`. A new durable request is eligible only while the Run has an active task in this API process. The
 request is inserted durably before the in-process cancellation flag is exposed. Repeated requests are
-idempotent, preserve the original timestamp, and return `created: false`. Missing Runs return
-`404 run_not_found`; inactive or terminal `succeeded`, `failed`, or `blocked` Runs without an existing
-intent return `409 run_cancellation_not_eligible`; persistence failures return
+idempotent per mode, preserve the original timestamp, and return `created: false`. Missing Runs return
+`404 run_not_found`; inactive nonterminal Runs and stop-after-current requests for `succeeded`, `failed`,
+or `blocked` Runs without an existing intent return `409 run_cancellation_not_eligible`; persistence failures return
 `500 run_cancellation_store_failed`. A Run already cancelled by discard returns a cancelled projection
 without creating SQLite intent.
 
+A detach request for an already `succeeded`, `failed`, `blocked`, or `cancelled` Run returns a no-op
+projection without adding intent: `created: false`, `requested_at: null`, and `finished` or `cancelled`.
+An existing same-mode intent still takes the idempotent path first.
+
 Cancellation request persistence and the short Job submission-admission transition share one
-per-active-Run lock. If the request wins before admission, the prepared Job and all remaining
-unsubmitted Jobs become `cancelled`. If admission already won, the current Job continues through
+per-active-Run lock. For `after_current_job`, if the request wins before admission, the prepared Job
+and all remaining unsubmitted Jobs become `cancelled`. If admission already won, the current Job continues through
 normal submission, history reconciliation, and Result ingestion, and no subsequent Job is submitted.
 Current-Job failure still produces Run `failed`; unresolved accepted or ambiguous submission produces
 Run `blocked`. If an admitted final Job succeeds, no cancelled suffix remains and the Run finishes
 `succeeded`. The operation never interrupts ComfyUI, clears its queue, retries, or resubmits work.
+
+`detach` is the local `Stop waiting` action. After persisting intent, the registry cancels only its owned
+local task to wake an in-flight await. The executor preserves submission evidence, known prompt IDs,
+and recorded Results, writes a detached `blocked` outcome for unresolved work, and leaves later Jobs
+pending. A submission interrupted locally remains uncertain, not safe to retry. Stronger already durable
+outcomes remain authoritative. Detach never interrupts ComfyUI, clears its queue, retries, or resubmits.
+Both request modes may coexist; detach takes precedence in the cancellation read model.
 
 `GET /api/runs/{run_id}/execution` returns an optional `cancellation` object, and
 `GET /api/runs/{run_id}` returns the same object under `execution.cancellation`. It contains `mode`,
 nullable `requested_at`, and one projection state: `stop_requested` before admission,
 `stopping_after_current_job` after admission, `cancelled` when execution v1 records a cancellation
 outcome, or `finished` when the request exists but execution honestly reached `succeeded`, `failed`, or
-`blocked`. A discarded Run projects `cancelled` with `requested_at: null`.
+`blocked`. Detach adds `detach_requested` while local waiting is ending and `detached` for its recorded
+blocked outcome. A discarded Run projects `cancelled` with `requested_at: null`. If SQLite intent is
+lost, the blocked filesystem diagnostic remains inspectable but does not manufacture a cancellation
+request object.
 
 Every execution response also includes ephemeral `execution_task_active`. This is `true` only while
 the current API process owns a live execution task for that Run. It is not persisted and is not evidence
@@ -465,6 +587,21 @@ missing or corrupt Results. File retrieval accepts integer Job and artifact ordi
 matching `ResultRecord`, and validates the selected regular file's path, size, and SHA-256 before returning
 it. Arbitrary filesystem paths are never accepted.
 
+Integrity-only listing hashes in bounded chunks. Result and Asset reads reject non-regular files without
+waiting for FIFO writers. Downloads copy and hash the selected descriptor's bytes into a disk tempfile
+in 256 KiB chunks before HTTP success, then stream only that snapshot in 64 KiB chunks. No pathname is
+reopened to serve the original after verification. In-place changes cannot substitute unchecked bytes;
+the snapshot must match recorded size and SHA-256. Tempfiles close on completion, disconnect, failure,
+or cancellation, after any active file worker finishes. This requires disk space proportional to the
+selected artifact and delays the first response byte until verification completes; no historical
+artifact size cap is imposed. Metadata and persisted-plan materialization remain unchanged.
+
+Result responses render inline only when the recorded MIME is PNG, JPEG, GIF, or WebP and the bytes
+match that format's signature. Other artifacts, including HTML, SVG, and mismatched image MIME, download
+as `application/octet-stream` attachments. All Result responses include `X-Content-Type-Options: nosniff`
+and a restrictive sandbox CSP. This HTTP policy does not change recorded MIME, hashes, or historical
+bytes; signature checks are not full image decoding or malware scanning.
+
 The scoped frontend cleanup retains current Results and Project History and removes Batch Results.
 Thumbnail cards omit visible `Verified` badges and `Job` captions; the info popup, accessible
 descriptions, lightbox labels, and unavailable-artifact placeholders remain. This presentation change
@@ -490,4 +627,27 @@ invalid image uploads, missing or invalid Project assets, missing Runs or Result
 ineligible execution, ineligible Run discard, ineligible Run cancellation, unavailable cancellation
 intent storage, Saved Batch revision conflicts, Saved Batch integrity violations, missing or
 invalid Saved Batches, asset or Run publication failure, invalid durable Run data, and unexpected
-internal errors. Python stack traces are logged server-side rather than returned to clients.
+internal errors. Public diagnostic messages use an approved, bounded vocabulary rather than arbitrary
+exception text. Safe numeric context such as HTTP status, Job ordinal, and materialization limits is
+retained. Execution diagnostic lists retain at most 16 source entries, deduplicate public summaries,
+and never echo raw upstream bodies or legacy diagnostic prose. Frozen Prompt/Workflow provenance and
+recorded historical bytes remain unchanged; this policy is not redaction of all application data.
+
+For definite structured submission rejections, the response retains distinct guidance for matched Base
+Image Inputs and Base parameters, with one-based Profile positions. It does not repeat labels, retained
+values, or upstream error prose. Overrides, unrelated targets, and ambiguous outcomes do not receive
+Base guidance.
+
+The HTTP application boundary prevents Starlette's rethrown exceptions from reaching Uvicorn's raw
+traceback formatter. Controlled failure logs retain normalized exception categories, fixed filesystem
+failure reasons, and package-relative locations. Background execution failures include a short SHA-256
+Run-ID fingerprint for correlation even when execution-state persistence failed. Failed streams remain
+incomplete rather than being presented as successful. Access logs, startup/lifespan failures, and
+independent dependency logs are outside this policy; logs still require review before sharing.
+
+Request admission adds `400 invalid_host`, `400 invalid_content_length`, `403 invalid_origin`, and
+`413 request_too_large`, plus `408 request_body_timeout` and `429 request_capacity_exceeded`.
+Read queue overflow or expiry adds `503 read_capacity_exceeded`. Configured frontend origins receive
+CORS headers on admission errors too.
+Internal persisted submission/history evidence can still contain raw diagnostics. Response summarization
+does not bound transport parsing, response sizes, or on-disk diagnostic storage.

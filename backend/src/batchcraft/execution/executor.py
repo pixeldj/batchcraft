@@ -447,9 +447,36 @@ def _base_workflow_rejection_context(
     persisted_job: PersistedJob,
     response: Mapping[str, object] | None,
 ) -> tuple[str, ...]:
+    image_indices, parameter_indices = base_workflow_rejection_indices(run, persisted_job, response)
+    contexts: list[str] = []
+    for index in image_indices:
+        slot = run.compiled_plan.image_input_slots[index]
+        value = _formatted_workflow_input(run.workflow, slot.node_id, slot.input_name)
+        contexts.append(
+            f"ComfyUI reported validation for Image Input {slot.label!r}, which used "
+            f"Base workflow · {value}. Choose a Project image for {slot.label} or check "
+            "that workflow value in ComfyUI."
+        )
+    for index in parameter_indices:
+        parameter = run.compiled_plan.parameters[index]
+        value = _formatted_workflow_input(run.workflow, parameter.node_id, parameter.input_name)
+        contexts.append(
+            f"ComfyUI reported validation for parameter {parameter.label!r}, which used "
+            f"Base workflow · {value}. Choose an override for {parameter.label} or check "
+            "that workflow value in ComfyUI."
+        )
+    return tuple(contexts)
+
+
+def base_workflow_rejection_indices(
+    run: PublishedRun,
+    persisted_job: PersistedJob,
+    response: Mapping[str, object] | None,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Match structured rejection evidence to frozen Base selections, not diagnostic prose."""
     rejected_targets = _structured_rejection_targets(response)
     if not rejected_targets:
-        return ()
+        return (), ()
 
     resolved_images = {
         item.slot_key: item.asset_id is None
@@ -460,8 +487,9 @@ def _base_workflow_rejection_context(
         item.parameter_key: item.value is None
         for item in persisted_job.compiled_job.resolved_parameters
     }
-    contexts: list[str] = []
-    for slot in run.compiled_plan.image_input_slots:
+    image_indices: list[int] = []
+    parameter_indices: list[int] = []
+    for index, slot in enumerate(run.compiled_plan.image_input_slots):
         if (
             (slot.node_id, slot.input_name) not in rejected_targets
             or not resolved_images.get(slot.key, False)
@@ -471,12 +499,8 @@ def _base_workflow_rejection_context(
         value = _formatted_workflow_input(run.workflow, slot.node_id, slot.input_name)
         if value is None:
             continue
-        contexts.append(
-            f"ComfyUI reported validation for Image Input {slot.label!r}, which used "
-            f"Base workflow · {value}. Choose a Project image for {slot.label} or check "
-            "that workflow value in ComfyUI."
-        )
-    for parameter in run.compiled_plan.parameters:
+        image_indices.append(index)
+    for index, parameter in enumerate(run.compiled_plan.parameters):
         if (
             parameter.node_id,
             parameter.input_name,
@@ -485,12 +509,8 @@ def _base_workflow_rejection_context(
         value = _formatted_workflow_input(run.workflow, parameter.node_id, parameter.input_name)
         if value is None:
             continue
-        contexts.append(
-            f"ComfyUI reported validation for parameter {parameter.label!r}, which used "
-            f"Base workflow · {value}. Choose an override for {parameter.label} or check "
-            "that workflow value in ComfyUI."
-        )
-    return tuple(contexts)
+        parameter_indices.append(index)
+    return tuple(image_indices), tuple(parameter_indices)
 
 
 def _structured_rejection_targets(

@@ -468,29 +468,54 @@ export class BatchcraftApiClient implements BatchcraftApi {
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}${path}`, init);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
+    for (let attempt = 0; ; attempt++) {
+      init?.signal?.throwIfAborted();
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}${path}`, init);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw error;
+        }
+        throw new ApiError("Cannot reach the batchcraft API", "network_error", null);
       }
-      throw new ApiError("Cannot reach the batchcraft API", "network_error", null);
-    }
 
-    if (!response.ok) {
-      const envelope = await readErrorEnvelope(response);
-      throw new ApiError(
-        envelope?.error.message ?? `The batchcraft API returned HTTP ${response.status}`,
-        envelope?.error.code ?? "http_error",
-        response.status,
-      );
-    }
+      if (!response.ok) {
+        const envelope = await readErrorEnvelope(response);
+        if ((init?.method ?? "GET") === "GET" && response.status === 503
+          && envelope?.error.code === "read_capacity_exceeded" && attempt < 2) {
+          const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
+          const delay = /^\d+$/.test(retryAfter)
+            ? Number(retryAfter) * 1000
+            : /^[A-Za-z]{3}, /.test(retryAfter) ? Date.parse(retryAfter) - Date.now() : NaN;
+          await new Promise<void>((resolve, reject) => {
+            const signal = init?.signal;
+            signal?.throwIfAborted();
+            const timer = setTimeout(() => {
+              signal?.removeEventListener("abort", abort);
+              resolve();
+            }, Number.isNaN(delay) ? 1000 : Math.max(1000, Math.min(5000, delay)));
+            function abort() {
+              clearTimeout(timer);
+              signal?.removeEventListener("abort", abort);
+              reject(signal?.reason);
+            }
+            signal?.addEventListener("abort", abort, { once: true });
+          });
+          continue;
+        }
+        throw new ApiError(
+          envelope?.error.message ?? `The batchcraft API returned HTTP ${response.status}`,
+          envelope?.error.code ?? "http_error",
+          response.status,
+        );
+      }
 
-    try {
-      return (await response.json()) as T;
-    } catch {
-      throw new ApiError("The batchcraft API returned invalid JSON", "invalid_response", response.status);
+      try {
+        return (await response.json()) as T;
+      } catch {
+        throw new ApiError("The batchcraft API returned invalid JSON", "invalid_response", response.status);
+      }
     }
   }
 }

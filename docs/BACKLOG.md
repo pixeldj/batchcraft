@@ -8,8 +8,11 @@ _Last consolidated: 2026-09-01._
 
 ## Current focus
 
+Public v1 preparation is tracked by [BC-025](#bc-025-public-v1-release-hardening-and-acceptance).
+Its release gate remains open; implementation milestones below are not a v1 release approval.
+
 1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Done)
-2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, Done)
+2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, In Progress)
 3. [BC-003C: Interrupt owned ComfyUI Job](#bc-003c-interrupt-owned-comfyui-job) (P2, Planned)
 4. [BC-002: Durable queued Runs](#bc-002-durable-queued-runs) (P2, Planned)
 
@@ -182,10 +185,11 @@ Implementation progress: durable `detach` intent, executor-owned local task wake
 finalization, API/read-model support, and the confirmed frontend `Stop waiting` action are implemented.
 Known submission evidence and already durable Results are preserved, later Jobs remain pending, refresh
 restores the blocked outcome, and no ComfyUI interrupt or queue-clear operation is used. Automated
-coverage and owner acceptance for the original implementation are complete. A follow-up correctness fix
-is in progress for restored `running` state after API process loss: expose ephemeral local task ownership,
-stop stale polling, preserve the unresolved Run honestly, and release replacement-Run and Batch-save
-controls without claiming remote cancellation.
+coverage and owner acceptance for the original implementation are complete. The follow-up for restored
+`running` state after API process loss now exposes ephemeral local task ownership, stops stale polling,
+preserves the unresolved Run honestly, and releases replacement-Run and Batch-save controls without
+claiming remote cancellation. Automated coverage passes; retain In Progress until follow-up owner
+acceptance is recorded rather than inferring it from the earlier implementation's acceptance.
 
 Expected behavior:
 
@@ -474,10 +478,9 @@ Batch Results gallery, accumulated state, and restoration requests were removed.
 Project History, integrity checks, cancellation, and current-Run recovery remain. Existing valid v4
 drafts are preserved while obsolete gallery membership is ignored. Verification passed with 384
 frontend tests, eight desktop/mobile browser tests across Vite and built same-origin modes, lint,
-typecheck, and production build. BC-007 remains Planned for automatic history freshness, pagination,
-sorting, and filters.
+typecheck, and production build. Pagination, sorting, and advanced filters remain deferred beyond v1.
 
-Next slice: automatic history freshness for the current registered Project (P2, Planned).
+V1 slice: automatic history freshness for the current registered Project (P2, Done).
 
 - Existing Results should appear without pressing Reindex Project. Restarting or updating with the same
   database and data root should retain history; reconcile missing or stale projections automatically.
@@ -491,6 +494,19 @@ Next slice: automatic history freshness for the current registered Project (P2, 
 - Verify same-data restart/update, missing index recovery, completed Run visibility, failed/concurrent
   scans, Project switching, and unchanged historical files. Measure larger-history scan cost before
   adding incremental indexing; startup-wide scans and filesystem watchers are outside this slice.
+
+Implementation: opening history reads the existing index first and reconciles in the background.
+Observed creation and terminal Run transitions refresh the frozen Run's Project, not an unrelated draft
+Project. Registered scans cannot import foreign ownership; full scan-and-replace cycles are serialized,
+and changed owners/directories or failed enumeration preserve the prior index. Worker cancellation
+joins publication and indexing operations rather than abandoning writes. Missing execution metadata
+keeps last-known Result metadata without images until fresh current-generation verification succeeds.
+Verification passed with 923 backend tests, 421 frontend tests, eight desktop/mobile browser checks
+across Vite and built same-origin modes, and the artifact-security/six-image browser check. Ruff,
+mypy, frontend lint/typecheck, builds, distribution checks, current-source Gitleaks, actionlint, and
+`git diff --check` pass. Browser coverage confirms completion in the open Project and reopening history
+without manual reindex. Advanced filters, sorting, and pagination remain Planned; the broader BC-007
+entry is not Done. The public v1 release gate remains separate.
 
 ### BC-008: Video and generic file input slots
 
@@ -619,6 +635,11 @@ append context only for exact mapped targets that the concrete Job left at Base,
 original diagnostic and all overridden, unstructured, and ambiguous behavior. No API, SQLite, or v1
 filesystem format changed. Verification passed with 622 backend tests, Ruff check/format, mypy, and
 package build, plus 365 frontend tests, typecheck, lint, and production build.
+
+BC-025 supersedes verbatim public diagnostic display: historical evidence remains intact, while API
+responses derive fixed Base Image Input/parameter guidance and one-based positions from the same
+structured target match. Labels, Base values, and upstream prose remain out of public diagnostics;
+frozen provenance remains inspectable. Submission classification and override behavior are unchanged.
 
 ### BC-011: Create and Start
 
@@ -981,8 +1002,8 @@ not a claim that BC-021's manual cross-instance acceptance has passed.
 | Priority | P1 |
 | Status | Done |
 | Area | Runs / Recovery / Historical reuse |
-| Summary | Reconstruct editable Batch intent from a modern historical Run with detached resources, then pass the clean-instance portability release gate. |
-| Dependencies / Notes | V1-004. Depends on BC-020. Implements the portability-specific `Load Run as Batch` part of BC-006; `Recreate Result` and `Exact Rerun` remain in BC-006. Follow `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. |
+| Summary | Reconstruct editable Batch intent from a modern historical Run with detached resources. |
+| Dependencies / Notes | V1-004. Depends on BC-020. Implements the portability-specific `Load Run as Batch` part of BC-006; `Recreate Result` and `Exact Rerun` remain in BC-006 and are deferred beyond v1. The separate clean-instance/live release gate is unfinished under BC-025 and `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. |
 
 Acceptance requires:
 
@@ -992,7 +1013,7 @@ Acceptance requires:
 - exact-content relinking, explicit detached import, and hard conflicts for identity/content mismatch;
 - a new Preview before creating a new immutable Run;
 - automated cross-instance import, inspection, reconstruction, relinking, and degraded-content tests;
-- one separate live ComfyUI smoke test proving successful execution of the reconstructed Batch;
+- a separately tracked live ComfyUI release smoke test under BC-025, not satisfied by these automated tests;
 - unchanged hashes for every original historical Run file.
 
 Implementation progress: historical Runs now load as unsaved editable drafts through a read-only,
@@ -1007,8 +1028,8 @@ also protects stale frontend reconstruction/import requests, cold Random-seed re
 ownership, archived resources, and dependent Workflow/Profile conflicts. Verification passes with 611
 backend tests, Ruff check/format, mypy, and package build, plus 352 frontend tests, typecheck, lint, and
 production build. The complete realistic fixture, repeat-fresh-instance proof, and live ComfyUI gate remain
-as release-level validation under `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`, not BC-021 implementation
-blockers.
+as release blockers under BC-025 and `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`, not completed BC-021
+implementation evidence.
 
 ### BC-022: Random seed per-Job semantics
 
@@ -1097,6 +1118,95 @@ Acceptance and scope:
   progress, disconnects, completion, and browser reload. Confirm installed ComfyUI/custom-node payloads
   only in a separately authorized live check.
 - Whole-Job percentage estimates, ETA, durable telemetry history, and WebSocket reconnection are deferred.
+
+### BC-025: Public v1 release hardening and acceptance
+
+| Field | Value |
+| --- | --- |
+| ID | BC-025 |
+| Priority | P1 |
+| Status | In Progress |
+| Area | Security / Licensing / Release / Documentation |
+| Summary | Resolve the public-source audit findings and pass candidate-specific installation, privacy, security, and cross-instance release acceptance. |
+| Dependencies / Notes | Builds on BC-021 and BC-023. ADR 0015 defines local browser defenses and runtime budgets. ADR 0012 remains Proposed until `V1_CROSS_INSTANCE_ACCEPTANCE.md` passes. No history rewrite or everyday/live promotion is authorized by this entry. |
+
+Scope decisions:
+
+- Public v1 is a macOS source installation, with basic README prerequisites, install, launch, and
+  update/backup instructions. Standalone application packaging remains deferred.
+- BC-007 automatic registered-Project history freshness is included in v1; advanced history filters,
+  sorting, and pagination remain later work.
+- License the project under GNU GPL version 3 only (`GPL-3.0-only`). Preserve dependency notices and
+  review redistribution rights for fixtures and any packaged components.
+- Remove private identifiers and personal package contact information from current source only;
+  existing history is retained with owner approval. Never treat cleanup as credential revocation.
+- Exact Rerun is deferred beyond v1. Editable `Load Run as Batch` preserves Random intent and asks for
+  fresh seeds; historical inspection retains the frozen seeds.
+
+Implemented groundwork on the cleanup branch:
+
+- Privacy cleanup, root GPL license, metadata, public security policy, broader secret-file ignores,
+  checksum-pinned redacted Gitleaks checks, and commit-pinned CI Actions.
+- Passive Result serving, Host/Origin mutation defenses, a 64 MiB total request budget, a configurable
+  10,000-Job new-plan budget, and nonblocking regular-file validation with chunked integrity reads.
+- Offline live-verification setup now publishes Project ownership and compiles a matching snapshot.
+- Current Random/recovery/detach/reconstruction docs, supported Node versions, source installation
+  requirements, and the Random/missing-execution acceptance distinctions are reconciled.
+- Public domain, upstream, history, and execution diagnostics use bounded safe summaries. Structured
+  Base Image Input/parameter guidance remains; HTTP/task failure logs retain safe failure context and
+  hashed Run correlation without exposing raw exception chains. Historical evidence is not rewritten.
+- Frontend builds include the complete GPL license and bundled runtime/tool notices. Backend wheel
+  and sdist include GPL-3.0-only metadata and a verified license copy. Automated artifact checks reject
+  missing/truncated/stale notices, unreviewed bundled dependencies, and unexpected package inputs.
+- Request bodies now have per-process capacity and receive/spool deadlines, with joined cleanup under
+  shutdown cancellation. Verified Asset/Result downloads use owned disk snapshots and bounded buffers
+  rather than whole-file RAM allocation. Trusted storage anchors support macOS temporary-path aliases
+  without permitting symlinks inside the store.
+- Historical reads and serialization run off the event loop with bounded active/waiting capacity.
+  Execution polling has separate capacity. Project History limits Result-list fan-out to two Runs,
+  and only structured GET read-capacity failures receive bounded retries; mutations never retry.
+- BC-007's automatic current-Project history freshness slice is complete. README now includes basic
+  macOS source installation and launch instructions. This is not clean-machine installation acceptance
+  or permission to update the everyday installation.
+
+Remaining release work:
+
+- Complete resource review of persisted-data validation, remote ComfyUI response sizes, resolved-plan
+  byte sizes, remaining synchronous mutation work, and temporary snapshot disk usage/active stream
+  duration. Local read/admission limits are not a complete denial-of-service defense; do not impose
+  new historical format restrictions or rewrite valid user data to add runtime limits.
+- Preserve raw historical CSV, document text-only spreadsheet import, and decide whether a separate
+  spreadsheet-safe export is required. Never rewrite old manifests to neutralize formula cells.
+- Audit the final release for GPL corresponding-source delivery and any separately bundled dependencies,
+  runtimes, browsers, models, or fixture rights. Artifact notice checks do not establish complete
+  distribution compliance or make the source installation a standalone application package.
+- Enable and verify GitHub private vulnerability reporting and hosted secret/push protection; run the
+  new CI on the candidate. Repeat secret/privacy and dependency-advisory scans on release contents.
+- Verify clean macOS source installation and supported browser behavior against fake data. Record the
+  tested revision and limitations; ordinary Ubuntu/Chromium CI is not platform-release acceptance.
+- Complete the realistic fixture, repeat-fresh-instance proof, unchanged archive hashes, and separately
+  authorized live ComfyUI smoke test in `V1_CROSS_INSTANCE_ACCEPTANCE.md`. Then resolve ADR 0012 status.
+
+Audit evidence: pinned Gitleaks found no secrets in the audited current source or locally reachable
+history. npm production/full and pinned pip-audit production/development scans reported no known
+advisories for the audited platform on 2026-09-05. This does not cover ComfyUI, models, OS/browser
+binaries, every platform-specific dependency, or all licensing obligations.
+
+Cleanup verification: 923 backend tests, 421 frontend tests, eight desktop/mobile smoke tests across
+Vite and built same-origin modes, and the real HTML/SVG/PNG artifact-security browser check pass.
+The browser check now includes a six-image burst with four concurrent preparations and no image retry.
+Resource regressions cover upload/read saturation, independent polling, worker shutdown, FIFO and
+internal-symlink rejection, macOS runtime aliases, verified snapshots under source replacement, and
+GET-only capacity retries with Project-switch cancellation.
+The backend total includes 13 actual-package notice tests; three additional frontend distribution checks
+and the combined offline artifact checker pass. Ruff lint/format, mypy, frontend lint/typecheck,
+backend/frontend builds, actionlint, final redacted current-source secret scans, and `git diff --check`
+pass. The test suite reports an upstream Starlette/httpx deprecation warning. One existing frontend
+snapshot-divergence test failed once during parallel checks, then passed in isolation and in a full
+rerun without changes; it also passed in this resource pass. Watch for recurrence in candidate CI rather
+than treating its cause as resolved.
+Hosted CI, complete distribution acceptance, and the separately authorized live release gate have not
+run for this cleanup. BC-025 remains In Progress.
 
 ## Maintenance rules
 

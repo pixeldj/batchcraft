@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import cast
 
-from fastapi.testclient import TestClient
+from api_client import LoopbackTestClient as TestClient
 
 from batchcraft.api import Settings, create_app
 from batchcraft.application import ApplicationComfyUIClient

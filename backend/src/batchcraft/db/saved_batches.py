@@ -69,16 +69,54 @@ class SavedBatchIntegrityError(SavedBatchStoreError):
 
 
 class SavedBatchStore:
+    """Limit write-time parameter validation; persisted definitions remain readable."""
+
     def __init__(
         self,
         database_path: Path,
         *,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
+        max_jobs: int = 10_000,
     ) -> None:
+        if type(max_jobs) is not int or max_jobs <= 0:
+            raise ValueError("max_jobs must be a positive integer")
+        self.max_jobs = max_jobs
         self.database_path = database_path
         self._id_factory = id_factory or (lambda: str(uuid4()))
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    def check_materialization_budget(self, definition: SavedBatchDefinition) -> None:
+        """Count validation's parameter product without constructing Jobs or writing data.
+
+        Saved Batches may be incomplete drafts. Only parameter dimensions are
+        compiled during their validation; Preview budgets the complete Job plan.
+        """
+        profile = definition.selected_workflow_profile_version
+        if profile is None:
+            return
+        raw_parameters = profile.profile.get("parameters")
+        if not isinstance(raw_parameters, list):
+            raise SavedBatchValidationError(
+                "selected Workflow Profile version has invalid parameters"
+            )
+        try:
+            parameters = tuple(
+                _workflow_parameter(value, index) for index, value in enumerate(raw_parameters, 1)
+            )
+            bindings = materialize_parameter_bindings(parameters, definition.parameter_bindings)
+        except ValueError as error:
+            raise SavedBatchValidationError(str(error)) from error
+        count = 1
+        for size in (
+            *(len(binding.values) for binding in bindings),
+            *(len(linked_set.rows) for linked_set in definition.linked_parameter_sets),
+        ):
+            if size and count > self.max_jobs // size:
+                raise SavedBatchValidationError(
+                    f"Saved Batch parameter validation expands beyond the maximum of {self.max_jobs} Jobs"
+                )
+            count *= size
 
     def create(
         self,
@@ -92,11 +130,14 @@ class SavedBatchStore:
         definition = _normalize_parameter_bindings(definition)
         _validate_identity(project_id, batch_id, filesystem_key)
         _validate_definition(definition)
+        self.check_materialization_budget(definition)
         with closing(open_connection(self.database_path)) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 _require_project(connection, project_id)
-                _validate_library_selections(connection, project_id, definition)
+                _validate_library_selections(
+                    connection, project_id, definition, max_jobs=self.max_jobs
+                )
                 timestamp = _timestamp(self._clock)
                 workflow_version_id = (
                     None
@@ -183,6 +224,7 @@ class SavedBatchStore:
         ):
             raise SavedBatchValidationError("expected revision must be a positive integer")
         _validate_definition(definition)
+        self.check_materialization_budget(definition)
         with closing(open_connection(self.database_path)) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
@@ -192,7 +234,9 @@ class SavedBatchStore:
                         f"Saved Batch revision conflict: expected {expected_revision}, "
                         f"found {current.revision}"
                     )
-                _validate_library_selections(connection, current.project_id, definition)
+                _validate_library_selections(
+                    connection, current.project_id, definition, max_jobs=self.max_jobs
+                )
                 workflow_version_id = (
                     None
                     if definition.selected_workflow_version is None
@@ -472,7 +516,11 @@ def _validate_digest(value: str, label: str) -> None:
 
 
 def _validate_library_selections(
-    connection: sqlite3.Connection, project_id: str, definition: SavedBatchDefinition
+    connection: sqlite3.Connection,
+    project_id: str,
+    definition: SavedBatchDefinition,
+    *,
+    max_jobs: int,
 ) -> None:
     for selection in definition.prompt_selections:
         row = connection.execute(
@@ -639,7 +687,8 @@ def _validate_library_selections(
                         for item in definition.linked_parameter_sets
                     ),
                     seeds=SeedInput.fixed(0),
-                )
+                ),
+                max_jobs=max_jobs,
             )
         except ValueError as error:
             raise SavedBatchIntegrityError(str(error)) from error

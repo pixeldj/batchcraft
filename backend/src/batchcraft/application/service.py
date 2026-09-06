@@ -1,18 +1,18 @@
 import asyncio
 import hashlib
 import json
-import os
+import logging
 import re
 import secrets
-import stat
 from collections.abc import Callable, Coroutine, Iterator, Mapping
-from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from threading import Lock
+from typing import BinaryIO, Literal, Protocol, cast
 from uuid import UUID, uuid5
+from weakref import WeakValueDictionary
 
 from batchcraft.comfyui import (
     ComfyUIError,
@@ -54,6 +54,7 @@ from batchcraft.db import (
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
 )
+from batchcraft.diagnostics import safe_exception
 from batchcraft.domain import BatchDefinition, CompiledRunPlan, SeedInput, compile_batch
 from batchcraft.execution import (
     DISCARDED_BEFORE_START,
@@ -82,6 +83,7 @@ from batchcraft.files import (
     RunStoreError,
     is_safe_filesystem_key,
 )
+from batchcraft.files._io import open_regular_file
 from batchcraft.files.history import (
     ProjectHistoryScan,
     ProjectHistoryScanError,
@@ -117,6 +119,7 @@ from .tasks import RunTaskRegistry
 _RUN_DIRECTORY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
 _HISTORICAL_IMPORT_NAMESPACE = UUID("cf2d89da-87dc-4ce7-8bf5-c1da75fc690b")
 _SEED_SPACE_SIZE = 2**53
+logger = logging.getLogger(__name__)
 _IMAGE_MIME_TYPES = {
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
@@ -223,6 +226,12 @@ class BatchReconstruction:
 
 
 class BatchcraftService:
+    """Application materialization is limited to 10,000 Jobs by default.
+
+    ``max_jobs`` is a positive, configurable safety budget for new plans, including
+    Random Preview assignments, not a limit on reading valid historical Runs.
+    """
+
     def __init__(
         self,
         *,
@@ -236,7 +245,11 @@ class BatchcraftService:
         executor: RunExecutor = execute_run,
         clock: Callable[[], datetime] | None = None,
         random_seed_source: RandomSeedSource = secrets.randbelow,
+        max_jobs: int = 10_000,
     ) -> None:
+        if isinstance(max_jobs, bool) or not isinstance(max_jobs, int) or max_jobs < 1:
+            raise ValueError("max_jobs must be a positive integer")
+        self.max_jobs = max_jobs
         self.projects_root = projects_root
         self.comfyui_client = comfyui_client
         self.task_registry = task_registry
@@ -247,6 +260,8 @@ class BatchcraftService:
             cancellation_store.database_path
         )
         self.history_scanner = ProjectHistoryScanner(projects_root)
+        self._history_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
+        self._history_locks_guard = Lock()
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
         self._random_seed_source = random_seed_source
@@ -266,7 +281,7 @@ class BatchcraftService:
             raise RunCreationError("Random seed count must be positive")
         base_plan = compile_batch(
             creation.definition,
-            max_jobs=_SEED_SPACE_SIZE // random_seed_count,
+            max_jobs=min(self.max_jobs, _SEED_SPACE_SIZE) // random_seed_count,
         )
         seeds = materialize_random_seeds(
             base_plan.job_count * random_seed_count,
@@ -312,8 +327,9 @@ class BatchcraftService:
         return tuple(imported.values())
 
     def get_project_asset_content(
-        self, project_filesystem_key: str, asset_id: str
-    ) -> tuple[AssetRecord, bytes]:
+        self, project_filesystem_key: str, asset_id: str, destination: BinaryIO
+    ) -> AssetRecord:
+        """Verify into an empty caller-owned file, rewound only on success."""
         store = self._project_asset_store(project_filesystem_key)
         try:
             matches = [
@@ -329,13 +345,15 @@ class BatchcraftService:
             raise AssetDataError(f"duplicate Project asset ID: {asset_id}")
 
         try:
-            record = store.load(matches[0].sha256)
-            content = _read_asset_content(store.project_path / record.stored_path, record)
-            if not _has_image_signature(content, record.mime_type):
+            record = matches[0]
+            _read_asset_content(store.project_path / record.stored_path, record, destination)
+            destination.seek(0)
+            if not _has_image_signature(destination.read(12), record.mime_type):
                 raise AssetDataError("Project asset image signature is invalid")
         except (AssetStoreError, OSError, ValueError) as error:
             raise AssetDataError("Project asset data is invalid") from error
-        return record, content
+        destination.seek(0)
+        return record
 
     def create_run(self, creation: RunCreationInput) -> PublishedRun:
         self._validate_creation_paths(
@@ -345,6 +363,15 @@ class BatchcraftService:
         plan = self._compile_and_validate(creation)
 
         assets = self._resolve_assets(creation.project.filesystem_key, plan)
+        with self._history_lock(creation.project.filesystem_key):
+            return self._publish_run(creation, plan, assets)
+
+    def _publish_run(
+        self,
+        creation: RunCreationInput,
+        plan: CompiledRunPlan,
+        assets: dict[str, AssetRecord],
+    ) -> PublishedRun:
         try:
             run = self.run_store.create_run(
                 project=creation.project,
@@ -358,8 +385,15 @@ class BatchcraftService:
                 description=creation.description,
             )
             # The filesystem Run is authoritative; projection repair is available via reindex.
-            with suppress(ProjectImportError):
-                self.import_project(creation.project.filesystem_key)
+            try:
+                self._refresh_project(
+                    creation.project.filesystem_key, project_id=creation.project.id
+                )
+            except Exception as error:
+                logger.warning(
+                    "Published Run history refresh failed; reindex to repair: %s",
+                    safe_exception(error, run_id=run.run_id),
+                )
             return run
         except OSError as error:
             raise RunPublicationError("Run publication failed") from error
@@ -371,7 +405,7 @@ class BatchcraftService:
             raise RunCreationError(f"Run could not be published: {error}") from error
 
     def _compile_and_validate(self, creation: RunCreationInput) -> CompiledRunPlan:
-        plan = compile_batch(creation.definition)
+        plan = compile_batch(creation.definition, max_jobs=self.max_jobs)
         first_job = plan.jobs[0]
         prepare_workflow(
             creation.workflow,
@@ -862,8 +896,9 @@ class BatchcraftService:
             raise RunCancellationStoreError("Run cancellation data could not be read") from error
 
     def get_result(
-        self, run: PublishedRun, job_ordinal: int, artifact_ordinal: int
-    ) -> tuple[ResultRecord, bytes]:
+        self, run: PublishedRun, job_ordinal: int, artifact_ordinal: int, destination: BinaryIO
+    ) -> ResultRecord:
+        """Verify into an empty caller-owned file, rewound only on success."""
         state = self.get_execution_state(run)
         for result in (result for job in state.jobs for result in job.results):
             if (result.job_ordinal, result.artifact_ordinal) == (
@@ -873,15 +908,37 @@ class BatchcraftService:
                 path = run.path / result.local_path
                 if path.parent != run.path / "outputs":
                     raise RunDataError(f"recorded Result file is unsafe: {result.local_path}")
-                return result, _read_result(path, result)
+                _read_result(path, result, destination=destination)
+                destination.seek(0)
+                return result
         raise ResultNotFoundError(
             f"Result {job_ordinal}/{artifact_ordinal} was not found for Run {run.run_id!r}"
         )
 
     def import_project(self, filesystem_key: str) -> ProjectHistoryScan:
+        with self._history_lock(filesystem_key):
+            return self._refresh_project(filesystem_key)
+
+    def _history_lock(self, filesystem_key: str) -> Lock:
+        # One process owns the store. No operation under these locks awaits the event loop.
+        # Holders and waiters retain the lock; unused keys need no process-lifetime entry.
+        with self._history_locks_guard:
+            return self._history_locks.setdefault(filesystem_key, Lock())
+
+    def _refresh_project(
+        self, filesystem_key: str, *, project_id: str | None = None
+    ) -> ProjectHistoryScan:
+        """Scan and replace while the caller holds the Project history lock."""
         try:
             scan = self.history_scanner.scan(filesystem_key)
-            self.history_store.replace_project(scan)
+            if project_id is not None and (
+                scan.project.id != project_id or scan.project.filesystem_key != filesystem_key
+            ):
+                raise HistoricalProjectConflictError(
+                    "Project owner ID or filesystem key conflicts with SQLite registration"
+                )
+            self.history_scanner.validate_project_context(scan)
+            self.history_store.replace_project(scan, register=project_id is None)
             return scan
         except HistoricalProjectConflictError as error:
             raise ProjectImportConflictError(str(error)) from error
@@ -889,7 +946,9 @@ class BatchcraftService:
             raise ProjectImportError(str(error)) from error
 
     def reindex_project(self, project_id: str) -> ProjectHistoryScan:
-        return self.import_project(self._registered_project_key(project_id))
+        filesystem_key = self._registered_project_key(project_id)
+        with self._history_lock(filesystem_key):
+            return self._refresh_project(filesystem_key, project_id=project_id)
 
     def list_project_runs(self, project_id: str) -> tuple[HistoricalRunRecord, ...]:
         self._registered_project_key(project_id)
@@ -1415,19 +1474,31 @@ def _has_os_error_cause(error: BaseException) -> bool:
     return False
 
 
-def _read_result(path: Path, result: ResultRecord) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _read_result(
+    path: Path,
+    result: ResultRecord,
+    *,
+    destination: BinaryIO | None = None,
+) -> None:
+    digest = hashlib.sha256()
+    size = 0
     try:
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                raise RunDataError(f"recorded Result is not a regular file: {result.local_path}")
-            content = file.read()
+        with open_regular_file(path) as file:
+            for chunk in iter(lambda: file.read(256 * 1024), b""):
+                size += len(chunk)
+                if size > result.byte_size:
+                    raise RunDataError(
+                        f"recorded Result integrity check failed: {result.local_path}"
+                    )
+                digest.update(chunk)
+                if destination is not None:
+                    destination.write(chunk)
+    except ValueError as error:
+        raise RunDataError(f"recorded Result is not a regular file: {result.local_path}") from error
     except OSError as error:
         raise RunDataError(f"recorded Result cannot be read: {result.local_path}") from error
-    if len(content) != result.byte_size or hashlib.sha256(content).hexdigest() != result.sha256:
+    if size != result.byte_size or digest.hexdigest() != result.sha256:
         raise RunDataError(f"recorded Result integrity check failed: {result.local_path}")
-    return content
 
 
 def _validate_image_file(source: Path, declared_content_type: str) -> None:
@@ -1460,16 +1531,20 @@ def _is_supported_image_record(record: AssetRecord) -> bool:
     return _IMAGE_MIME_TYPES.get(Path(record.original_filename).suffix.lower()) == record.mime_type
 
 
-def _read_asset_content(path: Path, record: AssetRecord) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _read_asset_content(path: Path, record: AssetRecord, destination: BinaryIO) -> None:
+    digest = hashlib.sha256()
+    size = 0
     try:
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                raise AssetDataError(f"Project asset is not a regular file: {record.asset_id}")
-            content = file.read()
+        with open_regular_file(path) as file:
+            for chunk in iter(lambda: file.read(256 * 1024), b""):
+                size += len(chunk)
+                if size > record.byte_size:
+                    raise AssetDataError(f"Project asset integrity check failed: {record.asset_id}")
+                digest.update(chunk)
+                destination.write(chunk)
+    except ValueError as error:
+        raise AssetDataError(f"Project asset is not a regular file: {record.asset_id}") from error
     except OSError as error:
         raise AssetDataError(f"Project asset cannot be read: {record.asset_id}") from error
-    if len(content) != record.byte_size or hashlib.sha256(content).hexdigest() != record.sha256:
+    if size != record.byte_size or digest.hexdigest() != record.sha256:
         raise AssetDataError(f"Project asset integrity check failed: {record.asset_id}")
-    return content

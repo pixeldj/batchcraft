@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 
 import type { BatchcraftApi, RunCancellationApi, RunDiscardApi } from "../../api/client";
 import type {
@@ -20,6 +20,7 @@ interface Props {
   initialResults: ResultResponse[];
   initialResultsError: string | null;
   onStatusChange(status: RunStatus | null): void;
+  onHistoryChange?(projectId: string): void;
   onCreatedUnavailableChange(runId: string, unavailable: boolean): void;
   onExecutionControlUnavailableChange(runId: string, unavailable: boolean): void;
   getCachedRun(runId: string): RunResponse | null;
@@ -35,6 +36,7 @@ export function RunWorkspace({
   initialResults,
   initialResultsError,
   onStatusChange,
+  onHistoryChange,
   onCreatedUnavailableChange,
   onExecutionControlUnavailableChange,
   getCachedRun,
@@ -50,6 +52,14 @@ export function RunWorkspace({
     initialResultsError,
     onStatusChange,
   );
+
+  const notifyHistory = useEffectEvent(() => {
+    if (run) onHistoryChange?.(run.project_id);
+  });
+  const historyStatus = execution.execution?.status ?? (run ? "created" : null);
+  useEffect(() => {
+    if (historyStatus && historyStatus !== "running") notifyHistory();
+  }, [run?.run_id, historyStatus]);
 
   useEffect(() => {
     if (run) {

@@ -417,7 +417,11 @@ SQLite historical tables are a non-authoritative read projection of an owned v1 
 scan rebuilds Project Asset, Batch, Run, Job, resolved parameter, Image Input, Asset-use, Result, and
 diagnostic rows from filesystem records. Import creates or confirms the Project registration and replaces
 that Project's projection atomically. Reindex uses the registered Project filesystem key and performs the
-same replacement. Neither operation rewrites Project files.
+same replacement but must confirm existing registration; it never registers a different Project.
+Automatic current-Project history refresh uses this registered reindex path. Failed or unsafe storage
+enumeration preserves the prior projection, and owner/directory identity is rechecked before replacement.
+Neither operation rewrites Project files. Scan identity markers and locks are process-local, not new
+durable fields.
 
 A trusted Run projection has integrity `verified` or `degraded`. `verified` means the scanner found no
 Run-scoped diagnostic. `degraded` preserves valid plan and metadata while recording problems such as a

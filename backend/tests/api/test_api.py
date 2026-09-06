@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 import pytest
-from fastapi.testclient import TestClient
+from api_client import LoopbackTestClient as TestClient
+from artifact_fixture import artifact_png
 from httpx import Response
 from pydantic import BaseModel, TypeAdapter
 
@@ -269,7 +270,7 @@ class FakeComfyUIClient:
         )
 
     async def download_artifact(self, artifact: RemoteOutputArtifact) -> DownloadedArtifact:
-        content = f"bytes:{artifact.filename}".encode()
+        content = artifact_png(artifact.filename)
         return DownloadedArtifact(
             remote=artifact,
             content=content,
@@ -2054,7 +2055,7 @@ def test_preview_rejects_a_selected_project_asset_that_does_not_exist(tmp_path: 
     assert response.json() == {
         "error": {
             "code": "project_asset_not_found",
-            "message": "Project assets were not found: missing-asset",
+            "message": "Project Asset was not found; reselect or import the image",
         }
     }
 
@@ -2554,7 +2555,7 @@ def test_named_run_api_round_trips_provenance_without_changing_plan_or_results(
     assert lookup.json()["plan"]["jobs"] == preview.json()["jobs"]
     assert terminal.status == "succeeded"
     assert result_content.status_code == 200
-    assert result_content.content == b"bytes:prompt-1-1.png"
+    assert result_content.content == artifact_png("prompt-1-1.png")
 
 
 def test_discard_pristine_run_is_durable_terminal_and_preserves_frozen_run(
@@ -3136,7 +3137,7 @@ def test_execution_runs_in_background_and_serves_ordered_results(tmp_path: Path)
     ]
     assert first_file.status_code == 200
     assert first_file.headers["content-type"] == "image/png"
-    assert first_file.content == b"bytes:prompt-1-1.png"
+    assert first_file.content == artifact_png("prompt-1-1.png")
     assert missing.status_code == 404
     assert traversal.status_code == 422
     assert traversal.json()["error"]["code"] == "invalid_request"
@@ -3180,7 +3181,7 @@ def test_api_state_queries_skip_result_hashing_and_download_verifies_selected_re
 
         selected = http.get(f"/api/runs/{run_id}/results/1/1")
         assert selected.status_code == 200
-        assert selected.content == b"bytes:prompt-1-1.png"
+        assert selected.content == artifact_png("prompt-1-1.png")
         assert hashed_paths == []
 
         tampered_path = run_path / "outputs" / "000001-02.png"

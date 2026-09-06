@@ -1969,6 +1969,27 @@ describe("Active Run rediscovery", () => {
     expect(loadWorkingSession().form.projectId).toBe("project-1");
   });
 
+  it("does not rescan the draft Project when a foreign monitored Run becomes terminal", async () => {
+    const foreign = runLookupResponse("running", "run-foreign", 33);
+    foreign.project_id = "project-2";
+    foreign.batch_snapshot.project = { id: "project-2", filesystem_key: "project_2", name: "Other" };
+    const terminal = deferred<ExecutionResponse>();
+    const api = makeApi({
+      getActiveExecution: vi.fn(async () => ({ run_id: foreign.run_id })),
+      getRun: vi.fn(async () => foreign),
+      getExecution: vi.fn()
+        .mockResolvedValueOnce(execution("running", foreign.run_id))
+        .mockImplementation(() => terminal.promise),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(1));
+    await act(async () => terminal.resolve(execution("succeeded", foreign.run_id)));
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    await pause(20);
+    expect(api.reindexProject).toHaveBeenCalledExactlyOnceWith("project-1");
+  });
+
   it("shows a mismatched active monitor without erasing the persisted pointer", async () => {
     seedWorkingSession("run-draft");
     const foreign = runLookupResponse("running", "run-foreign", 34);
@@ -2130,9 +2151,12 @@ describe("Discard unstarted Run", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await screen.findByRole("button", { name: "View Run Plan" });
 
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(2));
+
     fireEvent.click(screen.getByRole("button", { name: "Discard Run" }));
 
     expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(3));
     expect(api.discardRun).toHaveBeenCalledWith("run-discarded");
     expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
@@ -2557,6 +2581,7 @@ describe("Stop waiting", () => {
     expect(screen.getByText(/remote ComfyUI Job may continue running/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Active Project" })).toBeDisabled();
 
+    const historyScans = vi.mocked(api.reindexProject).mock.calls.length;
     terminalPoll.resolve(detachedExecution());
     expect(await screen.findByText("Blocked: Remote outcome unknown")).toBeInTheDocument();
     expect(screen.getByText(/No later Job will start/)).toBeInTheDocument();
@@ -2570,6 +2595,7 @@ describe("Stop waiting", () => {
     expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
     await pause(20);
     expect(api.getExecution).toHaveBeenCalledTimes(2);
+    expect(api.reindexProject).toHaveBeenCalledTimes(historyScans + 1);
   });
 
   it("reconciles an ambiguous detach response before allowing another request", async () => {

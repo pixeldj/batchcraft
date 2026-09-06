@@ -2,6 +2,10 @@
   "name": "batchcraft-frontend",
   "private": true,
   "version": "0.1.0",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "check:distribution": "node --test scripts/check-distribution.mjs",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "browser:install": "playwright install chromium && node node_modules/playwright/cli.js install chromium",

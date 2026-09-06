@@ -50,7 +50,7 @@ These are architectural requirements, not implementation suggestions:
 3. Execution state is mutable while a Run executes. Status, timestamps, ComfyUI IDs, errors, and Results may advance without changing the frozen plan.
 4. A Job is fully resolved before it reaches the scheduler.
 5. No unresolved `{{placeholder}}` may be submitted to ComfyUI.
-6. Random or sampled values, if supported later, must be resolved and stored before execution.
+6. Random seeds and any future sampled values must be resolved and stored before execution.
 7. Editing a Prompt Template, Variable List, Reference Collection, Workflow Profile, or Batch must never alter an existing Run plan.
 8. Rerunning creates a new Run rather than modifying the original.
 9. Completed Run artifacts must contain enough information to understand and re-index the Run without SQLite.
@@ -200,11 +200,18 @@ scaled-integer materializer resolves Range intent to explicit values before the 
 Unlinked parameters remain independent Cartesian dimensions; Batch-owned Linked Parameter Sets may
 replace two or more parameters with one ordered row dimension at the earliest member's Profile position.
 Every Job and Result provenance record still carries one resolved scalar or Base state per Profile
-parameter. Candidate-v1 filesystem formats, browser working-session recovery v2, and forward SQLite
-migrations `0001_initial` and `0002_historical_projections` are current. Recovery v2 stores editable intent and stable backend
+parameter. Candidate-v1 filesystem formats, browser working-session recovery v4, and forward SQLite
+migrations `0001_initial` and `0002_historical_projections` are current. Recovery v4 stores editable intent and stable backend
 identity pointers in localStorage, always invalidates Preview on cold load, and reconstructs execution
-and Results from FastAPI. Historical projections are rebuildable from filesystem authority. Enums,
-`/object_info`, LoRA discovery, random parameter values, linked Image Inputs, editable `Load Run as
-Batch`, broader Project-history filtering, and backend executor restart recovery remain deferred. Keep
+and Results from FastAPI. Historical projections are rebuildable from filesystem authority.
+`Load Run as Batch` restores editable intent with detached-resource relinking and explicit import.
+Backend Preview materializes one unique Random seed per final Job within `0..2^53-1`; historical
+editable restore requests fresh seeds, while Run creation reuses Preview's exact assignments.
+Stop-after-current and local `Stop waiting` detach are implemented; neither interrupts ComfyUI.
+Enums, `/object_info`, LoRA discovery, random parameter values, linked Image Inputs, Exact Rerun,
+broader Project-history filtering, and backend executor restart recovery remain deferred beyond v1. Keep
 frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and
 persistence rules.
+
+For public v1 preparation, follow BC-025 in `docs/BACKLOG.md` and the release gate in
+`docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. The gate remains unpassed and ADR 0012 remains Proposed.

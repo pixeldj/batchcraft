@@ -4,6 +4,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 
 from batchcraft.db import RunCancellationMode, RunCancellationRequestRecord
+from batchcraft.diagnostics import safe_exception
 from batchcraft.execution import RunExecutionState
 
 from .cancellation import ActiveRunCancellationControl
@@ -43,7 +44,7 @@ class RunTaskRegistry:
                     f"Run {active_run_id!r} is already executing; concurrent Runs are disabled"
                 )
 
-            task = asyncio.create_task(factory(), name=f"batchcraft-run-{run_id}")
+            task = asyncio.create_task(factory(), name="batchcraft-run")
             self._active_runs[run_id] = _ActiveRun(task, cancellation_control)
             task.add_done_callback(lambda completed: self._task_completed(run_id, completed))
 
@@ -89,9 +90,9 @@ class RunTaskRegistry:
         try:
             task.result()
         except asyncio.CancelledError:
-            logger.info("Run execution task was cancelled: %s", run_id)
-        except Exception:
-            logger.exception("Run execution task failed: %s", run_id)
+            logger.info("Run execution task was cancelled")
+        except Exception as error:
+            logger.error("Run execution task failed: %s", safe_exception(error, run_id=run_id))
         asyncio.create_task(self._release(run_id, task))
 
     async def _release(self, run_id: str, task: asyncio.Task[RunExecutionState]) -> None:

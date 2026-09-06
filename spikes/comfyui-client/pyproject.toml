@@ -3,9 +3,6 @@ name = "comfyui-client"
 version = "0.1.0"
 description = "Disposable Mac-to-Windows ComfyUI integration spike"
 readme = "README.md"
-authors = [
-    { name = "pixeldj", email = "superdj@gmail.com" }
-]
 requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
