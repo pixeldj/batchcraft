@@ -268,6 +268,12 @@ For structures that do not map naturally to flat columns, encode compact JSON in
 
 `manifest.json` remains canonical if CSV representation becomes lossy or awkward.
 
+`manifest.csv` preserves raw text, including possible spreadsheet formulas. CSV quoting does not make
+cells safe: inspect it in a text editor, or import every column explicitly as text with formula
+evaluation disabled. Do not double-click an untrusted manifest into a spreadsheet. A separate
+spreadsheet-safe export is deferred beyond v1; historical manifests are never rewritten for this
+purpose. See [SECURITY.md](../SECURITY.md#deployment-boundary).
+
 A standalone CSV file is not sufficient for guaranteed exact replay. Exact replay uses `manifest.json` together with the snapshotted base workflow, Workflow Profile mapping, and referenced Project assets.
 
 ## `execution.json`
@@ -407,8 +413,9 @@ Historical Run, execution, and Result-detail reads use strict read-only loaders 
 provenance and recorded metadata when `outputs/` or individual Result files are absent. Execution,
 cancellation, discard, and Result download use strict mutation/content loaders and require all relevant
 paths and bytes to validate. BC-021 now reconstructs editable intent and detached resources without
-rewriting these files. The complete cross-instance and live execution proof remains open. A future CSV
-import may be convenient, but CSV alone cannot guarantee exact replay.
+rewriting these files. The cross-instance gate is Passed on owner-reported candidate acceptance in
+`V1_CROSS_INSTANCE_ACCEPTANCE.md`, and ADR 0012 is Accepted. A future CSV import may be convenient,
+but CSV alone cannot guarantee exact replay.
 
 ## Loading and Validation
 
@@ -448,12 +455,15 @@ Example:
 }
 ```
 
-The candidate v1 matrix is `batchcraft.project`, `batchcraft.batch`, `batchcraft.asset`,
+The accepted v1 matrix is `batchcraft.project`, `batchcraft.batch`, `batchcraft.asset`,
 `batchcraft.run`, `batchcraft.manifest`, `batchcraft.batch-snapshot`, `batchcraft.execution`,
 `batchcraft.workflow-snapshot`, `batchcraft.workflow-profile-snapshot`, and
 `batchcraft.manifest-csv`, each independently at format version 1. Unsupported development formats fail
 closed. The application does not rewrite or delete them automatically. The committed emitted-byte
 fixture is `backend/tests/fixtures/v1_project/`.
+
+The v1.0.0 application release does not increment these format versions or change applied SQLite
+migrations. Valid files emitted by the accepted candidate remain durable v1 user data.
 
 ## Filesystem Publication and SQLite Indexing
 

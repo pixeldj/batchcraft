@@ -11,7 +11,11 @@ Input slots.
 
 ## Supported Development Environment
 
-Initial development target:
+v1.0.0 is source-only on macOS. Automated browser verification covers Chromium desktop and mobile
+viewports; it does not establish Safari or Windows application support. The private v1.0.0 tag and
+future public repository publication are separate milestones.
+
+Development environment:
 
 - development host: macOS;
 - shell: normal macOS terminal environment;
@@ -45,7 +49,7 @@ For concurrent everyday use and development, follow [`LOCAL_INSTANCES.md`](LOCAL
 `./dev.command` uses isolated persistent sandbox data and simulated ComfyUI. Playwright owns temporary
 test data and separate ports; neither launcher inherits the everyday database or generation host.
 
-Treat user SQLite databases and valid candidate-v1 Project files as durable local data. Keep applied SQL
+Treat user SQLite databases and valid v1 Project files as durable local data. Keep applied SQL
 migration files byte-stable and make user-database schema changes only through the next contiguous
 forward migration. Unsupported migration history, durable record versions, and malformed data fail
 closed. The application must not silently delete, reset, or rewrite user databases or Project files.
@@ -53,9 +57,10 @@ closed. The application must not silently delete, reset, or rewrite user databas
 Historical SQLite tables are non-authoritative projections and may be replaced atomically from
 filesystem truth. Temporary file-backed test databases remain disposable. Browser working-session
 recovery is versioned convenience state; unsupported or malformed records may reset to an empty session.
-ADR 0012 remains Proposed until the full cross-instance release gate passes.
-BC-025 tracks public v1 release hardening and that still-unpassed gate in
-`V1_CROSS_INSTANCE_ACCEPTANCE.md`. Exact Rerun is deferred beyond v1.
+ADR 0012 is Accepted. The cross-instance gate is Passed on owner-reported candidate acceptance in
+`V1_CROSS_INSTANCE_ACCEPTANCE.md`. BC-025 retains public-publication settings, licensing/distribution
+review, and final scans. Durable format versions remain 1; applied migrations are unchanged.
+Exact Rerun is deferred beyond v1.
 
 The API resolves only trusted configured storage roots at `Settings` construction, including macOS
 `/var` aliases used by `tools.runtime`'s `TemporaryDirectory`. Filesystem helpers expect canonical
@@ -433,8 +438,8 @@ and displays execution availability and Result integrity without browser-held Ru
 
 BC-021 is complete. Editable `Load Run as Batch`, detached-resource classification, exact relinking,
 explicit server-sourced historical import, and an automated clean-instance reconstruction/Preview/new-Run
-path are implemented. The complete realistic fixture, repeat-fresh-instance proof, and live ComfyUI
-acceptance step remain release-level checks for ADR 0012.
+path are implemented. Subsequent owner-reported candidate acceptance passed the full release gate for
+ADR 0012; see `V1_CROSS_INSTANCE_ACCEPTANCE.md` for the revision and evidence limits.
 
 ## Python Conventions
 
@@ -737,7 +742,7 @@ When changing a durable format:
 6. state whether a compatibility path is explicitly required;
 7. document compatibility and migration behavior.
 
-Superseded prerelease formats remain unsupported, but valid candidate-v1 Project files are durable user
+Superseded prerelease formats remain unsupported, but valid v1 Project files are durable user
 data under the persistence policy above. Unsupported data must fail closed without automatic deletion
 or rewriting. Do not infer durable format versions solely from the absence of fields.
 

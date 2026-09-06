@@ -9,7 +9,8 @@ _Last consolidated: 2026-09-01._
 ## Current focus
 
 Public v1 preparation is tracked by [BC-025](#bc-025-public-v1-release-hardening-and-acceptance).
-Its release gate remains open; implementation milestones below are not a v1 release approval.
+Its portability gate is Passed; public publication remains open, separate from the private v1.0.0 tag.
+Earlier entry-level gate notes record their milestone-time status; BC-025 holds current acceptance.
 
 1. [BC-003A: Stop after current Job](#bc-003a-stop-after-current-job) (P1, Done)
 2. [BC-003B: Force stop local waiting](#bc-003b-force-stop-local-waiting) (P1, In Progress)
@@ -1128,7 +1129,7 @@ Acceptance and scope:
 | Status | In Progress |
 | Area | Security / Licensing / Release / Documentation |
 | Summary | Resolve the public-source audit findings and pass candidate-specific installation, privacy, security, and cross-instance release acceptance. |
-| Dependencies / Notes | Builds on BC-021 and BC-023. ADR 0015 defines local browser defenses and runtime budgets. ADR 0012 remains Proposed until `V1_CROSS_INSTANCE_ACCEPTANCE.md` passes. No history rewrite or everyday/live promotion is authorized by this entry. |
+| Dependencies / Notes | Builds on BC-021 and BC-023. ADR 0015 defines local browser defenses and runtime budgets. ADR 0012 is Accepted and `V1_CROSS_INSTANCE_ACCEPTANCE.md` is Passed. Remaining work concerns public publication, not the private v1.0.0 tag. No history rewrite, visibility change, or everyday/live promotion is authorized by this entry. |
 
 Scope decisions:
 
@@ -1142,6 +1143,11 @@ Scope decisions:
   existing history is retained with owner approval. Never treat cleanup as credential revocation.
 - Exact Rerun is deferred beyond v1. Editable `Load Run as Batch` preserves Random intent and asks for
   fresh seeds; historical inspection retains the frozen seeds.
+- Preserve raw historical CSV. A separate spreadsheet-safe export is deferred beyond v1. Import every
+  column explicitly as text with formula evaluation disabled, or use a text editor; CSV quoting does
+  not neutralize formulas. Never rewrite historical manifests. See [SECURITY.md](../SECURITY.md).
+- v1.0.0 is source-only on macOS. Automated browser coverage is Chromium desktop/mobile viewports,
+  not Safari or a Windows-hosted batchcraft app. A private tag is distinct from public publication.
 
 Implemented groundwork on the cleanup branch:
 
@@ -1181,19 +1187,28 @@ four concurrent download snapshots have no combined disk cap or active-stream de
 HTTP inactivity timeouts are not whole-transfer deadlines. Payload and admission limits are not a
 whole-process memory bound or a complete denial-of-service defense.
 
-Remaining release work:
+Remaining public-publication work:
 
-- Preserve raw historical CSV, document text-only spreadsheet import, and decide whether a separate
-  spreadsheet-safe export is required. Never rewrite old manifests to neutralize formula cells.
 - Audit the final release for GPL corresponding-source delivery and any separately bundled dependencies,
   runtimes, browsers, models, or fixture rights. Artifact notice checks do not establish complete
   distribution compliance or make the source installation a standalone application package.
-- Enable and verify GitHub private vulnerability reporting and hosted secret/push protection; run the
-  new CI on the candidate. Repeat secret/privacy and dependency-advisory scans on release contents.
-- Verify clean macOS source installation and supported browser behavior against fake data. Record the
-  tested revision and limitations; ordinary Ubuntu/Chromium CI is not platform-release acceptance.
-- Complete the realistic fixture, repeat-fresh-instance proof, unchanged archive hashes, and separately
-  authorized live ComfyUI smoke test in `V1_CROSS_INSTANCE_ACCEPTANCE.md`. Then resolve ADR 0012 status.
+  In particular, record provenance/redistribution rights for the spike workflow JSON and the embedded
+  one-pixel PNG in `backend/tests/live/test_execution_setup.py` before public publication.
+- Enable and verify GitHub private vulnerability reporting and hosted secret/push protection before
+  public publication. Read-only administrative API inspection shows the repository is PRIVATE,
+  `security_and_analysis` is `null`, and private vulnerability reporting returns HTTP 404. These are
+  not verified enabled settings. No repository visibility change is authorized.
+- Repeat release-content scans if code or dependencies change before public publication.
+
+V1 tag preparation: production/full npm audits and pinned pip-audit 2.9.0 scans of the locked Python
+production/development dependencies found no known advisories. Gitleaks 8.30.1 found no secrets in the
+reviewed current source or 55 locally reachable commits. Dependency versions are unchanged by the
+1.0.0 metadata bump. These scans do not prove historical privacy or cover every platform. The source
+inventory contains no model weights, photographic assets, databases, or bundled runtime/browser
+binaries; fixture provenance limitations remain listed above. Both GPL license copies match.
+The 1.0.0 metadata passes 1,147 backend tests, 427 frontend tests, lint/format/type checks, frontend
+build, and wheel/sdist plus frontend distribution checks. Final pushed-commit CI must pass before the
+annotated tag is created; CI also scans that exact checkout and its fetched history.
 
 Audit evidence: pinned Gitleaks found no secrets in the audited current source or locally reachable
 history. npm production/full and pinned pip-audit production/development scans reported no known
@@ -1217,9 +1232,8 @@ PR #3 hosted checks passed and the PR was merged. The owner reports installing f
 source checkout, copying and importing a Project, browsing its full history, loading a Run as a Batch,
 and importing its Prompt/Workflow resources successfully. This is useful source-install and recovery
 smoke evidence. The owner subsequently confirmed that the portability requirements work on their
-instance. Manual portability acceptance is owner-reported; the tested revision and individual artifacts
-were not supplied. Final candidate acceptance awaits hosted resource-fix CI and the owner's planned
-test before v1 tagging/deployment. BC-025 remains In Progress.
+instance. This earlier report did not identify the tested revision or supply individual artifacts;
+the candidate-specific acceptance below supersedes its pending status.
 
 Owner-feedback polish: production installer builds omit the internal instance badge while sandbox
 labels remain. Session notices are dismissible; the restored-draft reminder clears after a successful
@@ -1234,6 +1248,15 @@ typecheck, frontend build, wheel/sdist distribution checks, three frontend distr
 `git diff --check` pass. The successive-Run test now waits for the enabled Create Another Run button
 before clicking; ten focused repetitions pass. This fixes its readiness race, not the separate
 snapshot-divergence test noted above. No live ComfyUI or everyday-data verification was performed.
+
+Final candidate acceptance: on 2026-09-05 the owner explicitly confirmed candidate
+`79190ebadeb47c952e3bfeec23bfe15d3123d971`, all portability requirements, clean macOS source installation,
+Project import, `Load Run as Batch`, resource import, and successful new Job execution. PR #5 merged as
+`3eeb87a77e823c866bcf161313394d4af79059f1` with green checks. The portability gate is Passed and ADR 0012
+is Accepted. This is owner-reported manual evidence, not an independently observed live test or retained
+archive-hash report. No repeat is required merely because acceptance was owner-reported.
+BC-025 remains In Progress only for the public-publication work above; it does not block the private
+v1.0.0 tag. Final release-check evidence will be added when supplied, not inferred from prior checks.
 
 ## Maintenance rules
 

@@ -1857,7 +1857,7 @@ def test_health_and_comfyui_status_reachable_and_client_lifecycle(tmp_path: Path
         comfyui = http.get("/api/comfyui/status")
 
         assert health.status_code == 200
-        assert health.json() == {"status": "ok", "version": "0.1.0"}
+        assert health.json() == {"status": "ok", "version": "1.0.0"}
         assert comfyui.json() == {
             "reachable": True,
             "version": "0.31.0",

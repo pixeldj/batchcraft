@@ -213,5 +213,7 @@ broader Project-history filtering, and backend executor restart recovery remain 
 frontend HTTP types and UI state separate from backend compiler, filesystem, ComfyUI, execution, and
 persistence rules.
 
-For public v1 preparation, follow BC-025 in `docs/BACKLOG.md` and the release gate in
-`docs/V1_CROSS_INSTANCE_ACCEPTANCE.md`. The gate remains unpassed and ADR 0012 remains Proposed.
+The v1 portability gate in `docs/V1_CROSS_INSTANCE_ACCEPTANCE.md` has passed through automated checks
+and owner acceptance of candidate `79190eb`; ADR 0012 is Accepted. Preserve the v1 persistence contract.
+BC-025 in `docs/BACKLOG.md` tracks remaining public-publication checks; a release tag does not authorize
+changing repository visibility or updating an everyday installation.

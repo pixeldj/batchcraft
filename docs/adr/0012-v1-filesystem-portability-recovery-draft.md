@@ -1,16 +1,23 @@
 # ADR 0012: V1 Filesystem Portability and Recovery Contract
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-02
+- **Accepted:** 2026-09-05
 - **Decision scope:** batchcraft v1 filesystem, import, recovery, and post-v1 compatibility policy
 
 ## Context
 
 Current policy supersedes the prerelease reset latitude recorded below: user SQLite databases and valid
-candidate-v1 Project files are already durable data. Preserve applied migration bytes and add contiguous
+v1 Project files are durable data. Preserve applied migration bytes and add contiguous
 forward migrations under `../DEVELOPMENT.md#persistence-policy`. This protection does not depend on
-accepting this ADR. BC-025 tracks public v1 release hardening and the still-unpassed gate in
-`../V1_CROSS_INSTANCE_ACCEPTANCE.md`.
+accepting this ADR. The gate in [V1_CROSS_INSTANCE_ACCEPTANCE.md](../V1_CROSS_INSTANCE_ACCEPTANCE.md)
+is Passed on owner-reported acceptance of candidate `79190ebadeb47c952e3bfeec23bfe15d3123d971`;
+PR #5 merged as `3eeb87a77e823c866bcf161313394d4af79059f1` with green checks.
+BC-025 retains only public-publication work, separate from the private v1.0.0 tag.
+
+The following Context and implementation-progress notes record proposal-time and intermediate findings.
+Their unresolved-gap and Proposed-status statements are historical, not the current decision status.
+Acceptance changes no format version or applied migration bytes.
 
 batchcraft deliberately separates mutable application state from immutable historical experiment provenance.
 
@@ -290,8 +297,8 @@ The importer must not require stale browser IDs to reconstruct historical Runs.
 
 ### 10. V1 freezes the compatibility policy
 
-The original timing below is superseded by the current persistence note at the top of this ADR.
-User-data protection and forward migrations already apply; only final release acceptance remains open.
+The original timing below is historical and superseded by the current persistence note at the top of
+this ADR. User-data protection and forward migrations apply; the portability release gate has passed.
 
 Before v1:
 
@@ -404,7 +411,7 @@ This ADR does not promise:
 
 ## Follow-up work
 
-The intended release sequence is:
+The original release sequence was:
 
 1. **V1-001 — Filesystem Recovery Audit & Contract**
    - inventory current durable artifacts;
@@ -434,8 +441,7 @@ The corresponding stable backlog items are BC-018 through BC-021. BC-020 coordin
 broader Project-wide browser work, and BC-021 supplies the portability-specific part of BC-006's
 historical reuse work.
 
-BC-021's reconstruction implementation is complete. BC-025 now owns the remaining release acceptance
-from the sequence above; the release gate has not passed.
-
-Only after the release gate passes should batchcraft declare the Project persistence contract v1.
-Valid candidate-v1 persisted data is already compatibility-sensitive user data under the current policy.
+BC-021's reconstruction implementation and the portability release gate are complete. The Project
+persistence contract is v1, with every durable format remaining independently at version 1 and applied
+SQLite migrations unchanged. BC-025 remains In Progress for public-publication settings,
+licensing/distribution review, and final scans, not portability acceptance or the private v1.0.0 tag.

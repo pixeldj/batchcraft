@@ -9,11 +9,10 @@ the original SQLite database or browser state.
 BC-019 and BC-020 provide the durable records, owned-v1 import, rebuildable historical projections, and
 read-only Project history needed for the first half of this scenario. BC-021 is complete: editable
 reconstruction, conflict-aware detached resources, explicit historical import, and focused automated
-clean-instance Preview/new-Run proof are implemented. The complete realistic fixture,
-repeat-fresh-instance, and live execution proof remain release-level checks. This is still an acceptance
-contract, not a passed release gate.
-BC-025 tracks public v1 release hardening and completion of this gate. Exact Rerun is deferred
-beyond v1 and is not required by this editable-reconstruction scenario. ADR 0012 remains Proposed.
+clean-instance Preview/new-Run proof are implemented. The release gate is Passed on the owner-reported
+candidate acceptance recorded below. This document retains the acceptance procedure and its evidence limits.
+BC-025 tracks the remaining public-publication work, separately from this passed portability gate.
+Exact Rerun is deferred beyond v1 and is not required by this scenario. ADR 0012 is Accepted.
 
 ## Current BC-020 evidence
 
@@ -225,18 +224,25 @@ The release gate passes only when:
 Any required use of Instance A's SQLite database, browser state, mutable libraries, or manually supplied
 Run IDs fails the gate.
 
-Current gate status: BC-020 import, reindex, inspection, idempotency, and degraded-content coverage is
-implemented. Completed BC-021 covers frozen-intent reconstruction, exact/missing/conflicting resource
-classification, explicit server-sourced historical import, pre-edit Preview under the seed-mode rules
-above, new Run creation, and original-Run hash preservation in focused automated tests. The owner now
-confirms that the portability requirements work on their instance. This is owner-reported manual
-acceptance, not an independently observed live test or a retained archive-hash report. Final candidate
-acceptance remains pending the owner's planned test after resource-fix CI; tagging and deployment are
-not authorized by this confirmation alone.
+## Acceptance record
 
-Owner-reported smoke evidence after PR #3 merged: a fresh temporary source checkout was installed,
-a copied Project imported with its history, and `Load Run as Batch` plus Prompt/Workflow resource import
-worked. The subsequent owner confirmation covers the portability requirements as a whole; the exact
-tested revision and individual test artifacts were not supplied. Do not require the completed manual
-work to be repeated merely because it was owner-reported. Record the next candidate revision and its
-final test outcome before resolving ADR 0012 and the release gate.
+Current gate status: **Passed**. On 2026-09-05, the owner explicitly confirmed that all portability
+requirements and clean macOS source installation, Project import, `Load Run as Batch`, resource import,
+and new Job execution passed on candidate `79190ebadeb47c952e3bfeec23bfe15d3123d971`.
+The owner confirmed the tested SHA and that PR #5 merged as
+`3eeb87a77e823c866bcf161313394d4af79059f1` with green checks.
+
+This is owner-reported manual acceptance, not an independently observed live test or a retained
+archive-hash report. Individual paths, inventories, and ComfyUI environment artifacts were not supplied.
+The earlier PR #3 smoke report is superseded by this candidate-specific confirmation; no repeat of the
+accepted manual work is required solely because it was owner-reported.
+
+Automated BC-020/BC-021 coverage supplies import, reindex, inspection, idempotency, degraded-content,
+reconstruction, relinking, Preview/new-Run, and original-Run hash-preservation evidence. Browser
+automation covers Chromium desktop and mobile viewports, not Safari or a Windows-hosted batchcraft app.
+
+The final v1.0.0 release is source-only on macOS. A private-repository v1.0.0 tag is not public
+publication. BC-025 remains In Progress only for public-publication hosted settings, licensing and
+distribution review, and final release scans. Repository visibility changes are not authorized.
+Final release-check outcomes will be recorded when supplied; this acceptance record does not claim
+those later checks have run.

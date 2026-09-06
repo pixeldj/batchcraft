@@ -3,14 +3,15 @@
 ## Purpose
 
 This document records the V1-001 audit of batchcraft's current persistence behavior. It compares the
-prerelease implementation with the proposed portability contract in ADR 0012.
+prerelease implementation with the portability contract proposed in ADR 0012, now Accepted.
 
 The audit is descriptive. BC-019 closed the record-level format gaps, and BC-020 added owned-v1 Project
 import, historical reindex, and Project history inspection. BC-021 completed editable reconstruction and
-detached-resource relinking/import; final cross-instance release validation remains open.
-ADR 0012 therefore remains Proposed.
-BC-025 tracks public v1 release hardening and the still-unpassed gate in
-`V1_CROSS_INSTANCE_ACCEPTANCE.md`. Editable reconstruction uses fresh Random seeds under ADR 0013;
+detached-resource relinking/import. The cross-instance gate is Passed on owner-reported acceptance of
+candidate `79190ebadeb47c952e3bfeec23bfe15d3123d971`, merged through PR #5 as
+`3eeb87a77e823c866bcf161313394d4af79059f1` with green checks; see
+`V1_CROSS_INSTANCE_ACCEPTANCE.md` for evidence limits. BC-025 retains only public-publication work.
+Editable reconstruction uses fresh Random seeds under ADR 0013;
 historical inspection preserves exact frozen seeds. Exact Rerun is deferred beyond v1.
 
 ## Audit conclusion
@@ -23,7 +24,7 @@ That data is now exposed for owned-v1 import, historical inspection, and editabl
 A fresh instance can import by filesystem key, browse valid and degraded Runs, rebuild historical indexes,
 and load frozen intent with missing library records represented as detached resources.
 
-The v1 contract is therefore feasible with the current authority split, but not yet satisfied.
+The accepted v1 contract is satisfied with this authority split under the recorded acceptance evidence.
 
 ## Current Project tree
 
@@ -81,7 +82,7 @@ without an explicit user operation.
 
 ## Format inventory
 
-| Record | Candidate v1 format | Version | Reader behavior |
+| Record | Accepted v1 format | Version | Reader behavior |
 | --- | ---: | --- | --- |
 | `project.json` | `batchcraft.project` | 1 | Strict owner identity, producer, path, and shape validation. |
 | `batch.json` | `batchcraft.batch` | 1 | Strict owner identity and Project owner-chain validation. |
@@ -156,10 +157,9 @@ loaders validate the referenced bytes.
 
 ### Missing or incomplete recovery data
 
-Remaining gaps in recovery workflow are:
+Remaining recovery boundaries and deferred features are:
 
 - cancellation intent remains SQLite-only until it becomes an outcome in `execution.json`;
-- final realistic cross-instance and live ComfyUI execution acceptance is not complete;
 - Project history has no pagination or advanced filters.
 
 Output naming is not currently editable product behavior. BC-019 removed that stale conceptual Batch
@@ -218,7 +218,7 @@ BC-020 classifies discovered content instead of silently trusting it:
 | V1-002 V1 Format Consolidation | BC-019 | Close record-level gaps, assign explicit format identities, reset v1 versions, add producer metadata, and add fixtures. |
 | V1-003 Project Import & Historical Reindex | BC-020 | Validate a copied Project, discover healthy and degraded Runs, and rebuild disposable historical indexes. |
 | V1-004 Load Run as Batch | BC-021 | Reconstruct editable intent with detached resources and verify focused automated clean-instance behavior. |
-| Public v1 release hardening and acceptance | BC-025 | Complete the realistic cross-instance fixture, repeat-fresh-instance proof, and separately authorized live execution gate. |
+| Public v1 release hardening and acceptance | BC-025 | Portability gate Passed; public-publication settings, licensing/distribution review, and final scans remain. |
 
 BC-020 is the portability prerequisite for the broader BC-007 browser. BC-021 implements the
 portability-specific `Load Run as Batch` slice already described by BC-006. It does not include
@@ -250,6 +250,7 @@ The main implementation evidence is in:
 
 ## Exit condition
 
-V1-001 is complete. BC-019 and BC-020 provide candidate-v1 records, owned Project import, rebuildable
-history, and degraded inspection. BC-021 reconstruction is complete, but the v1 portability contract
-remains unproven until the complete cross-instance and live execution gate passes.
+V1-001 is complete. BC-019 and BC-020 provide accepted v1 records, owned Project import, rebuildable
+history, and degraded inspection. BC-021 reconstruction and the portability gate are complete.
+Acceptance changes neither format versions (all remain 1) nor applied migration bytes. The private
+v1.0.0 tag does not complete BC-025's future public-publication work.

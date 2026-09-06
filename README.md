@@ -6,11 +6,20 @@ It is intended for workflows where prompts, named image inputs, seeds, and other
 
 ComfyUI remains the workflow editor and generation engine. batchcraft sits above it to provide reusable prompts and variables, reference libraries, Batch compilation, queue orchestration, reproducible Runs, and visual result review.
 
+> [!NOTE]
+> AI was used to assist in coding this.
+> Feel free to use/fork. I plan to continue working on this until it's in a somewhat stable condition.
+> If you submit an issue/PR I will happily take a look, but no guarantees!
+> Thanks for checking it out.
+
 ## Status
 
-Early production development. The public v1 release gate has not passed; BC-025 tracks public
-v1 release hardening and the remaining gate in
-[`V1_CROSS_INSTANCE_ACCEPTANCE.md`](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md). ADR 0012 remains Proposed.
+v1.0.0 is a source-only macOS release. The [cross-instance portability gate](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md)
+has passed with owner-reported candidate acceptance, and ADR 0012 is Accepted.
+The repository remains private: the v1.0.0 tag is separate from future public repository publication.
+BC-025 remains In Progress for public-publication settings, licensing/distribution review, and final scans.
+Automated browser coverage is Chromium at desktop and mobile viewport sizes; this is not Safari or
+Windows application acceptance.
 
 The disposable remote ComfyUI spike, deterministic Batch compiler, Run filesystem store, production
 ComfyUI adapter, sequential Run executor, FastAPI application boundary, and first React workflow are
@@ -46,7 +55,7 @@ Node 24.15 or newer in the 24.x line is recommended for the locked frontend depe
 ComfyUI must be installed separately; see its [installation guide](https://docs.comfy.org/installation/overview).
 batchcraft does not install GPUs, models, or custom nodes. Replace the URL below with the ComfyUI
 engine's base URL reachable from this Mac, such as `http://<generation-host>:8188`, not batchcraft's URL.
-Choose a checked commit for `--revision`; a tested public v1 revision/release is still forthcoming.
+Use the `v1.0.0` tag for `--revision`. Cloning currently requires access to the private repository.
 
 ```bash
 git clone https://github.com/pixeldj/batchcraft.git
@@ -56,7 +65,7 @@ uv run --directory backend python -m tools.install_app \
   --app-path "$HOME/ai/batchcraft-app" \
   --data-root "$HOME/ai/batchcraft-data" \
   --comfyui-url "http://<generation-host>:8188" \
-  --revision "<chosen-commit>"
+  --revision v1.0.0
 ```
 
 `--revision` is optional and defaults to the source clone's `HEAD`, which is not a release guarantee.
