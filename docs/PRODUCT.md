@@ -231,6 +231,13 @@ gallery. Thumbnail cards omit visible `Verified` badges and `Job` captions; the 
 metadata. Accessible descriptions, lightbox labels, integrity checks, and unavailable-artifact
 placeholders remain.
 
+Opening Project History shows the existing index immediately and checks filesystem history in the
+background. Creating a Run or observing its completion, cancellation, discard, or durable detach refreshes
+that Project's history without a manual reindex. Storage failures leave known history visible with a
+warning; unavailable execution records retain metadata without claiming current image verification.
+Other Projects still require explicit import. Advanced history filters, sorting, and pagination are
+deferred beyond this v1 freshness slice.
+
 The Results Viewer should eventually support:
 
 - thumbnail grid;

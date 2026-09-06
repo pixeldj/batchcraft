@@ -478,10 +478,9 @@ Batch Results gallery, accumulated state, and restoration requests were removed.
 Project History, integrity checks, cancellation, and current-Run recovery remain. Existing valid v4
 drafts are preserved while obsolete gallery membership is ignored. Verification passed with 384
 frontend tests, eight desktop/mobile browser tests across Vite and built same-origin modes, lint,
-typecheck, and production build. BC-007 remains Planned for automatic history freshness, pagination,
-sorting, and filters.
+typecheck, and production build. Pagination, sorting, and advanced filters remain deferred beyond v1.
 
-Next slice: automatic history freshness for the current registered Project (P2, Planned).
+V1 slice: automatic history freshness for the current registered Project (P2, Done).
 
 - Existing Results should appear without pressing Reindex Project. Restarting or updating with the same
   database and data root should retain history; reconcile missing or stale projections automatically.
@@ -495,6 +494,19 @@ Next slice: automatic history freshness for the current registered Project (P2, 
 - Verify same-data restart/update, missing index recovery, completed Run visibility, failed/concurrent
   scans, Project switching, and unchanged historical files. Measure larger-history scan cost before
   adding incremental indexing; startup-wide scans and filesystem watchers are outside this slice.
+
+Implementation: opening history reads the existing index first and reconciles in the background.
+Observed creation and terminal Run transitions refresh the frozen Run's Project, not an unrelated draft
+Project. Registered scans cannot import foreign ownership; full scan-and-replace cycles are serialized,
+and changed owners/directories or failed enumeration preserve the prior index. Worker cancellation
+joins publication and indexing operations rather than abandoning writes. Missing execution metadata
+keeps last-known Result metadata without images until fresh current-generation verification succeeds.
+Verification passed with 923 backend tests, 421 frontend tests, eight desktop/mobile browser checks
+across Vite and built same-origin modes, and the artifact-security/six-image browser check. Ruff,
+mypy, frontend lint/typecheck, builds, distribution checks, current-source Gitleaks, actionlint, and
+`git diff --check` pass. Browser coverage confirms completion in the open Project and reopening history
+without manual reindex. Advanced filters, sorting, and pagination remain Planned; the broader BC-007
+entry is not Done. The public v1 release gate remains separate.
 
 ### BC-008: Video and generic file input slots
 
@@ -1120,6 +1132,10 @@ Acceptance and scope:
 
 Scope decisions:
 
+- Public v1 is a macOS source installation, with basic README prerequisites, install, launch, and
+  update/backup instructions. Standalone application packaging remains deferred.
+- BC-007 automatic registered-Project history freshness is included in v1; advanced history filters,
+  sorting, and pagination remain later work.
 - License the project under GNU GPL version 3 only (`GPL-3.0-only`). Preserve dependency notices and
   review redistribution rights for fixtures and any packaged components.
 - Remove private identifiers and personal package contact information from current source only;
@@ -1149,6 +1165,9 @@ Implemented groundwork on the cleanup branch:
 - Historical reads and serialization run off the event loop with bounded active/waiting capacity.
   Execution polling has separate capacity. Project History limits Result-list fan-out to two Runs,
   and only structured GET read-capacity failures receive bounded retries; mutations never retry.
+- BC-007's automatic current-Project history freshness slice is complete. README now includes basic
+  macOS source installation and launch instructions. This is not clean-machine installation acceptance
+  or permission to update the everyday installation.
 
 Remaining release work:
 
@@ -1173,7 +1192,7 @@ history. npm production/full and pinned pip-audit production/development scans r
 advisories for the audited platform on 2026-09-05. This does not cover ComfyUI, models, OS/browser
 binaries, every platform-specific dependency, or all licensing obligations.
 
-Cleanup verification: 881 backend tests, 406 frontend tests, eight desktop/mobile smoke tests across
+Cleanup verification: 923 backend tests, 421 frontend tests, eight desktop/mobile smoke tests across
 Vite and built same-origin modes, and the real HTML/SVG/PNG artifact-security browser check pass.
 The browser check now includes a six-image burst with four concurrent preparations and no image retry.
 Resource regressions cover upload/read saturation, independent polling, worker shutdown, FIFO and

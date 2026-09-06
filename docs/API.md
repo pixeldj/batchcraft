@@ -402,8 +402,34 @@ ordinary fastest-varying seed dimensions reused for every non-seed configuration
 ## Project history and Run lookup
 
 `POST /api/projects/{project_id}/reindex` resolves the registered filesystem key, rescans filesystem
-truth, and atomically replaces that Project's historical projection. Repeated import/reindex is
-idempotent. A failed scan or transaction leaves the prior projection intact.
+truth, and atomically replaces that Project's historical projection. It requires the same registered
+Project ID and filesystem key; it cannot create registration or import another Project. Repeated
+import/reindex is idempotent. A failed scan or transaction leaves the prior projection intact.
+
+Per-Project locks serialize the entire scan-and-replace cycle across explicit import, registered
+reindex, and Run publication refresh. Ownership, safe paths, and directory identities are rechecked
+before replacement. A changed owner/directory, failed enumeration, unsafe root, or missing `batches/`
+root with previously indexed history rejects reconciliation rather than replacing history with empty
+rows. A new Project without batches remains valid empty history. Individually malformed Runs remain
+isolated with diagnostics. This is not an atomic transaction against arbitrary external filesystem
+writers; they can still race a final check. Run creation, import, and reindex workers remain owned until
+completion even if the request is cancelled. Published Runs are never rolled back by cancellation or
+an indexing failure; indexing failure emits a safe warning and can be repaired on the next refresh.
+
+The frontend first reads indexed history when opening a registered Project, then automatically calls
+reindex and reads the refreshed index. It shows a checking indicator while retaining known content.
+Run creation and observed terminal execution changes, including discard and durable detach, trigger
+another check for the Run's frozen Project identity. Ordinary execution polls do not trigger scans.
+Dispatched reindex requests are joined before newer checks in the same view; obsolete Result responses
+cannot replace newer history. No startup-wide scan, filesystem watcher, timer, focus refresh, or
+automatic import of other Projects is introduced. Changes made elsewhere are discovered on reopening
+history or using the retained manual Reindex Project repair/retry action.
+
+Failed refreshes keep known history with an explicit stale/unavailable warning. When execution metadata
+is unavailable, an empty Result response is not treated as proof of no Results. The view preserves
+last-known metadata without images, artifact links, or current-verification claims until an available
+execution record and a successful fresh Result read agree. Overlapping older requests cannot clear
+that state or restore images early. Nothing is written to historical artifacts by these UI checks.
 
 `GET /api/projects/{project_id}/runs` returns Runs grouped by their recorded Batch identity in the UI,
 plus Project diagnostics. A Run is `verified` or `degraded`; structurally invalid Runs are excluded and

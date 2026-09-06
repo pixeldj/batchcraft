@@ -49,7 +49,7 @@ The frontend is responsible for:
 - submitting Random seed intent and retaining Preview's exact materialized request for Run creation;
 - compiled-job preview;
 - Run progress visualization;
-- Project history browsing and explicit reindex requests;
+- Project history browsing, automatic registered-Project reconciliation, and explicit repair requests;
 - Results Viewer;
 - user actions such as rerun, pause, cancel, and selection.
 
@@ -404,11 +404,23 @@ content.
 
 Run creation publishes a complete filesystem Run before execution, then best-effort refreshes the
 Project's historical projection. Projection failure does not invalidate the authoritative published Run;
-an explicit reindex repairs the projection.
+automatic registered-Project reconciliation or an explicit reindex repairs the projection.
 
 Import and reindex scan filesystem truth, then atomically replace one Project's complete historical
 projection. A failed scan or transaction leaves the prior projection intact. Incomplete staging data is
 not a valid Run and must not be scheduled or presented as one.
+
+Per-Project process-local locks serialize scanning and replacement with Run publication refresh.
+Registered reconciliation confirms existing ownership rather than creating registration; explicit import
+retains that separate responsibility. Owner/path/directory identity checks before replacement reject a
+changed scan context. Unavailable storage does not become a successful empty scan, and background
+publication/indexing workers are joined before request cancellation finishes. No historical format or
+SQLite migration changes are required.
+
+Project History shows its existing index immediately and reconciles on opening and local Run lifecycle
+changes. It does not scan every Project at startup or watch external directories. Failed checks preserve
+known content with warnings. Missing execution records preserve last-known Result metadata without
+rendering images as currently verified. Advanced filtering, sorting, and pagination remain later work.
 
 ## Identity and Display Names
 

@@ -71,13 +71,31 @@ class HistoricalProjectionStore:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
 
-    def replace_project(self, scan: ProjectHistoryScan) -> None:
-        """Atomically create-or-confirm registration and replace one Project projection."""
+    def replace_project(self, scan: ProjectHistoryScan, *, register: bool = True) -> None:
+        """Atomically confirm ownership and replace; only explicit import may register."""
         try:
             with closing(open_connection(self.database_path)) as connection:
                 try:
                     connection.execute("BEGIN IMMEDIATE")
-                    self._create_or_confirm_project(connection, scan)
+                    self._create_or_confirm_project(connection, scan, register=register)
+                    if (
+                        scan.batches_root_missing
+                        and connection.execute(
+                            """
+                        SELECT 1 FROM historical_batch WHERE project_id = ?
+                        UNION ALL
+                        SELECT 1 FROM historical_run WHERE project_id = ?
+                        UNION ALL
+                        SELECT 1 FROM historical_diagnostic
+                        WHERE project_id = ? AND scope IN ('batch', 'run', 'execution', 'result')
+                        LIMIT 1
+                        """,
+                            (scan.project.id, scan.project.id, scan.project.id),
+                        ).fetchone()
+                    ):
+                        raise HistoricalProjectionError(
+                            "Batches root is missing; prior history retained. Restore storage and reindex"
+                        )
                     self._delete_project_projection(connection, scan.project.id)
                     self._insert_projection(connection, scan)
                     connection.commit()
@@ -140,7 +158,7 @@ class HistoricalProjectionStore:
             return self._diagnostics(connection, project_id)
 
     def _create_or_confirm_project(
-        self, connection: sqlite3.Connection, scan: ProjectHistoryScan
+        self, connection: sqlite3.Connection, scan: ProjectHistoryScan, *, register: bool
     ) -> None:
         by_id = connection.execute(
             "SELECT id, filesystem_key FROM project WHERE id = ?", (scan.project.id,)
@@ -156,6 +174,10 @@ class HistoricalProjectionStore:
                     "Project owner ID or filesystem key conflicts with SQLite registration"
                 )
             return
+        if not register:
+            raise HistoricalProjectConflictError(
+                "Project is not registered; explicit import is required"
+            )
         if connection.execute(
             "SELECT 1 FROM project WHERE name = ?", (scan.project.name,)
         ).fetchone():

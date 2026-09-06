@@ -25,8 +25,10 @@ editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, backend Random seed
 materialization, and repeated Run creation. Random assigns one unique seed per final Job within
 `0..2^53-1`; Run creation uses the exact assignments inspected in Preview.
-Result review uses current-Run Results and Project History
-grouped by Batch. Thumbnails are image-first, with Job and integrity metadata available in Result Details.
+Result review uses current-Run Results and Project History grouped by Batch. History refreshes
+automatically when opening a registered Project and after local Run creation or execution finishes;
+normal use does not require pressing Reindex Project. Thumbnails are image-first, with Job and
+integrity metadata available in Result Details.
 Frozen Run Plan inspection and explicit unavailable execution state remain available. The backend includes
 mutable Project metadata, distinct ownerless adoption, immutable-version libraries, durable Saved Batches, and
 rebuildable historical projections. `Load Run as Batch` restores editable intent, with detached-resource
@@ -34,12 +36,51 @@ relinking and explicit import; Random intent requests fresh seeds on Preview. Ex
 beyond v1. Broader Project-history filtering, a global scheduler, and automatic backend recovery remain
 unimplemented. Stop-after-current and local `Stop waiting` detach are supported; neither interrupts ComfyUI.
 
-## Source setup
+## Install From Source (macOS)
 
-The current setup is source-based on macOS, not a standalone app bundle. Use a Git clone, `uv` with
-Python 3.13 or newer, and npm with Node.js satisfying `^22.22.2 || ^24.15.0 || >=26.0.0`.
+V1 is source-only on macOS, not a standalone app bundle. Prerequisites: Git,
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/) with Python 3.13 or newer,
+and Node.js with npm satisfying `^22.22.2 || ^24.15.0 || >=26.0.0`.
 Node 24.15 or newer in the 24.x line is recommended for the locked frontend dependencies.
-For fake-backed development, install dependencies from the repository root, then launch:
+
+ComfyUI must be installed separately; see its [installation guide](https://docs.comfy.org/installation/overview).
+batchcraft does not install GPUs, models, or custom nodes. Replace the URL below with the ComfyUI
+engine's base URL reachable from this Mac, such as `http://<generation-host>:8188`, not batchcraft's URL.
+Choose a checked commit for `--revision`; a tested public v1 revision/release is still forthcoming.
+
+```bash
+git clone https://github.com/pixeldj/batchcraft.git
+cd batchcraft
+mkdir -p "$HOME/ai"
+uv run --directory backend python -m tools.install_app \
+  --app-path "$HOME/ai/batchcraft-app" \
+  --data-root "$HOME/ai/batchcraft-data" \
+  --comfyui-url "http://<generation-host>:8188" \
+  --revision "<chosen-commit>"
+```
+
+`--revision` is optional and defaults to the source clone's `HEAD`, which is not a release guarantee.
+Both destination paths must be absent. The installer creates a separate, commit-pinned Git worktree,
+installs locked dependencies, builds the frontend, and creates a separate data root for SQLite and
+Projects. Retain the source clone and its Git metadata: the installed worktree depends on them.
+
+Double-click `app.command` in the installed `batchcraft-app` folder, or run:
+
+```bash
+"$HOME/ai/batchcraft-app/app.command"
+```
+
+Open `http://127.0.0.1:8000`. Access is loopback-only by default. Add `--lan-access` during installation
+only for a trusted LAN: there is no authentication, and anyone who can reach the app can read or modify
+data and start GPU Jobs. Do not expose it to the internet.
+
+There are no automatic updates, and the installer does not reuse existing destinations. Follow
+[updating and backing up](docs/LOCAL_INSTANCES.md#updating-and-backing-up) before changing an installation.
+
+### Development Sandbox
+
+For fake-backed development without GPU work, install dependencies from the source repository root,
+then launch:
 
 ```bash
 uv sync --frozen --directory backend
@@ -47,8 +88,7 @@ npm ci --prefix frontend
 ./dev.command
 ```
 
-For everyday provisioning, follow [`LOCAL_INSTANCES.md`](docs/LOCAL_INSTANCES.md). Its installer creates
-a linked Git worktree that depends on the source repository's Git metadata, not an independent copy.
+See [`LOCAL_INSTANCES.md`](docs/LOCAL_INSTANCES.md) for instance isolation, shutdown, and browser testing.
 
 ## Run The API
 

@@ -1,16 +1,18 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import secrets
 from collections.abc import Callable, Coroutine, Iterator, Mapping
-from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from threading import Lock
 from typing import BinaryIO, Literal, Protocol, cast
 from uuid import UUID, uuid5
+from weakref import WeakValueDictionary
 
 from batchcraft.comfyui import (
     ComfyUIError,
@@ -52,6 +54,7 @@ from batchcraft.db import (
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
 )
+from batchcraft.diagnostics import safe_exception
 from batchcraft.domain import BatchDefinition, CompiledRunPlan, SeedInput, compile_batch
 from batchcraft.execution import (
     DISCARDED_BEFORE_START,
@@ -116,6 +119,7 @@ from .tasks import RunTaskRegistry
 _RUN_DIRECTORY = re.compile(r"[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*")
 _HISTORICAL_IMPORT_NAMESPACE = UUID("cf2d89da-87dc-4ce7-8bf5-c1da75fc690b")
 _SEED_SPACE_SIZE = 2**53
+logger = logging.getLogger(__name__)
 _IMAGE_MIME_TYPES = {
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
@@ -256,6 +260,8 @@ class BatchcraftService:
             cancellation_store.database_path
         )
         self.history_scanner = ProjectHistoryScanner(projects_root)
+        self._history_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
+        self._history_locks_guard = Lock()
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
         self._random_seed_source = random_seed_source
@@ -357,6 +363,15 @@ class BatchcraftService:
         plan = self._compile_and_validate(creation)
 
         assets = self._resolve_assets(creation.project.filesystem_key, plan)
+        with self._history_lock(creation.project.filesystem_key):
+            return self._publish_run(creation, plan, assets)
+
+    def _publish_run(
+        self,
+        creation: RunCreationInput,
+        plan: CompiledRunPlan,
+        assets: dict[str, AssetRecord],
+    ) -> PublishedRun:
         try:
             run = self.run_store.create_run(
                 project=creation.project,
@@ -370,8 +385,15 @@ class BatchcraftService:
                 description=creation.description,
             )
             # The filesystem Run is authoritative; projection repair is available via reindex.
-            with suppress(ProjectImportError):
-                self.import_project(creation.project.filesystem_key)
+            try:
+                self._refresh_project(
+                    creation.project.filesystem_key, project_id=creation.project.id
+                )
+            except Exception as error:
+                logger.warning(
+                    "Published Run history refresh failed; reindex to repair: %s",
+                    safe_exception(error, run_id=run.run_id),
+                )
             return run
         except OSError as error:
             raise RunPublicationError("Run publication failed") from error
@@ -894,9 +916,29 @@ class BatchcraftService:
         )
 
     def import_project(self, filesystem_key: str) -> ProjectHistoryScan:
+        with self._history_lock(filesystem_key):
+            return self._refresh_project(filesystem_key)
+
+    def _history_lock(self, filesystem_key: str) -> Lock:
+        # One process owns the store. No operation under these locks awaits the event loop.
+        # Holders and waiters retain the lock; unused keys need no process-lifetime entry.
+        with self._history_locks_guard:
+            return self._history_locks.setdefault(filesystem_key, Lock())
+
+    def _refresh_project(
+        self, filesystem_key: str, *, project_id: str | None = None
+    ) -> ProjectHistoryScan:
+        """Scan and replace while the caller holds the Project history lock."""
         try:
             scan = self.history_scanner.scan(filesystem_key)
-            self.history_store.replace_project(scan)
+            if project_id is not None and (
+                scan.project.id != project_id or scan.project.filesystem_key != filesystem_key
+            ):
+                raise HistoricalProjectConflictError(
+                    "Project owner ID or filesystem key conflicts with SQLite registration"
+                )
+            self.history_scanner.validate_project_context(scan)
+            self.history_store.replace_project(scan, register=project_id is None)
             return scan
         except HistoricalProjectConflictError as error:
             raise ProjectImportConflictError(str(error)) from error
@@ -904,7 +946,9 @@ class BatchcraftService:
             raise ProjectImportError(str(error)) from error
 
     def reindex_project(self, project_id: str) -> ProjectHistoryScan:
-        return self.import_project(self._registered_project_key(project_id))
+        filesystem_key = self._registered_project_key(project_id)
+        with self._history_lock(filesystem_key):
+            return self._refresh_project(filesystem_key, project_id=project_id)
 
     def list_project_runs(self, project_id: str) -> tuple[HistoricalRunRecord, ...]:
         self._registered_project_key(project_id)

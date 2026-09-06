@@ -110,13 +110,18 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
   await expect(details.locator(".result-technical-details dl > div").filter({ has: page.getByText("Integrity", { exact: true }) }).locator("dd")).toHaveText("verified");
   await details.getByRole("button", { name: "Close", exact: true }).click();
 
+  const openHistory = page.getByRole("region", { name: "Project History" });
+  await expect(openHistory.getByText("succeeded", { exact: true })).toBeVisible();
+  await expect(openHistory.getByText("2 Results", { exact: true })).toBeVisible();
+  await openHistory.getByRole("button", { name: "Open", exact: true }).click();
+  await expect(openHistory.locator("img.result-image").first()).toHaveJSProperty("naturalWidth", 384);
+
   await page.close();
   const reopened = await context.newPage();
   await reopened.goto("/");
   await expect(reopened.getByText("Succeeded", { exact: true })).toBeVisible();
   await expect(reopened.getByRole("region", { name: "Batch Results", exact: true })).toHaveCount(0);
   await expect(reopened.getByRole("button", { name: "Create Run", exact: true })).toHaveCount(0);
-  await reopened.getByRole("button", { name: "Reindex Project", exact: true }).click();
   const history = reopened.getByRole("region", { name: "Project History" });
   await history.getByRole("button", { name: "Open", exact: true }).click();
   await expect(history.locator("img.result-image").first()).toHaveJSProperty("naturalWidth", 384);

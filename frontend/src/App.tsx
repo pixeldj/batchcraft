@@ -111,6 +111,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [historyRevisions, setHistoryRevisions] = useState<Record<string, number>>({});
+  function onHistoryChange(projectId: string) {
+    setHistoryRevisions((current) => ({ ...current, [projectId]: (current[projectId] ?? 0) + 1 }));
+  }
   const [createdUnavailableRunId, setCreatedUnavailableRunId] = useState<string | null>(null);
   const [executionControlUnavailableRunId, setExecutionControlUnavailableRunId] =
     useState<string | null>(null);
@@ -888,6 +892,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         run_description: runDescription.trim() || null,
       });
       if (requestedBatchIdentity !== currentBatchIdentityRef.current) {
+        onHistoryChange(nextRun.project_id);
         return;
       }
       const consistent = nextRun.job_count === snapshot.response.job_count;
@@ -1104,6 +1109,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           initialResults={matchingRestoredRunSeed?.results ?? EMPTY_RESULTS}
           initialResultsError={matchingRestoredRunSeed?.resultsError ?? null}
           onStatusChange={setRunStatus}
+          onHistoryChange={onHistoryChange}
           onCreatedUnavailableChange={changeCreatedUnavailable}
           onExecutionControlUnavailableChange={changeExecutionControlUnavailable}
           getCachedRun={getCachedFrozenRun}
@@ -1113,6 +1119,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         <ProjectHistory
           api={api}
           projectId={projectVerified ? selectedProjectId : null}
+          historyRevision={selectedProjectId ? historyRevisions[selectedProjectId] ?? 0 : 0}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
           loadRunAsBatch={loadRunAsBatch}

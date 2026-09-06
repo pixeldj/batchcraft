@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BatchcraftApi } from "../../api/client";
 import type {
   HistoricalRunResponse,
+  ProjectImportResponse,
   ProjectRunsResponse,
   ResultResponse,
   RunResponse,
@@ -20,6 +22,7 @@ describe("ProjectHistory", () => {
     let outstanding = 0;
     let maximum = 0;
     const api = makeApi({
+      reindexProject: vi.fn(() => new Promise<ProjectImportResponse>(() => {})),
       listProjectRuns: vi.fn(async () => ({ project_id: "project-1", runs, diagnostics: [] })),
       getResults: vi.fn(async (runId: string) => {
         maximum = Math.max(maximum, ++outstanding);
@@ -43,12 +46,13 @@ describe("ProjectHistory", () => {
       expect(articles.map((article) => article.querySelector("strong")?.textContent))
         .toEqual(runs.filter((_, index) => index % 2 === batch).map((run) => run.run_name));
     }
-    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.reindexProject).toHaveBeenCalledTimes(1);
   });
 
   it.each(["switch", "unmount"])("stops queued Result reads after %s even when in-flight reads settle late", async (action) => {
     const pending = deferred<{ run_id: string; results: ResultResponse[] }>();
     const api = makeApi({
+      reindexProject: vi.fn(() => new Promise<ProjectImportResponse>(() => {})),
       listProjectRuns: vi.fn(async (projectId: string) => ({
         project_id: projectId,
         runs: projectId === "old" ? Array.from({ length: 12 }, (_, index) => historicalRun({ run_id: `old-${index}` })) : [],
@@ -64,7 +68,7 @@ describe("ProjectHistory", () => {
     await act(async () => pending.resolve({ run_id: "old-0", results: [result()] }));
     expect(api.getResults).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
-    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.reindexProject).toHaveBeenCalledWith("old");
   });
 
   it("ignores stale Project and Result responses after Project switching", async () => {
@@ -200,6 +204,291 @@ describe("ProjectHistory", () => {
     await waitFor(() => expect(loadRunAsBatch).toHaveBeenCalledWith("replayable"));
     expect(within(runs[1]).queryByRole("button", { name: "Load Run as Batch" })).not.toBeInTheDocument();
   });
+
+  it("shows cached history and Results during the automatic scan, then refreshes without manual reindex", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const api = makeApi({
+      reindexProject: vi.fn(() => scan.promise),
+      listProjectRuns: vi.fn()
+        .mockResolvedValueOnce({ project_id: "project-1", runs: [historicalRun({ execution_status: "running" })], diagnostics: [] })
+        .mockResolvedValue({ project_id: "project-1", runs: [historicalRun()], diagnostics: [] }),
+      getResults: vi.fn()
+        .mockResolvedValueOnce({ run_id: "run-1", results: [result()] })
+        .mockResolvedValue({ run_id: "run-1", results: [result(), { ...result(), artifact_ordinal: 2 }] }),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    expect(await screen.findByText("running")).toBeInTheDocument();
+    expect(await screen.findByText("1 Result")).toBeInTheDocument();
+    expect(screen.getByText("Checking Project history...")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    await act(async () => scan.resolve(importResponse("project-1")));
+    expect(await screen.findByText("succeeded")).toBeInTheDocument();
+    expect(await screen.findByText("2 Results")).toBeInTheDocument();
+    expect(api.reindexProject).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["scan", "history", "results"])("retains known history and Results after a %s refresh failure and allows retry", async (failure) => {
+    const api = makeApi({
+      listProjectRuns: vi.fn(async () => ({ project_id: "project-1", runs: [historicalRun()], diagnostics: [] })),
+      getResults: vi.fn(async () => ({ run_id: "run-1", results: [result()] })),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    await waitFor(() => expect(api.listProjectRuns).toHaveBeenCalledTimes(2));
+    await screen.findByText("1 Result");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    const failing = failure === "scan" ? api.reindexProject : failure === "history" ? api.listProjectRuns : api.getResults;
+    vi.mocked(failing).mockRejectedValueOnce(new Error("Storage unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    expect(await screen.findByText(/Use Reindex Project to retry|use Reindex Project to retry/)).toBeInTheDocument();
+    expect(screen.getByText("Baseline")).toBeInTheDocument();
+    expect(screen.getByRole("img")).toBeInTheDocument();
+    expect(screen.queryByText(/No indexed Runs|No Results were recorded/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    await waitFor(() => expect(screen.queryByText(/Storage unavailable/)).not.toBeInTheDocument());
+  });
+
+  it("deduplicates StrictMode and rerenders, serializes lifecycle scans, and never imports", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const importProject = vi.fn();
+    const api = makeApi({ reindexProject: vi.fn(() => scan.promise), importProject });
+    const view = render(<StrictMode>{history(api, "project-1")}</StrictMode>);
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(1));
+    view.rerender(<StrictMode>{history(api, "project-1")}</StrictMode>);
+    await act(async () => {});
+    expect(api.reindexProject).toHaveBeenCalledTimes(1);
+    view.rerender(<StrictMode>{history(api, "project-1", undefined, 1)}</StrictMode>);
+    await act(async () => {});
+    expect(api.reindexProject).toHaveBeenCalledTimes(1);
+    await act(async () => scan.resolve(importResponse("project-1")));
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(2));
+    view.rerender(<StrictMode>{history(api, "project-1", undefined, 1)}</StrictMode>);
+    await act(async () => {});
+    expect(api.reindexProject).toHaveBeenCalledTimes(2);
+    expect(importProject).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late scan after switching Project", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const api = makeApi({
+      reindexProject: vi.fn((id: string) => id === "old" ? scan.promise : Promise.resolve(importResponse(id))),
+    });
+    const view = renderHistory(api, "old");
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledWith("old"));
+    view.rerender(history(api, "new"));
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledWith("new"));
+    await act(async () => scan.resolve(importResponse("old")));
+    expect(vi.mocked(api.listProjectRuns).mock.calls.filter(([id]) => id === "old")).toHaveLength(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps pending Result workers bounded when a scan finishes before they do", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const runs = [historicalRun(), historicalRun({ run_id: "run-2" }), historicalRun({ run_id: "run-3" })];
+    const pending: { id: string; resolve: (value: { run_id: string; results: ResultResponse[] }) => void }[] = [];
+    let outstanding = 0;
+    let maximum = 0;
+    const api = makeApi({
+      listProjectRuns: vi.fn(async () => ({ project_id: "project-1", runs, diagnostics: [] })),
+      reindexProject: vi.fn(() => scan.promise),
+      getResults: vi.fn(async (id: string) => {
+        maximum = Math.max(maximum, ++outstanding);
+        const read = deferred<{ run_id: string; results: ResultResponse[] }>();
+        pending.push({ id, resolve: read.resolve });
+        const response = await read.promise;
+        outstanding--;
+        return response;
+      }),
+    });
+    renderHistory(api, "project-1");
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(2));
+    await act(async () => scan.resolve(importResponse("project-1")));
+    expect(api.getResults).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.getResults).mock.calls.every(([, signal]) => !signal?.aborted)).toBe(true);
+    for (let index = 0; index < 5; index++) {
+      await waitFor(() => expect(pending.length).toBeGreaterThan(index));
+      await act(async () => pending[index].resolve({ run_id: pending[index].id, results: [] }));
+    }
+    expect(maximum).toBe(2);
+    expect(vi.mocked(api.getResults).mock.calls.map(([id]) => id)).toEqual([...runs.slice(0, 2), ...runs].map((run) => run.run_id));
+  });
+
+  it("replaces previously verified Results with unavailable placeholders when integrity changes", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const api = makeApi({
+      reindexProject: vi.fn(() => scan.promise),
+      listProjectRuns: vi.fn(async () => ({ project_id: "project-1", runs: [historicalRun()], diagnostics: [] })),
+      getResults: vi.fn()
+        .mockResolvedValueOnce({ run_id: "run-1", results: [result()] })
+        .mockResolvedValue({ run_id: "run-1", results: [{ ...result(), integrity_status: "corrupt" }] }),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    await act(async () => scan.resolve(importResponse("project-1")));
+    expect(await screen.findByText("CORRUPT")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("does not describe a failed scan of an empty index as a confirmed empty Project", async () => {
+    const api = makeApi({ reindexProject: vi.fn(async () => { throw new Error("Storage unavailable"); }) });
+    renderHistory(api, "project-1");
+    expect(await screen.findByRole("alert")).toHaveTextContent("history may be stale");
+    expect(screen.queryByText(/No indexed Runs/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reindex Project" })).toBeEnabled();
+  });
+
+  it("retains metadata without images when execution disappears and an empty Result read succeeds", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const emptyResults = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const available = { project_id: "project-1", runs: [historicalRun()], diagnostics: [] };
+    const api = makeApi({
+      reindexProject: vi.fn(() => scan.promise),
+      listProjectRuns: vi.fn()
+        .mockResolvedValueOnce(available)
+        .mockResolvedValueOnce({ ...available, runs: [historicalRun({ execution_available: false, execution_status: null })] })
+        .mockImplementation(async () => ({ ...available })),
+      getResults: vi.fn()
+        .mockResolvedValueOnce({ run_id: "run-1", results: [result()] })
+        .mockImplementationOnce(() => emptyResults.promise)
+        .mockRejectedValueOnce(new Error("Result verification unavailable"))
+        .mockResolvedValue({ run_id: "run-1", results: [result()] }),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    await act(async () => scan.resolve(importResponse("project-1")));
+    expect(await screen.findByText("Execution unavailable")).toBeInTheDocument();
+    // Hide images as soon as history reports unavailable execution, before the Result read settles.
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    await act(async () => emptyResults.resolve({ run_id: "run-1", results: [] }));
+    expect(screen.getByText(/Last known Result metadata is retained/)).toBeInTheDocument();
+    expect(screen.getByText("Result count unavailable")).toBeInTheDocument();
+    const metadata = screen.getByRole("list", { name: "Last known Results" });
+    fireEvent.click(within(metadata).getByText("portrait.png (Job 1, artifact 1)"));
+    expect(within(metadata).getByText("Last known integrity (not current verification)").nextElementSibling).toHaveTextContent("verified");
+    expect(within(metadata).getByText("abc123")).toBeInTheDocument();
+    expect(within(metadata).getByText("1024")).toBeInTheDocument();
+    expect(within(metadata).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByText("No Results were recorded for this Run.")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 Results")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    expect(await screen.findByText(/Result verification unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Last known Results" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Last known Results" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 Result")).toBeInTheDocument();
+  });
+
+  it("does not confirm no Results for initially unavailable execution with an empty successful listing", async () => {
+    const api = makeApi({
+      listProjectRuns: vi.fn(async () => ({
+        project_id: "project-1",
+        runs: [historicalRun({ execution_available: false, execution_status: null })],
+        diagnostics: [],
+      })),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    await waitFor(() => expect(api.getResults).toHaveBeenCalled());
+    expect(screen.getByText(/No verified Result metadata is available in this view/)).toBeInTheDocument();
+    expect(screen.getByText("Result count unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No Results were recorded for this Run.")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 Results")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it.each(["empty", "error"])("ignores an old available generation's delayed %s reply after accepting unavailable history", async (outcome) => {
+    const scan = deferred<ProjectImportResponse>();
+    const oldRead = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const unavailableRead = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const available = { project_id: "project-1", runs: [historicalRun()], diagnostics: [] };
+    const api = makeApi({
+      reindexProject: vi.fn(() => scan.promise),
+      listProjectRuns: vi.fn()
+        .mockResolvedValueOnce(available)
+        .mockResolvedValueOnce(available)
+        .mockResolvedValue({ ...available, runs: [historicalRun({ execution_available: false, execution_status: null })] }),
+      getResults: vi.fn()
+        .mockResolvedValueOnce({ run_id: "run-1", results: [result()] })
+        .mockImplementationOnce(async () => {
+          const response = await oldRead.promise;
+          if (outcome === "error") throw new Error("Superseded Result error");
+          return response;
+        })
+        .mockImplementationOnce(() => unavailableRead.promise),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    await act(async () => scan.resolve(importResponse("project-1")));
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    expect(await screen.findByText("Execution unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    await act(async () => oldRead.resolve({ run_id: "run-1", results: [] }));
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("list", { name: "Last known Results" })).toHaveTextContent("portrait.png");
+    expect(screen.queryByText(/Superseded Result error/)).not.toBeInTheDocument();
+    await act(async () => unavailableRead.resolve({ run_id: "run-1", results: [] }));
+    expect(screen.getByRole("list", { name: "Last known Results" })).toHaveTextContent("portrait.png");
+    expect(screen.queryByText("No Results were recorded for this Run.")).not.toBeInTheDocument();
+  });
+
+  it("keeps the acceptance latch through available history, a superseded unavailable read, and a current read error", async () => {
+    const scan = deferred<ProjectImportResponse>();
+    const unavailableRead = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const failedRead = deferred<void>();
+    const freshRead = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const available = { project_id: "project-1", runs: [historicalRun()], diagnostics: [] };
+    const api = makeApi({
+      reindexProject: vi.fn(() => scan.promise),
+      listProjectRuns: vi.fn()
+        .mockResolvedValueOnce(available)
+        .mockResolvedValueOnce({ ...available, runs: [historicalRun({ execution_available: false, execution_status: null })] })
+        .mockResolvedValue(available),
+      getResults: vi.fn()
+        .mockResolvedValueOnce({ run_id: "run-1", results: [result()] })
+        .mockImplementationOnce(() => unavailableRead.promise)
+        .mockImplementationOnce(async () => { await failedRead.promise; throw new Error("Current verification failed"); })
+        .mockImplementationOnce(() => freshRead.promise),
+      getRun: vi.fn(async () => runResponse()),
+    });
+    renderHistory(api, "project-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    await act(async () => scan.resolve(importResponse("project-1")));
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Execution unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    expect(await screen.findByText("succeeded")).toBeInTheDocument();
+    expect(api.getResults).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Last known Results" })).toHaveTextContent("portrait.png");
+    await act(async () => unavailableRead.resolve({ run_id: "run-1", results: [{ ...result(), remote_filename: "superseded.png" }] }));
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("list", { name: "Last known Results" })).not.toHaveTextContent("superseded.png");
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    await act(async () => failedRead.resolve());
+    expect(await screen.findByText(/Current verification failed/)).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex Project" }));
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(4));
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    await act(async () => freshRead.resolve({ run_id: "run-1", results: [result()] }));
+    expect(await screen.findByRole("img")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Last known Results" })).not.toBeInTheDocument();
+  });
 });
 
 function renderHistory(
@@ -214,11 +503,13 @@ function history(
   api: BatchcraftApi,
   projectId: string | null,
   loadRunAsBatch: (runId: string) => Promise<void> = async () => undefined,
+  historyRevision = 0,
 ) {
   return (
     <ProjectHistory
       api={api}
       projectId={projectId}
+      historyRevision={historyRevision}
       getCachedRun={() => null}
       loadRun={(runId) => api.getRun(runId)}
       loadRunAsBatch={loadRunAsBatch}
@@ -229,13 +520,17 @@ function history(
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
     listProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, runs: [], diagnostics: [] })),
-    reindexProject: vi.fn(),
+    reindexProject: vi.fn(async (id: string) => importResponse(id)),
     getResults: vi.fn(async (runId: string) => ({ run_id: runId, results: [] })),
     getRun: vi.fn(),
     startRun: vi.fn(),
     resultUrl: (url: string) => url,
     ...overrides,
   } as BatchcraftApi;
+}
+
+function importResponse(projectId: string): ProjectImportResponse {
+  return { project_id: projectId, filesystem_key: projectId, name: projectId, batch_count: 1, asset_count: 0, run_count: 1, diagnostic_count: 0 };
 }
 
 function historicalRun(overrides: Partial<HistoricalRunResponse> = {}): HistoricalRunResponse {

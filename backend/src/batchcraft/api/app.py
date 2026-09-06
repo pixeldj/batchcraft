@@ -339,7 +339,7 @@ def create_app(
     async def import_project(
         request: ProjectImportRequest, service: ServiceDependency
     ) -> ProjectImportResponse:
-        scan = await asyncio.to_thread(service.import_project, request.filesystem_key)
+        scan = await file_operation(lambda: service.import_project(request.filesystem_key))
         return ProjectImportResponse(
             project_id=scan.project.id,
             filesystem_key=scan.project.filesystem_key,
@@ -368,7 +368,7 @@ def create_app(
         response_model=ProjectImportResponse,
     )
     async def reindex_project(project_id: str, service: ServiceDependency) -> ProjectImportResponse:
-        scan = await asyncio.to_thread(service.reindex_project, project_id)
+        scan = await file_operation(lambda: service.reindex_project(project_id))
         return ProjectImportResponse(
             project_id=scan.project.id,
             filesystem_key=scan.project.filesystem_key,
@@ -965,7 +965,9 @@ def create_app(
         request: RunCreateRequest,
         service: ServiceDependency,
     ) -> RunCreatedResponse:
-        return RunCreatedResponse.from_run(service.create_run(request.to_creation_input()))
+        creation = request.to_creation_input()
+        run = await file_operation(lambda: service.create_run(creation))
+        return RunCreatedResponse.from_run(run)
 
     @app.get("/api/runs/{run_id}", response_model=RunResponse)
     async def get_run(
