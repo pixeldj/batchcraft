@@ -1189,23 +1189,35 @@ whole-process memory bound or a complete denial-of-service defense.
 
 Remaining public-publication work:
 
-- Audit the final release for GPL corresponding-source delivery and any separately bundled dependencies,
-  runtimes, browsers, models, or fixture rights. Artifact notice checks do not establish complete
-  distribution compliance or make the source installation a standalone application package.
-  In particular, record provenance/redistribution rights for the spike workflow JSON and the embedded
-  one-pixel PNG in `backend/tests/live/test_execution_setup.py` before public publication.
-- Enable and verify GitHub private vulnerability reporting and hosted secret/push protection before
-  public publication. Read-only administrative API inspection shows the repository is PRIVATE,
+- Obtain final owner authorization to change repository visibility, then enable and verify GitHub
+  private vulnerability reporting and available hosted secret scanning/push protection immediately
+  afterward, before announcing the release. Private vulnerability reporting requires a public
+  repository; it cannot be enabled first on this private repository. Read-only API inspection shows
+  the repository is PRIVATE,
   `security_and_analysis` is `null`, and private vulnerability reporting returns HTTP 404. These are
   not verified enabled settings. No repository visibility change is authorized.
 - Repeat release-content scans if code or dependencies change before public publication.
+
+Publication clearance: the owner confirms authorship of `spikes/comfyui-client/test-workflow.json`
+and accepts the existing one-pixel PNG in `backend/tests/live/test_execution_setup.py` for inclusion.
+This is owner attestation, not independently established PNG provenance. Neither fixture needs replacing.
+The tagged source includes GPL licenses, application source, lockfiles, and build/install tooling, with
+no bundled dependencies, runtimes, browsers, models, or user data. The source-only GPL delivery review
+passes for this scope; distributing binaries or dependency environments requires a separate review.
+The reviewed GitHub issue/PR bodies and comments contain no new confidential-content concern. Previously
+approved Git-history preservation remains in effect; no fresh exhaustive Actions-log/artifact privacy
+audit is claimed.
+Both main CI (`34012870732`) and tag CI (`34013189097`) passed at release commit
+`ed601f626f2d6d81f24f7d40584e35588c0f3303`. Final hosted secret scans covered the checkout and 56 fetched
+history commits with no detected leaks. Draft Release-page text is in `V1_RELEASE_NOTES.md`; the existing
+annotated `v1.0.0` tag is unchanged. Visibility and Release-page publication still await final approval.
 
 V1 tag preparation: production/full npm audits and pinned pip-audit 2.9.0 scans of the locked Python
 production/development dependencies found no known advisories. Gitleaks 8.30.1 found no secrets in the
 reviewed current source or 55 locally reachable commits. Dependency versions are unchanged by the
 1.0.0 metadata bump. These scans do not prove historical privacy or cover every platform. The source
 inventory contains no model weights, photographic assets, databases, or bundled runtime/browser
-binaries; fixture provenance limitations remain listed above. Both GPL license copies match.
+binaries; the subsequent owner fixture clearance is recorded above. Both GPL license copies match.
 The 1.0.0 metadata passes 1,147 backend tests, 427 frontend tests, lint/format/type checks, frontend
 build, and wheel/sdist plus frontend distribution checks. Final pushed-commit CI must pass before the
 annotated tag is created; CI also scans that exact checkout and its fetched history.

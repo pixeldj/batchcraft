@@ -23,8 +23,9 @@ Historical manifests are not silently modified to make spreadsheet cells safe.
 
 Report vulnerabilities privately through this repository's
 [GitHub security advisories](https://github.com/pixeldj/batchcraft/security/advisories).
-Use **Report a vulnerability** when available. Private vulnerability reporting
-must be enabled and verified by a maintainer before public publication. If that
+Use **Report a vulnerability** when available. GitHub requires a public repository for
+private vulnerability reporting. On first publication, a maintainer must enable and
+verify it immediately after the authorized visibility change, before announcing the release. If that
 option is unavailable, do not post exploit details or private data in an issue;
 ask a maintainer to enable private reporting without disclosing the vulnerability.
 
