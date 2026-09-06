@@ -48,10 +48,21 @@ try {
     document.body.append(image);
   });
   await expect(page.locator("#security-png")).toHaveJSProperty("naturalWidth", 1);
+  const burstWidths = await page.evaluate(() => Promise.all(
+    Array.from({ length: 6 }, (_, index) => new Promise((resolve, reject) => {
+      const image = document.createElement("img");
+      image.id = `burst-${index}`;
+      image.onload = () => resolve(image.naturalWidth);
+      image.onerror = () => reject(new Error(`Image ${index} failed without retry`));
+      image.src = `/api/runs/run-id/results/1/${index + 4}`;
+      document.body.append(image);
+    })),
+  ));
+  assert.deepEqual(burstWidths, [1, 1, 1, 1, 1, 1]);
   assert.equal(await page.evaluate(() => localStorage.getItem("artifact-executed")), null);
   assert.deepEqual(await (await page.request.get("http://127.0.0.1:8002/api/projects")).json(), { projects: [] });
   assert.deepEqual(dialogs, []);
-  console.log("PASS: real HTML/SVG Results download without execution; real PNG decodes in built frontend");
+  console.log("PASS: HTML/SVG download without execution; PNG and six-image queued burst decode without retry in built frontend");
 } finally {
   await browser.close();
 }

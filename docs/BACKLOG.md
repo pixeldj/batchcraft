@@ -1142,12 +1142,20 @@ Implemented groundwork on the cleanup branch:
 - Frontend builds include the complete GPL license and bundled runtime/tool notices. Backend wheel
   and sdist include GPL-3.0-only metadata and a verified license copy. Automated artifact checks reject
   missing/truncated/stale notices, unreviewed bundled dependencies, and unexpected package inputs.
+- Request bodies now have per-process capacity and receive/spool deadlines, with joined cleanup under
+  shutdown cancellation. Verified Asset/Result downloads use owned disk snapshots and bounded buffers
+  rather than whole-file RAM allocation. Trusted storage anchors support macOS temporary-path aliases
+  without permitting symlinks inside the store.
+- Historical reads and serialization run off the event loop with bounded active/waiting capacity.
+  Execution polling has separate capacity. Project History limits Result-list fan-out to two Runs,
+  and only structured GET read-capacity failures receive bounded retries; mutations never retry.
 
 Remaining release work:
 
-- Complete resource review of persisted-data validation, whole-file downloads, remote response sizes,
-  upload concurrency/timeouts, and remaining synchronous work. Define supported limits and regression
-  checks; the new Job/request budgets alone are not a complete denial-of-service defense.
+- Complete resource review of persisted-data validation, remote ComfyUI response sizes, resolved-plan
+  byte sizes, remaining synchronous mutation work, and temporary snapshot disk usage/active stream
+  duration. Local read/admission limits are not a complete denial-of-service defense; do not impose
+  new historical format restrictions or rewrite valid user data to add runtime limits.
 - Preserve raw historical CSV, document text-only spreadsheet import, and decide whether a separate
   spreadsheet-safe export is required. Never rewrite old manifests to neutralize formula cells.
 - Audit the final release for GPL corresponding-source delivery and any separately bundled dependencies,
@@ -1165,14 +1173,19 @@ history. npm production/full and pinned pip-audit production/development scans r
 advisories for the audited platform on 2026-09-05. This does not cover ComfyUI, models, OS/browser
 binaries, every platform-specific dependency, or all licensing obligations.
 
-Cleanup verification: 791 backend tests, 384 frontend tests, eight desktop/mobile smoke tests across
+Cleanup verification: 881 backend tests, 406 frontend tests, eight desktop/mobile smoke tests across
 Vite and built same-origin modes, and the real HTML/SVG/PNG artifact-security browser check pass.
+The browser check now includes a six-image burst with four concurrent preparations and no image retry.
+Resource regressions cover upload/read saturation, independent polling, worker shutdown, FIFO and
+internal-symlink rejection, macOS runtime aliases, verified snapshots under source replacement, and
+GET-only capacity retries with Project-switch cancellation.
 The backend total includes 13 actual-package notice tests; three additional frontend distribution checks
 and the combined offline artifact checker pass. Ruff lint/format, mypy, frontend lint/typecheck,
 backend/frontend builds, actionlint, final redacted current-source secret scans, and `git diff --check`
 pass. The test suite reports an upstream Starlette/httpx deprecation warning. One existing frontend
 snapshot-divergence test failed once during parallel checks, then passed in isolation and in a full
-rerun without changes; watch for recurrence in candidate CI rather than treating its cause as resolved.
+rerun without changes; it also passed in this resource pass. Watch for recurrence in candidate CI rather
+than treating its cause as resolved.
 Hosted CI, complete distribution acceptance, and the separately authorized live release gate have not
 run for this cleanup. BC-025 remains In Progress.
 

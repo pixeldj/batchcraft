@@ -3,16 +3,29 @@
 import asyncio
 import ipaddress
 import tempfile
+from contextlib import suppress
+from functools import partial
 from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import quote, urlsplit
 
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .artifacts import file_operation
 from .config import Settings
 
 
-def artifact_response(content: bytes, content_type: str | None, local_path: str) -> Response:
+def artifact_response(
+    content: bytes,
+    content_type: str | None,
+    local_path: str,
+    *,
+    snapshot: BinaryIO,
+    size: int,
+) -> Response:
+    from .artifacts import snapshot_response
+
     signatures = {
         "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
         "image/jpeg": content.startswith(b"\xff\xd8\xff"),
@@ -21,8 +34,9 @@ def artifact_response(content: bytes, content_type: str | None, local_path: str)
     }
     passive = signatures.get(content_type or "", False)
     disposition = "inline" if passive else "attachment"
-    return Response(
-        content,
+    return snapshot_response(
+        snapshot,
+        size=size,
         media_type=content_type if passive else "application/octet-stream",
         headers={
             "Content-Disposition": (
@@ -68,6 +82,7 @@ class RequestSecurityMiddleware:
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
         self.settings = settings
+        self._inflight_bodies = 0
         self.frontend_origin = _origin(settings.frontend_origin)
         if self.frontend_origin is None:
             raise ValueError("frontend_origin must be an explicit HTTP(S) origin")
@@ -78,9 +93,11 @@ class RequestSecurityMiddleware:
             return
 
         async def reject(code: int, name: str, message: str) -> None:
-            await JSONResponse({"error": {"code": name, "message": message}}, status_code=code)(
-                scope, receive, send
-            )
+            await JSONResponse(
+                {"error": {"code": name, "message": message}},
+                status_code=code,
+                headers={"Retry-After": "1"} if code == 429 else None,
+            )(scope, receive, send)
 
         hosts = [value.decode("latin-1") for key, value in scope["headers"] if key == b"host"]
         target = _origin(f"{scope['scheme']}://{hosts[0]}") if len(hosts) == 1 else None
@@ -121,23 +138,59 @@ class RequestSecurityMiddleware:
                 await reject(413, "request_too_large", "Request body exceeds the upload budget")
                 return
 
-        # Finish admission before parsers or handlers can create files or mutate state.
-        # Spill to an owned temporary file rather than retaining the budget in RAM.
-        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as body:
-            size = 0
-            while True:
-                message = await receive()
-                if message["type"] == "http.disconnect":
+        deadline = asyncio.get_running_loop().time() + self.settings.request_body_timeout_seconds
+        first = asyncio.ensure_future(receive())
+        leased = False
+        body = None
+        try:
+            # Give receive one turn to report a genuinely empty body. Neither the method
+            # nor Content-Length proves emptiness. Pending probes never queue for a slot.
+            await asyncio.sleep(0)
+            message = first.result() if first.done() else None
+            if message is not None and message["type"] == "http.disconnect":
+                return
+            empty = (
+                message is not None
+                and not message.get("body", b"")
+                and not message.get("more_body", False)
+            )
+            if not empty:
+                if self._inflight_bodies >= self.settings.max_inflight_request_bodies:
+                    await reject(429, "request_capacity_exceeded", "Request body capacity is full")
                     return
-                chunk = message.get("body", b"")
-                size += len(chunk)
+                self._inflight_bodies += 1
+                leased = True
+                # The outer finally closes this before releasing the admission lease.
+                body = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)  # noqa: SIM115
+                size = 0
+                admission = asyncio.timeout_at(deadline)
+                try:
+                    async with admission:
+                        if message is None:
+                            message = await first
+                        while True:
+                            if message["type"] == "http.disconnect":
+                                return
+                            chunk = message.get("body", b"")
+                            size += len(chunk)
+                            if size > self.settings.max_request_bytes:
+                                break
+                            await file_operation(partial(body.write, chunk))
+                            if not message.get("more_body", False):
+                                break
+                            message = await receive()
+                        await file_operation(partial(body.seek, 0))
+                except TimeoutError:
+                    if not admission.expired():
+                        raise
+                    await reject(408, "request_body_timeout", "Request body admission timed out")
+                    return
                 if size > self.settings.max_request_bytes:
                     await reject(413, "request_too_large", "Request body exceeds the upload budget")
                     return
-                await asyncio.to_thread(body.write, chunk)
-                if not message.get("more_body", False):
-                    break
-            await asyncio.to_thread(body.seek, 0)
+            else:
+                size = 0
+
             remaining = size
             completed = False
 
@@ -145,9 +198,21 @@ class RequestSecurityMiddleware:
                 nonlocal remaining, completed
                 if completed:
                     return await receive()
-                chunk = await asyncio.to_thread(body.read, 64 * 1024)
+                chunk = (
+                    await file_operation(partial(body.read, 64 * 1024)) if body is not None else b""
+                )
                 remaining -= len(chunk)
                 completed = remaining == 0
                 return {"type": "http.request", "body": chunk, "more_body": remaining > 0}
 
             await self.app(scope, replay, send)
+        finally:
+            first.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await first
+            try:
+                if body is not None:
+                    await file_operation(body.close)
+            finally:
+                if leased:
+                    self._inflight_bodies -= 1

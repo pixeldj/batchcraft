@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BatchcraftApi } from "../../api/client";
@@ -11,6 +11,62 @@ import type {
 import { ProjectHistory } from "./ProjectHistory";
 
 describe("ProjectHistory", () => {
+  it("loads twelve Runs with at most two outstanding Result reads, once each, preserving order", async () => {
+    const runs = Array.from({ length: 12 }, (_, index) => historicalRun({
+      run_id: `run-${index}`, run_name: `History ${index}`,
+      batch_id: `batch-${index % 2}`, batch_name: `Experiment ${index % 2}`,
+    }));
+    const pending = runs.map(() => deferred<{ run_id: string; results: ResultResponse[] }>());
+    let outstanding = 0;
+    let maximum = 0;
+    const api = makeApi({
+      listProjectRuns: vi.fn(async () => ({ project_id: "project-1", runs, diagnostics: [] })),
+      getResults: vi.fn(async (runId: string) => {
+        maximum = Math.max(maximum, ++outstanding);
+        const response = await pending[runs.findIndex((run) => run.run_id === runId)].promise;
+        outstanding--;
+        return response;
+      }),
+    });
+    renderHistory(api, "project-1");
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(2));
+    // Complete the second worker first so completion order differs from display order.
+    for (const index of [1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10]) {
+      await act(async () => pending[index].resolve({ run_id: runs[index].run_id, results: [] }));
+      expect(outstanding).toBeLessThanOrEqual(2);
+    }
+    expect(maximum).toBe(2);
+    expect(vi.mocked(api.getResults).mock.calls.map(([id]) => id)).toEqual(runs.map((run) => run.run_id));
+    expect(screen.getAllByText("0 Results")).toHaveLength(12);
+    for (const batch of [0, 1]) {
+      const articles = within(screen.getByRole("region", { name: `Batch Experiment ${batch}` })).getAllByRole("article");
+      expect(articles.map((article) => article.querySelector("strong")?.textContent))
+        .toEqual(runs.filter((_, index) => index % 2 === batch).map((run) => run.run_name));
+    }
+    expect(api.reindexProject).not.toHaveBeenCalled();
+  });
+
+  it.each(["switch", "unmount"])("stops queued Result reads after %s even when in-flight reads settle late", async (action) => {
+    const pending = deferred<{ run_id: string; results: ResultResponse[] }>();
+    const api = makeApi({
+      listProjectRuns: vi.fn(async (projectId: string) => ({
+        project_id: projectId,
+        runs: projectId === "old" ? Array.from({ length: 12 }, (_, index) => historicalRun({ run_id: `old-${index}` })) : [],
+        diagnostics: [],
+      })),
+      getResults: vi.fn(() => pending.promise),
+    });
+    const view = renderHistory(api, "old");
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(2));
+    if (action === "switch") view.rerender(history(api, "new"));
+    else view.unmount();
+    expect(vi.mocked(api.getResults).mock.calls.every(([, signal]) => signal?.aborted)).toBe(true);
+    await act(async () => pending.resolve({ run_id: "old-0", results: [result()] }));
+    expect(api.getResults).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(api.reindexProject).not.toHaveBeenCalled();
+  });
+
   it("ignores stale Project and Result responses after Project switching", async () => {
     const oldHistory = deferred<ProjectRunsResponse>();
     const oldResults = deferred<{ run_id: string; results: ResultResponse[] }>();

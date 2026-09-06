@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import BinaryIO, Literal, Protocol, cast
 from uuid import UUID, uuid5
 
 from batchcraft.comfyui import (
@@ -321,8 +321,9 @@ class BatchcraftService:
         return tuple(imported.values())
 
     def get_project_asset_content(
-        self, project_filesystem_key: str, asset_id: str
-    ) -> tuple[AssetRecord, bytes]:
+        self, project_filesystem_key: str, asset_id: str, destination: BinaryIO
+    ) -> AssetRecord:
+        """Verify into an empty caller-owned file, rewound only on success."""
         store = self._project_asset_store(project_filesystem_key)
         try:
             matches = [
@@ -338,13 +339,15 @@ class BatchcraftService:
             raise AssetDataError(f"duplicate Project asset ID: {asset_id}")
 
         try:
-            record = store.load(matches[0].sha256)
-            content = _read_asset_content(store.project_path / record.stored_path, record)
-            if not _has_image_signature(content, record.mime_type):
+            record = matches[0]
+            _read_asset_content(store.project_path / record.stored_path, record, destination)
+            destination.seek(0)
+            if not _has_image_signature(destination.read(12), record.mime_type):
                 raise AssetDataError("Project asset image signature is invalid")
         except (AssetStoreError, OSError, ValueError) as error:
             raise AssetDataError("Project asset data is invalid") from error
-        return record, content
+        destination.seek(0)
+        return record
 
     def create_run(self, creation: RunCreationInput) -> PublishedRun:
         self._validate_creation_paths(
@@ -849,7 +852,7 @@ class BatchcraftService:
         for job in state.jobs:
             for result in job.results:
                 try:
-                    _read_result(run.path / result.local_path, result, include_content=False)
+                    _read_result(run.path / result.local_path, result)
                 except RunDataError:
                     path = run.path / result.local_path
                     integrity: Literal["verified", "missing", "corrupt"] = (
@@ -871,8 +874,9 @@ class BatchcraftService:
             raise RunCancellationStoreError("Run cancellation data could not be read") from error
 
     def get_result(
-        self, run: PublishedRun, job_ordinal: int, artifact_ordinal: int
-    ) -> tuple[ResultRecord, bytes]:
+        self, run: PublishedRun, job_ordinal: int, artifact_ordinal: int, destination: BinaryIO
+    ) -> ResultRecord:
+        """Verify into an empty caller-owned file, rewound only on success."""
         state = self.get_execution_state(run)
         for result in (result for job in state.jobs for result in job.results):
             if (result.job_ordinal, result.artifact_ordinal) == (
@@ -882,7 +886,9 @@ class BatchcraftService:
                 path = run.path / result.local_path
                 if path.parent != run.path / "outputs":
                     raise RunDataError(f"recorded Result file is unsafe: {result.local_path}")
-                return result, _read_result(path, result)
+                _read_result(path, result, destination=destination)
+                destination.seek(0)
+                return result
         raise ResultNotFoundError(
             f"Result {job_ordinal}/{artifact_ordinal} was not found for Run {run.run_id!r}"
         )
@@ -1424,24 +1430,31 @@ def _has_os_error_cause(error: BaseException) -> bool:
     return False
 
 
-def _read_result(path: Path, result: ResultRecord, *, include_content: bool = True) -> bytes:
+def _read_result(
+    path: Path,
+    result: ResultRecord,
+    *,
+    destination: BinaryIO | None = None,
+) -> None:
     digest = hashlib.sha256()
     size = 0
-    chunks: list[bytes] = []
     try:
         with open_regular_file(path) as file:
-            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            for chunk in iter(lambda: file.read(256 * 1024), b""):
                 size += len(chunk)
+                if size > result.byte_size:
+                    raise RunDataError(
+                        f"recorded Result integrity check failed: {result.local_path}"
+                    )
                 digest.update(chunk)
-                if include_content:
-                    chunks.append(chunk)
+                if destination is not None:
+                    destination.write(chunk)
     except ValueError as error:
         raise RunDataError(f"recorded Result is not a regular file: {result.local_path}") from error
     except OSError as error:
         raise RunDataError(f"recorded Result cannot be read: {result.local_path}") from error
     if size != result.byte_size or digest.hexdigest() != result.sha256:
         raise RunDataError(f"recorded Result integrity check failed: {result.local_path}")
-    return b"".join(chunks)
 
 
 def _validate_image_file(source: Path, declared_content_type: str) -> None:
@@ -1474,14 +1487,20 @@ def _is_supported_image_record(record: AssetRecord) -> bool:
     return _IMAGE_MIME_TYPES.get(Path(record.original_filename).suffix.lower()) == record.mime_type
 
 
-def _read_asset_content(path: Path, record: AssetRecord) -> bytes:
+def _read_asset_content(path: Path, record: AssetRecord, destination: BinaryIO) -> None:
+    digest = hashlib.sha256()
+    size = 0
     try:
         with open_regular_file(path) as file:
-            content = file.read()
+            for chunk in iter(lambda: file.read(256 * 1024), b""):
+                size += len(chunk)
+                if size > record.byte_size:
+                    raise AssetDataError(f"Project asset integrity check failed: {record.asset_id}")
+                digest.update(chunk)
+                destination.write(chunk)
     except ValueError as error:
         raise AssetDataError(f"Project asset is not a regular file: {record.asset_id}") from error
     except OSError as error:
         raise AssetDataError(f"Project asset cannot be read: {record.asset_id}") from error
-    if len(content) != record.byte_size or hashlib.sha256(content).hexdigest() != record.sha256:
+    if size != record.byte_size or digest.hexdigest() != record.sha256:
         raise AssetDataError(f"Project asset integrity check failed: {record.asset_id}")
-    return content

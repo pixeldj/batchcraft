@@ -4,8 +4,93 @@ import { ApiError, BatchcraftApiClient } from "./client";
 
 describe("BatchcraftApiClient", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    [undefined, 1000], ["garbage", 1000], ["-1", 1000], ["0", 1000],
+    ["2", 2000], ["999999999999", 5000],
+    ["Sat, 05 Sep 2026 12:00:03 GMT", 3000],
+  ])("retries capacity GETs using bounded Retry-After %s", async (retryAfter, delay) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => capacityResponse(retryAfter))
+      .mockResolvedValue(new Response(JSON.stringify({ run_id: "run-1", results: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const pending = new BatchcraftApiClient().getResults("run-1", controller.signal);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(pending).resolves.toEqual({ run_id: "run-1", results: [] });
+    expect(fetchMock.mock.calls).toEqual(Array.from({ length: 2 }, () => [
+      "/api/runs/run-1/results", { signal: controller.signal },
+    ]));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops after three capacity failures and preserves the final error", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(async () => capacityResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const assertion = expect(new BatchcraftApiClient().getRun("run-1")).rejects.toMatchObject({
+      code: "read_capacity_exceeded", status: 503, message: "Read capacity is busy; retry later",
+    });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts during the retry delay without another request", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(async () => capacityResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const assertion = expect(new BatchcraftApiClient().getRun("run-1", controller.signal))
+      .rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.runAllTimersAsync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["execute", "create", "reindex", "patch"])("never retries capacity failures for %s", async (operation) => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(async () => capacityResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient();
+    const pending = operation === "execute" ? client.startRun("run-1")
+      : operation === "create" ? client.createRun({ ...batchRequest(), run_name: null, run_description: null })
+      : operation === "reindex" ? client.reindexProject("project-1")
+      : client.updateProject("project-1", { name: "Renamed", description: null });
+    await expect(pending).rejects.toMatchObject({ code: "read_capacity_exceeded" });
+    await vi.runAllTimersAsync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [503, { error: { code: "unavailable", message: "Busy" } }],
+    [503, { error: { code: "read_capacity_exceeded" } }],
+    [503, "not JSON"],
+    [404, { error: { code: "not_found", message: "Missing" } }],
+    [422, { error: { code: "corrupt_run", message: "Corrupt" } }],
+    [429, { error: { code: "read_capacity_exceeded", message: "Busy" } }],
+  ])("does not retry other errors: %s %j", async (status, body) => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(
+      typeof body === "string" ? body : JSON.stringify(body), { status },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new BatchcraftApiClient().getRun("run-1")).rejects.toMatchObject({ status });
+    await vi.runAllTimersAsync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, "", "/"])("uses same-origin API and images with API override %s", async (baseUrl) => {
@@ -521,6 +606,12 @@ function successfulFetch(body: unknown) {
       headers: { "Content-Type": "application/json" },
     }),
   );
+}
+
+function capacityResponse(retryAfter?: string) {
+  return new Response(JSON.stringify({
+    error: { code: "read_capacity_exceeded", message: "Read capacity is busy; retry later" },
+  }), { status: 503, headers: retryAfter === undefined ? {} : { "Retry-After": retryAfter } });
 }
 
 function repeatedSuccessfulFetch(body: unknown) {

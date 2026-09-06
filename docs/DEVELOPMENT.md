@@ -57,6 +57,21 @@ ADR 0012 remains Proposed until the full cross-instance release gate passes.
 BC-025 tracks public v1 release hardening and that still-unpassed gate in
 `V1_CROSS_INSTANCE_ACCEPTANCE.md`. Exact Rerun is deferred beyond v1.
 
+The API resolves only trusted configured storage roots at `Settings` construction, including macOS
+`/var` aliases used by `tools.runtime`'s `TemporaryDirectory`. Filesystem helpers expect canonical
+anchors and reject symlinks within the store; never fix a failed artifact read by resolving that
+untrusted artifact pathname. Regression tests must include the runtime's unresolved temporary-root
+convention, since pytest's `tmp_path` is already canonical on macOS. This normalization changes no
+registered filesystem key or durable relative path.
+
+Read admission tests must exercise browser-sized bursts, not just overload rejection. Bulk reads allow
+four active requests and eight FIFO waiters; execution-detail polling independently allows two active
+requests and four waiters. Both queues have a five-second acquisition deadline. Waiters allocate no
+artifact tempfile or read worker. Preserve cancellation/grant race tests and active-slot retention until
+stream cleanup finishes. The opt-in `tests/api/check_artifact_browser.py` also checks six simultaneous
+real PNG downloads without retries against the fake-backed built frontend; it uses temporary data and
+refuses an occupied test port, so run it separately from other browser suites.
+
 ## Repository Shape
 
 The production Python package now lives under `backend/`. The remaining source layout is intentionally not frozen before its implementation requires it:

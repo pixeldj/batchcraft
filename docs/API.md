@@ -51,8 +51,18 @@ For direct `batchcraft-api` startup, configuration is read centrally from enviro
 | `BATCHCRAFT_SERVER_PORT` | `8000` | API bind port |
 | `BATCHCRAFT_MAX_JOBS` | `10000` | Positive materialization budget for new Job plans and Saved Batch parameter validation |
 | `BATCHCRAFT_MAX_REQUEST_BYTES` | `67108864` | Positive total request-body budget, including multipart overhead |
+| `BATCHCRAFT_MAX_INFLIGHT_REQUEST_BODIES` | `4` | Positive per-process capacity for requests retaining admitted bodies |
+| `BATCHCRAFT_REQUEST_BODY_TIMEOUT` | `120` | Positive finite deadline in seconds for receiving and spooling a body |
 
 The real ComfyUI host is never committed to repository configuration.
+
+`Settings` canonicalizes the trusted configured `data_root`, `database_path`, and `projects_root`
+once at construction, before creating stores. Relative paths become absolute and configured aliases
+such as macOS `/var` become `/private/var`. This does not move files or change registered Project
+filesystem keys, stored relative artifact paths, or historical provenance. Repointing an alias after
+construction does not repoint the running instance. Artifact paths inside the configured store are
+never resolved to bypass validation: descriptor traversal rejects internal symlinks and parent traversal.
+Low-level filesystem callers outside the API must supply a canonical trusted storage anchor too.
 
 The frontend API client defaults to an empty base URL for same-origin requests. The checked-in
 `.env.development` explicitly selects `http://127.0.0.1:8001`; the everyday installer builds with
@@ -75,14 +85,50 @@ require the validated same origin or configured frontend origin; malformed, dupl
 Origins are rejected. Requests without Origin remain available to CLI clients. This is not authentication.
 
 Bodies are admitted before handlers run, with both declared and received byte limits. The default is
-64 MiB per request, not per file; chunked and multipart uploads count toward it. There is no aggregate
-concurrency or slow-upload budget yet. Isolated app/dev/test launchers retain the default budgets and
-do not inherit these environment overrides. See ADR 0015 for the boundary and remaining limits.
+64 MiB per request, not per file; chunked and multipart uploads count toward it. At most four requests
+can retain admitted bodies at once; excess body requests fail immediately with
+`429 request_capacity_exceeded` and `Retry-After: 1`, without a capacity waiting queue. A lease remains
+held through body consumption, handler completion, and spool cleanup. Immediately completed empty
+bodies bypass this budget, including bodyless control requests; GET bodies cannot bypass admission.
+
+Receiving and spooling have a 120-second total deadline, not an idle timer reset by progress. Expiry
+returns `408 request_body_timeout` without running handlers. This is not a handler deadline or a bound
+on connection count or transport buffers. Cancellation and timeout join active file operations before
+closing the spool and releasing capacity; a stalled filesystem operation can delay that cleanup and
+the error response. Isolated app/dev/test launchers retain the default budgets and do not inherit these
+environment overrides. See ADR 0015 for the boundary and remaining limits.
 
 Preview and Run creation reject plans exceeding the configured Job budget before expansion/publication.
 Saved Batch writes enforce it on parameter combinations even for incomplete drafts; Preview checks all
 dimensions. Existing valid Saved Batches and historical Runs remain readable after lowering the budget.
 Preview runs in a worker thread; this does not make all filesystem or compilation work nonblocking.
+
+Read-only Project Run history, Run detail, Batch reconstruction, Result listing/download, and Project
+Asset listing/download share four active slots and at most eight FIFO waiters per application process.
+Execution-detail polling at `GET /api/runs/{run_id}/execution` has two separate active slots and at
+most four FIFO waiters. A waiter has five seconds to acquire a slot. Queue overflow fails immediately;
+expiration of the wait deadline fails without starting the read. Both return
+`503 {"error":{"code":"read_capacity_exceeded","message":"Read capacity is busy; retry later"}}`
+with `Retry-After: 1`. These fixed limits allow ordinary six-image browser bursts to complete without
+requiring an image retry, while bounding larger bursts. Waiting allocates no read worker or artifact
+snapshot. Cancelled and timed-out waiters leave the queue; a cancelled grant returns its reserved slot
+to the next waiter. A download retains its active slot through verification, streaming, and tempfile
+cleanup. The five-second deadline limits queue waiting only, not read/stream duration or historical size.
+
+These reads and their JSON serialization use the asyncio executor rather than the shared AnyIO
+worker pool. Service/library dependencies and execution task-registry reads stay on the event loop.
+Health, active-execution discovery, and mutation/control routes do not acquire a read slot or join a
+read queue; execution polling never joins the bulk queue. This is not a general latency
+guarantee: persisted parsing still does full validation, unrelated work can use worker capacity, and
+existing mutation paths are not made nonblocking by this policy. Cancellation joins an active file
+operation before releasing its slot or closing its tempfile, without blocking the event loop.
+
+Project History fetches Result lists for at most two Runs concurrently and stops queued work when its
+Project changes or the view unmounts. The frontend HTTP client retries only GET responses carrying
+`503 read_capacity_exceeded`, at most twice, with abortable delays of 1-5 seconds based on Retry-After.
+Other errors and all mutations are not retried by this policy. Ordinary image bursts use the backend's
+bounded wait queue; image elements do not gain an automatic retry loop. Sustained overload can still
+surface an error or unavailable image, rather than retrying indefinitely.
 
 ## Endpoints
 
@@ -288,7 +334,7 @@ every image. Invalid unrelated records are omitted; duplicate valid Asset IDs ma
 data invalid.
 
 `GET /api/projects/{project_key}/assets/{asset_id}/content` resolves only an Asset in the requested
-Project, performs full size and SHA-256 verification through `ProjectAssetStore.load()`, rejects
+Project, performs full size and SHA-256 verification into an owned disk snapshot, rejects
 unsafe files, and verifies the selected image signature before serving it. Arbitrary local paths are
 never accepted.
 
@@ -516,7 +562,13 @@ matching `ResultRecord`, and validates the selected regular file's path, size, a
 it. Arbitrary filesystem paths are never accepted.
 
 Integrity-only listing hashes in bounded chunks. Result and Asset reads reject non-regular files without
-waiting for FIFO writers. Downloads still materialize their selected content in memory.
+waiting for FIFO writers. Downloads copy and hash the selected descriptor's bytes into a disk tempfile
+in 256 KiB chunks before HTTP success, then stream only that snapshot in 64 KiB chunks. No pathname is
+reopened to serve the original after verification. In-place changes cannot substitute unchecked bytes;
+the snapshot must match recorded size and SHA-256. Tempfiles close on completion, disconnect, failure,
+or cancellation, after any active file worker finishes. This requires disk space proportional to the
+selected artifact and delays the first response byte until verification completes; no historical
+artifact size cap is imposed. Metadata and persisted-plan materialization remain unchanged.
 
 Result responses render inline only when the recorded MIME is PNG, JPEG, GIF, or WebP and the bytes
 match that format's signature. Other artifacts, including HTML, SVG, and mismatched image MIME, download
@@ -568,6 +620,8 @@ incomplete rather than being presented as successful. Access logs, startup/lifes
 independent dependency logs are outside this policy; logs still require review before sharing.
 
 Request admission adds `400 invalid_host`, `400 invalid_content_length`, `403 invalid_origin`, and
-`413 request_too_large`. Configured frontend origins receive CORS headers on admission errors too.
+`413 request_too_large`, plus `408 request_body_timeout` and `429 request_capacity_exceeded`.
+Read queue overflow or expiry adds `503 read_capacity_exceeded`. Configured frontend origins receive
+CORS headers on admission errors too.
 Internal persisted submission/history evidence can still contain raw diagnostics. Response summarization
 does not bound transport parsing, response sizes, or on-disk diagnostic storage.

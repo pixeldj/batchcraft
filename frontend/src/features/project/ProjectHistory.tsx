@@ -106,24 +106,28 @@ function VerifiedProjectHistory({
           run.run_id,
           { loading: true, results: [], error: null },
         ])));
-        for (const run of response.runs) {
-          void api.getResults(run.run_id, controller.signal).then(
-            (resultResponse) => {
+        let nextRun = 0;
+        async function loadResults() {
+          while (!controller.signal.aborted && tag === requestTag.current && nextRun < response.runs.length) {
+            const run = response.runs[nextRun++];
+            try {
+              const resultResponse = await api.getResults(run.run_id, controller.signal);
               if (controller.signal.aborted || tag !== requestTag.current) return;
               setResultsByRun((current) => ({
                 ...current,
                 [run.run_id]: { loading: false, results: resultResponse.results, error: null },
               }));
-            },
-            (caught: unknown) => {
+            } catch (caught) {
               if (controller.signal.aborted || tag !== requestTag.current || isAbort(caught)) return;
               setResultsByRun((current) => ({
                 ...current,
                 [run.run_id]: { loading: false, results: [], error: errorMessage(caught) },
               }));
-            },
-          );
+            }
+          }
         }
+        void loadResults();
+        void loadResults();
       },
       (caught: unknown) => {
         if (controller.signal.aborted || tag !== requestTag.current || isAbort(caught)) return;

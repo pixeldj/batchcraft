@@ -1,6 +1,7 @@
 import hashlib
 import multiprocessing
 import os
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,8 +53,11 @@ def _reject_fifo(path: Path, reader: str) -> None:
         with pytest.raises(RunDataError, match="not a regular file"):
             _read_result(path, _result(b""))
     elif reader == "asset":
-        with pytest.raises(AssetDataError, match="not a regular file"):
-            _read_asset_content(path, _asset(b""))
+        with (
+            tempfile.TemporaryFile() as destination,
+            pytest.raises(AssetDataError, match="not a regular file"),
+        ):
+            _read_asset_content(path, _asset(b""), destination)
     else:
         with pytest.raises(ValueError, match="not a regular file"), open_regular_file(path):
             pytest.fail("FIFO must not be yielded")
@@ -97,14 +101,20 @@ def test_readers_preserve_integrity_checks(tmp_path: Path, kind: str) -> None:
     )
     assert _result_integrity(tmp_path, _result(content))[0] == expected
     if kind == "regular":
-        assert _read_result(path, _result(content)) == content
-        assert _read_asset_content(path, _asset(content)) == content
-        assert _read_result(path, _result(content), include_content=False) == b""
+        with tempfile.TemporaryFile() as destination:
+            _read_result(path, _result(content), destination=destination)
+            destination.seek(0)
+            assert destination.read() == content
+        with tempfile.TemporaryFile() as destination:
+            _read_asset_content(path, _asset(content), destination)
+            destination.seek(0)
+            assert destination.read() == content
+        _read_result(path, _result(content))
     else:
         with pytest.raises(RunDataError):
             _read_result(path, _result(content))
-        with pytest.raises(AssetDataError):
-            _read_asset_content(path, _asset(content))
+        with tempfile.TemporaryFile() as destination, pytest.raises(AssetDataError):
+            _read_asset_content(path, _asset(content), destination)
 
 
 def test_integrity_only_reads_are_chunked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,5 +138,5 @@ def test_integrity_only_reads_are_chunked(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr("batchcraft.files.history.open_regular_file", bounded_reader)
     monkeypatch.setattr("batchcraft.application.service.open_regular_file", bounded_reader)
     assert _result_integrity(tmp_path, _result(content)) == ("verified", None)
-    assert _read_result(path, _result(content), include_content=False) == b""
-    assert len(read_sizes) == 8
+    _read_result(path, _result(content))
+    assert len(read_sizes) == 14

@@ -10,10 +10,14 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import BinaryIO, cast
 
 import uvicorn
 from artifact_fixture import artifact_png, write_artifact_fixture
 
+from batchcraft.application import BatchcraftService
+from batchcraft.execution import ResultRecord
+from batchcraft.files import PublishedRun
 from tools.runtime import application, settings_for
 
 
@@ -36,6 +40,7 @@ def main() -> None:
                     "svg",
                 ),
                 (artifact_png("browser.png"), "image/png", "png"),
+                *[(artifact_png(f"burst-{index}.png"), "image/png", "png") for index in range(6)],
             ],
         )
         before = execution_path.read_bytes()
@@ -55,6 +60,35 @@ def main() -> None:
                     if not thread.is_alive() or time.monotonic() >= deadline:
                         raise RuntimeError("Temporary security test server did not start")
                     time.sleep(0.02)
+                service = cast(BatchcraftService, app.state.service)
+                get_result = service.get_result
+                lock = threading.Lock()
+                active = peak = completed = 0
+
+                def delayed_result(
+                    run: PublishedRun,
+                    job_ordinal: int,
+                    artifact_ordinal: int,
+                    destination: BinaryIO,
+                ) -> ResultRecord:
+                    nonlocal active, peak, completed
+                    if artifact_ordinal < 4:
+                        return get_result(run, job_ordinal, artifact_ordinal, destination)
+                    with lock:
+                        active += 1
+                        peak = max(peak, active)
+                    try:
+                        # Hold four leases long enough for a normal six-image burst to queue.
+                        time.sleep(0.5)
+                        result = get_result(run, job_ordinal, artifact_ordinal, destination)
+                        with lock:
+                            completed += 1
+                        return result
+                    finally:
+                        with lock:
+                            active -= 1
+
+                service.get_result = delayed_result  # type: ignore[method-assign]
                 subprocess.run(
                     ["node", str(Path(__file__).with_name("artifact_browser.mjs"))],
                     cwd=root / "frontend",
@@ -62,6 +96,7 @@ def main() -> None:
                     timeout=60,
                 )
                 assert execution_path.read_bytes() == before
+                assert peak == 4 and completed == 6 and active == 0
             finally:
                 server.should_exit = True
                 thread.join(timeout=10)

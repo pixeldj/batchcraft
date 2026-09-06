@@ -132,7 +132,7 @@ def test_result_listing_verifies_without_retaining_content(
     assert response.json()["results"][0]["integrity_status"] == "verified"
     reader.assert_called_once()
     assert reader.call_args.args[0] == result_path
-    assert reader.call_args.kwargs == {"include_content": False}
+    assert reader.call_args.kwargs == {}
 
 
 def test_settings_default_and_environment_job_budget(monkeypatch: pytest.MonkeyPatch) -> None:
