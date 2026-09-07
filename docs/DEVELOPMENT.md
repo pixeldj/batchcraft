@@ -529,6 +529,27 @@ Keep API access in `src/api/`, feature components in `src/features/`, and small 
 `src/components/`. Treat HTTP responses as typed contracts. Keep Batch compilation, validation,
 execution transitions, and Result provenance on the backend.
 
+Settings Appearance uses a native modal `<dialog>` opened by the header cog, with an Appearance
+sidebar item and content panel. Apply System (default), Light, or Dark immediately; follow live OS
+color-scheme changes only while System is selected. Explicit Light and Dark override the OS.
+
+Preserve mode persistence unchanged: localStorage key `batchcraft.appearance.v1` stores the raw string
+`system`, `light`, or `dark`, not JSON. Missing, invalid, or unavailable mode reads fall back to `system`.
+Store palette independently under `batchcraft.palette.v1` as a raw validated ID, not JSON: `jipiti`
+(default), `github`, `synthwave`, `solarized`, `dracula`, `nord`, `monokai`, `gruvbox`, or `catppuccin`.
+Missing, invalid, or unavailable palette reads fall back to `jipiti` without changing mode. The current
+unchanged look is named `jipiti`.
+
+All palettes support light and dark as curated original adaptations inspired by their names, not exact
+upstream theme compatibility. Synthwave uses magenta and cyan with Tokyo Night-inspired styling. Each
+palette's dual light/dark previews must use the same tokens as the actual application. Apply selections
+immediately without a Save action; do not add an arbitrary theme editor.
+
+Save both preferences per browser origin. Failed storage writes show a warning and keep the
+selected preferences in the current session. Keep both keys independent of working-session recovery
+v4, without changing its key or schema; no cross-tab synchronization is promised. These
+presentation-only settings change no backend contract, Batch state, Preview validity, or Run state.
+
 Browser working-session recovery is a pointer/cache, not runtime authority. Store the strict recovery
 v4 record under `batchcraft.working-session-recovery.v4` in localStorage. It may contain semantic form
 values, selected Project and Saved Batch pointers, a historical source Run ID for detached-resource

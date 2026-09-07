@@ -89,6 +89,12 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("radio", { name: "Dark", exact: true }).check();
+  await page.getByRole("radio", { name: "Synthwave", exact: true }).check();
+  await page.getByRole("button", { name: "Close settings" }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
+  // Appearance must not invalidate the existing Preview or require another compilation.
   await page.getByRole("button", { name: "Create Run", exact: true }).click();
   await page.getByRole("button", { name: "Start Run", exact: true }).click();
   await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
