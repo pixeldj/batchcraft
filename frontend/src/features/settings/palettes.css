@@ -1,0 +1,228 @@
+/* Load after styles.css. Jipiti's root and scoped tokens live there unchanged.
+   Keep derived tokens on each palette boundary: inherited var() values would
+   otherwise remain resolved against the ancestor's palette, not the preview. */
+[data-palette]:not([data-palette="jipiti"]) {
+  --canvas-grid: color-mix(in srgb, var(--ink) 3%, transparent);
+  --surface-inset: color-mix(in srgb, var(--canvas) 60%, var(--paper));
+  --table-bg: color-mix(in srgb, var(--canvas) 65%, var(--paper));
+  --image-preview-bg: color-mix(in srgb, var(--canvas) 92%, var(--ink));
+  --placeholder-bg: var(--surface-inset);
+  --placeholder-stripe: color-mix(in srgb, var(--paper) 94%, var(--ink));
+  --progress-track: color-mix(in srgb, var(--paper) 78%, var(--ink));
+  --line: color-mix(in srgb, var(--paper) 75%, var(--ink));
+  --line-strong: color-mix(in srgb, var(--paper) 48%, var(--ink));
+  --accent-fill: var(--accent);
+  --accent-bg: color-mix(in srgb, var(--accent) 7%, var(--paper));
+  --focus-ring: color-mix(in srgb, var(--accent) 30%, transparent);
+  --session-bg: var(--accent-bg);
+  --warning-bg: color-mix(in srgb, var(--warning) 8%, var(--paper));
+  --warning-text: var(--warning);
+  --cancelled-text: var(--warning);
+  --stopping-text: var(--warning);
+  --danger-bg: color-mix(in srgb, var(--danger) 8%, var(--paper));
+  --danger-text: var(--danger);
+  --blocked-bg: color-mix(in srgb, var(--blocked) 8%, var(--paper));
+  --blocked-text: var(--blocked);
+  --success-bg: color-mix(in srgb, var(--success) 8%, var(--paper));
+  --saved-batch-muted: var(--muted);
+  --saved-batch-warning: var(--warning);
+  --header-bg: var(--canvas);
+  --header-ink: var(--ink);
+  --header-muted: var(--muted);
+  --header-line: var(--line-strong);
+  --header-hover: var(--paper-raised);
+  --header-error: var(--danger);
+  --header-offline: var(--danger);
+  --scrim-rgb: 0, 0, 0;
+  --overlay-rgb: 0, 0, 0;
+  --danger-shadow: color-mix(in srgb, var(--danger) 22%, transparent);
+  --result-info-ink: #fff;
+  --result-info-bg: rgba(0, 0, 0, 0.85);
+  --result-info-line: rgba(255, 255, 255, 0.55);
+  --result-info-opacity: 1;
+}
+
+[data-palette]:not([data-palette="jipiti"])[data-theme="light"] {
+  color-scheme: light;
+  --surface-rgb: 255, 255, 255;
+  --on-accent: #fff;
+  --warning: #754b00;
+  --danger: #a12432;
+  --blocked: #653a96;
+  --success: #24632b;
+  --shadow: 5px 5px 0 rgba(0, 0, 0, 0.16);
+}
+
+[data-palette]:not([data-palette="jipiti"])[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-rgb: 48, 48, 48;
+  --on-accent: #151515;
+  --warning: #f2cc8f;
+  --danger: #ff9f9f;
+  --blocked: #d4b0ff;
+  --success: #a6da95;
+  --shadow: 5px 5px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* Neutral charcoal, without the default palette's green cast. */
+[data-palette="github"][data-theme="light"] {
+  --canvas: #eaeef2;
+  --paper: #f6f8fa;
+  --paper-raised: #fff;
+  --ink: #1f2328;
+  --muted: #535c66;
+  --accent: #0960c5;
+  --accent-bright: #0960c5;
+}
+
+[data-palette="github"][data-theme="dark"] {
+  --canvas: #0d1117;
+  --paper: #161b22;
+  --paper-raised: #21262d;
+  --ink: #f0f6fc;
+  --muted: #adb6c0;
+  --accent: #79c0ff;
+  --accent-bright: #58a6ff;
+}
+
+/* Tokyo Night's ink-blue foundation with magenta and cyan highlights. */
+[data-palette="synthwave"][data-theme="light"] {
+  --canvas: #e8e7f3;
+  --paper: #f5f1fb;
+  --paper-raised: #fffbff;
+  --ink: #29243c;
+  --muted: #605471;
+  --accent: #972b8d;
+  --accent-bright: #006c83;
+}
+
+[data-palette="synthwave"][data-theme="dark"] {
+  --canvas: #16161e;
+  --paper: #1a1b26;
+  --paper-raised: #24283b;
+  --ink: #e0dcf4;
+  --muted: #b2acd1;
+  --accent: #ff7edb;
+  --accent-bright: #7dcfff;
+}
+
+[data-palette="solarized"][data-theme="light"] {
+  --canvas: #eee8d5;
+  --paper: #fdf6e3;
+  --paper-raised: #fffaf0;
+  --ink: #073642;
+  --muted: #52676c;
+  --accent: #006879;
+  --accent-bright: #806000;
+}
+
+[data-palette="solarized"][data-theme="dark"] {
+  --canvas: #002b36;
+  --paper: #073642;
+  --paper-raised: #103e49;
+  --ink: #eee8d5;
+  --muted: #a5b9b8;
+  --accent: #65c7bf;
+  --accent-bright: #e4bd58;
+}
+
+[data-palette="dracula"][data-theme="light"] {
+  --canvas: #eae7f2;
+  --paper: #f7f4fc;
+  --paper-raised: #fffbff;
+  --ink: #282a36;
+  --muted: #5d5770;
+  --accent: #713bb0;
+  --accent-bright: #23703a;
+}
+
+[data-palette="dracula"][data-theme="dark"] {
+  --canvas: #21222c;
+  --paper: #282a36;
+  --paper-raised: #303240;
+  --ink: #f8f8f2;
+  --muted: #bbb5cf;
+  --accent: #bd93f9;
+  --accent-bright: #50fa7b;
+}
+
+[data-palette="nord"][data-theme="light"] {
+  --canvas: #e5e9f0;
+  --paper: #eceff4;
+  --paper-raised: #f8fafc;
+  --ink: #2e3440;
+  --muted: #515d70;
+  --accent: #345e7a;
+  --accent-bright: #356966;
+}
+
+[data-palette="nord"][data-theme="dark"] {
+  --canvas: #242933;
+  --paper: #2e3440;
+  --paper-raised: #3b4252;
+  --ink: #eceff4;
+  --muted: #b8c4d6;
+  --accent: #88c0d0;
+  --accent-bright: #8fbcbb;
+}
+
+[data-palette="monokai"][data-theme="light"] {
+  --canvas: #e9e7dc;
+  --paper: #f8f7ed;
+  --paper-raised: #fffef5;
+  --ink: #272822;
+  --muted: #615f50;
+  --accent: #a71d56;
+  --accent-bright: #526d00;
+}
+
+[data-palette="monokai"][data-theme="dark"] {
+  --canvas: #1e1f1c;
+  --paper: #272822;
+  --paper-raised: #32332c;
+  --ink: #f8f8f2;
+  --muted: #c0bdab;
+  --accent: #ff70a2;
+  --accent-bright: #a6e22e;
+}
+
+[data-palette="gruvbox"][data-theme="light"] {
+  --canvas: #ebdbb2;
+  --paper: #fbf1c7;
+  --paper-raised: #fff7da;
+  --ink: #3c3836;
+  --muted: #665442;
+  --accent: #9d390c;
+  --accent-bright: #626000;
+}
+
+[data-palette="gruvbox"][data-theme="dark"] {
+  --canvas: #1d2021;
+  --paper: #282828;
+  --paper-raised: #3c3836;
+  --ink: #fbf1c7;
+  --muted: #c9b99a;
+  --accent: #fe8019;
+  --accent-bright: #b8bb26;
+}
+
+/* Latte and Mocha, with darker light-mode accents for small UI text. */
+[data-palette="catppuccin"][data-theme="light"] {
+  --canvas: #e6e9ef;
+  --paper: #eff1f5;
+  --paper-raised: #fff;
+  --ink: #4c4f69;
+  --muted: #5c5f77;
+  --accent: #7c2ddd;
+  --accent-bright: #a52f66;
+}
+
+[data-palette="catppuccin"][data-theme="dark"] {
+  --canvas: #181825;
+  --paper: #1e1e2e;
+  --paper-raised: #313244;
+  --ink: #cdd6f4;
+  --muted: #bac2de;
+  --accent: #cba6f7;
+  --accent-bright: #f5c2e7;
+}

@@ -222,6 +222,27 @@ creates six resolved prompt variants.
 Deterministic sampling, weighted values, and row-linked prompt variables remain deferred. Named Image
 Input slots form separate independent dimensions after prompt-variable expansion.
 
+## Settings: Appearance
+
+The header cog opens Settings in a native modal dialog with an Appearance sidebar item and its
+content panel. Appearance offers System (default), Light, and Dark, applied immediately without a
+Save action. System follows live OS color-scheme changes; explicit Light or Dark overrides ignore them.
+
+Palette selection is independent of mode. The unchanged current look is named `jipiti` (default),
+alongside `github`, `synthwave`, `solarized`, `dracula`, `nord`, `monokai`, `gruvbox`, and `catppuccin`.
+These are curated original adaptations inspired by their names, not exact upstream theme compatibility;
+Synthwave uses magenta and cyan with Tokyo Night-inspired styling. Every palette supports Light and
+Dark and has dual light/dark previews using the same tokens as the actual application. Selecting a
+palette applies it immediately without a Save action. There is no arbitrary theme editor.
+
+Both preferences are saved per browser origin, separate from working-session recovery v4; cross-tab
+synchronization is not promised. Mode retains the unchanged `batchcraft.appearance.v1` raw string
+`system`, `light`, or `dark`; missing, invalid, or unavailable mode reads fall back to System. The
+independent `batchcraft.palette.v1` stores a raw validated palette ID from the list above. Missing,
+invalid, or unavailable palette reads fall back to `jipiti` without affecting mode. Failed storage
+writes show a warning and retain the selected preferences for the current session.
+Appearance changes no backend behavior, Batch state, Preview validity, or Run state.
+
 ## Result Review
 
 A Run should be reviewable as a visual grid.

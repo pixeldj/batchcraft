@@ -46,6 +46,7 @@ import {
   saveWorkingSessionRecovery,
 } from "./features/session/workingSessionRecovery";
 import { ComfyUIStatus } from "./features/status/ComfyUIStatus";
+import { SettingsMenu } from "./features/settings/SettingsMenu";
 import { errorMessage } from "./utils/errors";
 
 interface Props {
@@ -1021,7 +1022,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             <p>ComfyUI experiment runner</p>
           </div>
         </div>
-        <ComfyUIStatus api={api} />
+        <div className="header-tools">
+          <ComfyUIStatus api={api} />
+          <SettingsMenu />
+        </div>
       </header>
 
       <main>
