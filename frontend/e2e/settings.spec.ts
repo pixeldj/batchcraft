@@ -132,8 +132,10 @@ test("all palettes apply to the workspace and previews in both modes", async ({ 
 
 test("palette choices fit narrow and intermediate widths without clipping", async ({ page }) => {
   await page.goto("/");
+  // Reserve scrollbar space even on macOS, where overlay scrollbars can hide Linux layout bugs.
+  await page.addStyleTag({ content: ".settings-content::-webkit-scrollbar { width: 16px; }" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  for (const width of [320, 620, 700, 800, 900]) {
+  for (const width of [320, 380, 381, 620, 700, 800, 900]) {
     await page.setViewportSize({ width, height: 720 });
     await page.getByRole("radio", { name: "Catppuccin", exact: true }).check();
     const fits = await page.locator(".settings-content").evaluate((content) => {

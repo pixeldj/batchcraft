@@ -79,3 +79,6 @@
   .palette-check { display: none; }
   .settings-footer { padding: 1rem; }
 }
+@media (max-width: 380px) {
+  .theme-options, .palette-options { grid-template-columns: 1fr; }
+}
