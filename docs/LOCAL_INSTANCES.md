@@ -150,6 +150,12 @@ Plain `npm run dev` also defaults to the development origin and API, not the eve
 The sandbox data persists between launches, but it is separate from the old `backend/data` directory and
 all everyday data. No script resets or deletes that persistent sandbox.
 
+Vite reloads frontend edits, but this launcher does not automatically reload the Python backend.
+After backend/API or migration changes, wait for active Runs to finish, stop the development instance,
+and restart `./dev.command`. Existing sandbox data is retained and forward migrations run normally.
+If Gallery/Runs reports that the backend lacks its browsing API, restart the backend before refreshing
+the view; reindexing cannot add missing API routes to an older running process.
+
 With development running, optionally add a sample Project, Prompt, Workflow Profile, and Saved Batch:
 
 ```bash

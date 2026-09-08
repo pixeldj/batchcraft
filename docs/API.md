@@ -138,8 +138,10 @@ import, and cancellation validation use joined file workers for their filesystem
 joins an active file operation before releasing its slot or closing its tempfile, without blocking the
 event loop.
 
-Project History fetches Result lists for at most two Runs concurrently and stops queued work when its
-Project changes or the view unmounts. The frontend HTTP client retries only GET responses carrying
+The Project browser uses bounded Run/Result history pages rather than the legacy unpaginated Run list
+and per-Run Result-list fan-out. Selected Result Details still fetches the selected owning Run's Result
+list; current-Run monitoring/detail reads remain separate. The frontend HTTP client retries only GET
+responses carrying
 `503 read_capacity_exceeded`, at most twice, with abortable delays of 1-5 seconds based on Retry-After.
 Other errors and all mutations are not retried by this policy. Ordinary image bursts use the backend's
 bounded wait queue; image elements do not gain an automatic retry loop. Sustained overload can still
@@ -158,6 +160,8 @@ GET  /api/projects/adoptable
 GET  /api/projects/{project_id}
 POST /api/projects/{project_id}/reindex
 GET  /api/projects/{project_id}/runs
+GET  /api/projects/{project_id}/history/runs
+GET  /api/projects/{project_id}/history/results
 PATCH /api/projects/{project_id}
 POST /api/projects/{project_id}/archive
 GET  /api/projects/{project_id}/prompts
@@ -431,38 +435,53 @@ writers; they can still race a final check. Run creation, import, and reindex wo
 completion even if the request is cancelled. Published Runs are never rolled back by cancellation or
 an indexing failure; indexing failure emits a safe warning and can be repaired on the next refresh.
 
-The frontend first reads indexed history when opening a registered Project, then automatically calls
-reindex and reads the refreshed index. It shows a checking indicator while retaining known content.
-Run creation and observed terminal execution changes, including discard and durable detach, trigger
-another check for the Run's frozen Project identity. Ordinary execution polls do not trigger scans.
-Dispatched reindex requests are joined before newer checks in the same view; obsolete Result responses
-cannot replace newer history. No startup-wide scan, filesystem watcher, timer, focus refresh, or
-automatic import of other Projects is introduced. Changes made elsewhere are discovered on reopening
-history or using the retained manual Reindex Project repair/retry action.
+The frontend reads indexed history on Gallery/Runs activation, then calls reindex in the background and
+checks a bounded first page. Run creation and observed terminal execution revisions, including discard
+and durable detach, prompt another check for the frozen Run's Project while its review is active.
+Ordinary polls, filter/page changes, and density changes do not scan. Dispatched scans are joined before
+later scans; obsolete reads cannot replace newer history. No startup-wide scan, watcher, timer, focus
+refresh, or automatic import is introduced. Reindex Project remains an explicit storage repair/retry.
 
-Failed refreshes keep known history with an explicit stale/unavailable warning. When execution metadata
-is unavailable, an empty Result response is not treated as proof of no Results. The view preserves
-last-known metadata without images, artifact links, or current-verification claims until an available
-execution record and a successful fresh Result read agree. Overlapping older requests cannot clear
-that state or restore images early. Nothing is written to historical artifacts by these UI checks.
+An identical first page silently rebases generation, scan time, and continuation metadata while keeping
+item objects. An empty page adopts newly discovered records automatically, even with an existing
+generation. Explicit Reindex Project adopts the refreshed first page after a successful scan and read;
+it does not require a separate Refresh. A background change to a nonempty page retains its metadata with `History updated` pending explicit Refresh,
+which reads the latest index from page one and discards old bookmarks without itself scanning storage.
+Images and original links are disabled if the newly scanned page cannot validate their retained
+identity, availability, integrity, and artifact metadata. Absence from that bounded page is not proof of
+deletion. Failed reads/scans retain known content with stale/unavailable warnings; unavailable execution
+is not proof of zero Results. Overlapping older requests cannot restore images early. These UI checks
+never rewrite historical artifacts.
 
-`GET /api/projects/{project_id}/runs` returns Runs grouped by their recorded Batch identity in the UI,
-plus Project diagnostics. A Run is `verified` or `degraded`; structurally invalid Runs are excluded and
+`GET /api/projects/{project_id}/runs` retains the unpaginated Run list and Project diagnostics for
+backward compatibility, but the mounted browser no longer uses it. A Run is `verified` or `degraded`;
+structurally invalid Runs are excluded and
 reported by diagnostic. `execution_available: false` and null execution fields explicitly represent a
 missing or invalid execution record. This endpoint needs neither browser `localStorage` Run IDs nor
 mutable Prompt, Workflow, Profile, or Saved Batch rows.
 
 ### Bounded historical browsing (BC-007)
 
-The first BC-007 query slice adds two endpoints for the upcoming Gallery/Runs workspace:
+The BC-007 query foundation supplies the implemented Gallery/Runs visual checkpoint:
 
 - `GET /api/projects/{project_id}/history/runs`
 - `GET /api/projects/{project_id}/history/results`
 
 Both require a registered Project (otherwise `404 project_not_found`). They read only SQLite's last
 committed projection: no filesystem scan, per-Run Result listing, compiler expansion, or original-byte
-hashing occurs in a browse request. The existing Project History UI and unpaginated APIs remain
-unchanged until the visual checkpoint. Existing strict artifact downloads remain authoritative.
+hashing occurs in a browse request. The browser now uses these endpoints; the old unpaginated APIs are
+retained for backward compatibility, not used to build Project-wide pages. Existing strict artifact
+downloads remain authoritative. Selected Result Details still uses `GET /api/runs/{run_id}/results`
+for the selected Run only, alongside its frozen Run detail, to match Job/artifact ordinals and hash.
+
+The UI requests 48 Results or 25 Runs per page, replaces rather than appends pages, retains at most 20
+previous cursor bookmarks, and caps its frozen-Run detail cache at 20 entries. Images are lazy-loaded,
+asynchronously decoded originals, not generated thumbnails. UI URL keys `view`, `q`, `sort`, `run`,
+`batch`, `status`, and `available` encode mode/basic filters only; identity/status keys map to the API
+parameters below. URL navigation never selects a Project or persists a cursor. The selected verified
+Project and existing guarded Project switching remain authoritative. Full advanced filters/facets,
+diagnostic detail browsing, thumbnails, and filmstrip are not part of this implemented checkpoint;
+automated verification has passed and owner UI acceptance remains pending (see BC-007 for evidence).
 
 Common query parameters:
 

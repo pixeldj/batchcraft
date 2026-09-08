@@ -247,17 +247,38 @@ Appearance changes no backend behavior, Batch state, Preview validity, or Run st
 
 A Run should be reviewable as a visual grid.
 
-Result review uses current-Run Results and Project History, without a separate Batch Results session
-gallery. Thumbnail cards omit visible `Verified` badges and `Job` captions; the info popup retains that
-metadata. Accessible descriptions, lightbox labels, integrity checks, and unavailable-artifact
-placeholders remain.
+The BC-007 visual checkpoint provides top-level **Batch**, **Gallery**, and **Runs** navigation.
+Gallery and Runs replace the bottom-of-page Project History, not current-Run Results, and do not restore
+the retired Batch Results session gallery. The Batch editor and current-Run monitor stay mounted while
+browsing, preserving editor drafts and a valid in-memory Preview. A compact current-Run strip shows
+the monitored Run's actual Project/Batch. Cold loads still require a fresh Preview; recovery v4 is unchanged.
 
-Opening Project History shows the existing index immediately and checks filesystem history in the
-background. Creating a Run or observing its completion, cancellation, discard, or durable detach refreshes
-that Project's history without a manual reindex. Storage failures leave known history visible with a
-warning; unavailable execution records retain metadata without claiming current image verification.
-Other Projects still require explicit import. Advanced history filters, sorting, and pagination are
-deferred beyond this v1 freshness slice.
+The selected, verified Project scopes review. URL query state records only the view and basic filters
+(`view`, `q`, `sort`, `run`, `batch`, `status`, `available`) with Back/Forward navigation; a URL cannot
+switch Project. Project changes remain explicit and guarded in Batch. Search matches Run names and notes;
+newest/oldest order, execution status/availability, and removable Run/Batch filter chips are available.
+
+Gallery holds one page of up to 48 Results; Runs holds up to 25 Runs. Previous/Next navigation retains
+at most 20 previous cursor bookmarks, not an accumulating collection. Gallery offers image-size controls
+and lazy, asynchronously decoded original images, not generated thumbnails. Inspection uses stable
+Run/Job/artifact identity, page-local cross-Run image navigation, and native modal Run Plan and Result
+Details surfaces with nested-dialog focus handling. Cards retain accessible descriptions and unavailable
+artifact placeholders without visible `Verified` badges or `Job` captions.
+
+Activating review reads the index first and checks filesystem history in the background. Run publication
+and observed terminal revisions, including cancellation, discard, and durable detach, also prompt checks
+while review is active; ordinary polls and filter/page changes do not scan. An identical first page can
+silently adopt a new generation without moving images. Changed pages retain metadata and show
+`History updated` until explicit **Refresh** starts a new page sequence; retained images and original
+links are disabled when the newly scanned page cannot validate them. **Reindex Project** remains the
+storage repair/retry action and displays the refreshed first page on success without another Refresh.
+Empty views automatically show newly discovered records rather than retaining an empty collection.
+Storage failures preserve known history with a warning, not a claim of
+confirmed emptiness. Other Projects still require explicit import.
+
+This checkpoint is implemented with automated verification passed and owner UI acceptance pending; BC-007 is not
+Done. Full advanced provenance filters/facets, diagnostic detail browsing, generated thumbnails, and a
+filmstrip remain deferred to later checkpoints.
 
 The Results Viewer should eventually support:
 

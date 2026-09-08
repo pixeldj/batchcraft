@@ -253,6 +253,75 @@ export interface ProjectRunsResponse {
   diagnostics: HistoryDiagnosticResponse[];
 }
 
+export interface HistoryQuery {
+  limit?: number;
+  cursor?: string | null;
+  sort?: "newest" | "oldest";
+  q?: string;
+  run_id?: string | null;
+  batch_id?: string | null;
+  execution_status?: RunStatus | null;
+  execution_available?: boolean | null;
+}
+
+export interface HistoryRunSummaryResponse {
+  run_id: string;
+  batch_id: string;
+  batch_name: string;
+  run_number: number;
+  run_name: string | null;
+  run_description_excerpt: string | null;
+  display_truncated: boolean;
+  created_at: string;
+  job_count: number;
+  execution_available: boolean;
+  execution_status: string | null;
+  integrity_status: string;
+  replayable: boolean;
+}
+
+export interface HistoryRunItemResponse {
+  run: HistoryRunSummaryResponse;
+  result_count: number;
+}
+
+export interface HistoryResultItemResponse {
+  run: HistoryRunSummaryResponse;
+  job_id: string;
+  job_ordinal: number;
+  artifact_ordinal: number;
+  filename_excerpt: string;
+  filename_truncated: boolean;
+  content_type: string | null;
+  byte_size: number;
+  sha256: string;
+  integrity_status: string;
+  download_url: string | null;
+  download_unavailable_reason:
+    | "execution_unavailable"
+    | "artifact_unavailable"
+    | "unaddressable_run_id"
+    | null;
+}
+
+export interface HistoryRunPageResponse {
+  project_id: string;
+  generation: string | null;
+  scanned_at: string | null;
+  items: HistoryRunItemResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface HistoryResultPageResponse {
+  project_id: string;
+  generation: string | null;
+  scanned_at: string | null;
+  items: HistoryResultItemResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface AdoptableProject {
   filesystem_key: string;
   owner_state: "owned" | "ownerless";

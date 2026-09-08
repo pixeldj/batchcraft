@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   ExecutionResponse,
@@ -7,6 +7,7 @@ import type {
   RunResponse,
 } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
+import { useModalDialog } from "../../components/useModalDialog";
 import { errorMessage } from "../../utils/errors";
 import { formatBaseWorkflowValue } from "../batch/baseWorkflowValue";
 import { profileImageInputs, profileParameters } from "../batch/form";
@@ -37,13 +38,8 @@ export function ResultDetailsDialog({
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const restoreTargetRef = useRef(restoreTarget);
-
-  useEffect(() => {
-    closeRef.current?.focus();
-    const target = restoreTargetRef.current;
-    return () => target?.focus();
-  }, []);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const modal = useModalDialog(dialogRef, onClose, restoreTarget, closeRef);
 
   useEffect(() => {
     if (run) {
@@ -69,23 +65,15 @@ export function ResultDetailsDialog({
 
   const job = run?.plan.jobs.find((candidate) => candidate.ordinal === result.job_ordinal) ?? null;
 
-  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    }
-  }
-
   return (
     <OverlayPortal level="details" onBackdropClick={onClose}>
       <dialog
         className="result-details-dialog"
-        open
+        ref={dialogRef}
+        style={{ position: "fixed", inset: 0, margin: "auto" }}
         aria-modal="true"
         aria-labelledby="result-details-title"
-        onCancel={onClose}
-        onKeyDown={handleKeyDown}
-        onClick={(event) => event.stopPropagation()}
+        {...modal}
       >
         <div className="result-details-heading">
           <div>

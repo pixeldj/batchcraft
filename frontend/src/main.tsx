@@ -6,6 +6,7 @@ import { applyPalettePreference, applyThemePreference, loadPalettePreference, lo
 import "./styles.css";
 import "./features/settings/palettes.css";
 import "./features/settings/settings.css";
+import "./features/project/projectBrowser.css";
 
 applyThemePreference(loadThemePreference());
 applyPalettePreference(loadPalettePreference());

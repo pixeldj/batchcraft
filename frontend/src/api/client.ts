@@ -21,6 +21,9 @@ import type {
   ExecutionStartedResponse,
   HistoricalResourceImportRequest,
   HistoricalWorkflowProfileImportRequest,
+  HistoryQuery,
+  HistoryRunPageResponse,
+  HistoryResultPageResponse,
   LibraryPromptVersion,
   PreviewResponse,
   ProjectAdoptRequest,
@@ -78,6 +81,8 @@ export interface BatchcraftApi {
   importProject(body: ProjectImportRequest): Promise<ProjectImportResponse>;
   reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse>;
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse>;
+  browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse>;
+  browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse>;
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse>;
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse>;
   listSavedBatches(projectId: string, includeArchived?: boolean, signal?: AbortSignal): Promise<SavedBatchesResponse>;
@@ -196,6 +201,14 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/runs`, { signal });
+  }
+
+  browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/runs${historyQueryString(query)}`, { signal });
+  }
+
+  browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/results${historyQueryString(query)}`, { signal });
   }
 
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse> {
@@ -482,6 +495,13 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
       if (!response.ok) {
         const envelope = await readErrorEnvelope(response);
+        if (response.status === 404 && !envelope && /\/history\/(runs|results)(\?|$)/.test(path)) {
+          throw new ApiError(
+            "The running backend does not support Gallery and Runs browsing. Restart the backend from the same version as the frontend, then Refresh. Reindexing cannot fix a missing API route.",
+            "history_browser_unavailable",
+            404,
+          );
+        }
         if ((init?.method ?? "GET") === "GET" && response.status === 503
           && envelope?.error.code === "read_capacity_exceeded" && attempt < 2) {
           const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
@@ -533,6 +553,15 @@ async function readErrorEnvelope(response: Response): Promise<ApiErrorEnvelope |
   } catch {
     return null;
   }
+}
+
+function historyQueryString(query?: HistoryQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value !== undefined && value !== null) params.set(key, String(value));
+  }
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

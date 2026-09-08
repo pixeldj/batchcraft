@@ -124,6 +124,25 @@ pre.prompt-editor { font-family: "SFMono-Regular", Consolas, "Liberation Mono", 
 .status-diagnostic { color: var(--header-error); max-width: 30rem; }
 
 main { width: min(1440px, calc(100% - 2.5rem)); margin: 1.5rem auto 5rem; }
+.workspace-navigation { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; align-items: center; margin: 0 0 1.5rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+.workspace-navigation nav { display: flex; gap: 0.25rem; padding: 0.25rem; background: var(--paper); border: 1px solid var(--line); border-radius: 0.45rem; }
+.workspace-navigation nav button { min-height: 44px; min-width: 5.5rem; padding: 0.6rem 1rem; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 0.25rem; font-size: 0.85rem; font-weight: 700; }
+.workspace-navigation nav button[aria-current="page"] { color: var(--on-accent); background: var(--accent-fill); }
+.workspace-navigation nav button:hover:not([aria-current]) { color: var(--ink); background: var(--paper-raised); }
+.workspace-navigation button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.workspace-project { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: baseline; min-width: 0; font-size: 0.78rem; }
+.workspace-project > span { color: var(--muted); font: 0.65rem "SFMono-Regular", monospace; text-transform: uppercase; letter-spacing: 0.05em; }
+.workspace-project strong { overflow-wrap: anywhere; }
+.workspace-project button { min-height: 44px; color: var(--muted); font-size: 0.7rem; }
+.workspace-batch[hidden], #current-run-workspace[hidden] { display: none; }
+#current-run-workspace { scroll-margin-top: 6rem; }
+.workspace-run-strip { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem; padding: 0.8rem 1rem; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--paper); }
+.workspace-run-strip > div { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap; min-width: 0; }
+.workspace-run-strip strong { font-size: 0.8rem; overflow-wrap: anywhere; }
+.workspace-run-strip span:not(.status-pill) { color: var(--muted); font-size: 0.72rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .workspace-navigation nav button { transition: background-color 120ms ease, color 120ms ease; }
+}
 .session-note { margin: -0.3rem 0 1rem; padding: 0.65rem 0.8rem; color: var(--accent); background: var(--session-bg); border-left: 4px solid var(--accent); font-size: 0.78rem; }
 .dismissible-note { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem; }
 

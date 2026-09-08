@@ -39,7 +39,8 @@ import {
   savedBatchToForm,
 } from "./features/batch/savedBatch";
 import type { SavedBatchCreateInput } from "./features/batch/SavedBatchSelector";
-import { ProjectHistory } from "./features/project/ProjectHistory";
+import { ProjectBrowser } from "./features/project/ProjectBrowser";
+import { useWorkspaceNavigation } from "./features/project/useWorkspaceNavigation";
 import { RunWorkspace } from "./features/run/RunWorkspace";
 import {
   loadWorkingSessionRecovery,
@@ -100,6 +101,7 @@ const EMPTY_RESULTS: ResultResponse[] = [];
 const RESTORED_DRAFT_MESSAGE = "Draft restored from this browser. Preview to verify the Job plan.";
 
 export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
+  const navigation = useWorkspaceNavigation();
   const [initialSession] = useState(loadWorkingSessionRecovery);
   const [form, setForm] = useState<BatchFormState>(initialSession.form);
   const [historicalSourceRunId, setHistoricalSourceRunId] = useState<string | null>(
@@ -174,6 +176,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
 
   const cacheFrozenRun = useCallback((frozenRun: RunResponse) => {
     frozenRunCache.current.set(frozenRun.run_id, frozenRun);
+    if (frozenRunCache.current.size > 20) {
+      const oldest = frozenRunCache.current.keys().next().value;
+      if (oldest) frozenRunCache.current.delete(oldest);
+    }
     return frozenRun;
   }, []);
 
@@ -588,6 +594,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       return;
     }
 
+    navigation.changeQuery({}, true);
     batchReplacementGeneration.current += 1;
     runRevision.current += 1;
     setSelectedProjectId(project.id);
@@ -812,18 +819,20 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     }
   }
 
-  async function loadRunAsBatch(runId: string) {
+  async function loadRunAsBatch(runId: string, signal?: AbortSignal) {
+    if (signal?.aborted) return;
     if (projectSwitchingBlocked) {
       throw new Error("Finish or release the current Run before loading another Run as a Batch.");
     }
     const requestedGeneration = ++batchReplacementGeneration.current;
     const requestedProjectId = projectContextRef.current.selectedProjectId;
     const [reconstruction, frozenRun] = await Promise.all([
-      api.getBatchReconstruction(runId),
+      api.getBatchReconstruction(runId, signal),
       loadFrozenRun(runId),
     ]);
     if (
-      requestedGeneration !== batchReplacementGeneration.current
+      signal?.aborted
+      || requestedGeneration !== batchReplacementGeneration.current
       || !projectContextRef.current.projectVerified
       || projectContextRef.current.selectedProjectId !== requestedProjectId
       || formRef.current.projectId !== requestedProjectId
@@ -868,6 +877,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
     setCreateError(null);
     setConsistencyError(null);
     setSessionMessage(`Run ${frozenRun.run_number} loaded as an unsaved Batch draft. Preview to verify the Job plan.`);
+    navigation.navigate("batch");
   }
 
   async function createRun() {
@@ -1029,6 +1039,25 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       </header>
 
       <main>
+        <div className="workspace-navigation">
+          <nav aria-label="Workspace">
+            {(["batch", "gallery", "runs"] as const).map((view) => (
+              <button
+                key={view}
+                type="button"
+                aria-current={navigation.view === view ? "page" : undefined}
+                onClick={() => navigation.navigate(view)}
+              >
+                {view === "batch" ? "Batch" : view === "gallery" ? "Gallery" : "Runs"}
+              </button>
+            ))}
+          </nav>
+          <div className="workspace-project">
+            <span>Project</span>
+            <strong>{projectVerified ? form.projectName : selectedProjectId ? "Reconnecting..." : "Not selected"}</strong>
+            {navigation.view !== "batch" ? <button type="button" className="button-link" onClick={() => navigation.navigate("batch")}>Change in Batch</button> : null}
+          </div>
+        </div>
         {import.meta.env.VITE_BATCHCRAFT_INSTANCE ? (
           <p className="session-note" role="status">{import.meta.env.VITE_BATCHCRAFT_INSTANCE}</p>
         ) : null}
@@ -1045,6 +1074,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             </button>
           </div>
         ) : null}
+        <div hidden={navigation.view !== "batch"} className="workspace-batch">
         {savedBatchConflict ? (
           <div className="operation-error" role="alert">
             <p>
@@ -1118,6 +1148,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         {consistencyError ? (
           <p className="consistency-error" role="alert">{consistencyError}</p>
         ) : null}
+        </div>
         <RunWorkspace
           key={run?.run_id ?? "no-run"}
           api={api}
@@ -1133,15 +1164,28 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
           batchDiverged={batchDiverged}
+          visible={navigation.view === "batch"}
+          onOpenRun={() => {
+            navigation.navigate("batch");
+            requestAnimationFrame(() => document.getElementById("current-run-workspace")?.scrollIntoView({ block: "start" }));
+          }}
         />
-        <ProjectHistory
+        <ProjectBrowser
           api={api}
           projectId={projectVerified ? selectedProjectId : null}
+          projectName={form.projectName}
+          active={navigation.view !== "batch"}
+          view={navigation.view === "runs" ? "runs" : "gallery"}
+          query={navigation.query}
+          onQueryChange={navigation.changeQuery}
+          onViewChange={navigation.navigate}
+          onOpenBatch={() => navigation.navigate("batch")}
           historyRevision={selectedProjectId ? historyRevisions[selectedProjectId] ?? 0 : 0}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
           loadRunAsBatch={loadRunAsBatch}
           loadRunAsBatchDisabled={projectSwitchingBlocked}
+          hasUnsavedChanges={hasUnsavedChanges}
         />
       </main>
     </>

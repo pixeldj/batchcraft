@@ -1,12 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, BatchcraftApiClient } from "./client";
+import type { HistoryQuery, HistoryResultPageResponse, HistoryRunPageResponse, HistoryRunSummaryResponse } from "./types";
 
 describe("BatchcraftApiClient", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it.each(["runs", "results"] as const)("explains a missing %s browsing route on an older backend", async (kind) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })));
+    const client = new BatchcraftApiClient();
+    const pending = kind === "runs" ? client.browseProjectRuns("project") : client.browseProjectResults("project");
+    await expect(pending).rejects.toMatchObject({
+      status: 404,
+      code: "history_browser_unavailable",
+      message: expect.stringContaining("Restart the backend"),
+    });
+  });
+
+  it("does not confuse a missing Project with a missing browsing route", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "project_not_found", message: "Project was not found" } }), { status: 404 })));
+    await expect(new BatchcraftApiClient().browseProjectRuns("missing")).rejects.toMatchObject({
+      code: "project_not_found", message: "Project was not found", status: 404,
+    });
   });
 
   it.each([
@@ -454,6 +473,123 @@ describe("BatchcraftApiClient", () => {
     await new BatchcraftApiClient("http://api.test").listAdoptableProjects(signal);
 
     expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/projects/adoptable", { signal });
+  });
+
+  describe.each([
+    ["browseProjectRuns", "runs"],
+    ["browseProjectResults", "results"],
+  ] as const)("%s", (method, endpoint) => {
+    it("encodes literal filters and opaque cursors without fetching Run details or original Results", async () => {
+      const run: HistoryRunSummaryResponse = {
+        run_id: "run-1", batch_id: "batch-1", batch_name: "Batch", run_number: 1,
+        run_name: null, run_description_excerpt: "Clipped", display_truncated: true,
+        created_at: "2026-09-07T12:00:00Z", job_count: 1, execution_available: false,
+        execution_status: null, integrity_status: "degraded", replayable: true,
+      };
+      const metadata = {
+        project_id: "project/one", generation: "generation-1", scanned_at: null,
+        next_cursor: "next+/=", has_more: true,
+      };
+      const page: HistoryRunPageResponse | HistoryResultPageResponse = endpoint === "runs"
+        ? { ...metadata, items: [{ run, result_count: 0 }] }
+        : { ...metadata, items: [{
+          run, job_id: "job-1", job_ordinal: 1, artifact_ordinal: 1,
+          filename_excerpt: "image.png", filename_truncated: false, content_type: null,
+          byte_size: 0, sha256: "abc", integrity_status: "missing", download_url: null,
+          download_unavailable_reason: "execution_unavailable",
+        }] };
+      const fetchMock = successfulFetch(page);
+      vi.stubGlobal("fetch", fetchMock);
+      const client = new BatchcraftApiClient("http://api.test/");
+      const getResults = vi.spyOn(client, "getResults");
+      const getRun = vi.spyOn(client, "getRun");
+      const signal = new AbortController().signal;
+      const query: HistoryQuery = {
+        limit: 25, cursor: "opaque+/=?&%", sort: "oldest", q: "  100%_ 'a' &+/#?  ",
+        run_id: "run/one?&", batch_id: "batch +%", execution_status: "failed",
+        execution_available: false,
+      };
+
+      await expect(client[method]("project/one", query, signal)).resolves.toEqual(page);
+
+      expect(fetchMock.mock.calls).toEqual([[
+        `http://api.test/api/projects/project%2Fone/history/${endpoint}`
+          + "?limit=25&cursor=opaque%2B%2F%3D%3F%26%25&sort=oldest"
+          + "&q=++100%25_+%27a%27+%26%2B%2F%23%3F++&run_id=run%2Fone%3F%26"
+          + "&batch_id=batch+%2B%25&execution_status=failed&execution_available=false",
+        { signal },
+      ]]);
+      expect(getResults).not.toHaveBeenCalled();
+      expect(getRun).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      undefined,
+      {},
+      { limit: undefined, cursor: null, run_id: null, batch_id: null, execution_status: null, execution_available: null },
+    ])("omits absent query values without a trailing question mark: %j", async (query) => {
+      const page = { project_id: "p", generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false };
+      const fetchMock = successfulFetch(page);
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(new BatchcraftApiClient("http://api.test")[method]("p", query)).resolves.toEqual(page);
+
+      expect(fetchMock.mock.calls).toEqual([[
+        `http://api.test/api/projects/p/history/${endpoint}`, { signal: undefined },
+      ]]);
+    });
+
+    it("preserves zero, empty text, and false for backend validation", async () => {
+      const fetchMock = successfulFetch({});
+      vi.stubGlobal("fetch", fetchMock);
+
+      await new BatchcraftApiClient("http://api.test")[method]("p", { limit: 0, q: "", execution_available: false });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        `http://api.test/api/projects/p/history/${endpoint}?limit=0&q=&execution_available=false`,
+        { signal: undefined },
+      );
+    });
+
+    it.each([
+      [409, "history_generation_changed"],
+      [422, "invalid_history_query"],
+      [404, "project_not_found"],
+    ])("preserves HTTP %s errors without retrying or resetting the cursor", async (status, code) => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        error: { code, message: "History request rejected" },
+      }), { status }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(new BatchcraftApiClient()[method]("p", { cursor: "stale" })).rejects.toMatchObject({
+        name: "ApiError", status, code, message: "History request rejected",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fetch with an already aborted signal", async () => {
+      const fetchMock = successfulFetch({});
+      vi.stubGlobal("fetch", fetchMock);
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(new BatchcraftApiClient()[method]("p", undefined, controller.signal))
+        .rejects.toBe(controller.signal.reason);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("preserves an in-flight fetch abort", async () => {
+      const controller = new AbortController();
+      const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      const pending = new BatchcraftApiClient()[method]("p", undefined, controller.signal);
+      controller.abort(new DOMException("Browse aborted", "AbortError"));
+
+      await expect(pending).rejects.toBe(controller.signal.reason);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("lists Project Prompts with an encoded ID and AbortSignal", async () => {

@@ -1,7 +1,8 @@
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useRef } from "react";
 
 import type { EditableBatchSnapshot, RunPlanJobResponse, RunResponse } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
+import { useModalDialog } from "../../components/useModalDialog";
 import { formatBaseWorkflowValue } from "../batch/baseWorkflowValue";
 import { parameterRangeCount, profileImageInputs, profileParameters } from "../batch/form";
 import { runDisplayLabel, runDisplayName, runNumberLabel } from "./runDisplay";
@@ -15,30 +16,18 @@ interface Props {
 export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
   const snapshot = run.batch_snapshot;
   const closeRef = useRef<HTMLButtonElement>(null);
-  const restoreTargetRef = useRef<HTMLElement | null>(restoreTarget);
-
-  useEffect(() => {
-    closeRef.current?.focus();
-    const restoreTarget = restoreTargetRef.current;
-    return () => restoreTarget?.focus();
-  }, []);
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    }
-  }
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const modal = useModalDialog(dialogRef, onClose, restoreTarget, closeRef);
 
   return (
     <OverlayPortal level="run-plan">
       <dialog
         className="run-plan-dialog"
-        open
+        ref={dialogRef}
+        style={{ position: "fixed", inset: 0, margin: "auto" }}
         aria-modal="true"
         aria-labelledby="run-plan-title"
-        onCancel={onClose}
-        onKeyDown={handleKeyDown}
+        {...modal}
       >
       <div className="run-plan-heading">
         <div>

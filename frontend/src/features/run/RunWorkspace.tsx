@@ -11,6 +11,7 @@ import type {
 import { ResultsPanel } from "../results/ResultsPanel";
 import { RunPanel } from "./RunPanel";
 import { useRunExecution } from "./useRunExecution";
+import { runDisplayLabel } from "./runDisplay";
 
 interface Props {
   api: BatchcraftApi & RunDiscardApi & RunCancellationApi;
@@ -26,6 +27,8 @@ interface Props {
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
   batchDiverged: boolean;
+  visible: boolean;
+  onOpenRun(): void;
 }
 
 export function RunWorkspace({
@@ -42,6 +45,8 @@ export function RunWorkspace({
   getCachedRun,
   loadRun,
   batchDiverged,
+  visible,
+  onOpenRun,
 }: Props) {
   const execution = useRunExecution(
     api,
@@ -75,6 +80,20 @@ export function RunWorkspace({
 
   return (
     <>
+      {!visible && run ? (
+        <section className="workspace-run-strip" aria-label="Current Run">
+          <div>
+            <span className={`status-pill ${historyStatus}`}>{historyStatus}</span>
+            <strong>{runDisplayLabel(run)}</strong>
+            <span>{run.project_name} / {run.batch_name}</span>
+          </div>
+          <div>
+            <span>{execution.execution?.current_job_ordinal ? `Job ${execution.execution.current_job_ordinal} of ${run.job_count}` : `${run.job_count} Jobs`}</span>
+            <button className="button-secondary compact" type="button" onClick={onOpenRun}>View current Run</button>
+          </div>
+        </section>
+      ) : null}
+      <div hidden={!visible} id="current-run-workspace">
       <RunPanel
         run={run}
         execution={execution.execution}
@@ -105,6 +124,7 @@ export function RunWorkspace({
         getCachedRun={getCachedRun}
         loadRun={loadRun}
       />
+      </div>
     </>
   );
 }

@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 
 import type { ResultResponse } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
+import { useModalDialog } from "../../components/useModalDialog";
 
 export interface LightboxItem {
   key: string;
@@ -30,27 +31,17 @@ export function ResultLightbox({
 }: Props) {
   const item = items[index];
   const closeRef = useRef<HTMLButtonElement>(null);
-  const restoreTargetRef = useRef<HTMLElement | null>(restoreTarget);
-
-  useEffect(() => {
-    closeRef.current?.focus();
-    const target = restoreTargetRef.current;
-    return () => {
-      // Return focus to the control that opened the lightbox on unmount.
-      target?.focus();
-    };
-  }, []);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const modal = useModalDialog(dialogRef, onClose, restoreTarget, closeRef, Boolean(item));
 
   if (!item) {
     return null;
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-      return;
-    }
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDialogElement>) {
+    modal.onKeyDown(event);
+    if (event.defaultPrevented || (event.target instanceof HTMLElement &&
+      event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])"))) return;
     if (event.key === "ArrowLeft" && index > 0) {
       onNavigate(-1);
     }
@@ -63,12 +54,13 @@ export function ResultLightbox({
     <OverlayPortal level="lightbox" onBackdropClick={onClose}>
       <dialog
         className="result-lightbox"
-        open
+        ref={dialogRef}
+        style={{ position: "fixed", inset: 0, margin: "auto" }}
         aria-modal="true"
         aria-label="Result image preview"
-        onCancel={onClose}
+        onCancel={modal.onCancel}
         onKeyDown={handleKeyDown}
-        onClick={(event) => event.stopPropagation()}
+        onClick={modal.onClick}
       >
         <div className="lightbox-toolbar">
           <button

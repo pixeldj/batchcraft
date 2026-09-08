@@ -588,11 +588,52 @@ and `Job` captions; keep the info popup, accessible descriptions, lightbox label
 unavailable-artifact placeholders, and image-load failure handling. Cancellation behavior is unchanged.
 This cleanup changes no SQLite schema, filesystem format, or backend API DTO.
 
+BC-007's visual checkpoint replaces the mounted Project History UI with `ProjectBrowser`, backed by
+`useProjectBrowserHistory` and `useWorkspaceNavigation`. Top navigation exposes Batch/Gallery/Runs;
+keep the Batch subtree and `RunWorkspace` mounted but hide inactive authoring controls. Monitoring
+continues with a compact strip showing the frozen Run's actual Project/Batch, independently of draft
+identity. In-app review preserves editor-local drafts and valid in-memory Preview. Cold-load Preview
+invalidation and the recovery v4 key/schema remain unchanged.
+
+Use query-string navigation only: `view`, `q`, `sort`, `run`, `batch`, `status`, and `available` support
+Back/Forward without SPA path fallback. These encode review mode/filters, not Project identity, cursor
+pages, or draft authority. URLs never switch Project; retain verified identity and guarded selection in
+Batch, clearing review filters on an accepted Project change. Restore per-view scroll in memory and
+close open dialogs when changing destinations, including body-portaled editor dialogs.
+
+The browser retains at most two metadata pages, one per view: 48 Results or 25 Runs, with Previous/Next
+navigation and at most 20 previous cursor bookmarks per view. App's frozen-Run cache is capped at 20
+entries. Do not restore the legacy
+`listProjectRuns` plus per-Run `getResults` fan-out: browsing uses `browseProjectRuns` and
+`browseProjectResults`. Selected Result Details still calls `getResults` for that selected owning Run
+and checks ownership, Job/artifact ordinals, and hash against frozen provenance. Gallery images use
+`loading="lazy"` and `decoding="async"` on original artifact URLs; there is no thumbnail cache yet.
+
+Read the index before background reconciliation. Automatic scans are tied to review activation and
+publication/terminal history revisions while active, not filters, pages, density, ordinary polls, focus,
+or timers. Join dispatched scans before later scans. Refresh adopts the latest index at page one and
+clears old bookmarks; Reindex Project retries storage reconciliation and adopts its refreshed first page.
+Empty pages adopt discovered records automatically, including previously confirmed empty generations. An identical first
+page silently rebases generation/scan/cursor metadata while retaining item objects and image failures.
+A changed page stays in place with `History updated` pending Refresh. Preserve its metadata but disable
+images/original links not validated by the newly scanned bounded page; absence there is not proof of
+deletion. Failed reads/scans retain known content with honest stale/unavailable warnings.
+
+Run Plan, Result Details, and ResultLightbox use shared `useModalDialog` with native `showModal`, body
+scroll locking, topmost Escape, and focus restoration only to connected visible openers. Preserve nested
+inspection behavior and prevent focus returning into a hidden destination. The Project browser also
+uses native inspection/confirmation dialogs. Full provenance filters/facets, diagnostic detail browsing,
+generated thumbnails, and a filmstrip remain future work. Automated verification passed for this visual
+checkpoint; see BC-007 for evidence. Owner UI acceptance remains pending; do not mark BC-007 Done.
+
 Regression checks cover absence of Batch Results and
 visible card labels, retained detail/lightbox accessibility and unavailable placeholders, strict reading
 of older valid v4 records without gallery fetches, malformed-record rejection, minimal new wire writes,
 independent current/active Run restoration, cancellation, and historical detail. Run the frontend checks
-below and fake-backed browser verification from `LOCAL_INSTANCES.md`.
+below and fake-backed browser verification from `LOCAL_INSTANCES.md`. For BC-007, also check mounted
+draft/Preview and monitor retention, URL Back/Forward and guarded Project selection, bounded pages and
+cache eviction, stale-generation/late-response races, silent identical-page rebase, disabled unvalidated
+images, selected-Run-only detail reads, and native nested-dialog focus on desktop/mobile.
 
 Execution responses distinguish durable status from the ephemeral active-task ownership of the current
 API process. A restored `running` Run without an active task remains historically unchanged, but the UI

@@ -12,6 +12,8 @@ import type {
   AssetResponse,
   BatchReconstructionResponse,
   ExecutionResponse,
+  HistoryResultPageResponse,
+  HistoryRunPageResponse,
   LibraryPromptVersion,
   PreviewResponse,
   ProjectResponse,
@@ -30,6 +32,8 @@ import {
 } from "./features/session/workingSessionRecovery";
 
 beforeEach(() => {
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  window.history.replaceState(null, "", "/");
   vi.unstubAllEnvs();
   localStorage.clear();
   sessionStorage.clear();
@@ -93,6 +97,249 @@ describe("Session notices", () => {
   });
 });
 
+describe("Workspace navigation", () => {
+  it("retains the raw dirty Batch, Preview, Run metadata draft, and polling monitor across Gallery and Runs", async () => {
+    const form = populatedBatchForm();
+    form.batchId = "batch-1";
+    form.batchFilesystemKey = "batch_1";
+    saveWorkingSession(form, "run-123", "project-1", undefined, "batch-1", 1);
+    const detail = savedBatchDetail();
+    let status: ExecutionResponse["status"] = "running";
+    const api = makeApi({
+      getSavedBatch: vi.fn(async () => detail),
+      listSavedBatches: vi.fn(async () => ({ batches: [detail] })),
+      getRun: vi.fn(async () => runLookupResponse("running")),
+      getExecution: vi.fn(async () => execution(status)),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await screen.findByText("Running · Job 1 of 2");
+    await screen.findByText("Unsaved changes");
+    await expandConfiguration("Variable bindings");
+    const raw = "  fox  \n\n wolf \n";
+    fireEvent.change(screen.getByLabelText("Values"), { target: { value: raw } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await screen.findByRole("button", { name: "Create Another Run" });
+    fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), { target: { value: "Next experiment" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Notes/ }), { target: { value: "Keep these notes" } });
+    const preview = screen.getByRole("region", { name: "Preview" });
+    const monitor = currentRunSection();
+    const draft = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+
+    navigateWorkspace("Gallery");
+    expect(preview).not.toBeVisible();
+    expect(monitor).not.toBeVisible();
+    const strip = screen.getByRole("region", { name: "Current Run" });
+    expect(strip).toHaveTextContent("Run 7");
+    expect(within(strip).getByText("running")).toBeVisible();
+    const polls = vi.mocked(api.getExecution).mock.calls.length;
+    await waitFor(() => expect(vi.mocked(api.getExecution).mock.calls.length).toBeGreaterThan(polls));
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenCalledWith("project-1", expect.objectContaining({ limit: 48, cursor: null }), expect.any(AbortSignal)));
+
+    navigateWorkspace("Runs");
+    await waitFor(() => expect(api.browseProjectRuns).toHaveBeenCalledWith("project-1", expect.objectContaining({ limit: 25, cursor: null }), expect.any(AbortSignal)));
+    status = "succeeded";
+    expect(await within(screen.getByRole("region", { name: "Current Run" })).findByText("succeeded")).toBeVisible();
+    navigateWorkspace("Batch");
+    expect(screen.getByRole("region", { name: "Preview" })).toBe(preview);
+    expect(preview).toBeVisible();
+    expect(within(preview).getByText("A studio portrait of cat.")).toBeVisible();
+    expect(within(preview).getByText("A studio portrait of dog.")).toBeVisible();
+    expect(within(preview).getByRole("button", { name: "Create Another Run" })).toBeEnabled();
+    expect(currentRunSection()).toBe(monitor);
+    expect(within(monitor).getByText("Succeeded")).toBeVisible();
+    expect(screen.getByLabelText("Values")).toHaveValue(raw);
+    expect(screen.getByRole("textbox", { name: /Run Name/ })).toHaveValue("Next experiment");
+    expect(screen.getByRole("textbox", { name: /Notes/ })).toHaveValue("Keep these notes");
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(draft);
+    expect(loadWorkingSession().currentRunId).toBe("run-123");
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(api.getRun).toHaveBeenCalledOnce();
+    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
+  });
+
+  it("keeps a newly started Run visible and polling in Gallery without restarting execution", async () => {
+    let status: ExecutionResponse["status"] = "running";
+    const api = makeApi({ getExecution: vi.fn(async () => execution(status)) });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await screen.findByText("Running · Job 1 of 2");
+    navigateWorkspace("Gallery");
+    const strip = screen.getByRole("region", { name: "Current Run" });
+    expect(strip).toBeVisible();
+    expect(strip).toHaveTextContent("Run 7");
+    expect(strip).toHaveTextContent("Job 1 of 2");
+    expect(within(strip).getByText("running")).toBeVisible();
+    const polls = vi.mocked(api.getExecution).mock.calls.length;
+    await waitFor(() => expect(vi.mocked(api.getExecution).mock.calls.length).toBeGreaterThan(polls));
+    status = "succeeded";
+    expect(await within(strip).findByText("succeeded")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Project browser" })).toBeVisible();
+    expect(api.startRun).toHaveBeenCalledExactlyOnceWith("run-123");
+    expect(loadWorkingSession().currentRunId).toBe("run-123");
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
+  });
+
+  it("cancels then accepts historical Batch replacement, invalidating Preview only on acceptance", async () => {
+    const frozen = runLookupResponse("succeeded", "historical-run", 12);
+    frozen.batch_snapshot.batch.name = "Recovered experiment";
+    const api = makeApi({
+      browseProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
+      getRun: vi.fn(async () => frozen),
+      getBatchReconstruction: vi.fn(async () => reconstructionFor(frozen)),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+    fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), { target: { value: "Keep until replaced" } });
+    const draft = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    navigateWorkspace("Runs");
+    const run = await screen.findByRole("article", { name: "Run 12" });
+    fireEvent.click(within(run).getByRole("button", { name: "Load Run as Batch" }));
+    const confirm = screen.getByRole("dialog", { name: "Replace unsaved Batch?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing" }));
+    expect(api.getBatchReconstruction).not.toHaveBeenCalled();
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(draft);
+    navigateWorkspace("Batch");
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: /Run Name/ })).toHaveValue("Keep until replaced");
+    navigateWorkspace("Runs");
+    fireEvent.click(within(await screen.findByRole("article", { name: "Run 12" })).getByRole("button", { name: "Load Run as Batch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace Batch" }));
+    expect(await screen.findByRole("textbox", { name: "Batch name" })).toHaveValue("Recovered experiment");
+    expect(new URLSearchParams(window.location.search).get("view")).toBeNull();
+    expect(screen.getByRole("region", { name: "Preview" })).toHaveTextContent("Preview required");
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
+    expect(loadWorkingSession().sourceRunId).toBe("historical-run");
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(api.getBatchReconstruction).toHaveBeenCalledExactlyOnceWith("historical-run", expect.any(AbortSignal));
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("ignores a dismissed reconstruction even when its mock ignores abort (intervening edit: %s)", async (editDraft) => {
+    const frozen = runLookupResponse("succeeded", "historical-run", 12);
+    frozen.batch_snapshot.batch.name = "Must not replace the draft";
+    const reconstruction = deferred<BatchReconstructionResponse>();
+    const api = makeApi({
+      browseProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
+      getRun: vi.fn(async () => frozen),
+      getBatchReconstruction: vi.fn(() => reconstruction.promise),
+    });
+    render(<App api={api} />);
+    await reachPreview();
+    navigateWorkspace("Runs");
+    const run = await screen.findByRole("article", { name: "Run 12" });
+    fireEvent.click(within(run).getByRole("button", { name: "Load Run as Batch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace Batch" }));
+    await waitFor(() => expect(api.getBatchReconstruction).toHaveBeenCalledExactlyOnceWith("historical-run", expect.any(AbortSignal)));
+    const signal = vi.mocked(api.getBatchReconstruction).mock.calls[0][1]!;
+    expect(signal.aborted).toBe(false);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "History inspection" })).getByRole("button", { name: "Close" }));
+    expect(signal.aborted).toBe(true);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    navigateWorkspace("Batch");
+    if (editDraft) {
+      fireEvent.change(screen.getByRole("textbox", { name: "Batch name" }), { target: { value: "Intervening draft" } });
+      expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+      await screen.findByRole("button", { name: "Create Run" });
+    }
+    fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), { target: { value: "Keep this Run name" } });
+    const draft = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    const preview = screen.getByRole("region", { name: "Preview" });
+    navigateWorkspace("Gallery");
+    const destination = window.location.href;
+    const pushState = vi.spyOn(window.history, "pushState");
+    await act(async () => reconstruction.resolve(reconstructionFor(frozen)));
+
+    expect(window.location.href).toBe(destination);
+    expect(pushState).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "Project browser" })).toBeVisible();
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(draft);
+    expect(loadWorkingSession().sourceRunId).toBeNull();
+    expect(screen.queryByText(/loaded as an unsaved Batch draft/)).not.toBeInTheDocument();
+    navigateWorkspace("Batch");
+    expect(screen.getByRole("textbox", { name: "Batch name" })).toHaveValue(editDraft ? "Intervening draft" : "First experiment");
+    expect(screen.getByRole("textbox", { name: /Run Name/ })).toHaveValue("Keep this Run name");
+    expect(screen.getByRole("region", { name: "Preview" })).toBe(preview);
+    expect(within(preview).getByText("A studio portrait of cat.")).toBeVisible();
+    expect(within(preview).getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(api.previewBatch).toHaveBeenCalledTimes(editDraft ? 2 : 1);
+    expect(api.createRun).not.toHaveBeenCalled();
+  });
+
+  it("opens Show Results with one atomic history entry and Back restores the unfiltered Runs URL", async () => {
+    const frozen = runLookupResponse("succeeded", "historical-run", 12);
+    const api = makeApi({
+      browseProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
+      browseProjectResults: vi.fn(async () => projectResultsFor(frozen, [result(1, 1, "image/png", "history.png", 100)])),
+    });
+    render(<App api={api} />);
+    navigateWorkspace("Runs");
+    const run = await screen.findByRole("article", { name: "Run 12" });
+    const runsUrl = window.location.href;
+    expect(new URL(runsUrl).search).toBe("?view=runs");
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    fireEvent.click(within(run).getByRole("button", { name: "Show Results" }));
+    const galleryUrl = window.location.href;
+    expect(new URL(galleryUrl).searchParams.get("view")).toBe("gallery");
+    expect(new URL(galleryUrl).searchParams.get("run")).toBe(frozen.run_id);
+    expect(pushState).toHaveBeenCalledExactlyOnceWith(null, "", new URL(galleryUrl));
+    expect(replaceState).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenCalledWith("project-1", expect.objectContaining({ run_id: frozen.run_id, cursor: null, limit: 48 }), expect.any(AbortSignal)));
+    expect(screen.getByRole("region", { name: "Project browser" })).toHaveTextContent("Clear Run filter");
+
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.href).toBe(runsUrl));
+    await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Runs" })).toHaveAttribute("aria-current", "page"));
+    expect(await screen.findByRole("article", { name: "Run 12" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Clear Run filter/ })).not.toBeInTheDocument();
+    expect(api.browseProjectRuns).toHaveBeenLastCalledWith("project-1", expect.objectContaining({ run_id: undefined, cursor: null, limit: 25 }), expect.any(AbortSignal));
+    act(() => window.history.forward());
+    await waitFor(() => expect(window.location.href).toBe(galleryUrl));
+    await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Gallery" })).toHaveAttribute("aria-current", "page"));
+    expect(pushState).toHaveBeenCalledOnce();
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
+    expect(api.getRun).not.toHaveBeenCalled();
+    expect(api.getResults).not.toHaveBeenCalled();
+  });
+
+  it("cold-loads Gallery from its URL without restoring Preview and handles Back and Forward", async () => {
+    const api = makeApi();
+    const first = render(<App api={api} />);
+    await reachPreview();
+    navigateWorkspace("Gallery");
+    await screen.findByRole("region", { name: "Project browser" });
+    first.unmount();
+    const galleryReads = vi.mocked(api.browseProjectResults).mock.calls.length;
+    render(<App api={api} />);
+    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Gallery" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "Preview Batch" })).not.toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(api.browseProjectResults).mock.calls.length).toBeGreaterThan(galleryReads));
+    navigateWorkspace("Runs");
+    await waitFor(() => expect(api.browseProjectRuns).toHaveBeenCalled());
+    act(() => window.history.back());
+    await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Gallery" })).toHaveAttribute("aria-current", "page"));
+    act(() => window.history.forward());
+    await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Runs" })).toHaveAttribute("aria-current", "page"));
+    navigateWorkspace("Batch");
+    expect(screen.getByRole("textbox", { name: "Batch name" })).toHaveValue("First experiment");
+    expect(screen.getByRole("region", { name: "Preview" })).toHaveTextContent("Preview required");
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
+    expect(api.getRun).not.toHaveBeenCalled();
+    expect(api.getResults).not.toHaveBeenCalled();
+  });
+});
+
 describe("ComfyUI status", () => {
   it("shows a reachable server and device", async () => {
     const api = makeApi();
@@ -126,27 +373,24 @@ describe("Project selection", () => {
     const imported = projectResponse();
     const api = makeApi({
       listProjects: vi.fn(async () => ({ projects: [imported] })),
-      listProjectRuns: vi.fn(async (projectId: string) => ({
+      browseProjectRuns: vi.fn(async (projectId: string) => ({
         project_id: projectId,
-        runs: [{
+        generation: "generation-1", scanned_at: "2026-08-20T12:00:00Z", next_cursor: null, has_more: false,
+        items: [{ result_count: 0, run: {
           run_id: "imported-run",
           batch_id: "imported-batch",
-          batch_filesystem_key: "imported_batch",
           batch_name: "Imported Batch",
           run_number: 12,
-          filesystem_key: "012-imported",
           run_name: "Imported baseline",
-          run_description: null,
+          run_description_excerpt: null,
+          display_truncated: false,
           created_at: "2026-08-20T12:00:00Z",
           job_count: 2,
           execution_available: false,
           execution_status: null,
-          started_at: null,
-          completed_at: null,
           integrity_status: "verified" as const,
           replayable: true,
-        }],
-        diagnostics: [],
+        } }],
       })),
       getResults: vi.fn(async () => ({ run_id: "imported-run", results: [] })),
     });
@@ -156,11 +400,14 @@ describe("Project selection", () => {
       target: { value: imported.id },
     });
 
-    const history = screen.getByRole("heading", { name: "Project History" }).closest("section");
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    navigateWorkspace("Runs");
+    const history = screen.getByRole("region", { name: "Project browser" });
     expect(history).not.toBeNull();
     expect(await within(history as HTMLElement).findByText("Imported baseline")).toBeInTheDocument();
     expect(within(history as HTMLElement).getByText("Execution unavailable")).toBeInTheDocument();
-    expect(api.listProjectRuns).toHaveBeenCalledWith("project-1", expect.any(AbortSignal));
+    expect(api.browseProjectRuns).toHaveBeenCalledWith("project-1", expect.objectContaining({ limit: 25, cursor: null }), expect.any(AbortSignal));
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(loadWorkingSession().currentRunId).toBeNull();
     expect(api.startRun).not.toHaveBeenCalled();
   });
@@ -188,38 +435,17 @@ describe("Project selection", () => {
       .mockResolvedValueOnce(previewResponseWithSeeds([7, 8]))
       .mockResolvedValueOnce(previewResponseWithSeeds([9, 10]));
     const api = makeApi({
-      listProjectRuns: vi.fn(async () => ({
-        project_id: "project-1",
-        runs: [{
-          run_id: frozen.run_id,
-          batch_id: frozen.batch_id,
-          batch_filesystem_key: frozen.batch_snapshot.batch.filesystem_key,
-          batch_name: frozen.batch_name,
-          run_number: frozen.run_number,
-          filesystem_key: frozen.filesystem_key,
-          run_name: frozen.run_name,
-          run_description: frozen.run_description,
-          created_at: frozen.created_at,
-          job_count: frozen.job_count,
-          execution_available: true,
-          execution_status: "succeeded",
-          started_at: frozen.execution.started_at,
-          completed_at: frozen.execution.completed_at,
-          integrity_status: "verified" as const,
-          replayable: true,
-        }],
-        diagnostics: [],
-      })),
+      browseProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
       getRun: vi.fn(async () => frozen),
       getBatchReconstruction: vi.fn(async () => reconstruction),
       previewBatch,
     });
     render(<App api={api} />);
-    const historicalRun = await screen.findByText("Run 12");
-    const article = historicalRun.closest("article");
+    navigateWorkspace("Runs");
+    const article = await screen.findByRole("article", { name: "Run 12" });
     expect(article).not.toBeNull();
-    fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Open" }));
     fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Load Run as Batch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace Batch" }));
 
     expect(await screen.findByText("Run 12 loaded as an unsaved Batch draft. Preview to verify the Job plan.")).toBeInTheDocument();
     await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
@@ -255,14 +481,17 @@ describe("Project selection", () => {
     frozen.batch_snapshot.batch.name = "Historical name";
     const reconstruction = deferred<BatchReconstructionResponse>();
     const api = makeApi({
-      listProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
+      browseProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
       getRun: vi.fn(async () => frozen),
       getBatchReconstruction: vi.fn(() => reconstruction.promise),
     });
     render(<App api={api} />);
-    const article = (await screen.findByText("Run 12")).closest("article");
-    fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Open" }));
+    navigateWorkspace("Runs");
+    const article = await screen.findByRole("article", { name: "Run 12" });
     fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Load Run as Batch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace Batch" }));
+    await waitFor(() => expect(api.getBatchReconstruction).toHaveBeenCalledOnce());
+    navigateWorkspace("Batch");
     fireEvent.change(screen.getByRole("textbox", { name: "Batch name" }), { target: { value: "Intervening edit" } });
 
     await act(async () => reconstruction.resolve(reconstructionFor(frozen)));
@@ -277,16 +506,19 @@ describe("Project selection", () => {
     const reconstruction = deferred<BatchReconstructionResponse>();
     const detail = savedBatchDetail({ name: "Selected Batch", revision: 2 });
     const api = makeApi({
-      listProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
+      browseProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
       getRun: vi.fn(async () => frozen),
       getBatchReconstruction: vi.fn(() => reconstruction.promise),
       listSavedBatches: vi.fn(async () => ({ batches: [detail] })),
       getSavedBatch: vi.fn(async () => detail),
     });
     render(<App api={api} />);
-    const article = (await screen.findByText("Run 12")).closest("article");
-    fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Open" }));
+    navigateWorkspace("Runs");
+    const article = await screen.findByRole("article", { name: "Run 12" });
     fireEvent.click(within(article as HTMLElement).getByRole("button", { name: "Load Run as Batch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace Batch" }));
+    await waitFor(() => expect(api.getBatchReconstruction).toHaveBeenCalledOnce());
+    navigateWorkspace("Batch");
     fireEvent.change(await screen.findByRole("combobox", { name: "Saved Batch" }), { target: { value: detail.id } });
     fireEvent.click(await screen.findByRole("button", { name: "Discard and switch" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Batch name" })).toHaveValue("Selected Batch"));
@@ -379,7 +611,8 @@ describe("Batch preview", () => {
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Run" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Results" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Project History" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Batch", "Gallery", "Runs"]);
     expect(screen.queryByRole("heading", { name: "Batch Results" })).not.toBeInTheDocument();
     expect(screen.queryByText("One Batch. An explicit Job plan. A durable Run.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Working draft/)).not.toBeInTheDocument();
@@ -2041,9 +2274,11 @@ describe("Active Run rediscovery", () => {
     });
     render(<App api={api} pollIntervalMs={5} />);
     await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    navigateWorkspace("Gallery");
     await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(1));
     await act(async () => terminal.resolve(execution("succeeded", foreign.run_id)));
-    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    expect(await within(screen.getByRole("region", { name: "Current Run" })).findByText("succeeded")).toBeVisible();
     await pause(20);
     expect(api.reindexProject).toHaveBeenCalledExactlyOnceWith("project-1");
   });
@@ -2196,7 +2431,7 @@ describe("Discard unstarted Run", () => {
     const api = makeApi({
       createRun,
       discardRun: vi.fn(async (runId: string) => execution("cancelled", runId)),
-      listProjectRuns: vi.fn(async () => projectRunsFor(runLookupResponse("cancelled", "run-discarded", 7))),
+      browseProjectRuns: vi.fn(async () => projectRunsFor(runLookupResponse("cancelled", "run-discarded", 7))),
       getRun: vi.fn(async (runId: string) => {
         const runNumber = runId === "run-discarded" ? 7 : 8;
         const frozen = runLookupResponse("created", runId, runNumber);
@@ -2209,12 +2444,12 @@ describe("Discard unstarted Run", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
     await screen.findByRole("button", { name: "View Run Plan" });
 
-    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(2));
+    expect(api.reindexProject).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Discard Run" }));
 
     expect(await screen.findByText("Cancelled")).toBeInTheDocument();
-    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledTimes(3));
+    expect(api.reindexProject).not.toHaveBeenCalled();
     expect(api.discardRun).toHaveBeenCalledWith("run-discarded");
     expect(screen.queryByRole("button", { name: "Start Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
@@ -2227,10 +2462,11 @@ describe("Discard unstarted Run", () => {
     expect(await screen.findByRole("heading", { name: "Run 8" })).toBeInTheDocument();
     expect(within(currentRunSection()).getByText("run-next")).toBeInTheDocument();
     await waitFor(() => expect(loadWorkingSession().currentRunId).toBe("run-next"));
-    const historyRun = screen.getByText("Run 7", { selector: ".project-history-run strong" }).closest("article")!;
-    fireEvent.click(within(historyRun).getByRole("button", { name: "Open" }));
+    navigateWorkspace("Runs");
+    const historyRun = await screen.findByRole("article", { name: "Run 7" });
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledExactlyOnceWith("project-1"));
     fireEvent.click(await within(historyRun).findByRole("button", { name: "View Run Plan" }));
-    const plan = screen.getByRole("dialog", { name: "Run 7 Plan" });
+    const plan = await screen.findByRole("dialog", { name: "Run 7 Plan" });
     expect(plan).toHaveTextContent("007-run");
     expect(plan).toHaveTextContent("A studio portrait of cat.");
     expect(api.getRun).toHaveBeenCalledWith("run-discarded");
@@ -2639,7 +2875,7 @@ describe("Stop waiting", () => {
     expect(screen.getByText(/remote ComfyUI Job may continue running/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Active Project" })).toBeDisabled();
 
-    const historyScans = vi.mocked(api.reindexProject).mock.calls.length;
+    expect(api.reindexProject).not.toHaveBeenCalled();
     terminalPoll.resolve(detachedExecution());
     expect(await screen.findByText("Blocked: Remote outcome unknown")).toBeInTheDocument();
     expect(screen.getByText(/No later Job will start/)).toBeInTheDocument();
@@ -2653,7 +2889,9 @@ describe("Stop waiting", () => {
     expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
     await pause(20);
     expect(api.getExecution).toHaveBeenCalledTimes(2);
-    expect(api.reindexProject).toHaveBeenCalledTimes(historyScans + 1);
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    navigateWorkspace("Gallery");
+    await waitFor(() => expect(api.reindexProject).toHaveBeenCalledExactlyOnceWith("project-1"));
   });
 
   it("reconciles an ambiguous detach response before allowing another request", async () => {
@@ -3351,22 +3589,24 @@ describe("Result lightbox", () => {
   it("opens historical Results with Run labels and deterministic lightbox navigation", async () => {
     const frozen = runLookupResponse("succeeded");
     const api = makeApi({
-      listProjectRuns: vi.fn(async () => projectRunsFor(frozen)),
+      browseProjectResults: vi.fn(async () => projectResultsFor(frozen, threeImages)),
       getRun: vi.fn(async () => frozen),
       getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
     });
     render(<App api={api} />);
 
-    const historyRun = (await screen.findByText("Run 7")).closest("article")!;
-    fireEvent.click(within(historyRun).getByRole("button", { name: "Open" }));
-    const image = await within(historyRun).findByAltText("Result 1 from Job 1: Run 7 / first.png");
+    navigateWorkspace("Gallery");
+    const image = await screen.findByAltText("Run 7, Run 7, Job 1, artifact 1: first.png");
     fireEvent.click(image.closest("button") as HTMLElement);
 
-    const lightbox = await screen.findByRole("dialog", { name: "Result image preview" });
-    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
-    expect(within(lightbox).getByText("Job 001")).toBeInTheDocument();
+    const lightbox = await screen.findByRole("dialog", { name: "Project Result image" });
+    expect(within(lightbox).getByText("1 of 3 loaded images")).toBeInTheDocument();
+    expect(within(lightbox).getByRole("img")).toHaveAccessibleName("Run 7, Run 7, Job 1, artifact 1: first.png");
     fireEvent.keyDown(lightbox, { key: "ArrowRight" });
-    expect(within(lightbox).getByText("2 of 3")).toBeInTheDocument();
+    expect(within(lightbox).getByText("2 of 3 loaded images")).toBeInTheDocument();
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
+    expect(api.getResults).not.toHaveBeenCalled();
+    expect(api.getRun).not.toHaveBeenCalled();
     expect(api.startRun).not.toHaveBeenCalled();
   });
 
@@ -3609,9 +3849,16 @@ describe("Result Details", () => {
     const getRun = vi.fn(async (runId: string) => runId === "run-a" ? runA : runB);
     const api = makeApi({
       getRun,
-      listProjectRuns: vi.fn(async () => ({
+      browseProjectRuns: vi.fn(async () => ({
         ...projectRunsFor(runA),
-        runs: [...projectRunsFor(runA).runs, ...projectRunsFor(runB).runs],
+        items: [...projectRunsFor(runA).items, ...projectRunsFor(runB).items],
+      })),
+      browseProjectResults: vi.fn(async () => ({
+        ...projectResultsFor(runA, [result(1, 1, "image/png", "run-a.png", 100)]),
+        items: [
+          ...projectResultsFor(runA, [result(1, 1, "image/png", "run-a.png", 100)]).items,
+          ...projectResultsFor(runB, [result(1, 1, "image/png", "run-b.png", 100)]).items,
+        ],
       })),
       getExecution: vi.fn(async (runId: string) => execution("succeeded", runId)),
       getResults: vi.fn(async (runId: string) => ({
@@ -3621,30 +3868,31 @@ describe("Result Details", () => {
     });
     render(<App api={api} />);
 
-    const runARegion = (await screen.findByText("Run 10")).closest("article")!;
-    const runBRegion = screen.getByText("Run 11").closest("article")!;
+    navigateWorkspace("Runs");
+    const runARegion = await screen.findByRole("article", { name: "Run 10" });
     expect(getRun).not.toHaveBeenCalled();
-    fireEvent.click(within(runARegion).getByRole("button", { name: "Open" }));
     fireEvent.click(await within(runARegion).findByRole("button", { name: "View Run Plan" }));
-    const plan = screen.getByRole("dialog", { name: "Run 10 Plan" });
+    const plan = await screen.findByRole("dialog", { name: "Run 10 Plan" });
     expect(plan).toHaveTextContent("Frozen prompt from Run A");
     fireEvent.click(within(plan).getByRole("button", { name: "Close" }));
+    navigateWorkspace("Batch");
     await expandConfiguration("Variable bindings");
     fireEvent.change(screen.getByLabelText("Values"), { target: { value: "Mutable draft fox" } });
-    fireEvent.click(within(runBRegion).getByRole("button", { name: "Open" }));
-    fireEvent.click(within(runBRegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    navigateWorkspace("Gallery");
+    const detailsB = await screen.findByRole("button", { name: "Details for Run 11, Run 11, Job 1, artifact 1: run-b.png" });
+    fireEvent.click(detailsB);
     let dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(await within(dialog).findByText("Frozen prompt from Run B", { exact: false })).toBeInTheDocument();
     expect(within(dialog).queryByText("Frozen prompt from Run A", { exact: false })).not.toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Mutable draft fox");
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
 
-    fireEvent.click(within(runBRegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    fireEvent.click(detailsB);
     dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(within(dialog).getByText("Frozen prompt from Run B", { exact: false })).toBeInTheDocument();
     expect(getRun).toHaveBeenCalledTimes(2);
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    fireEvent.click(within(runARegion).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Details for Run 10, Run 10, Job 1, artifact 1: run-a.png" }));
     dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
     expect(dialog).toHaveTextContent("Frozen prompt from Run A");
     expect(dialog).not.toHaveTextContent("Frozen prompt from Run B");
@@ -3796,7 +4044,10 @@ describe("Current Results without Batch Results", () => {
     });
     render(<App api={api} />);
 
-    await screen.findByText("No indexed Runs were found for this Project.");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
     if (currentRunId) {
       await screen.findByRole("heading", { name: "Run 11" });
       expect(await within(currentResultsSection()).findByAltText("Result 1 from Job 1: run-b.png")).toBeInTheDocument();
@@ -3888,9 +4139,12 @@ describe("Current Results without Batch Results", () => {
     const badRun = runLookupResponse("succeeded", "run-bad", 21);
     const goodRun = runLookupResponse("succeeded", "run-good", 22);
     const api = makeApi({
-      listProjectRuns: vi.fn(async () => ({
-        ...projectRunsFor(goodRun),
-        runs: [...projectRunsFor(badRun).runs, ...projectRunsFor(goodRun).runs],
+      browseProjectResults: vi.fn(async () => ({
+        ...projectResultsFor(goodRun, []),
+        items: [
+          ...projectResultsFor(badRun, [result(1, 1, "image/png", "broken.png", 100)]).items,
+          ...projectResultsFor(goodRun, [result(1, 1, "image/png", "healthy.png", 100)]).items,
+        ],
       })),
       getRun: vi.fn(async (runId: string) => {
         if (runId === "run-bad") {
@@ -3905,12 +4159,17 @@ describe("Current Results without Batch Results", () => {
     });
     render(<App api={api} />);
 
-    const bad = (await screen.findByText("Run 21")).closest("article")!;
-    const good = screen.getByText("Run 22").closest("article")!;
-    fireEvent.click(within(bad).getByRole("button", { name: "Open" }));
-    fireEvent.click(within(good).getByRole("button", { name: "Open" }));
-    expect(await within(good).findByAltText("Result 1 from Job 1: Run 22 / healthy.png")).toBeInTheDocument();
-    expect(await within(bad).findByText("Frozen Run Plan unavailable: Run data is invalid")).toBeInTheDocument();
+    navigateWorkspace("Gallery");
+    const bad = await screen.findByRole("button", { name: /Details for Run 21,/ });
+    const good = screen.getByRole("button", { name: /Details for Run 22,/ });
+    fireEvent.click(bad);
+    expect(await screen.findByText("Run data is invalid")).toBeInTheDocument();
+    expect(screen.getByAltText("Run 22, Run 22, Job 1, artifact 1: healthy.png")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    fireEvent.click(good);
+    const details = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
+    expect(details).toHaveTextContent("healthy.png");
+    expect(details).toHaveTextContent("A studio portrait of cat.");
     expect(api.getRun).toHaveBeenCalledTimes(2);
   });
 });
@@ -3973,6 +4232,8 @@ function makeApi(
       runs: [],
       diagnostics: [],
     })),
+    browseProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
+    browseProjectResults: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
     listSavedBatches: vi.fn(async () => ({ batches: [] })),
     createSavedBatch: vi.fn(),
@@ -4203,28 +4464,52 @@ function reconstructionFor(run: RunResponse): BatchReconstructionResponse {
   };
 }
 
-function projectRunsFor(run: RunResponse) {
+function navigateWorkspace(view: "Batch" | "Gallery" | "Runs") {
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: view }));
+}
+
+function projectRunsFor(run: RunResponse): HistoryRunPageResponse {
   return {
     project_id: run.project_id,
-    runs: [{
+    generation: "generation-1",
+    scanned_at: run.created_at,
+    next_cursor: null,
+    has_more: false,
+    items: [{ result_count: 0, run: {
       run_id: run.run_id,
       batch_id: run.batch_id,
-      batch_filesystem_key: run.batch_snapshot.batch.filesystem_key,
       batch_name: run.batch_name,
       run_number: run.run_number,
-      filesystem_key: run.filesystem_key,
       run_name: run.run_name,
-      run_description: run.run_description,
+      run_description_excerpt: run.run_description,
+      display_truncated: false,
       created_at: run.created_at,
       job_count: run.job_count,
       execution_available: true,
       execution_status: run.execution.status,
-      started_at: run.execution.started_at,
-      completed_at: run.execution.completed_at,
       integrity_status: "verified" as const,
       replayable: true,
-    }],
-    diagnostics: [],
+    } }],
+  };
+}
+
+function projectResultsFor(run: RunResponse, results: ResultResponse[]): HistoryResultPageResponse {
+  return {
+    ...projectRunsFor(run),
+    items: results.map((result) => ({
+      run: projectRunsFor(run).items[0].run,
+      job_id: `${run.run_id}-job-${result.job_ordinal}`,
+      job_ordinal: result.job_ordinal,
+      artifact_ordinal: result.artifact_ordinal,
+      filename_excerpt: result.remote_filename,
+      filename_truncated: false,
+      content_type: result.content_type,
+      byte_size: result.byte_size,
+      sha256: result.sha256,
+      integrity_status: result.integrity_status,
+      download_url: result.download_url,
+      download_unavailable_reason: result.download_url ? null : "artifact_unavailable",
+    })),
   };
 }
 

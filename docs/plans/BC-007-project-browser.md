@@ -1,12 +1,17 @@
 # BC-007: Project-wide Run and Result browser
 
-Status: In Progress. The first delivery is the bounded historical query foundation.
+Status: In Progress. Bounded query foundation and visual checkpoint implemented and automated checks
+passed; owner UI acceptance pending.
 Backlog: [BC-007](../BACKLOG.md#bc-007-project-wide-run-and-result-browser).
 
 Current implementation: additive `/history/runs` and `/history/results` APIs, newest/oldest keyset
 pagination, basic Run filters, SQL-clipped metadata, generation-scoped bookmarks, and forward migration
-0003 are implemented. Verification is recorded in the backlog after checks complete. The visual
-workspace, advanced provenance filters/facets, bounded diagnostics, and thumbnails remain upcoming.
+0003 are implemented. The visual checkpoint adds `ProjectBrowser`,
+`useProjectBrowserHistory`, `useWorkspaceNavigation`, App navigation/monitor integration, and native
+inspection modals. The visual checkpoint passes 508 frontend tests, lint/typecheck/build, and twelve
+desktop/mobile browser tests in each of Vite and built modes. Screenshots were reviewed; owner acceptance
+is separate. Advanced provenance filters/facets, bounded
+diagnostic detail browsing, generated thumbnails, and filmstrip remain upcoming; BC-007 is not Done.
 
 ## Outcome
 
@@ -28,7 +33,7 @@ History presentation, not current-Run Results.
 ### Gallery
 
 - Show Results across the Project immediately, with natural aspect ratios and no forced cropping.
-- Offer a compact image-size/density control and explicit Load more rather than unbounded loading.
+- Offer a compact image-size/density control and bounded Previous/Next pages rather than unbounded loading.
 - Keep cards visually quiet. Reveal owning-Run context and inspection actions on hover/focus, with
   equivalent touch controls and no hover-only functionality.
 - Reuse the lightbox with cross-Run keyboard navigation and clear ownership. Consider a compact
@@ -88,8 +93,8 @@ library records. Facets should be bounded and derived from historical indexes, n
 - Replace projection deletion's per-Run SQL placeholders with Project-scoped deletion.
 - Keep diagnostics available through existing history while a bounded diagnostic endpoint is developed.
 
-The initial query sub-slice does not switch the UI to these endpoints yet. This keeps existing behavior
-working while pagination and ownership contracts are verified before visual navigation changes.
+The initial query sub-slice was additive. The visual checkpoint now switches the mounted browser to
+these endpoints; old unpaginated APIs remain available for backward compatibility.
 
 ### 2. Visual workspace
 
@@ -107,6 +112,41 @@ working while pagination and ownership contracts are verified before visual navi
   shared inspection surfaces as they enter this workflow.
 
 Owner visual review at this checkpoint precedes the complete advanced-filter UI.
+
+Implemented checkpoint details:
+
+- Top navigation exposes Batch/Gallery/Runs. The Batch subtree and current-Run monitor remain mounted;
+  inactive authoring is hidden. Drafts and valid in-memory Preview survive review navigation, and the
+  compact monitor shows the actual frozen Project/Batch. Cold loads still invalidate Preview; recovery
+  v4 is unchanged.
+- URL query keys are `view`, `q`, `sort`, `run`, `batch`, `status`, and `available`, with Back/Forward
+  and in-memory per-view scroll restoration. URLs encode review mode/filters only, never Project
+  selection or cursor pages. Project selection remains verified and guarded in Batch; an accepted
+  Project switch clears review filters. Destination changes close open dialogs, including portals.
+- Gallery retains one page of up to 48 Results; Runs retains up to 25 Runs. Previous/Next uses at most
+  20 previous cursor bookmarks. Frozen-Run detail caching is capped at 20 entries, not all history.
+  The browser no longer uses `listProjectRuns` or `getResults` for every Run. Selected Result Details
+  still reads `getResults` for its selected owning Run and validates the artifact against frozen detail.
+- Search covers Run names/notes, with newest/oldest order, status/availability controls, and removable
+  Run/Batch chips. Runs offer Show Results, frozen Run Plan, and guarded Load Run as Batch with native
+  unsaved-work confirmation. Full advanced-filter controls and historical facets are not implemented.
+- Gallery uses natural-aspect lazy original images with asynchronous decoding and density controls,
+  not generated thumbnails. Image selection uses Run/Job/artifact identity and navigation is limited
+  to eligible images on the loaded page. A filmstrip is not implemented.
+- Automatic background scans occur on review activation and publication/terminal history revisions
+  while active, not filter/page/density changes or ordinary polls. Reindex Project explicitly repairs
+  and adopts the refreshed first page. Empty pages automatically adopt newly discovered records.
+  Refresh adopts the latest index at page one and drops old bookmarks without triggering a scan.
+- An identical first page silently rebases generation/scan/continuation metadata while preserving item
+  objects and image-failure state. Changed pages retain metadata with History updated pending Refresh;
+  disable retained images/original links that the newly scanned bounded page cannot validate. Absence
+  from that page is not deletion evidence. Failed scans retain known content with a warning. Diagnostic
+  counts are shown, but diagnostic detail browsing remains upcoming.
+- Shared Run Plan, Result Details, and ResultLightbox use native modal inspection via `useModalDialog`,
+  with nested-dialog/topmost Escape handling, body scroll locking, and safe focus restoration. The
+  browser's viewer and confirmation are native modals too. Automated verification and the imported-history
+  follow-up passed; counts are recorded in BC-007. The owner has given positive checkpoint feedback;
+  final acceptance of the complete backlog scope remains pending.
 
 ### 3. Provenance filters
 
