@@ -22,6 +22,7 @@ import type {
 } from "../../api/types";
 import { ProjectBrowser, type ProjectBrowserProps } from "./ProjectBrowser";
 import { ResultDetailsDialog } from "../results/ResultDetailsDialog";
+import { ResultGallery } from "../results/ResultGallery";
 
 beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -39,6 +40,35 @@ beforeEach(() => {
 });
 
 describe("ProjectBrowser", () => {
+  it.each(["cached", "loaded"])("does not offer actions from a mismatched %s frozen Run in current Results", async (source) => {
+    const run = frozenRun("wrong-run");
+    const onFilter = vi.fn();
+    render(<ResultGallery api={makeApi()} runId="original" results={resultResponse("original").results}
+      getCachedRun={() => source === "cached" ? run : null} loadRun={vi.fn(async () => run)} onFilter={onFilter} />);
+    fireEvent.click(screen.getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("frozen Run did not match the selected Run");
+    expect(screen.queryByRole("button", { name: /^Filter Gallery/ })).not.toBeInTheDocument();
+    expect(onFilter).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("passes the validated frozen Run from current Results to its optional filter callback (nested: %s)", async (nested) => {
+    const run = frozenRun("original");
+    run.plan.jobs[0].seed = 0;
+    const onFilter = vi.fn(() => { throw new Error("Keep inspection open"); });
+    const loadRun = vi.fn(async () => run);
+    render(<ResultGallery api={makeApi()} runId="original" results={resultResponse("original").results}
+      getCachedRun={() => null} loadRun={loadRun} onFilter={onFilter} />);
+    if (nested) {
+      fireEvent.click(screen.getByRole("img"));
+      fireEvent.click(screen.getByRole("button", { name: /Details$/ }));
+    } else fireEvent.click(screen.getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Filter Gallery by Seed" }));
+    expect(onFilter).toHaveBeenCalledExactlyOnceWith({ seed: 0 }, run);
+    expect(loadRun).toHaveBeenCalledWith("original");
+    expect(screen.getByRole("alert")).toHaveTextContent("Keep inspection open");
+    expect(screen.getAllByRole("dialog")).toHaveLength(nested ? 2 : 1);
+  });
+
   it.each([
     ["boolean", false], ["integer", 0], ["float", 0], ["string", ""], ["float", null],
   ] as const)("filters Details using frozen %s %j and preserves conjunction", async (valueType, value) => {

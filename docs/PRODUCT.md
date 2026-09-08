@@ -280,12 +280,16 @@ Run/Job/artifact identity, page-local cross-Run image navigation, and native mod
 Details surfaces with nested-dialog focus handling. Cards retain accessible descriptions and unavailable
 artifact placeholders without visible `Verified` badges or `Job` captions.
 
-In Project-browser Result Details, **Filter Gallery** actions use the selected frozen Job's parameter
-Base/typed value, seed, Prompt revision, Image Input slot Base/Asset, or Asset usage in any slot, plus
+In Project-browser and current-Run Result Details (including nested image Details), **Filter Gallery**
+actions use the selected frozen Job's parameter Base/typed value, seed, Prompt revision, Image Input slot
+Base/Asset, or Asset usage in any slot, plus
 available frozen Workflow/Profile revision identities. They preserve unrelated AND filters and replace
 only the same parameter key/type, slot, or scalar field. Exceeding filter bounds shows an error without
 discarding other predicates. Success closes inspection and opens Gallery with the new filters in one
-navigation step. Current-Run Details without these optional actions is unchanged.
+navigation step, preserving the existing search/status and unrelated AND predicates without forcing a
+Run filter. Current-Run actions require the selected, verified Project to match the frozen Run's Project.
+Otherwise Details explains how to switch to the Run Project using the existing guarded Project selector
+in Batch; no automatic Project switch, form replacement, query change, or dialog closure occurs.
 
 **Diagnostics** in the Gallery/Runs header opens a native dialog independently of diagnostic counts or
 filter matches. It shows indexed problems in scan order, 25 at a time, with at most 20 previous-page

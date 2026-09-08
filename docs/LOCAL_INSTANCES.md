@@ -122,10 +122,10 @@ Test migration and restore against a separate copy, never the only copy of user 
 Do not merely switch to older code after migrating a database. A rollback may require restoring the
 matching backed-up database and filesystem. Before a future revision tracks the initial bootstrap files,
 reconcile those local copies against `installation.local.json`; do not force-checkout over them.
-Installing a separate candidate checkout is also supported. No update command currently overwrites an
-existing installation.
+Installing a separate candidate checkout is also supported. The explicit maintenance commands below
+automate candidate replacement and stable-release updates; neither runs automatically.
 
-For a future existing-build update, follow the shutdown, backup, and revision checks above, then run
+For a manually managed existing-build update, follow the shutdown, backup, and revision checks above, then run
 this in the installed checkout's `frontend/` directory before restarting:
 
 ```bash
@@ -135,6 +135,79 @@ VITE_BATCHCRAFT_API_URL=/ VITE_BATCHCRAFT_INSTANCE='' npm run build
 The explicit `/` also selects same-origin requests in pinned older client code. Rebuilding the frontend
 does not add LAN support to an older launcher; reconcile launcher files through the same deliberate
 update process before enabling `lan_access`.
+
+### Refresh a live-test candidate
+
+Run maintenance from the source/development checkout, not from an installed app. Finish active Runs,
+stop both daily and candidate backends, and keep all data users stopped until the command finishes.
+These macOS tools require `lsof`; they reserve port 8000 and reject open data files or inconclusive
+process checks. They cannot detect remote ComfyUI work or prevent arbitrary external filesystem writers.
+
+```bash
+uv run --directory backend python -m tools.refresh_test
+```
+
+Defaults: read `~/ai/batchcraft-app/app.local.json` for the daily data root and ComfyUI host; replace
+`~/ai/batchcraft-test/app` and `~/ai/batchcraft-test/data` using this source checkout's committed `HEAD`.
+Uncommitted changes are excluded, not automatically committed. `--revision <commit>` pins another
+committed revision. `--daily-app /absolute/path` and `--test-root /absolute/path` override the defaults.
+The candidate retains the live ComfyUI host but is loopback-only, regardless of the daily LAN setting.
+
+Replacement requires an absent/empty test root or a complete installer-owned candidate from the same
+Git repository. Unknown files, changed installed code, symlink/overlapping paths, and partial installs
+are refused. Removal uses Git's worktree handling and deletes only the validated test data directory.
+The old test data is disposable: export anything needed before replacement. Installation/build failure
+can leave a partial candidate requiring manual review; the old candidate is not retained as a backup.
+
+The command independently copies the entire offline daily data root, including Projects, SQLite
+sidecars, and logs. It neither modifies daily data nor merges candidate changes back. No backend starts,
+no GPU Job is submitted, and migrations run normally when the candidate starts. After success:
+
+```bash
+"$HOME/ai/batchcraft-test/app/app.command"
+```
+
+Open `http://127.0.0.1:8000` in a private window or separate browser profile to avoid reusing the daily
+browser's unsaved draft/session state. The daily and candidate apps share port 8000; run only one at a time.
+This live-test candidate is distinct from fake-backed automated tests, which must never use its data.
+
+### Update daily to a stable release
+
+```bash
+# Fetch configured origin tags, then choose the highest numeric stable version.
+uv run --directory backend python -m tools.update_daily --fetch
+
+# Or choose a specific stable tag already present locally.
+uv run --directory backend python -m tools.update_daily --tag v1.0.1
+```
+
+Without `--fetch`, the updater uses local tags only. Fetching is explicit, atomic, and never forced.
+Accepted tag names are exactly `vMAJOR.MINOR` or `vMAJOR.MINOR.PATCH`; `v1.10` sorts above `v1.9`.
+Prereleases, arbitrary branches/commits, and downgrades are refused. Equal numeric versions on different
+commits are also refused; identical-commit aliases are no-ops. This trusts the configured repository's
+stable tags, not a GitHub release label or cryptographic signature. The installed commit must itself
+match a stable tag; an unreleased daily installation requires manual review rather than an automatic
+transition that might roll its database backward.
+
+Defaults are `--daily-app ~/ai/batchcraft-app` and `--backup-root ~/ai/batchcraft-backups`. Before code
+changes, a timestamped backup contains all daily data, configuration, installation metadata, verified
+bootstrap files, and a `backup.json` recording old/new commits and paths. Retain the source repository:
+the backup records the old commit but is not a standalone copy of all Git objects or installed dependencies.
+The updater preserves data and LAN configuration, selects a detached release commit, installs locked
+dependencies, and builds the same-origin frontend. It neither starts the app nor applies migrations;
+migrations happen at the next normal launch.
+
+During code/build changes, `app.local.json` temporarily contains an invalid-schema maintenance blocker.
+Normal old/current launchers refuse to start it. Only after all steps succeed is the original valid
+configuration restored. If an update fails, do not bypass this blocker: first restore/rebuild consistent
+code, dependencies, frontend, and installation metadata using the recorded backup, then restore the
+valid configuration last. Do not automatically copy backup data over live data; migrations after later
+launches may require a deliberate whole-data restore. There is no automatic rollback.
+
+Both commands display paths and revisions and require typing `YES`. `--yes` explicitly skips that prompt,
+not any safety checks. Backups are never automatically pruned. Unknown ignored/untracked installed files
+are refused as well as tracked edits; only installer configuration, verified bootstrap files, and known
+generated dependency/build/cache paths are permitted. Review refusals rather than deleting unknown files.
 
 ## Development sandbox
 

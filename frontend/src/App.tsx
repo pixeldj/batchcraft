@@ -40,6 +40,7 @@ import {
 } from "./features/batch/savedBatch";
 import type { SavedBatchCreateInput } from "./features/batch/SavedBatchSelector";
 import { ProjectBrowser } from "./features/project/ProjectBrowser";
+import { mergeResultDetailsFilter } from "./features/project/mergeResultDetailsFilter";
 import { useWorkspaceNavigation } from "./features/project/useWorkspaceNavigation";
 import { RunWorkspace } from "./features/run/RunWorkspace";
 import {
@@ -1163,6 +1164,15 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           onExecutionControlUnavailableChange={changeExecutionControlUnavailable}
           getCachedRun={getCachedFrozenRun}
           loadRun={loadFrozenRun}
+          onFilter={(filter, frozenRun) => {
+            if (frozenRun.run_id !== run?.run_id || frozenRun.project_id !== run.project_id)
+              throw new Error("The frozen Run did not match the current Run. Close Details and retry.");
+            if (!projectVerified || !selectedProjectId || selectedProjectId !== frozenRun.project_id)
+              throw new Error(`Switch to the Run Project in Batch (${frozenRun.project_name}) using the Project selector, then reopen Details and try again. Your Batch draft and Gallery filters have not been changed.`);
+            if (navigation.filterError)
+              throw new Error(`${navigation.filterError} Close Details and open Gallery to clear invalid filters, then try again.`);
+            navigation.navigate("gallery", mergeResultDetailsFilter(navigation.query, filter));
+          }}
           batchDiverged={batchDiverged}
           visible={navigation.view === "batch"}
           onOpenRun={() => {

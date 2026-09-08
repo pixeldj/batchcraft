@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import type { BatchcraftApi } from "../../api/client";
 import type { ExecutionResponse, ResultResponse, RunResponse } from "../../api/types";
-import { ResultDetailsDialog } from "./ResultDetailsDialog";
+import { ResultDetailsDialog, type ResultDetailsFilter } from "./ResultDetailsDialog";
 import { ResultLightbox, type LightboxItem } from "./ResultLightbox";
 
 interface Props {
@@ -13,6 +13,7 @@ interface Props {
   runLabel?: string;
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
+  onFilter?(filter: ResultDetailsFilter, run: RunResponse): void;
 }
 
 /**
@@ -29,6 +30,7 @@ export function ResultGallery({
   runLabel,
   getCachedRun,
   loadRun,
+  onFilter,
 }: Props) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [failedKeys, setFailedKeys] = useState<Set<string>>(new Set());
@@ -179,6 +181,7 @@ export function ResultGallery({
           restoreTarget={detailsTarget.restoreTarget}
           getCachedRun={getCachedRun}
           loadRun={loadRun}
+          onFilter={onFilter}
           onClose={() => setDetailsTarget(null)}
         />
       ) : null}

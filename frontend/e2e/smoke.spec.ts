@@ -105,7 +105,9 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   const override = preview.jobs.find((job) => job.resolved_parameters.find((p) => p.parameter_key === "steps")?.value === 20)!;
   expect(base.seed).not.toBe(override.seed);
   await page.getByLabel(/^Run Name/).fill("Base and equal override");
+  const created = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs" && response.request().method() === "POST");
   await page.getByRole("button", { name: "Create Run", exact: true }).click();
+  const run = await (await created).json() as RunCreatedResponse;
   await page.getByRole("button", { name: "Start Run", exact: true }).click();
   await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
 
@@ -122,10 +124,89 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   const add = browser.getByRole("button", { name: "+ Add filter", exact: true });
   const parameterChip = browser.getByRole("button", { name: /^Edit .*\(integer\):/ });
   const filters = () => JSON.parse(new URL(page.url()).searchParams.get("filters") ?? "{}");
+  const details = page.getByRole("dialog", { name: /^Job \d+ .* Artifact 1$/ });
+  const currentResults = page.locator("#current-run-workspace").getByRole("region", { name: "Results", exact: true });
+  const currentLightbox = page.getByRole("dialog", { name: "Result image preview", exact: true });
+  const recovery = () => page.evaluate(() => localStorage.getItem("batchcraft.working-session-recovery.v4"));
+  await expect.poll(async () => JSON.parse((await recovery())!).draft.seedValues).toBe("987654");
+  const draftBeforeReview = await recovery();
+  expect(JSON.parse(draftBeforeReview!).current_run_id).toBe(run.run_id);
+
+  // These entry points belong to the mounted current Run, not ProjectBrowser Details.
+  for (const job of [base, override]) {
+    const trigger = currentResults.getByRole("button", { name: `Details for Job ${job.ordinal}, artifact 1`, exact: true });
+    await trigger.click();
+    await expect(details.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(details).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await trigger.press("Enter");
+    await details.getByRole("button", { name: "Filter Gallery by Steps (integer)", exact: true }).click();
+    const parameter = job === base
+      ? { key: "steps", value_type: "integer", mode: "base" }
+      : { key: "steps", value_type: "integer", mode: "equals", value: 20 };
+    await expect(details).toHaveCount(0);
+    await expect(nav.getByRole("button", { name: "Gallery", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page).toHaveURL((url) => url.searchParams.get("view") === "gallery" && !url.searchParams.has("run"));
+    expect(filters()).toEqual({ parameters: [parameter] });
+    await expect(browser.locator(".pb-result")).toHaveCount(1);
+    await expect(browser.getByRole("button", { name: new RegExp(`^Details for .*Job ${job.ordinal}, artifact 1:`) })).toBeVisible();
+    const identity = await browser.locator(".pb-result").getAttribute("data-result-identity");
+    const strip = page.getByRole("region", { name: "Current Run", exact: true });
+    await expect(strip).toContainText(project.name);
+    await expect(strip).toContainText("Base and equal override");
+    await expect(strip.getByText("succeeded", { exact: true })).toBeVisible();
+    await strip.getByRole("button", { name: "View current Run", exact: true }).click();
+    await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
+
+    const image = currentResults.locator(".result-card").filter({
+      has: page.getByRole("button", { name: `Details for Job ${job.ordinal}, artifact 1`, exact: true }),
+    }).locator(".result-image-button");
+    await image.click();
+    await expect(currentLightbox.locator("img")).toHaveJSProperty("naturalWidth", 384);
+    await expect(currentLightbox.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+    const nestedTrigger = currentLightbox.getByRole("button", { name: /Details/ });
+    await nestedTrigger.click();
+    await expect(details.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(details).toHaveCount(0);
+    await expect(currentLightbox).toBeVisible();
+    await expect(nestedTrigger).toBeFocused();
+    await nestedTrigger.press("Enter");
+    await page.screenshot({ path: testInfo.outputPath(`current-run-filter-${job === base ? "base" : "override"}.png`), scale: "css" });
+    await details.getByRole("button", { name: "Filter Gallery by Seed", exact: true }).click();
+    await expect(details).toHaveCount(0);
+    await expect(currentLightbox).toHaveCount(0);
+    await expect(page.locator("[data-overlay-level]")).toHaveCount(0);
+    await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
+    await expect(nav.getByRole("button", { name: "Gallery", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(filters()).toEqual({ parameters: [parameter], seed: job.seed });
+    expect(new URL(page.url()).searchParams.has("run")).toBe(false);
+    await expect(browser.locator(".pb-result")).toHaveCount(1);
+    await expect(browser.locator(".pb-result")).toHaveAttribute("data-result-identity", identity!);
+    expect(await page.evaluate(() => document.activeElement?.closest("#current-run-workspace, dialog") === null)).toBe(true);
+    // Navigation must leave the visible destination keyboard-operable, not trapped in hidden inspection.
+    await page.keyboard.press("Tab");
+    if (await page.evaluate(() => !document.hasFocus() && document.activeElement === document.body)) {
+      await page.keyboard.press("Tab");
+    }
+    expect(await page.evaluate(() => document.activeElement instanceof HTMLElement
+      && document.activeElement !== document.body && document.activeElement.checkVisibility()
+      && document.activeElement.closest("#current-run-workspace, dialog") === null)).toBe(true);
+    await browser.getByRole("button", { name: "Clear advanced", exact: true }).click();
+    await expect(browser.locator(".pb-result")).toHaveCount(2);
+    await strip.getByRole("button", { name: "View current Run", exact: true }).click();
+    await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
+    await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
+    await expect(page.getByRole("spinbutton", { name: /^Seed / })).toHaveValue("987654");
+    await expect(page.getByLabel(/^Run Name/)).toHaveValue("Unpublished draft - keep me");
+    await expect(page.getByRole("button", { name: /^Create (Another )?Run$/ })).toBeEnabled();
+    await expect(currentResults.locator(".result-card")).toHaveCount(2);
+    expect(await recovery()).toBe(draftBeforeReview);
+  }
   await nav.getByRole("button", { name: "Gallery", exact: true }).click();
   await expect(browser.locator(".pb-result")).toHaveCount(2);
   await expect(browser.locator(".pb-image-button img").first()).toHaveJSProperty("naturalWidth", 384);
-  const details = page.getByRole("dialog", { name: /^Job \d+ .* Artifact 1$/ });
   const lightbox = page.getByRole("dialog", { name: "Project Result image", exact: true });
   for (const job of [base, override]) {
     const card = browser.locator(".pb-result").filter({

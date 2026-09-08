@@ -33,7 +33,7 @@ interface Props {
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
   onClose(): void;
-  onFilter?(filter: ResultDetailsFilter): void;
+  onFilter?(filter: ResultDetailsFilter, run: RunResponse): void;
 }
 
 export function ResultDetailsDialog({
@@ -47,8 +47,8 @@ export function ResultDetailsDialog({
   onFilter,
 }: Props) {
   const cachedRun = getCachedRun(runId);
-  const [run, setRun] = useState<RunResponse | null>(cachedRun);
-  const [loading, setLoading] = useState(cachedRun === null);
+  const [run, setRun] = useState<RunResponse | null>(cachedRun?.run_id === runId ? cachedRun : null);
+  const [loading, setLoading] = useState(cachedRun?.run_id !== runId);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [filterError, setFilterError] = useState<string | null>(null);
@@ -64,7 +64,11 @@ export function ResultDetailsDialog({
     void loadRun(runId).then(
       (loadedRun) => {
         if (!current) return;
-        setRun(loadedRun);
+        if (loadedRun.run_id !== runId) {
+          setError("The frozen Run did not match the selected Run.");
+        } else {
+          setRun(loadedRun);
+        }
         setLoading(false);
       },
       (caught: unknown) => {
@@ -125,7 +129,7 @@ export function ResultDetailsDialog({
         {filterError ? <p className="operation-error" role="alert">{filterError}</p> : null}
         {run && job ? <GenerationDetails run={run} job={job} onFilter={onFilter ? (filter) => {
           try {
-            onFilter(filter);
+            onFilter(filter, run);
           } catch (caught) {
             setFilterError(errorMessage(caught));
           }
@@ -152,7 +156,7 @@ function GenerationDetails({ run, job, onFilter }: {
   const selection = run.batch_snapshot.workflow_selection;
   function action(label: string, filter: ResultDetailsFilter, text = "Filter Gallery..."): DetailAction[] {
     return onFilter && !validateHistoryFilters(filter)
-      ? [{ label, text, onClick: () => onFilter(filter) }]
+      ? [{ label, text, onClick: () => onFilter(filter, run) }]
       : [];
   }
 

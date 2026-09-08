@@ -243,8 +243,15 @@ Asset-in-any-slot intent from the selected frozen Job, and Workflow/Profile revi
 snapshot where available. They preserve unrelated AND predicates and replace only the matching
 parameter key/type, slot, or scalar field. Merged-filter validation enforces the existing caps; failure
 shows an error in Details without truncation or navigation. Success closes Details and image inspection,
-clears the cursor, and changes Gallery/query together in one navigation operation. Current-Run Details
-without the optional callback remains unchanged.
+clears the cursor, and changes Gallery/query together in one navigation operation. At that checkpoint,
+current-Run Details remained unchanged without the optional callback. The owner-requested follow-up now
+wires App's current-Run card and nested lightbox Details through the same shared `mergeResultDetailsFilter`
+helper as ProjectBrowser. It retains existing search/status/AND predicates without forcing `run_id`.
+Navigation requires the selected, verified Project to match the frozen Run's Project and the frozen Run
+to match the current Run. Otherwise an actionable Details error directs the user to the existing guarded
+Project selector in Batch; it never silently switches Project, replaces forms, changes queries, or closes
+inspection. Invalid URL filter intent and cap failures likewise leave inspection open. Successful workspace
+navigation closes all Details/lightbox portals. Both cached and loaded Details provenance check Run ID.
 
 Standalone `HistoryDiagnostics` is wired to the ProjectBrowser header regardless of counts or filter
 matches. Its native dialog reads `/history/diagnostics` in scan order, with one 25-row page and at most

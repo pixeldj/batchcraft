@@ -86,6 +86,18 @@ data and start GPU Jobs. Do not expose it to the internet.
 There are no automatic updates, and the installer does not reuse existing destinations. Follow
 [updating and backing up](docs/LOCAL_INSTANCES.md#updating-and-backing-up) before changing an installation.
 
+From the source checkout, after stopping daily and test backends, maintenance commands can refresh an
+independent live-test candidate or update daily to a stable release:
+
+```bash
+uv run --directory backend python -m tools.refresh_test
+uv run --directory backend python -m tools.update_daily --fetch
+```
+
+Test refresh replaces only validated test folders and copies daily data using committed `HEAD`.
+Daily updates accept only stable version tags and take a full data backup before changing code.
+Both require confirmation and leave servers stopped. See [maintenance details and failure recovery](docs/LOCAL_INSTANCES.md#refresh-a-live-test-candidate).
+
 ### Development Sandbox
 
 For fake-backed development without GPU work, install dependencies from the source repository root,

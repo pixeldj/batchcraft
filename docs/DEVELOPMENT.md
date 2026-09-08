@@ -648,7 +648,15 @@ parameter Base/typed equality, seed, Prompt revision, available Workflow/Profile
 slot Base/Asset, and Asset in any slot. Merge with unrelated AND predicates, replace only the matching
 key/type, slot, or scalar field, and validate all caps before closing inspection. A cap error stays in
 Details without truncating filters. Success closes Details and image inspection and atomically navigates
-to Gallery with the merged query and no cursor. Current-Run callers without the callback remain unchanged.
+to Gallery with the merged query and no cursor. Current-Run Details was initially left without the
+callback; App now wires it through RunWorkspace/ResultsPanel/ResultGallery for both card and nested
+lightbox Details. Both browser paths share `mergeResultDetailsFilter`. Current-Run navigation requires
+matching frozen/current Run identity and a selected, verified Project matching the frozen Run's Project.
+A mismatch throws actionable guidance in Details to use the existing guarded Project selector in Batch;
+it never switches Project or overwrites the draft/query. Invalid URL filter intent also blocks the action.
+Success preserves existing search/status/AND predicates, adds no implicit Run filter, and uses workspace
+navigation's existing portal/dialog closure. Cached and loaded Details provenance must match the requested
+Run ID. Standalone callers that omit the optional callback still offer no filter actions.
 
 Standalone `HistoryDiagnostics` is wired into the ProjectBrowser header, not gated on diagnostic counts,
 filter matches, or provenance enrichment. Use its SQL-only `/history/diagnostics` API with 25 rows and

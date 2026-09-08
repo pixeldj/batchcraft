@@ -669,6 +669,16 @@ in each serving mode. An earlier mobile Vite execution-completion timeout did no
 rerun or three focused repeats; it remains an unexplained intermittent test caveat, not a claimed fix.
 Backend code is unchanged since the 1,330-test checkpoint.
 
+Owner-requested current-Run Details follow-up: card and nested lightbox Details now expose the same
+Filter Gallery actions, including Asset in any slot, through shared merge/validation logic. Existing
+search/status/AND predicates are retained without forcing a Run filter. A different or unverified draft
+Project blocks navigation with guidance to the guarded Project selector in Batch; forms, queries, and
+inspection remain intact. Cached/loaded Details provenance checks the requested Run ID. No backend,
+durable format, candidate installation, or everyday-data changes are involved. Verification passed:
+692 frontend tests across 19 files (12 added), full frontend typecheck, lint, and production build.
+Browser verification passed with 14 desktop/mobile tests in each of Vite and built modes, including
+current-Run card and nested lightbox Details filters, draft/Preview retention, and dialog focus cleanup.
+
 Final owner acceptance remains pending. Scope approval
 does not mean final UI acceptance. Follow the plan's short
 [owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance); preserve meaningful tests
@@ -1258,6 +1268,17 @@ same-origin serving. Ruff, mypy, lint/typecheck, and builds pass. The pinned eve
 backed up and updated without changing application source or data formats. Read-only browser checks
 from the Mac passed at its LAN IP, localhost, and loopback; a second physical device was not tested.
 Development/test listeners remain loopback-only. No authentication or wildcard CORS is added.
+
+Explicit maintenance follow-up: `tools.refresh_test` replaces a validated installer-owned live-test
+candidate with committed code and an independent full offline daily-data copy. `tools.update_daily`
+accepts only stable numeric version tags, refuses downgrades/ambiguous aliases/unreleased installed
+commits, and makes a full data/configuration backup before code changes. Shared guards reject unsafe
+paths, unknown installed files, and open/inconclusive process state. A failed daily update leaves a
+configuration blocker so mixed code/build outputs cannot launch normally; recovery is manual.
+Neither tool starts a backend, submits GPU Jobs, or automatically promotes development code. Verification:
+1,384 backend tests including 54 maintenance tests, Ruff lint/format, and mypy passed. Tests use disposable
+repositories and mocked builds/process probes, not everyday or candidate data. Usage and recovery are
+documented in `LOCAL_INSTANCES.md`; this is explicit user-directed maintenance, not automatic updates.
 
 ### BC-024: Live current-node progress
 

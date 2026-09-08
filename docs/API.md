@@ -582,14 +582,18 @@ previous bookmarks. Its Refresh explicitly restarts at page one using GET only; 
 refreshing diagnostics never trigger a scan. Reindex Project closes the dialog and invokes the owning
 browser's explicit repair action. Empty diagnostics describe the last index, not newly verified storage.
 
-Project-browser Result Details can apply parameter Base/typed equality, seed, exact Prompt revision,
-available Workflow/Profile revision identities, Image Input slot Base/Asset, and Asset-in-any-slot
+Project-browser and current-Run Result Details can apply parameter Base/typed equality, seed, exact
+Prompt revision, available Workflow/Profile revision identities, Image Input slot Base/Asset, and Asset-in-any-slot
 filters from the frozen Job and snapshots. The action preserves unrelated filters under AND, replaces
 the same parameter key/type or slot predicate (or scalar identity field), and validates the merged
 8-parameter/4-slot/JSON-size bounds. Failure stays in Details with an error; no filters are truncated.
 Success closes Details and image inspection, clears the cursor, and navigates to Gallery with the
-updated query in one navigation operation. No new mutation endpoint is involved. Current-Run Details
-without the optional callback retains its existing behavior and does not show these actions.
+updated query in one navigation operation. No new mutation endpoint is involved. Current-Run card and
+nested lightbox Details are now wired to the same merge/validation path, preserving search/status and
+unrelated AND filters without adding an implicit Run filter. Navigation requires a selected, verified
+Project matching the frozen Run's Project; mismatches remain in Details with guidance to use the guarded
+Project selector in Batch, without changing forms or queries. Standalone callers without the optional
+callback still do not show these actions.
 
 Run/Result pages contain `project_id`, nullable `generation` and `scanned_at`, `items`, `next_cursor`, and `has_more`.
 Run items contain `run` plus projected `result_count`. Result items contain compact `run` context,

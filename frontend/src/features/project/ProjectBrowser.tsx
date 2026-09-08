@@ -13,7 +13,8 @@ import { errorMessage } from "../../utils/errors";
 import { useModalDialog } from "../../components/useModalDialog";
 import { ResultDetailsDialog, type ResultDetailsFilter } from "../results/ResultDetailsDialog";
 import { RunPlanDialog } from "../run/RunPlanDialog";
-import { HistoryFilters, validateHistoryFilters } from "./HistoryFilters";
+import { HistoryFilters } from "./HistoryFilters";
+import { mergeResultDetailsFilter } from "./mergeResultDetailsFilter";
 import { HistoryDiagnostics } from "./HistoryDiagnostics";
 import {
   historyResultIdentity as identity,
@@ -254,23 +255,10 @@ function Browser({
     onViewChange("gallery", { ...query, run_id: run.run_id, cursor: null });
   }
   function filterGallery(filter: ResultDetailsFilter) {
-    const filters = { ...query.filters, ...filter };
-    if ("parameters" in filter) {
-      const entry = filter.parameters[0];
-      filters.parameters = [...(query.filters?.parameters ?? []).filter(
-        (parameter) => parameter.key !== entry.key || parameter.value_type !== entry.value_type,
-      ), entry];
-    } else if ("image_inputs" in filter) {
-      const entry = filter.image_inputs[0];
-      filters.image_inputs = [...(query.filters?.image_inputs ?? []).filter(
-        (input) => input.slot_key !== entry.slot_key,
-      ), entry];
-    }
-    const validation = validateHistoryFilters(filters);
-    if (validation) throw new Error(`${validation} Close Details to edit Gallery filters, then try again.`);
+    const nextQuery = mergeResultDetailsFilter(query, filter);
     close();
     setViewedImage(null);
-    onViewChange("gallery", { ...query, filters, cursor: null });
+    onViewChange("gallery", nextQuery);
   }
 
   return (

@@ -3835,6 +3835,166 @@ describe("Result lightbox", () => {
 });
 
 describe("Result Details", () => {
+  it.each([false, true])("filters current-Run Details (nested lightbox: %s) with frozen values and the existing Gallery query", async (nested) => {
+    const frozen = frozenProvenanceRun();
+    frozen.plan.jobs[0].resolved_parameters = [
+      { parameter_key: "count", label: "Count", value: 0 },
+      { parameter_key: "enabled", label: "Enabled", value: false },
+      { parameter_key: "base", label: "Base", value: null },
+    ];
+    frozen.batch_snapshot.workflow_selection.workflow_profile.parameters = [
+      { key: "count", label: "Count", node_id: "1", input_name: "count", value_type: "integer" },
+      { key: "enabled", label: "Enabled", node_id: "1", input_name: "enabled", value_type: "boolean" },
+      { key: "base", label: "Base", node_id: "1", input_name: "base", value_type: "float" },
+    ];
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: frozen.run_id, results: [result(1, 1, "image/png", "cat.png", 100)] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    await within(currentResultsSection()).findByAltText("Result 1 from Job 1: cat.png");
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Keep my draft" } });
+    let filters: HistoryProvenanceFilters = {
+      prompt_id: "keep-prompt", parameters: [{ key: "count", value_type: "integer", mode: "base" }],
+      image_inputs: [{ slot_key: "style", mode: "base" }],
+    };
+    const query = new URLSearchParams({ q: "study", sort: "oldest", status: "succeeded", available: "false", batch: "existing-batch", filters: JSON.stringify(filters) });
+    act(() => {
+      window.history.pushState(null, "", `/?${query}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const before = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    const actions: Array<[string, HistoryProvenanceFilters]> = [
+      ["Count (integer)", { parameters: [{ key: "count", value_type: "integer", mode: "equals", value: 0 }] }],
+      ["Enabled (boolean)", { parameters: [{ key: "count", value_type: "integer", mode: "equals", value: 0 }, { key: "enabled", value_type: "boolean", mode: "equals", value: false }] }],
+      ["Base (float)", { parameters: [{ key: "count", value_type: "integer", mode: "equals", value: 0 }, { key: "enabled", value_type: "boolean", mode: "equals", value: false }, { key: "base", value_type: "float", mode: "base" }] }],
+      ["Style image slot", { image_inputs: [{ slot_key: "style", mode: "asset", asset_id: "ref-02" }] }],
+      ["Style image Asset in any slot", { asset_id: "ref-02" }],
+      ["Pose image slot", { image_inputs: [{ slot_key: "style", mode: "asset", asset_id: "ref-02" }, { slot_key: "pose", mode: "base" }] }],
+      ["Seed", { seed: 38192831 }],
+      ["Prompt revision", { prompt_version_id: frozen.plan.jobs[0].prompt_version_id }],
+      ["Workflow revision", { workflow_version_id: frozen.batch_snapshot.workflow_selection.workflow_version_id! }],
+      ["Profile revision", { profile_version_id: frozen.batch_snapshot.workflow_selection.workflow_profile_version_id! }],
+    ];
+    for (const [label, patch] of actions) {
+      if (nested) {
+        fireEvent.click(within(currentResultsSection()).getByAltText("Result 1 from Job 1: cat.png"));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Result image preview" })).getByRole("button", { name: /Details/ }));
+      } else {
+        fireEvent.click(within(currentResultsSection()).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+      }
+      fireEvent.click(await screen.findByRole("button", { name: `Filter Gallery by ${label}` }));
+      filters = { ...filters, ...patch };
+      const url = new URLSearchParams(window.location.search);
+      expect(url.get("view")).toBe("gallery");
+      expect(url.get("run")).toBeNull();
+      expect(url.get("q")).toBe("study");
+      expect(url.get("status")).toBe("succeeded");
+      expect(url.get("available")).toBe("false");
+      expect(url.get("batch")).toBe("existing-batch");
+      expect(url.get("sort")).toBe("oldest");
+      expect(JSON.parse(url.get("filters")!)).toEqual(filters);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(document.querySelector("[data-overlay-level]")).toBeNull();
+      expect(document.body.style.overflow).toBe("");
+      await waitFor(() => expect(api.browseProjectResults).toHaveBeenCalledWith("project-1", expect.objectContaining({ filters, q: "study", cursor: null }), expect.any(AbortSignal)));
+      navigateWorkspace("Batch");
+      expect(screen.getByLabelText("Batch name")).toHaveValue("Keep my draft");
+      expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(before);
+    }
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(within(currentResultsSection()).getByAltText("Result 1 from Job 1: cat.png")).toBeInTheDocument();
+  });
+
+  it.each([false, true])("rejects cross-Project current-Run filtering without overwriting the draft or query (nested: %s)", async (nested) => {
+    saveWorkingSession(populatedBatchForm(), "run-123", "project-1");
+    const frozen = frozenProvenanceRun();
+    frozen.project_id = "other-project";
+    frozen.project_name = "Other Project";
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: frozen.run_id, results: [result(1, 1, "image/png", "cat.png", 100)] })),
+    });
+    window.history.replaceState(null, "", '/?q=keep&status=failed&filters=%7B%22seed%22%3A0%7D');
+    render(<App api={api} />);
+    const image = await screen.findByAltText("Result 1 from Job 1: cat.png");
+    await waitFor(() => expect(loadWorkingSession().form.prompts[0].libraryProjectId).toBe("project-1"));
+    fireEvent.change(screen.getByLabelText("Batch name"), { target: { value: "Unsaved work" } });
+    const before = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    const url = window.location.href;
+    if (nested) {
+      fireEvent.click(image);
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Result image preview" })).getByRole("button", { name: /Details/ }));
+    } else fireEvent.click(within(currentResultsSection()).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Filter Gallery by Style image Asset in any slot" }));
+    expect(within(screen.getByRole("dialog", { name: "Job 001 · Artifact 1" })).getByRole("alert")).toHaveTextContent("Switch to the Run Project in Batch (Other Project)");
+    expect(screen.getAllByRole("dialog")).toHaveLength(nested ? 2 : 1);
+    expect(window.location.href).toBe(url);
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(before);
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    expect(document.body.style.overflow).toBe("hidden");
+  });
+
+  it.each(["parameter", "image"] as const)("keeps nested current-Run inspection and filters intact on the %s cap", async (kind) => {
+    const frozen = frozenProvenanceRun();
+    frozen.plan.jobs[0].resolved_parameters = [{ parameter_key: "new", label: "New", value: 0 }];
+    frozen.batch_snapshot.workflow_selection.workflow_profile.parameters = [{ key: "new", label: "New", node_id: "1", input_name: "new", value_type: "integer" }];
+    const api = makeApi({
+      getRun: vi.fn(async () => frozen), getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: frozen.run_id, results: [result(1, 1, "image/png", "cat.png", 100)] })),
+    });
+    render(<App api={api} pollIntervalMs={5} />);
+    await createRunAndStart();
+    const image = await within(currentResultsSection()).findByAltText("Result 1 from Job 1: cat.png");
+    const filters: HistoryProvenanceFilters = kind === "parameter"
+      ? { parameters: Array.from({ length: 8 }, (_, i) => ({ key: `p${i}`, value_type: "integer", mode: "base" })) }
+      : { image_inputs: Array.from({ length: 4 }, (_, i) => ({ slot_key: `s${i}`, mode: "base" })) };
+    act(() => {
+      window.history.pushState(null, "", `/?q=keep&filters=${encodeURIComponent(JSON.stringify(filters))}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const url = window.location.href;
+    const before = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    fireEvent.click(image);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Result image preview" })).getByRole("button", { name: /Details/ }));
+    fireEvent.click(await screen.findByRole("button", { name: `Filter Gallery by ${kind === "parameter" ? "New (integer)" : "Pose image slot"}` }));
+    expect(within(screen.getByRole("dialog", { name: "Job 001 · Artifact 1" })).getByRole("alert")).toHaveTextContent(kind === "parameter" ? "at most 8" : "at most 4");
+    expect(screen.getAllByRole("dialog")).toHaveLength(2);
+    expect(window.location.href).toBe(url);
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(before);
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(document.body.style.overflow).toBe("hidden");
+  });
+
+  it.each(["unverified Project", "invalid URL filters"])("blocks current-Run filtering for %s without silently clearing intent", async (reason) => {
+    saveWorkingSession(populatedBatchForm(), "run-123", "project-1");
+    const frozen = frozenProvenanceRun();
+    const api = makeApi({
+      ...(reason === "unverified Project" ? { listProjects: vi.fn(async () => ({ projects: [] })) } : {}),
+      getRun: vi.fn(async () => frozen), getExecution: vi.fn(async () => execution("succeeded")),
+      getResults: vi.fn(async () => ({ run_id: frozen.run_id, results: [result(1, 1, "image/png", "cat.png", 100)] })),
+    });
+    if (reason === "invalid URL filters") window.history.replaceState(null, "", '/?q=keep&filters=invalid');
+    render(<App api={api} />);
+    await screen.findByAltText("Result 1 from Job 1: cat.png");
+    if (reason === "invalid URL filters")
+      await waitFor(() => expect(loadWorkingSession().form.prompts[0].libraryProjectId).toBe("project-1"));
+    const before = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    const url = window.location.href;
+    fireEvent.click(within(currentResultsSection()).getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Filter Gallery by Seed" }));
+    expect(within(screen.getByRole("dialog", { name: "Job 001 · Artifact 1" })).getByRole("alert")).toHaveTextContent(
+      reason === "unverified Project" ? "Switch to the Run Project in Batch" : "Close Details and open Gallery to clear invalid filters",
+    );
+    expect(window.location.href).toBe(url);
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(before);
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+  });
+
   function frozenProvenanceRun(runId = "run-123", runNumber = 7) {
     const frozen = runLookupResponse("succeeded", runId, runNumber);
     frozen.batch_snapshot.prompt_versions[0].version_number = 3;
@@ -3964,7 +4124,8 @@ describe("Result Details", () => {
       name: "Details for Job 1, artifact 1",
     }));
     const dialog = await screen.findByRole("dialog", { name: "Job 001 · Artifact 1" });
-    expect(within(dialog).getByText("Guidance").nextElementSibling).toHaveTextContent(/^Base workflow · 7$/);
+    expect(within(dialog).getByText("Guidance").nextElementSibling?.firstChild?.textContent).toBe("Base workflow · 7");
+    expect(within(dialog).getByRole("button", { name: "Filter Gallery by Guidance (float)" })).toBeInTheDocument();
     expect(within(dialog).getByText("Caption").nextElementSibling).toHaveTextContent(/^"" \(empty string\)$/);
     expect(dialog).not.toHaveTextContent("cfg_internal");
     expect(dialog).not.toHaveTextContent("caption_internal");

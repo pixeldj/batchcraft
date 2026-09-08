@@ -8,6 +8,7 @@ import type {
   RunResponse,
 } from "../../api/types";
 import { ResultGallery } from "./ResultGallery";
+import type { ResultDetailsFilter } from "./ResultDetailsDialog";
 
 interface Props {
   api: BatchcraftApi;
@@ -19,6 +20,7 @@ interface Props {
   onRefresh(): void;
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
+  onFilter?(filter: ResultDetailsFilter, run: RunResponse): void;
 }
 
 export function ResultsPanel({
@@ -31,6 +33,7 @@ export function ResultsPanel({
   onRefresh,
   getCachedRun,
   loadRun,
+  onFilter,
 }: Props) {
   const [expanded, setExpanded] = useState(true);
 
@@ -83,6 +86,7 @@ export function ResultsPanel({
             results={results}
             getCachedRun={getCachedRun}
             loadRun={loadRun}
+            onFilter={onFilter}
           />
         </div>
       ) : null}

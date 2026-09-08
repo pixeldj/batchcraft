@@ -9,6 +9,7 @@ import type {
   RunStatus,
 } from "../../api/types";
 import { ResultsPanel } from "../results/ResultsPanel";
+import type { ResultDetailsFilter } from "../results/ResultDetailsDialog";
 import { RunPanel } from "./RunPanel";
 import { useRunExecution } from "./useRunExecution";
 import { runDisplayLabel } from "./runDisplay";
@@ -26,6 +27,7 @@ interface Props {
   onExecutionControlUnavailableChange(runId: string, unavailable: boolean): void;
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
+  onFilter?(filter: ResultDetailsFilter, run: RunResponse): void;
   batchDiverged: boolean;
   visible: boolean;
   onOpenRun(): void;
@@ -44,6 +46,7 @@ export function RunWorkspace({
   onExecutionControlUnavailableChange,
   getCachedRun,
   loadRun,
+  onFilter,
   batchDiverged,
   visible,
   onOpenRun,
@@ -123,6 +126,7 @@ export function RunWorkspace({
         onRefresh={execution.refreshResults}
         getCachedRun={getCachedRun}
         loadRun={loadRun}
+        onFilter={onFilter}
       />
       </div>
     </>
