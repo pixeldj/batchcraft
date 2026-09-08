@@ -350,6 +350,7 @@ describe("Workspace provenance filters", () => {
       { key: "flag", value_type: "boolean", mode: "equals", value: false },
       { key: "steps", value_type: "integer", mode: "equals", value: 0 },
       { key: "caption", value_type: "string", mode: "equals", value: "" },
+      { key: "scale", value_type: "float", mode: "equals", value: 0.125 },
     ],
   };
 
@@ -376,6 +377,21 @@ describe("Workspace provenance filters", () => {
     expect(screen.getByRole("button", { name: 'Edit caption (string): ""' })).toBeVisible();
     expect(api.getHistoryChoices).not.toHaveBeenCalled();
     expect(api.listProjectRuns).not.toHaveBeenCalled();
+  });
+
+  it.each(["gallery", "runs"] as const)("passes raw float tokens and JSON-looking strings unchanged in scope to %s", async (view) => {
+    const caption = '{"seed":1,"seed":2} [ ] \\ "value":1.0';
+    const raw = `{"parameters":[{"value":9007199254740991.1,"key":"scale","mode":"equals","value_type":"float"},{"key":"caption","value_type":"string","mode":"equals","value":${JSON.stringify(caption)}}]}`;
+    window.history.replaceState(null, "", `/?${new URLSearchParams({ ...basicParams, view, filters: raw })}`);
+    const api = makeApi();
+    render(<App api={api} />);
+    const browse = view === "gallery" ? api.browseProjectResults : api.browseProjectRuns;
+    await waitFor(() => expect(browse).toHaveBeenCalledWith("project-1", {
+      ...basicQuery, filters: JSON.parse(raw), limit: view === "gallery" ? 48 : 25, cursor: null,
+    }, expect.any(AbortSignal)));
+    expect(new URLSearchParams(window.location.search).get("filters")).toBe(raw);
+    expect(view === "gallery" ? api.browseProjectRuns : api.browseProjectResults).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Clear invalid filters" })).not.toBeInTheDocument();
   });
 
   it("changes and removes an advanced filter without losing any basic filter", async () => {
@@ -431,6 +447,17 @@ describe("Workspace provenance filters", () => {
   it.each([
     ["invalid JSON", "{not-json"],
     ["unknown fields", JSON.stringify({ seed: 0, unknown: "must not be ignored" })],
+    ["duplicate root keys", '{"seed":1,"seed":2}'],
+    ["escaped duplicate root keys", '{"seed":1,"\\u0073eed":2}'],
+    ["duplicate parameter keys", '{"parameters":[{"key":"steps","value_type":"integer","mode":"equals","value":1,"value":2}]}'],
+    ["escaped duplicate Image Input keys", '{"image_inputs":[{"slot_key":"reference","mode":"base","\\u006dode":"asset","asset_id":"asset-1"}]}'],
+    ["rounded fractional seed", '{"seed":9007199254740991.1}'],
+    ["decimal seed", '{"seed":1.0}'],
+    ["exponent seed", '{"seed":1e0}'],
+    ["rounded fractional integer parameter", '{"parameters":[{"value":9007199254740991.1,"key":"steps","mode":"equals","value_type":"integer"}]}'],
+    ["decimal integer parameter", '{"parameters":[{"key":"steps","value_type":"integer","mode":"equals","value":1.0}]}'],
+    ["exponent integer parameter", '{"parameters":[{"value":1e0,"key":"steps","mode":"equals","value_type":"integer"}]}'],
+    ["oversize JSON", `{"seed":0}${" ".repeat(16384)}`],
   ])("blocks both browse endpoints for %s until Clear invalid filters", async (_label, raw) => {
     window.history.replaceState(null, "", `/?${new URLSearchParams({ ...basicParams, view: "gallery", filters: raw })}`);
     const api = makeApi();
@@ -3754,10 +3781,10 @@ describe("Result lightbox", () => {
     fireEvent.click(image.closest("button") as HTMLElement);
 
     const lightbox = await screen.findByRole("dialog", { name: "Project Result image" });
-    expect(within(lightbox).getByText("1 of 3 loaded images")).toBeInTheDocument();
+    expect(within(lightbox).getByText("1/3")).toHaveAccessibleName("1 of 3 loaded images");
     expect(within(lightbox).getByRole("img")).toHaveAccessibleName("Run 7, Run 7, Job 1, artifact 1: first.png");
     fireEvent.keyDown(lightbox, { key: "ArrowRight" });
-    expect(within(lightbox).getByText("2 of 3 loaded images")).toBeInTheDocument();
+    expect(within(lightbox).getByText("2/3")).toHaveAccessibleName("2 of 3 loaded images");
     expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(api.getResults).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
@@ -4386,6 +4413,7 @@ function makeApi(
       runs: [],
       diagnostics: [],
     })),
+    browseProjectDiagnostics: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     browseProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     browseProjectResults: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     listAdoptableProjects: vi.fn(async () => ({ projects: [] })),

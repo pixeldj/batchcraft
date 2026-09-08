@@ -163,6 +163,7 @@ GET  /api/projects/{project_id}/runs
 GET  /api/projects/{project_id}/history/runs
 GET  /api/projects/{project_id}/history/results
 GET  /api/projects/{project_id}/history/choices
+GET  /api/projects/{project_id}/history/diagnostics
 PATCH /api/projects/{project_id}
 POST /api/projects/{project_id}/archive
 GET  /api/projects/{project_id}/prompts
@@ -482,9 +483,12 @@ asynchronously decoded originals, not generated thumbnails. UI URL keys `view`, 
 map to the API parameters below. Add filter opens typed controls with editable/removable chips.
 Invalid advanced URL filters show an explicit error and block browsing until cleared rather than
 silently showing an unfiltered collection. URL navigation never selects a Project or persists a cursor.
-The selected verified Project and existing guarded Project switching remain authoritative. Complete
-facets, filter-from-Details actions, additional Run/Job sorts, diagnostic detail browsing, thumbnails,
-and filmstrip remain unfinished; BC-007 is In Progress (see its entry for checkpoint evidence).
+The selected verified Project and existing guarded Project switching remain authoritative. Result Details
+now offers optional Filter Gallery actions from frozen provenance, and header Diagnostics opens bounded
+indexed diagnostics. BC-007 remains In Progress pending final owner acceptance and main-agent review
+of any confirmed audit fixes; see the [scoped checklist](plans/BC-007-project-browser.md#finite-acceptance-checklist).
+Complete facets, additional dedicated Run/Job sort modes, and filmstrip are optional, not completion
+requirements. The user deferred thumbnails and broader performance work until a reported/measured issue.
 
 Common query parameters:
 
@@ -530,8 +534,9 @@ and Asset usage cannot be satisfied by different Jobs in the same Run. A missing
 Base; an override equal to the workflow's Base literal remains an override. `false`, `0`, and `""`
 remain distinct typed overrides. The UI permits one predicate per parameter key/type pair and one per
 Image Input slot, with one value per identity field. API array predicates also use AND, not OR.
-Multi-value OR within a dimension is planned, not implemented. Logical Workflow/Profile and hash
-filters are not exposed; exact revision filters do not imply those broader capabilities.
+Multi-value OR, logical Workflow/Profile across revisions, and hash filters are optional and deferred,
+not exposed. Exact frozen WorkflowVersion/ProfileVersion filters satisfy BC-007's scoped workflow
+lookup requirement without implying those broader capabilities.
 
 `GET /api/projects/{project_id}/history/choices` supplies bounded historical selection lists, not
 complete or active-filter-conditioned facets. Required `kind` is `parameter`, `prompt`, `prompt_version`,
@@ -555,7 +560,38 @@ never scan or repair storage. Frozen revision metadata is stored as decimal TEXT
 revisions can exceed SQLite's signed-64-bit integer range. Applied migrations 0001-0003 and v1 Project
 bytes remain unchanged; this is a rebuildable index extension, not a durable-format change.
 
-Pages contain `project_id`, nullable `generation` and `scanned_at`, `items`, `next_cursor`, and `has_more`.
+`GET /api/projects/{project_id}/history/diagnostics` requires a registered Project and accepts only
+`limit` (1-100, default 25) and optional `cursor` (at most 8,192 characters). It reads SQLite only,
+without filesystem access or a provenance-enrichment requirement. Old unenriched indexes remain
+inspectable. Items follow ascending scan-position ordinal; generation, scan time, bookmark validation,
+and page rows share one read transaction. The response contains `project_id`, nullable `generation`
+and `scanned_at`, `items`, `next_cursor`, and `has_more`. Each item contains `ordinal`, `scope`, nullable
+`entity_id` and `name_excerpt`, `display_truncated`, `code`, and `message`.
+
+Diagnostic cursors bind Project, endpoint, and generation, not page size. Malformed, mismatched, or
+missing bookmarks return `422 invalid_history_query`; a changed generation returns
+`409 history_generation_changed`, requiring a restart without a cursor. Names are SQL-clipped to 256
+characters with a truncation flag, using indexed names or a safe single-component filesystem-key
+fallback. Exact entity identities remain separate. Public codes/messages use the approved safe
+vocabulary, with messages capped at 512 characters; raw persisted diagnostic prose and filesystem paths
+are not returned. Unknown codes use the generic historical-data-invalid summary.
+
+The standalone `HistoryDiagnostics` native dialog is wired to ProjectBrowser's header Diagnostics
+action regardless of diagnostic count or filter matches. It retains one 25-row page and at most 20
+previous bookmarks. Its Refresh explicitly restarts at page one using GET only; opening, paging, and
+refreshing diagnostics never trigger a scan. Reindex Project closes the dialog and invokes the owning
+browser's explicit repair action. Empty diagnostics describe the last index, not newly verified storage.
+
+Project-browser Result Details can apply parameter Base/typed equality, seed, exact Prompt revision,
+available Workflow/Profile revision identities, Image Input slot Base/Asset, and Asset-in-any-slot
+filters from the frozen Job and snapshots. The action preserves unrelated filters under AND, replaces
+the same parameter key/type or slot predicate (or scalar identity field), and validates the merged
+8-parameter/4-slot/JSON-size bounds. Failure stays in Details with an error; no filters are truncated.
+Success closes Details and image inspection, clears the cursor, and navigates to Gallery with the
+updated query in one navigation operation. No new mutation endpoint is involved. Current-Run Details
+without the optional callback retains its existing behavior and does not show these actions.
+
+Run/Result pages contain `project_id`, nullable `generation` and `scanned_at`, `items`, `next_cursor`, and `has_more`.
 Run items contain `run` plus projected `result_count`. Result items contain compact `run` context,
 exact `job_id`, `job_ordinal`, `artifact_ordinal`, filename excerpt/truncation flag, MIME, size, hash,
 projected integrity, and optional download URL. Stable Result identity is Run ID + Job ID + artifact
@@ -573,7 +609,8 @@ Ordering uses normalized ISO instants at microsecond precision. Explicit offsets
 naive timestamps mean UTC. Unparseable or oversized historical timestamps remain browsable in an
 unknown-date bucket after dated Runs for either direction. Run ID ascending breaks equal-instant ties;
 Results then use ascending Job and artifact ordinals. There is no global uniqueness assumption on Run
-number. No offset pagination is used.
+number. No offset pagination is used. This newest/oldest order with stable Run/Job ties satisfies the
+original sorting alternatives; additional dedicated Run/Job sort modes are deferred, not required.
 
 Generation and page data (including Result counts and cursor bookmark resolution) share one read
 transaction. Every successful full replacement updates the generation and UTC scan-completion time in
@@ -597,6 +634,12 @@ Browse reads and response serialization run off the event loop under the existin
 budget. They neither consume execution-polling slots nor change reindex triggers. Filtering/search and
 joined sorting can still inspect more rows than one page; bounded responses are not a query-time
 guarantee or an incremental-index implementation.
+
+The opt-in SQL metadata benchmark and its measured limitations are documented in
+[DEVELOPMENT](DEVELOPMENT.md#history-browser-measurement) and the
+[BC-007 plan](plans/BC-007-project-browser.md#4-performance-and-polish). Result queries can use temporary
+sorting B-trees and choices still perform Project-wide work; bounded output is not page-proportional work.
+The baseline is observational, not a release gate; broader measurement is deferred until an issue warrants it.
 
 Direct Run and execution reads differ from this history projection: if `execution.json` is absent,
 they derive pristine `created` state from the frozen Run without writing a file. Invalid execution

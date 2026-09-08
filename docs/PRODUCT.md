@@ -280,6 +280,20 @@ Run/Job/artifact identity, page-local cross-Run image navigation, and native mod
 Details surfaces with nested-dialog focus handling. Cards retain accessible descriptions and unavailable
 artifact placeholders without visible `Verified` badges or `Job` captions.
 
+In Project-browser Result Details, **Filter Gallery** actions use the selected frozen Job's parameter
+Base/typed value, seed, Prompt revision, Image Input slot Base/Asset, or Asset usage in any slot, plus
+available frozen Workflow/Profile revision identities. They preserve unrelated AND filters and replace
+only the same parameter key/type, slot, or scalar field. Exceeding filter bounds shows an error without
+discarding other predicates. Success closes inspection and opens Gallery with the new filters in one
+navigation step. Current-Run Details without these optional actions is unchanged.
+
+**Diagnostics** in the Gallery/Runs header opens a native dialog independently of diagnostic counts or
+filter matches. It shows indexed problems in scan order, 25 at a time, with at most 20 previous-page
+bookmarks, safe public summaries, and shortened historical names where needed. Opening, paging, and
+**Refresh** read the index only; Refresh restarts the diagnostic pages, not a storage scan. The dialog's
+**Reindex Project** closes it and invokes the browser's explicit storage repair. Old indexes do not need
+provenance enrichment to show diagnostics, and an empty diagnostic page is not a fresh storage check.
+
 Activating review reads the index first and checks filesystem history in the background. Run publication
 and observed terminal revisions, including cancellation, discard, and durable detach, also prompt checks
 while review is active; ordinary polls and filter/page changes do not scan. An identical first page can
@@ -292,9 +306,17 @@ Storage failures preserve known history with a warning, not a claim of
 confirmed emptiness. Other Projects still require explicit import.
 
 The visual and typed-provenance checkpoints have reported automated verification; final owner acceptance
-of BC-007 remains pending and it is not Done. Filter-from-Details actions, additional Run/Job sorts,
-logical Workflow/Profile and hash filters, multi-value OR and complete facets, diagnostic detail browsing,
-generated thumbnails, filmstrip, and performance measurement remain for later checkpoints.
+of BC-007 and main-agent review of any confirmed audit fixes remain pending; it is not Done. Bounded
+diagnostics, Filter Gallery from Details, and an initial synthetic SQL measurement are also implemented.
+The user approved closing scope against the original requirements: newest/oldest with stable Run ID ties
+and Job/artifact order satisfies deterministic sorting, and exact frozen Workflow/Profile version
+filters satisfy workflow lookup without claiming logical matching across revisions. Additional dedicated
+Run/Job sorts, logical Workflow/Profile across revisions, hash filters, multi-value OR, complete facets,
+and filmstrip are optional additions, not completion requirements. The user works mostly over LAN,
+reports no slowness, and prioritizes usage/functionality; generated thumbnails and broader performance
+work are deferred until a reported or measured issue. This is not final UI acceptance. The SQL baseline
+excludes HTTP/image costs, is not a release gate, and does not imply page-proportional work. See the
+[owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance).
 
 The Results Viewer should eventually support:
 

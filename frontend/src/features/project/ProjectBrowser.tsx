@@ -11,9 +11,10 @@ import type {
 } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
 import { useModalDialog } from "../../components/useModalDialog";
-import { ResultDetailsDialog } from "../results/ResultDetailsDialog";
+import { ResultDetailsDialog, type ResultDetailsFilter } from "../results/ResultDetailsDialog";
 import { RunPlanDialog } from "../run/RunPlanDialog";
-import { HistoryFilters } from "./HistoryFilters";
+import { HistoryFilters, validateHistoryFilters } from "./HistoryFilters";
+import { HistoryDiagnostics } from "./HistoryDiagnostics";
 import {
   historyResultIdentity as identity,
   useProjectBrowserHistory,
@@ -96,6 +97,7 @@ function Browser({
     setFailedImages(new Set());
   }
   const [inspection, setInspection] = useState<
+    | { kind: "diagnostics" }
     | { kind: "loading"; label: string }
     | { kind: "error"; message: string }
     | { kind: "plan"; run: RunResponse }
@@ -251,6 +253,25 @@ function Browser({
   function showResults(run: HistoryRunSummaryResponse) {
     onViewChange("gallery", { ...query, run_id: run.run_id, cursor: null });
   }
+  function filterGallery(filter: ResultDetailsFilter) {
+    const filters = { ...query.filters, ...filter };
+    if ("parameters" in filter) {
+      const entry = filter.parameters[0];
+      filters.parameters = [...(query.filters?.parameters ?? []).filter(
+        (parameter) => parameter.key !== entry.key || parameter.value_type !== entry.value_type,
+      ), entry];
+    } else if ("image_inputs" in filter) {
+      const entry = filter.image_inputs[0];
+      filters.image_inputs = [...(query.filters?.image_inputs ?? []).filter(
+        (input) => input.slot_key !== entry.slot_key,
+      ), entry];
+    }
+    const validation = validateHistoryFilters(filters);
+    if (validation) throw new Error(`${validation} Close Details to edit Gallery filters, then try again.`);
+    close();
+    setViewedImage(null);
+    onViewChange("gallery", { ...query, filters, cursor: null });
+  }
 
   return (
     <section
@@ -287,6 +308,16 @@ function Browser({
             onClick={history.repair}
           >
             Reindex Project
+          </button>
+          <button
+            className="button-link"
+            disabled={busy}
+            onClick={(event) => {
+              capture(event.currentTarget);
+              setInspection({ kind: "diagnostics" });
+            }}
+          >
+            Diagnostics
           </button>
         </div>
       </header>
@@ -756,9 +787,34 @@ function Browser({
         </nav>
       ) : null}
 
+      {active && inspection?.kind === "diagnostics" ? (
+        <HistoryDiagnostics
+          api={api}
+          projectId={projectId}
+          onClose={close}
+          onReindex={history.scanning ? undefined : history.repair}
+        />
+      ) : null}
       {active && viewedImage ? (
         <BrowserModal
           label="Project Result image"
+          toolbar={
+            <>
+              <div className="pb-viewer-navigation">
+                <button className="button-secondary" disabled={!!inspection || !selected || selectedIndex <= 0}
+                  onClick={() => setViewedImage({ ...viewedImage, identity: identity(images[selectedIndex - 1]) })}>Previous</button>
+                <span aria-label={`${selectedIndex + 1} of ${images.length} loaded images`}>{selectedIndex + 1}/{images.length}</span>
+                <button className="button-secondary" disabled={!!inspection || !selected || selectedIndex === images.length - 1}
+                  onClick={() => setViewedImage({ ...viewedImage, identity: identity(images[selectedIndex + 1]) })}>Next</button>
+              </div>
+              <button className="button-secondary" disabled={!!inspection || !selected}
+                onClick={(event) => {
+                  if (!selected) return;
+                  capture(event.currentTarget);
+                  void inspect(selected.run.run_id, selected);
+                }}>Image Details</button>
+            </>
+          }
           restoreTarget={viewedImage.restoreTarget}
           onClose={() => {
             close();
@@ -773,51 +829,7 @@ function Browser({
         >
           {selected ? (
             <>
-              <div className="pb-viewer-tools">
-                <button
-                  className="button-secondary"
-                  disabled={!!inspection || selectedIndex <= 0}
-                  onClick={() =>
-                    setViewedImage({
-                      ...viewedImage,
-                      identity: identity(images[selectedIndex - 1]),
-                    })
-                  }
-                >
-                  Previous image
-                </button>
-                <span>
-                  {selectedIndex + 1} of {images.length} loaded images
-                </span>
-                <button
-                  className="button-secondary"
-                  disabled={!!inspection || selectedIndex === images.length - 1}
-                  onClick={() =>
-                    setViewedImage({
-                      ...viewedImage,
-                      identity: identity(images[selectedIndex + 1]),
-                    })
-                  }
-                >
-                  Next image
-                </button>
-                <button
-                  className="button-secondary"
-                  onClick={(event) => {
-                    capture(event.currentTarget);
-                    void inspect(selected.run.run_id, selected);
-                  }}
-                >
-                  Details
-                </button>
-                <a
-                  href={api.resultUrl(selected.download_url!)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open original
-                </a>
-              </div>
+              <a className="pb-viewer-link" href={api.resultUrl(selected.download_url!)} target="_blank" rel="noreferrer" aria-label="Open original image in a new tab">
               <img
                 className="pb-viewer-image"
                 src={api.resultUrl(selected.download_url!)}
@@ -827,6 +839,7 @@ function Browser({
                   setFailedImages((old) => new Set(old).add(identity(selected)))
                 }
               />
+              </a>
               <p className="pb-viewer-caption">
                 {resultLabel(selected)} / {selected.run.batch_name}
               </p>
@@ -856,11 +869,13 @@ function Browser({
           getCachedRun={() => inspection.run}
           loadRun={validatedRun}
           onClose={close}
+          onFilter={filterGallery}
         />
       ) : null}
       {active &&
-      inspection &&
-      inspection.kind !== "plan" &&
+       inspection &&
+       inspection.kind !== "diagnostics" &&
+       inspection.kind !== "plan" &&
       inspection.kind !== "details" ? (
         <BrowserModal
           label={
@@ -953,12 +968,14 @@ function BrowserModal({
   restoreTarget,
   onClose,
   onNavigate,
+  toolbar,
   children,
 }: {
   label: string;
   restoreTarget: HTMLElement | null;
   onClose(): void;
   onNavigate?(delta: number): void;
+  toolbar?: ReactNode;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -967,7 +984,7 @@ function BrowserModal({
   return (
     <dialog
       ref={ref}
-      className="pb-modal"
+      className={`pb-modal${toolbar ? " pb-image-modal" : ""}`}
       aria-label={label}
       {...modal}
       onKeyDown={(event) => {
@@ -983,7 +1000,7 @@ function BrowserModal({
       }}
     >
       <div className="pb-modal-heading">
-        <span className="pb-kicker">{label}</span>
+        {toolbar ?? <span className="pb-kicker">{label}</span>}
         <button className="button-secondary" onClick={onClose} ref={closeRef}>
           Close
         </button>

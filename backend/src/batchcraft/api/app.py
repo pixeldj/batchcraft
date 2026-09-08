@@ -125,6 +125,9 @@ from .schemas import (
     HistoricalRunResponse,
     HistoryChoiceQueryParameters,
     HistoryChoicesResponse,
+    HistoryDiagnosticItemResponse,
+    HistoryDiagnosticPageResponse,
+    HistoryDiagnosticQueryParameters,
     HistoryDiagnosticResponse,
     HistoryQueryParameters,
     HistoryResultPageResponse,
@@ -397,6 +400,33 @@ def create_app(
                 project_id=project_id,
                 runs=[HistoricalRunResponse.from_record(item) for item in runs],
                 diagnostics=[HistoryDiagnosticResponse.from_record(item) for item in diagnostics],
+            )
+            return Response(model.model_dump_json(), media_type="application/json")
+
+        async with bulk_reads.claim():
+            return await file_operation(read)
+
+    @app.get(
+        "/api/projects/{project_id}/history/diagnostics",
+        response_model=HistoryDiagnosticPageResponse,
+    )
+    async def browse_project_diagnostics(
+        project_id: str,
+        query: Annotated[HistoryDiagnosticQueryParameters, Query()],
+        service: ServiceDependency,
+    ) -> Response:
+        def read() -> Response:
+            page = service.browse_project_diagnostics(project_id, query.limit, query.cursor)
+            model = HistoryDiagnosticPageResponse(
+                project_id=project_id,
+                generation=page.generation,
+                scanned_at=page.scanned_at,
+                items=[
+                    HistoryDiagnosticItemResponse.model_validate(item, from_attributes=True)
+                    for item in page.items
+                ],
+                next_cursor=page.next_cursor,
+                has_more=page.has_more,
             )
             return Response(model.model_dump_json(), media_type="application/json")
 

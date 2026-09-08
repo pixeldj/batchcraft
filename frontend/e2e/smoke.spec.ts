@@ -83,6 +83,16 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   const { project, batch } = await seed(request, "mountain", true);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  let reindexPosts = 0;
+  const diagnosticRequests: URL[] = [];
+  page.on("request", (sent) => {
+    const url = new URL(sent.url());
+    if (url.pathname === `/api/projects/${project.id}/reindex` && sent.method() === "POST") reindexPosts++;
+    if (url.pathname === `/api/projects/${project.id}/history/diagnostics`) {
+      expect(sent.method()).toBe("GET");
+      diagnosticRequests.push(url);
+    }
+  });
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
@@ -115,6 +125,37 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   await nav.getByRole("button", { name: "Gallery", exact: true }).click();
   await expect(browser.locator(".pb-result")).toHaveCount(2);
   await expect(browser.locator(".pb-image-button img").first()).toHaveJSProperty("naturalWidth", 384);
+  const details = page.getByRole("dialog", { name: /^Job \d+ .* Artifact 1$/ });
+  const lightbox = page.getByRole("dialog", { name: "Project Result image", exact: true });
+  for (const job of [base, override]) {
+    const card = browser.locator(".pb-result").filter({
+      has: page.getByRole("button", { name: new RegExp(`^Details for .*Job ${job.ordinal}, artifact 1:`) }),
+    });
+    const identity = await card.getAttribute("data-result-identity");
+    await card.getByRole("button", { name: /^Details for / }).click();
+    await details.getByRole("button", { name: "Filter Gallery by Steps (integer)", exact: true }).click();
+    await expect(details).toHaveCount(0);
+    await expect(nav.getByRole("button", { name: "Gallery", exact: true })).toHaveAttribute("aria-current", "page");
+    const parameter = job === base
+      ? { key: "steps", value_type: "integer", mode: "base" }
+      : { key: "steps", value_type: "integer", mode: "equals", value: 20 };
+    expect(filters()).toEqual({ parameters: [parameter] });
+    await expect(browser.locator(".pb-result")).toHaveCount(1);
+    await expect(browser.locator(".pb-result")).toHaveAttribute("data-result-identity", identity!);
+    await browser.locator(".pb-image-button").click();
+    await expect(lightbox).toBeVisible();
+    await lightbox.getByRole("button", { name: "Image Details", exact: true }).click();
+    await expect(details.getByRole("button", { name: "Filter Gallery by Seed", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`history-result-filter-${job === base ? "base" : "override"}.png`), scale: "css" });
+    await details.getByRole("button", { name: "Filter Gallery by Seed", exact: true }).click();
+    await expect(details).toHaveCount(0);
+    await expect(lightbox).toHaveCount(0);
+    expect(filters()).toEqual({ parameters: [parameter], seed: job.seed });
+    await expect(browser.locator(".pb-result")).toHaveCount(1);
+    await expect(browser.locator(".pb-result")).toHaveAttribute("data-result-identity", identity!);
+    await browser.getByRole("button", { name: "Clear advanced", exact: true }).click();
+    await expect(browser.locator(".pb-result")).toHaveCount(2);
+  }
   await add.click();
   await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
   await dialog.getByLabel("Search historical choices").fill("Steps");
@@ -217,6 +258,47 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   await expect(browser.locator(".pb-result")).toHaveCount(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("history-filters-gallery-320.png"), scale: "css", fullPage: true });
+  // Finish automatic history reconciliation before measuring this read-only dialog.
+  await expect(browser.getByRole("button", { name: "Reindex Project", exact: true })).toBeEnabled();
+  const reindexesBeforeDiagnostics = reindexPosts;
+  const diagnosticsTrigger = browser.getByRole("button", { name: "Diagnostics", exact: true });
+  const diagnostics = page.getByRole("dialog", { name: "History diagnostics", exact: true });
+  const diagnosticResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/projects/${project.id}/history/diagnostics`);
+  await diagnosticsTrigger.click();
+  const initialDiagnostics = await diagnosticResponse;
+  expect(initialDiagnostics.ok()).toBe(true);
+  expect(await initialDiagnostics.json()).toMatchObject({ project_id: project.id, items: [], next_cursor: null });
+  await expect(diagnostics).toBeVisible();
+  expect(await diagnostics.evaluate((element) => element.matches("dialog:modal"))).toBe(true);
+  await expect(diagnostics.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await expect(diagnostics.getByText("No diagnostics in this indexed page. This is not a new storage check.", { exact: true })).toBeVisible();
+  await expect(diagnostics.getByRole("button", { name: "Previous", exact: true })).toBeDisabled();
+  await expect(diagnostics.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+  // Development Strict Mode replays the mount effect; Refresh must add one read.
+  const readsBeforeRefresh = diagnosticRequests.length;
+  expect(readsBeforeRefresh).toBeGreaterThan(0);
+  const refreshedDiagnostics = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/projects/${project.id}/history/diagnostics`);
+  await diagnostics.getByRole("button", { name: "Refresh", exact: true }).click();
+  expect((await refreshedDiagnostics).ok()).toBe(true);
+  await expect(diagnostics.getByRole("region", { name: "Diagnostic page", exact: true })).toHaveAttribute("aria-busy", "false");
+  await expect(diagnostics.getByText("No diagnostics in this indexed page. This is not a new storage check.", { exact: true })).toBeVisible();
+  expect(diagnosticRequests).toHaveLength(readsBeforeRefresh + 1);
+  for (const url of diagnosticRequests) {
+    expect(url.searchParams.get("limit")).toBe("25");
+    expect(url.searchParams.has("cursor")).toBe(false);
+  }
+  expect(reindexPosts).toBe(reindexesBeforeDiagnostics);
+  expect(await diagnostics.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+      && element.scrollWidth <= element.clientWidth;
+  })).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("history-diagnostics-empty-320.png"), scale: "css" });
+  await page.keyboard.press("Escape");
+  await expect(diagnostics).toHaveCount(0);
+  await expect(diagnosticsTrigger).toBeFocused();
+  expect(reindexPosts).toBe(reindexesBeforeDiagnostics);
   await nav.getByRole("button", { name: "Batch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
   await page.getByRole("group", { name: "Seeds", exact: true }).getByRole("button", { name: "Edit", exact: true }).click();
@@ -385,11 +467,64 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
   await expect(viewer).toBeVisible();
   await expect(viewer).toContainText("Amber valley");
   await expect(viewer.locator("img")).toHaveJSProperty("naturalWidth", 384);
-  await viewer.getByRole("button", { name: "Details", exact: true }).click();
+  const originalViewport = page.viewportSize()!;
+  for (const viewport of [originalViewport, { width: 320, height: 720 }, { width: 720, height: 320 }]) {
+    await page.setViewportSize(viewport);
+    await expect(viewer.locator(".pb-modal-heading")).toHaveCount(1);
+    await expect(viewer.getByRole("heading")).toHaveCount(0);
+    await expect(viewer.getByText("Project Result image", { exact: true })).toHaveCount(0);
+    await expect(viewer.getByRole("button")).toHaveText(["Previous", "Next", "Image Details", "Close"]);
+    const imageLink = viewer.getByRole("link", { name: "Open original image in a new tab", exact: true });
+    await expect(imageLink).toHaveAttribute("href", (await viewer.locator("img").getAttribute("src"))!);
+    await expect(imageLink).toHaveAttribute("target", "_blank");
+    await expect(imageLink.locator("img")).toHaveCSS("object-fit", "contain");
+    const layout = await viewer.evaluate((element) => {
+      const box = (node: Element) => {
+        const { x, y, width, height } = node.getBoundingClientRect();
+        return { x, y, width, height };
+      };
+      return {
+        dialog: box(element),
+        toolbar: box(element.querySelector(".pb-modal-heading")!),
+        controls: [...element.querySelectorAll(".pb-modal-heading button, .pb-viewer-navigation span")].map(box),
+        image: box(element.querySelector("img")!),
+        link: box(element.querySelector(".pb-viewer-link")!),
+        caption: box(element.querySelector(".pb-viewer-caption")!),
+        noOverflow: element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight,
+      };
+    });
+    await page.screenshot({ path: testInfo.outputPath(`project-viewer-${viewport.width}x${viewport.height}.png`), scale: "css" });
+    expect(layout.noOverflow).toBe(true);
+    expect(layout.dialog.x).toBeGreaterThanOrEqual(0);
+    expect(layout.dialog.x + layout.dialog.width).toBeLessThanOrEqual(viewport.width);
+    expect(layout.dialog.y).toBeGreaterThanOrEqual(0);
+    expect(layout.dialog.y + layout.dialog.height).toBeLessThanOrEqual(viewport.height);
+    for (const control of layout.controls) {
+      expect(control.y).toBeGreaterThanOrEqual(layout.toolbar.y);
+      expect(control.y + control.height).toBeLessThanOrEqual(layout.toolbar.y + layout.toolbar.height + 1);
+      expect(control.x).toBeGreaterThanOrEqual(layout.toolbar.x);
+      expect(control.x + control.width).toBeLessThanOrEqual(layout.toolbar.x + layout.toolbar.width + 1);
+      expect(Math.abs(control.y + control.height / 2 - layout.controls[0].y - layout.controls[0].height / 2)).toBeLessThan(1);
+    }
+    expect(layout.link.height / layout.dialog.height).toBeGreaterThan(0.7);
+    expect(layout.image).toEqual(layout.link);
+    expect(layout.image.y).toBeGreaterThanOrEqual(layout.toolbar.y + layout.toolbar.height);
+    expect(layout.image.y + layout.image.height).toBeLessThanOrEqual(layout.caption.y);
+  }
+  await page.setViewportSize(originalViewport);
+  await expect(viewer.getByRole("button", { name: "Previous", exact: true })).toBeDisabled();
+  await expect(viewer.getByText("1/2", { exact: true })).toBeVisible();
+  await viewer.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(viewer.getByText("2/2", { exact: true })).toBeVisible();
+  await expect(viewer.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+  await viewer.getByRole("button", { name: "Previous", exact: true }).click();
+  const imageDetails = viewer.getByRole("button", { name: "Image Details", exact: true });
+  await imageDetails.click();
   const details = page.getByRole("dialog", { name: "Job 001 \u00b7 Artifact 1", exact: true });
   await expect(details).toContainText("Amber valley");
   await details.getByRole("button", { name: "Close", exact: true }).click();
   await expect(viewer).toBeVisible();
+  await expect(imageDetails).toBeFocused();
   await viewer.getByRole("button", { name: "Close", exact: true }).click();
   await nav.getByRole("button", { name: "Runs", exact: true }).click();
   await expect(browser.locator(".pb-run")).toHaveCount(2);

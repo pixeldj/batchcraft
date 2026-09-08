@@ -627,7 +627,7 @@ entries. Do not restore the legacy
 `listProjectRuns` plus per-Run `getResults` fan-out: browsing uses `browseProjectRuns` and
 `browseProjectResults`. Selected Result Details still calls `getResults` for that selected owning Run
 and checks ownership, Job/artifact ordinals, and hash against frozen provenance. Gallery images use
-`loading="lazy"` and `decoding="async"` on original artifact URLs; there is no thumbnail cache yet.
+`loading="lazy"` and `decoding="async"` on original artifact URLs; generated thumbnails are deferred.
 
 Read the index before background reconciliation. Automatic scans are tied to review activation and
 publication/terminal history revisions while active, not filters, pages, density, ordinary polls, focus,
@@ -643,10 +643,30 @@ Run Plan, Result Details, and ResultLightbox use shared `useModalDialog` with na
 scroll locking, topmost Escape, and focus restoration only to connected visible openers. Preserve nested
 inspection behavior and prevent focus returning into a hidden destination. The Project browser also
 uses native inspection/confirmation dialogs. Typed provenance filters and historical choices are now
-implemented. Filter-from-Details actions, additional deterministic Run/Job sorts, logical Workflow/Profile
-and hash filters, multi-value OR within a dimension, complete facets, diagnostic detail browsing,
-generated thumbnails, filmstrip, and performance measurement remain future work. See BC-007 for
-checkpoint-specific verification evidence. Final owner acceptance remains pending; do not mark BC-007 Done.
+implemented. Result Details now offers optional Filter Gallery actions from frozen Job/snapshot values:
+parameter Base/typed equality, seed, Prompt revision, available Workflow/Profile revisions, Image Input
+slot Base/Asset, and Asset in any slot. Merge with unrelated AND predicates, replace only the matching
+key/type, slot, or scalar field, and validate all caps before closing inspection. A cap error stays in
+Details without truncating filters. Success closes Details and image inspection and atomically navigates
+to Gallery with the merged query and no cursor. Current-Run callers without the callback remain unchanged.
+
+Standalone `HistoryDiagnostics` is wired into the ProjectBrowser header, not gated on diagnostic counts,
+filter matches, or provenance enrichment. Use its SQL-only `/history/diagnostics` API with 25 rows and
+at most 20 previous bookmarks, generation-bound cursors, safe public messages, and clipped names.
+Opening/paging and explicit Refresh only read the index; Refresh restarts at page one. Reindex Project
+closes the native dialog and delegates to the owning browser's explicit repair action. Preserve unknown
+scan state, generation-change guidance, request cancellation, and honest empty-index messaging.
+
+BC-007 scope closure keeps newest/oldest with stable Run ID ties and Job/artifact order, plus exact frozen
+WorkflowVersion/ProfileVersion filters. These satisfy the original sorting alternatives and scoped
+workflow lookup; dedicated Run/Job sort modes, logical Workflow/Profile across revisions, hash filters,
+multi-value OR, complete facets, and filmstrip are optional additions. The user approved deferring
+thumbnails and broader performance work until a reported/measured issue, prioritizing usage/functionality
+on mostly LAN use with no reported slowness. No dependency changes follow from this docs-only decision.
+Keep existing meaningful regressions and checkpoint evidence; the SQL baseline is not an end-to-end
+performance claim or release gate. BC-007 remains In Progress pending final owner acceptance and
+main-agent review of any confirmed audit fixes. Follow the plan's
+[owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance), not the deferred extras.
 
 Regression checks cover absence of Batch Results and
 visible card labels, retained detail/lightbox accessibility and unavailable placeholders, strict reading
@@ -659,6 +679,12 @@ images, selected-Run-only detail reads, and native nested-dialog focus on deskto
 regressions also cover strict JSON/URL bounds, same-Job AND, typed Base/false/zero/empty values,
 historical choice search/labels without libraries, stale choice responses, enrichment-required repair,
 and preservation of large v1 revisions and historical bytes.
+
+Also cover diagnostic paging/generation mismatch, no enrichment or filesystem dependency, safe message
+projection, header access with empty/error/filtered history, explicit GET-only Refresh, and owner-driven
+repair. Filter-from-Details checks must retain unrelated predicates, same-Job AND, Base/false/zero/empty
+values, cap errors without truncation, atomic URL navigation, dialog closure, and unchanged callers
+without the optional callback.
 
 Execution responses distinguish durable status from the ephemeral active-task ownership of the current
 API process. A restored `running` Run without an active task remains historically unchanged, but the UI
@@ -732,6 +758,30 @@ npm run build
 ```
 
 The committed npm lockfile defines dependency versions. Do not commit `.env` or `.env.local`.
+
+## History browser measurement
+
+From `backend/`, run the opt-in synthetic SQL metadata check:
+
+```bash
+uv run python tests/db/check_history_browser.py --repeats 20 --explain
+```
+
+`backend/tests/db/check_history_browser.py` creates only its own temporary SQLite database, applies
+normal migrations/indexes, and verifies ordering, complete identities, typed/same-Job filters, choices,
+and diagnostics before timing production query functions. It uses 200 Runs, 10,000 Jobs, 20,000 Results,
+three parameter dimensions, and 200 diagnostics. No configured user database, Project files, HTTP server,
+ComfyUI, or image bytes are used; guarded correctness reads reject filesystem/legacy-list access.
+It removes its temporary data and has no timing assertions or additional dependencies.
+
+Measurements use a warm OS cache, fresh SQLite connections, sequential calls, and no HTTP/DTO, image
+network/decode, reconciliation, or concurrent-write cost. `--explain` reports the actual production page
+SQL plans. The [BC-007 plan](plans/BC-007-project-browser.md#4-performance-and-polish) records the M4 Max
+baseline and p50/p95 results. Result sorting uses temporary B-trees and choices do Project-wide work;
+do not interpret bounded response size as page-proportional query work. Peak process RSS includes
+imports, seeding, and full-identity verification lists, not per-page or browser memory. Keep timings
+observational rather than flaky pass/fail thresholds; broader scan/image/end-to-end measurements are
+user-approved deferrals until a reported or measured issue warrants them, not BC-007 completion gates.
 
 ## Backend/Frontend Boundary
 

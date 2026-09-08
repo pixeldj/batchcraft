@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { HistoryProvenanceFilters, HistoryQuery, RunStatus } from "../../api/types";
-import { validateHistoryFilters } from "./HistoryFilters";
+import { parseHistoryFilters } from "./parseHistoryFilters";
 
 export type WorkspaceView = "batch" | "gallery" | "runs";
 const statuses = new Set<RunStatus>(["created", "running", "succeeded", "failed", "blocked", "cancelled"]);
@@ -15,11 +15,7 @@ function readLocation(): { view: WorkspaceView; query: HistoryQuery; filterError
   const raw = params.get("filters");
   if (raw !== null) {
     try {
-      if (raw.length > 16384) throw new Error("History filters exceed the supported size.");
-      const parsed: unknown = JSON.parse(raw);
-      const error = validateHistoryFilters(parsed);
-      if (error) throw new Error(error);
-      filters = parsed as HistoryProvenanceFilters;
+      filters = parseHistoryFilters(raw);
     } catch {
       filterError = "The history filters in this link are invalid. Clear them to browse this Project.";
     }

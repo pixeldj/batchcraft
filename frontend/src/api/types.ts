@@ -220,6 +220,30 @@ export interface ProjectImportResponse {
   diagnostic_count: number;
 }
 
+export interface HistoryDiagnosticQuery {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface HistoryDiagnosticItemResponse {
+  ordinal: number;
+  scope: string;
+  entity_id: string | null;
+  name_excerpt: string | null;
+  display_truncated: boolean;
+  code: string;
+  message: string;
+}
+
+export interface HistoryDiagnosticPageResponse {
+  project_id: string;
+  generation: string | null;
+  scanned_at: string | null;
+  items: HistoryDiagnosticItemResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface HistoryDiagnosticResponse {
   scope: string;
   filesystem_key: string | null;

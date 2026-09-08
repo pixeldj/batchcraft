@@ -526,6 +526,30 @@ class ProjectRunsResponse(ApiModel):
     diagnostics: list[HistoryDiagnosticResponse]
 
 
+class HistoryDiagnosticQueryParameters(ApiModel):
+    limit: int = Field(default=25, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=8192)
+
+
+class HistoryDiagnosticItemResponse(ApiModel):
+    ordinal: int
+    scope: str
+    entity_id: str | None
+    name_excerpt: str | None
+    display_truncated: bool
+    code: str
+    message: str
+
+
+class HistoryDiagnosticPageResponse(ApiModel):
+    project_id: str
+    generation: str | None
+    scanned_at: str | None
+    items: list[HistoryDiagnosticItemResponse]
+    next_cursor: str | None
+    has_more: bool
+
+
 class HistoryChoiceQueryParameters(ApiModel):
     kind: Literal[
         "parameter",

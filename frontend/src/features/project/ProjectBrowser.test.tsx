@@ -14,11 +14,14 @@ import type {
   HistoryResultItemResponse,
   HistoryResultPageResponse,
   HistoryRunSummaryResponse,
+  HistoryProvenanceFilters,
+  ParameterValueType,
   ProjectImportResponse,
   ResultsResponse,
   RunResponse,
 } from "../../api/types";
 import { ProjectBrowser, type ProjectBrowserProps } from "./ProjectBrowser";
+import { ResultDetailsDialog } from "../results/ResultDetailsDialog";
 
 beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -36,6 +39,131 @@ beforeEach(() => {
 });
 
 describe("ProjectBrowser", () => {
+  it.each([
+    ["boolean", false], ["integer", 0], ["float", 0], ["string", ""], ["float", null],
+  ] as const)("filters Details using frozen %s %j and preserves conjunction", async (valueType, value) => {
+    const run = frozenRun("original");
+    run.plan.jobs[0].resolved_parameters = [{ parameter_key: "target", label: "Frozen value", value }];
+    run.batch_snapshot.workflow_selection.workflow_profile = { parameters: [
+      { key: "target", label: "Other label", node_id: "1", input_name: "value", value_type: valueType },
+    ] };
+    const api = makeApi({ getRun: vi.fn(async () => run), getResults: vi.fn(async () => resultResponse("original")) });
+    const p = props(api);
+    p.query = { q: "study", sort: "oldest", execution_status: "succeeded", execution_available: false,
+      run_id: "original", batch_id: "batch", filters: { seed: 0, asset_id: "other-asset", parameters: [
+        { key: "target", value_type: valueType, mode: "override" },
+        { key: "target", value_type: valueType === "string" ? "integer" : "string", mode: "base" },
+      ] } };
+    render(<ProjectBrowser {...p} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^View original/ }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Image Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Filter Gallery by Frozen value (${valueType})` }));
+    expect(p.onViewChange).toHaveBeenCalledExactlyOnceWith("gallery", { ...p.query, cursor: null, filters: {
+      ...p.query.filters, parameters: [p.query.filters!.parameters![1], {
+        key: "target", value_type: valueType, mode: value === null ? "base" : "equals",
+        ...(value === null ? {} : { value }),
+      }],
+    } });
+    expect(p.onQueryChange).not.toHaveBeenCalled();
+    expect(p.loadRunAsBatch).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
+  });
+
+  it.each([
+    ["Seed", { seed: 4 }],
+    ["Prompt revision", { prompt_version_id: "prompt" }],
+    ["Workflow revision", { workflow_version_id: "historical-workflow-version" }],
+    ["Profile revision", { profile_version_id: "historical-profile-version" }],
+    ["Reference slot", { image_inputs: [{ slot_key: "reference", mode: "asset", asset_id: "historical-asset" }] }],
+    ["Reference Asset in any slot", { asset_id: "historical-asset" }],
+    ["Base image slot", { image_inputs: [{ slot_key: "base_image", mode: "base" }] }],
+  ] satisfies Array<[string, HistoryProvenanceFilters]>)("filters %s without current library ancestry", async (label, filter: HistoryProvenanceFilters) => {
+    const run = frozenRun("original");
+    Object.assign(run.batch_snapshot.workflow_selection, {
+      workflow_version_id: "historical-workflow-version", workflow_profile_version_id: "historical-profile-version",
+    });
+    run.plan.jobs[0].resolved_image_inputs = [
+      { slot_key: "reference", label: "Reference", asset_id: "historical-asset", filename: "same-label.png" },
+      { slot_key: "base_image", label: "Base image", asset_id: null, filename: null },
+    ];
+    const api = makeApi({ getRun: vi.fn(async () => run), getResults: vi.fn(async () => resultResponse("original")) });
+    const p = props(api);
+    p.query = { filters: { prompt_id: "existing-ancestry", image_inputs: [{ slot_key: "reference", mode: "base" }] } };
+    render(<ProjectBrowser {...p} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Details for/ }));
+    fireEvent.click(await screen.findByRole("button", { name: `Filter Gallery by ${label}` }));
+    const images = filter.image_inputs
+      ? [...p.query.filters!.image_inputs!.filter((image) => image.slot_key !== filter.image_inputs![0].slot_key), ...filter.image_inputs]
+      : p.query.filters!.image_inputs;
+    expect(p.onViewChange).toHaveBeenCalledExactlyOnceWith("gallery", {
+      ...p.query, cursor: null, filters: { ...p.query.filters, ...filter, image_inputs: images },
+    });
+    expect(api.getHistoryChoices).not.toHaveBeenCalled();
+  });
+
+  it.each(["parameter", "image"] as const)("allows replacement at the %s cap but rejects a new predicate without truncation", async (kind) => {
+    const run = frozenRun("original");
+    run.plan.jobs[0].resolved_parameters = ["existing", "new"].map((key) => ({ parameter_key: key, label: key, value: 0 }));
+    run.batch_snapshot.workflow_selection.workflow_profile = { parameters: ["existing", "new"].map((key) => ({
+      key, label: key, node_id: "1", input_name: key, value_type: "integer",
+    })) };
+    run.plan.jobs[0].resolved_image_inputs = ["existing", "new"].map((key) => ({ slot_key: key, label: key, asset_id: null, filename: null }));
+    const api = makeApi({ getRun: vi.fn(async () => run), getResults: vi.fn(async () => resultResponse("original")) });
+    const p = props(api);
+    p.query = { filters: kind === "parameter" ? { parameters: Array.from({ length: 8 }, (_, i) => ({
+      key: i ? `key${i}` : "existing", value_type: "integer" as ParameterValueType, mode: "base" as const,
+    })) } : { image_inputs: Array.from({ length: 4 }, (_, i) => ({ slot_key: i ? `slot${i}` : "existing", mode: "asset" as const, asset_id: "old" })) } };
+    const before = structuredClone(p.query);
+    render(<ProjectBrowser {...p} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Details for/ }));
+    const suffix = kind === "parameter" ? "(integer)" : "slot";
+    fireEvent.click(await screen.findByRole("button", { name: `Filter Gallery by new ${suffix}` }));
+    expect(screen.getByRole("alert")).toHaveTextContent(kind === "parameter" ? "at most 8" : "at most 4");
+    expect(p.onViewChange).not.toHaveBeenCalled();
+    expect(p.query).toEqual(before);
+    fireEvent.click(screen.getByRole("button", { name: `Filter Gallery by existing ${suffix}` }));
+    expect(p.onViewChange).toHaveBeenCalledTimes(1);
+    const next = vi.mocked(p.onViewChange).mock.calls[0][1]!.filters!;
+    expect(kind === "parameter" ? next.parameters : next.image_inputs).toHaveLength(kind === "parameter" ? 8 : 4);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers no actions for unsupported or missing provenance, or without an optional callback", () => {
+    const run = frozenRun("original");
+    run.plan.jobs[0].prompt_version_id = "";
+    run.plan.jobs[0].seed = Number.MAX_SAFE_INTEGER + 1;
+    run.plan.jobs[0].resolved_parameters = [
+      { parameter_key: "missing", label: "Missing", value: false },
+      { parameter_key: "unsupported", label: "Unsupported", value: "text" },
+    ];
+    run.batch_snapshot.workflow_selection.workflow_profile = { parameters: [
+      { key: "unsupported", label: "Unsupported", node_id: "1", input_name: "x", value_type: "enum" },
+    ] };
+    const p = { runId: "original", result: resultResponse("original").results[0], execution: null,
+      restoreTarget: null, getCachedRun: () => run, loadRun: vi.fn(), onClose: vi.fn() };
+    const ui = render(<ResultDetailsDialog {...p} onFilter={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /^Filter Gallery/ })).not.toBeInTheDocument();
+    run.plan.jobs[0].seed = 0;
+    ui.rerender(<ResultDetailsDialog {...p} />);
+    expect(screen.queryByRole("button", { name: /^Filter Gallery/ })).not.toBeInTheDocument();
+    run.plan.jobs = [];
+    ui.rerender(<ResultDetailsDialog {...p} onFilter={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Frozen Job 1 is unavailable");
+    expect(screen.queryByRole("button", { name: /^Filter Gallery/ })).not.toBeInTheDocument();
+  });
+
+  it("rejects a Result hash mismatch before offering frozen filter actions", async () => {
+    const api = makeApi({ getRun: vi.fn(async () => frozenRun("original")), getResults: vi.fn(async () => resultResponse("wrong-hash")) });
+    const response = resultResponse("wrong-hash");
+    response.run_id = "original";
+    vi.mocked(api.getResults).mockResolvedValue(response);
+    render(<ProjectBrowser {...props(api)} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Details for/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be matched to its frozen Job");
+    expect(screen.queryByRole("button", { name: /^Filter Gallery/ })).not.toBeInTheDocument();
+  });
+
   it("reads a bounded index before scanning, with no per-Run fanout or legacy history", async () => {
     const first = deferred<HistoryResultPageResponse>();
     const api = makeApi({ browseProjectResults: vi.fn(() => first.promise) });
@@ -658,6 +786,25 @@ describe("ProjectBrowser", () => {
     expect(api.listProjectRuns).not.toHaveBeenCalled();
   });
 
+  it("opens bounded diagnostics without scanning and closes on workspace navigation", async () => {
+    const api = makeApi({ reindexProject: vi.fn(async () => scanResponse()) });
+    const p = props(api);
+    const ui = render(<ProjectBrowser {...p} />);
+    await screen.findByText("original");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Reindex Project" })).toBeEnabled());
+    const scans = vi.mocked(api.reindexProject).mock.calls.length;
+    expect(api.browseProjectDiagnostics).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(await screen.findByRole("dialog", { name: "History diagnostics" })).toBeInTheDocument();
+    await waitFor(() => expect(api.browseProjectDiagnostics).toHaveBeenCalledWith(
+      p.projectId, { limit: 25, cursor: undefined }, expect.any(AbortSignal),
+    ));
+    expect(api.reindexProject).toHaveBeenCalledTimes(scans);
+    ui.rerender(<ProjectBrowser {...p} active={false} />);
+    expect(screen.queryByRole("dialog", { name: "History diagnostics" })).not.toBeInTheDocument();
+    expect(vi.mocked(api.browseProjectDiagnostics).mock.calls[0][2]?.aborted).toBe(true);
+  });
+
   it.each(["gallery", "runs"] as const)("shows discovered history in an already-indexed empty %s page without another Refresh", async (view) => {
     const api = makeApi({
       browseProjectResults: vi.fn().mockResolvedValueOnce(page([], "g1")).mockResolvedValue(page([item("imported")], "g2")),
@@ -744,7 +891,7 @@ describe("ProjectBrowser", () => {
     expect(api.getResults).not.toHaveBeenCalled();
     fireEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
-        name: "Details",
+        name: "Image Details",
       }),
     );
     const dialog = await screen.findByRole("dialog", {
@@ -923,6 +1070,49 @@ describe("ProjectBrowser", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("uses one compact viewer toolbar, bounds navigation, and links only available images", async () => {
+    const api = makeApi({
+      browseProjectResults: vi.fn(async () => page(Array.from({ length: 48 }, (_, i) => item(`image-${i}`)))),
+    });
+    render(<ProjectBrowser {...props(api)} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^View image-0,/ }));
+    const viewer = screen.getByRole("dialog", { name: "Project Result image" });
+    const controls = within(viewer);
+    const toolbar = viewer.querySelector<HTMLElement>(".pb-modal-heading")!;
+    expect(viewer.querySelectorAll(".pb-modal-heading")).toHaveLength(1);
+    expect(controls.queryByRole("heading")).not.toBeInTheDocument();
+    expect(controls.queryByText("Project Result image")).not.toBeInTheDocument();
+    expect(within(toolbar).getAllByRole("button").map((button) => button.textContent))
+      .toEqual(["Previous", "Next", "Image Details", "Close"]);
+    expect(controls.getAllByRole("button")).toHaveLength(4);
+    const previous = controls.getByRole("button", { name: "Previous" });
+    const next = controls.getByRole("button", { name: "Next" });
+    expect(previous).toBeDisabled();
+    expect(next).toBeEnabled();
+    expect(controls.getByText("1/48", { exact: true })).toBeInTheDocument();
+    fireEvent.keyDown(viewer, { key: "ArrowLeft" });
+    expect(controls.getByText("1/48", { exact: true })).toBeInTheDocument();
+    const link = controls.getByRole("link", { name: "Open original image in a new tab" });
+    expect(link).toHaveAttribute("href", "/results/image-0");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+    expect(within(link).getByRole("img")).toHaveAttribute("src", "/results/image-0");
+    expect(controls.getAllByRole("link")).toHaveLength(1);
+    for (let i = 1; i < 48; i++) fireEvent.click(next);
+    expect(controls.getByText("48/48", { exact: true })).toBeInTheDocument();
+    expect(next).toBeDisabled();
+    expect(previous).toBeEnabled();
+    fireEvent.keyDown(viewer, { key: "ArrowRight" });
+    expect(controls.getByText("48/48", { exact: true })).toBeInTheDocument();
+    fireEvent.click(previous);
+    expect(controls.getByText("47/48", { exact: true })).toBeInTheDocument();
+    expect(controls.getByRole("link")).toHaveAttribute("href", "/results/image-46");
+    fireEvent.error(controls.getByRole("img"));
+    expect(controls.queryByRole("link")).not.toBeInTheDocument();
+    expect(controls.queryByRole("img")).not.toBeInTheDocument();
+    expect(controls.getByRole("status")).toHaveTextContent("This image is no longer available");
+  });
+
   it("keeps the selected image under loading and Details, restores focus, and closes only the topmost dialog", async () => {
     const details = deferred<ResultsResponse>();
     const api = makeApi({
@@ -937,7 +1127,7 @@ describe("ProjectBrowser", () => {
     const viewer = screen.getByRole("dialog", { name: "Project Result image" });
     const image = within(viewer).getByRole("img");
     const detailsButton = within(viewer).getByRole("button", {
-      name: "Details",
+      name: "Image Details",
     });
     fireEvent.click(detailsButton);
     await waitFor(() => expect(api.getResults).toHaveBeenCalledTimes(1));
@@ -977,7 +1167,7 @@ describe("ProjectBrowser", () => {
       await screen.findByRole("button", { name: /^View original/ }),
     );
     const viewer = screen.getByRole("dialog", { name: "Project Result image" });
-    const button = within(viewer).getByRole("button", { name: "Details" });
+    const button = within(viewer).getByRole("button", { name: "Image Details" });
     fireEvent.click(button);
     await screen.findByText("Metadata offline");
     fireEvent.click(
@@ -1140,6 +1330,7 @@ function props(api: BatchcraftApi): ProjectBrowserProps {
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
     getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
+    browseProjectDiagnostics: vi.fn(async (projectId: string) => ({ ...page([]), project_id: projectId })),
     browseProjectResults: vi.fn(async () => page([item("original")])),
     browseProjectRuns: vi.fn(async () => ({
       ...page([]),

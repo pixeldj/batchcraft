@@ -22,6 +22,8 @@ import type {
   HistoricalResourceImportRequest,
   HistoricalWorkflowProfileImportRequest,
   HistoryQuery,
+  HistoryDiagnosticQuery,
+  HistoryDiagnosticPageResponse,
   HistoryChoiceKind,
   HistoryChoicesResponse,
   HistoryRunPageResponse,
@@ -83,6 +85,7 @@ export interface BatchcraftApi {
   importProject(body: ProjectImportRequest): Promise<ProjectImportResponse>;
   reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse>;
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse>;
+  browseProjectDiagnostics(projectId: string, query?: HistoryDiagnosticQuery, signal?: AbortSignal): Promise<HistoryDiagnosticPageResponse>;
   getHistoryChoices(projectId: string, kind: HistoryChoiceKind, q?: string, signal?: AbortSignal): Promise<HistoryChoicesResponse>;
   browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse>;
   browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse>;
@@ -204,6 +207,14 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/runs`, { signal });
+  }
+
+  browseProjectDiagnostics(projectId: string, query?: HistoryDiagnosticQuery, signal?: AbortSignal): Promise<HistoryDiagnosticPageResponse> {
+    const params = new URLSearchParams();
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    if (query?.cursor !== undefined) params.set("cursor", query.cursor);
+    const suffix = params.size ? `?${params}` : "";
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/diagnostics${suffix}`, { signal });
   }
 
   browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse> {
@@ -504,7 +515,7 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
       if (!response.ok) {
         const envelope = await readErrorEnvelope(response);
-        if (response.status === 404 && !envelope && /\/history\/(runs|results|choices)(\?|$)/.test(path)) {
+        if (response.status === 404 && !envelope && /\/history\/(runs|results|choices|diagnostics)(\?|$)/.test(path)) {
           throw new ApiError(
             "The running backend does not support Gallery and Runs browsing. Restart the backend from the same version as the frontend, then Refresh. Reindexing cannot fix a missing API route.",
             "history_browser_unavailable",

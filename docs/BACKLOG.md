@@ -436,7 +436,7 @@ so BC-006 remains `Planned` for those distinct workflows.
 
 Implementation plan: [BC-007 Project browser](plans/BC-007-project-browser.md). Start with bounded,
 generation-consistent Run/Result queries, then deliver the image-first Gallery/Runs workspace,
-provenance filters, and measured performance/polish. Preserve draft/Preview and execution ownership
+provenance filters, and safe diagnostics/inspection. Preserve draft/Preview and execution ownership
 while browsing. Stars/exports and additional historical reuse operations retain their separate entries.
 
 Primary product behavior:
@@ -563,9 +563,9 @@ twelve desktop/mobile browser tests in each of Vite and built same-origin modes.
 real paginated metadata, checks correct cross-Run Details, navigation and Preview retention, polling
 while reviewing, URL Back/Forward and reload, historical reuse, palettes, and a 320px layout. Desktop
 and mobile screenshots were reviewed. The owner has given positive feedback on this checkpoint;
-final BC-007 acceptance remains pending. Typed provenance filtering has since advanced as recorded below;
-complete facets, bounded diagnostic detail browsing, generated thumbnails, and filmstrip remain upcoming.
-BC-007 stays In Progress, not Done; the linked plan records the remaining checkpoints.
+final BC-007 acceptance remains pending. Typed provenance filtering and bounded diagnostics have since
+advanced as recorded below; complete facets, generated thumbnails, and filmstrip are now deferred options.
+BC-007 stays In Progress, not Done; the linked plan records the finite acceptance scope.
 
 Imported-history visibility follow-up: the development frontend can hot-reload ahead of the Python
 backend. Missing browsing routes now report an actionable backend-restart message rather than a generic
@@ -609,10 +609,70 @@ filter editing/removal, URL restoration, and draft retention. Reviewed 320px scr
 overlap, fixed with a separate tools row and a bounding-box regression. Pagination checks now await the
 refreshed page before capturing its identity rather than capturing deliberately retained stale content.
 
-Remaining scope: filter-from-Details actions, additional deterministic Run/Job sorts, logical
-Workflow/Profile and hash filters, planned OR within a dimension and complete facets, bounded diagnostic
-detail browsing, generated thumbnails, filmstrip, and performance measurement/polish. Final owner
-acceptance remains pending. BC-007 remains In Progress, not Done; no architecture change or new ADR is required.
+Post-`8b3ec48` diagnostics/Details/measurement pass:
+
+- Standalone `HistoryDiagnostics` is wired to the ProjectBrowser header regardless of diagnostic counts
+  or filter matches. Its native dialog retains one 25-row page and at most 20 previous bookmarks.
+  SQL-only `GET /history/diagnostics` defaults to 25 rows, maximum 100, with generation-bound cursors,
+  scan-order paging, safe public messages, and clipped historical names. It requires neither filesystem
+  reads nor provenance enrichment. Explicit Refresh only GETs page one; Reindex Project closes the
+  dialog and invokes the owning browser's repair action. Empty diagnostics are not a fresh storage check.
+- Optional Result Details Filter Gallery actions derive parameter Base/typed equality, seed, Prompt
+  revision, available Workflow/Profile revisions, Image Input slot Base/Asset, and Asset-in-any-slot
+  predicates from frozen Job/snapshot provenance. They retain unrelated AND predicates and replace only
+  the matching key/type, slot, or scalar field. Caps produce an error without truncation; success closes
+  inspection and navigates Gallery/query atomically with no cursor. Current-Run callers without the
+  callback are unchanged.
+- `backend/tests/db/check_history_browser.py` provides an opt-in, temporary-data-only SQL measurement:
+  from `backend/`, run `uv run python tests/db/check_history_browser.py --repeats 20 --explain`.
+  The dataset has 200 Runs, 10,000 Jobs, 20,000 Results, three parameter dimensions, and 200 diagnostics.
+  M4 Max / Python 3.14.7 / SQLite 3.53.1 p50/p95 milliseconds: newest Results 29.73/29.94;
+  middle Results 35.90/36.94; newest Runs 0.83/0.92; Result parameters + seed 10.05/10.18;
+  parameter choices 10.62/10.82; diagnostics 0.68/0.84. Warm OS cache and fresh connections exclude
+  HTTP, images, and filesystem reconciliation. Result temporary B-trees and Project-wide choices mean
+  bounded output is not page-proportional work. Database size was 20.96 MiB; 63.33 MiB peak process RSS
+  includes seeding/full-identity verification, not page memory. Timings are observations, not assertions;
+  the linked plan records methodology and remaining measurement limits.
+
+Verification passed: 1,330 backend tests, Ruff lint/format, mypy and package build; 642 frontend tests,
+lint/typecheck and production build; and 14 real-API desktop/mobile tests in each of Vite and built
+same-origin modes. Diagnostics and Details screenshots were reviewed, including the 320px dialog layout.
+Earlier checkpoint counts above remain unchanged historical evidence.
+
+User-approved scope closure after gap review: retain the original requirements above unchanged and use
+the plan's [finite acceptance checklist](plans/BC-007-project-browser.md#finite-acceptance-checklist).
+Implemented newest/oldest order with deterministic Run ID ties and Job/artifact ordinals satisfies the
+original sorting alternatives; additional dedicated Run/Job modes are deferred, not missing stable
+sorting. The original "Workflow and Profile version" wording is ambiguous about logical Workflow
+ancestry: exact frozen WorkflowVersion/ProfileVersion filters satisfy finding the frozen workflow for
+this scope, without claiming logical matching across revisions.
+
+Optional plan additions, not original completion requirements: logical Workflow/Profile across revisions,
+hash filters, multi-value OR, complete/conditioned facets, filmstrip, and additional dedicated Run/Job
+sort modes. The user works mostly over LAN, reports no slowness, and prioritizes usage/functionality;
+generated thumbnails and broader scan/image/end-to-end performance work are deferred until a reported
+or measured issue warrants them. Recorded benchmarks remain observational baselines, not release gates.
+Keep deferred options here as scoped maintenance; no new backlog IDs or dependencies are needed.
+
+Owner-requested viewer refinement: removed the visible title and separate original link, condensed
+navigation/Details/Close into one toolbar, linked the image to its original in a new tab, and reduced
+caption spacing. Images use the remaining viewport space without cropping. Verification passed with
+680 frontend tests, lint/typecheck/build, and 14 browser tests in each serving mode; desktop, 320px
+portrait, and short-landscape viewer layouts were checked. Original-byte safety and nested Details
+focus/keyboard behavior remain unchanged.
+
+The functional audit found no missing original requirement within the closed scope. Two confirmed bugs
+are fixed: URL filters reject duplicate decoded JSON keys and non-integer seed/integer-parameter tokens
+instead of silently changing intent, and missing Diagnostics API support now explains the required
+backend restart. Verification passed with 679 frontend tests, lint/typecheck/build, and 14 browser tests
+in each serving mode. An earlier mobile Vite execution-completion timeout did not reproduce in the full
+rerun or three focused repeats; it remains an unexplained intermittent test caveat, not a claimed fix.
+Backend code is unchanged since the 1,330-test checkpoint.
+
+Final owner acceptance remains pending. Scope approval
+does not mean final UI acceptance. Follow the plan's short
+[owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance); preserve meaningful tests
+and prior verification evidence. BC-007 remains In Progress, not Done; no architecture change or new ADR is required.
 
 ### BC-008: Video and generic file input slots
 

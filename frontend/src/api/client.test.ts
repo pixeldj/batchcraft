@@ -4,6 +4,14 @@ import { ApiError, BatchcraftApiClient } from "./client";
 import type { HistoryQuery, HistoryResultPageResponse, HistoryRunPageResponse, HistoryRunSummaryResponse } from "./types";
 
 describe("BatchcraftApiClient", () => {
+  it("requests bounded diagnostic pages with encoded Project and cursor and cancellation", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const controller = new AbortController();
+    const api = new BatchcraftApiClient("");
+    await api.browseProjectDiagnostics("project #1", { limit: 25, cursor: "a+/=" }, controller.signal);
+    expect(fetcher).toHaveBeenCalledWith("/api/projects/project%20%231/history/diagnostics?limit=25&cursor=a%2B%2F%3D", expect.objectContaining({ signal: controller.signal }));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -35,6 +43,20 @@ describe("BatchcraftApiClient", () => {
   it("explains an older backend's missing choices route", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })));
     await expect(new BatchcraftApiClient().getHistoryChoices("p", "asset")).rejects.toMatchObject({ status: 404, message: expect.stringContaining("Restart the backend") });
+  });
+
+  it("distinguishes a missing diagnostics route from a missing Project", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: "project_not_found", message: "Project was not found" } }), { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new BatchcraftApiClient();
+    await expect(client.browseProjectDiagnostics("p")).rejects.toMatchObject({
+      code: "history_browser_unavailable", message: expect.stringContaining("Restart the backend"),
+    });
+    await expect(client.browseProjectDiagnostics("missing")).rejects.toMatchObject({
+      code: "project_not_found", message: "Project was not found",
+    });
   });
 
   it.each(["runs", "results"] as const)("serializes advanced %s filters as typed JSON without mutating the query", async (kind) => {

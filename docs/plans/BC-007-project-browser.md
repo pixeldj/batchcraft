@@ -1,7 +1,8 @@
 # BC-007: Project-wide Run and Result browser
 
-Status: In Progress. Bounded browsing, visual workspace, and typed-provenance checkpoint implemented;
-reported automated evidence is recorded below. Final owner acceptance remains pending.
+Status: In Progress. Bounded browsing, visual workspace, typed provenance, diagnostics, Filter Gallery
+from Details, and initial SQL measurement have recorded verification. Scope is closed by the user decision
+below; the functional audit and its fixes are complete. Final owner acceptance remains pending.
 Backlog: [BC-007](../BACKLOG.md#bc-007-project-wide-run-and-result-browser).
 
 Current implementation: additive `/history/runs` and `/history/results` APIs, newest/oldest keyset
@@ -11,9 +12,54 @@ pagination, basic Run filters, SQL-clipped metadata, generation-scoped bookmarks
 inspection modals. That historical visual checkpoint passed 508 frontend tests, lint/typecheck/build, and twelve
 desktop/mobile browser tests in each of Vite and built modes. Screenshots were reviewed; owner acceptance
 is separate. Typed JSON provenance filters, bounded historical choices, frontend `HistoryFilters`, and
-forward migration 0004 are now implemented. This is not complete faceting: filter-from-Details,
-additional Run/Job sorts, logical Workflow/Profile and hash filters, multi-value OR, bounded diagnostic
-detail browsing, generated thumbnails, filmstrip, and performance work remain; BC-007 is not Done.
+forward migration 0004 are now implemented. The pass after `8b3ec48` adds bounded diagnostic browsing,
+Filter Gallery from Details, and a reproducible SQL measurement script. Complete facets and the other
+optional enhancements below are not completion requirements; BC-007 is not Done.
+
+## Scope closure
+
+The user approved removing accumulated plan extras from mandatory completion after reviewing gaps
+against the original BC-007 requirements. Usage and functionality take priority: the user works mostly
+over LAN and reports no slowness. Generated thumbnails and broader performance work are deferred until
+a reported or measured issue justifies them. This is scope approval, not acceptance of the final UI.
+
+The original backlog requirements remain unchanged. Their sorting alternatives are satisfied by
+implemented newest/oldest ordering with deterministic Run ID ties and Job/artifact ordinal ordering;
+additional dedicated Run/Job sort modes are deferred options, not missing stable ordering. The original
+"Workflow and Profile version" wording is ambiguous about logical Workflow ancestry. Exact frozen
+WorkflowVersion and ProfileVersion filters satisfy finding the frozen workflow for this scope; they do
+not provide logical Workflow/Profile matching across revisions.
+
+Logical Workflow/Profile across revisions, hash filters, multi-value OR, complete/conditioned facets,
+filmstrip, and additional dedicated Run/Job sort modes are optional plan additions, not original
+requirements. Keep these deferred options within BC-007 for scoped maintenance; no new backlog IDs,
+dependencies, or implementation changes are required by this decision. Starred-state filtering remains
+conditional on BC-015 as originally specified.
+
+### Finite acceptance checklist
+
+All six areas have implementation and checkpoint evidence below; final acceptance remains open.
+
+- [ ] Project-wide history: every indexed Run/Result is reachable through bounded pages, including
+  non-image and zero-Result history, without session-held membership or per-Run Result-list fan-out.
+  Newest/oldest ordering retains deterministic Run ID ties and Job/artifact ordinal order.
+- [ ] Required filters: typed parameter key/value and Base/override, seed, logical Prompt where frozen
+  ancestry exists and exact PromptVersion, exact WorkflowVersion/ProfileVersion, Saved Batch/historical
+  Batch, Run status/date, Image Input slot plus Asset/Base, and Asset in any slot. Job predicates match
+  the same Job (the Result's own Job); missing values, false, zero, empty strings, and types stay distinct.
+- [ ] Image-first inspection: lazy originals, density controls, page-local cross-Run lightbox, frozen
+  Run Plan and Result Details retain correct ownership and keyboard/touch access. Filter Gallery from
+  Details preserves unrelated AND predicates and reports cap errors without truncation.
+- [ ] Safe degraded history: corrupt/missing Runs do not hide healthy history; unavailable execution,
+  stale storage, no matches, and confirmed empty history remain distinct. Bounded diagnostics expose
+  safe summaries; Refresh reads the index and Reindex Project is explicit repair.
+- [ ] Historical authority: typed and Image Input indexes retain identities/order and rebuild from
+  filesystem Run/execution artifacts. SQLite stores no Result bytes, absolute paths are not portable
+  identity, stale projections cannot authorize unsafe originals, and frozen files/migrations remain intact.
+- [ ] Workspace continuity: review preserves draft/valid in-memory Preview and execution ownership;
+  URL Back/Forward restores view/filters without switching Project or persisting cursor pages. Guarded
+  Project switching and cold-load Preview invalidation remain unchanged. Required regressions remain
+   meaningful; confirmed audit fixes are verified before final owner sign-off.
 
 ## Outcome
 
@@ -45,6 +91,10 @@ History presentation, not current-Run Results.
 - Use short, reduced-motion-aware transitions. Do not rearrange images underneath an active inspection.
 - Respect all appearance palettes through semantic tokens, including filters, focus, and overlays.
 - Offer a contextual Filter gallery to this value action from supported provenance fields.
+- The Project image viewer has one compact toolbar: Previous, page-local image counter, Next,
+  Image Details, and Close. It has no visible title row; its accessible dialog name remains.
+  The uncropped image fills the available space and links to the original in a new tab. A compact
+  caption retains ownership, with bounded scrolling for long names. Keyboard navigation is unchanged.
 
 ### Runs
 
@@ -59,7 +109,7 @@ History presentation, not current-Run Results.
 
 Start with Run-name/notes search, newest/oldest sorting, Run/Batch identity, and execution status and
 availability. Use an Add filter control and removable/editable chips instead of a permanently expanded
-form. The table describes the intended scope; current coverage and remaining work are distinguished below:
+form. The table describes the scoped, implemented filter coverage:
 
 | Filter | Interaction |
 | --- | --- |
@@ -68,17 +118,17 @@ form. The table describes the intended scope; current coverage and remaining wor
 | Parameter | Key and Profile context, declared type, Base/override, typed value |
 | Seed | Exact supported integer |
 | Prompt | Logical Prompt and optional exact revision where ancestry is known |
-| Workflow / Profile | Historical logical identities and revisions |
+| Workflow / Profile | Exact frozen WorkflowVersion and ProfileVersion identities |
 | Image Input | Slot key plus Asset, or Base workflow |
 | Asset usage | Concrete Asset in any slot |
 
 Search labels must describe the fields actually searched. Current filters combine with AND; the UI
 supports one predicate per parameter key/type pair or Image Input slot and one value per identity field.
-OR among multiple selected values within a dimension is planned, not implemented. Job predicates match the **same Job**, not different
+OR among multiple selected values within a dimension is optional and deferred. Job predicates match the **same Job**, not different
 Jobs in one Run. Missing parameters/slots are not Base; an override equal to a Base literal is still an
 override. Preserve false, zero, empty string, numeric types, and historical identities without current
 library records. Implemented choices are bounded historical searches, not complete or active-filter-conditioned
-facets. Logical Workflow/Profile and hash filters remain planned; exact revision filters are implemented.
+facets. Logical Workflow/Profile across revisions and hash filters are optional and deferred; exact revision filters are implemented.
 
 ## Delivery checkpoints
 
@@ -95,7 +145,8 @@ facets. Logical Workflow/Profile and hash filters remain planned; exact revision
 - Allow old/unreconciled indexes to be read honestly with unknown scan state. GET must not scan storage.
 - Reject an obsolete generation with an actionable refresh error; never combine mixed-generation pages.
 - Replace projection deletion's per-Run SQL placeholders with Project-scoped deletion.
-- Keep diagnostics available through existing history while a bounded diagnostic endpoint is developed.
+- Keep diagnostics available through the bounded diagnostic endpoint described below; the legacy
+  history API remains available but is not required for diagnostic browsing.
 
 The initial query sub-slice was additive. The visual checkpoint now switches the mounted browser to
 these endpoints; old unpaginated APIs remain available for backward compatibility.
@@ -134,7 +185,7 @@ Implemented checkpoint details:
 - Search covers Run names/notes, with newest/oldest order, status/availability controls, and removable
   Run/Batch chips. Runs offer Show Results, frozen Run Plan, and guarded Load Run as Batch with native
   unsaved-work confirmation. Typed advanced controls and historical choices are implemented as described
-  below; complete facets remain unfinished.
+  below; complete facets are optional and deferred.
 - Gallery uses natural-aspect lazy original images with asynchronous decoding and density controls,
   not generated thumbnails. Image selection uses Run/Job/artifact identity and navigation is limited
   to eligible images on the loaded page. A filmstrip is not implemented.
@@ -146,7 +197,7 @@ Implemented checkpoint details:
   objects and image-failure state. Changed pages retain metadata with History updated pending Refresh;
   disable retained images/original links that the newly scanned bounded page cannot validate. Absence
   from that page is not deletion evidence. Failed scans retain known content with a warning. Diagnostic
-  counts are shown, but diagnostic detail browsing remains upcoming.
+  counts are shown, and header Diagnostics now opens the bounded dialog described below.
 - Shared Run Plan, Result Details, and ResultLightbox use native modal inspection via `useModalDialog`,
   with nested-dialog/topmost Escape handling, body scroll locking, and safe focus restoration. The
   browser's viewer and confirmation are native modals too. Automated verification and the imported-history
@@ -186,21 +237,72 @@ Implemented:
   JSON `filters` round-trips through URL Back/Forward; invalid advanced URL intent shows an explicit
   error and blocks browsing until cleared. Project guards, drafts, Preview, and recovery v4 stay unchanged.
 
-Remaining: filter-from-Details actions; additional deterministic Run/Job sorts; logical Workflow/Profile
+Filter Gallery from Details is now implemented through an optional `ResultDetailsDialog` callback.
+Actions derive parameter Base/typed equality, seed, Prompt revision, Image Input slot Base/Asset, and
+Asset-in-any-slot intent from the selected frozen Job, and Workflow/Profile revision IDs from its frozen
+snapshot where available. They preserve unrelated AND predicates and replace only the matching
+parameter key/type, slot, or scalar field. Merged-filter validation enforces the existing caps; failure
+shows an error in Details without truncation or navigation. Success closes Details and image inspection,
+clears the cursor, and changes Gallery/query together in one navigation operation. Current-Run Details
+without the optional callback remains unchanged.
+
+Standalone `HistoryDiagnostics` is wired to the ProjectBrowser header regardless of counts or filter
+matches. Its native dialog reads `/history/diagnostics` in scan order, with one 25-row page and at most
+20 previous bookmarks. The SQL-only API defaults to 25 rows (maximum 100); generation-bound cursors,
+rows, and scan metadata share one transaction. No filesystem read or provenance enrichment is required.
+Public summaries use safe approved messages and clipped historical names, not raw diagnostic prose or
+paths. Explicit Refresh only GETs the first indexed page; a generation mismatch asks for Refresh rather
+than mixing pages. Reindex Project closes the dialog and invokes the browser owner's explicit repair
+action. Opening or paging diagnostics does not scan storage; empty diagnostics do not prove fresh health.
+
+Optional and deferred: additional dedicated Run/Job sorts; logical Workflow/Profile across revisions
 and hash filters; multi-value OR within a dimension and complete facets. Do not infer missing historical
 ancestry from today's libraries or assume Run numbers are globally unique.
 
 ### 4. Performance and polish
 
-- Benchmark representative histories and large images. Page reads must scale with requested metadata,
-  not trigger a filesystem Result-list request for every Run.
+This formerly planned checkpoint is not a BC-007 completion gate. The user approved deferring generated
+thumbnails and broader performance work until a reported or measured issue warrants it. Existing
+correctness, artifact security, bounded-state, accessibility, and responsive-layout regressions remain
+required. If performance work is reopened, retain these constraints:
+
+- Extend the initial synthetic SQL baseline below to representative histories, scans, HTTP, and large
+  images. Avoid per-Run filesystem Result-list fan-out; current bounded output does not imply
+  page-proportional SQL work.
 - Add aspect-preserving raster thumbnails in a bounded disposable filesystem cache, outside canonical
   Run directories. Key by verified source content plus rendition version/size; retain original downloads.
 - Review the decoder dependency, source validation, pixel/frame/input limits, concurrency, cache budget,
   cancellation cleanup, and corruption handling before exposing thumbnail generation.
 - Do not let a cache bypass missing execution/source checks or weaken safe artifact serving.
 - Measure scan/lookup cost before introducing incremental indexing, watchers, or virtualization.
-- Refine density, empty states, keyboard/touch use, and all-palette contrast and responsive layouts.
+- Target further polish to confirmed usage issues rather than an open-ended completion requirement.
+
+Initial reproducible measurement: from `backend/`, run
+`uv run python tests/db/check_history_browser.py --repeats 20 --explain`.
+The script creates only its own temporary SQLite database and exercises production query functions,
+with correctness checks for complete identity/order, typed same-Job predicates, choices, and diagnostics.
+It uses 200 Runs, 10,000 Jobs, 20,000 Results, three parameter dimensions, and 200 diagnostics.
+Guarded correctness reads reject Project filesystem and legacy-list access. There are no timing
+assertions, image bytes, configured data paths, or new dependencies.
+
+Recorded baseline: M4 Max, Python 3.14.7, SQLite 3.53.1, 20 repeats. Warm OS cache, fresh connections
+per call, sequential reads; p50 is median and p95 is nearest rank.
+
+| SQL query | p50 (ms) | p95 (ms) |
+| --- | ---: | ---: |
+| Newest Result page | 29.73 | 29.94 |
+| Middle Result page | 35.90 | 36.94 |
+| Newest Run page | 0.83 | 0.92 |
+| Result parameters + seed | 10.05 | 10.18 |
+| Parameter choices | 10.62 | 10.82 |
+| First diagnostic page | 0.68 | 0.84 |
+
+The SQLite file was 20.96 MiB. Peak process RSS was 63.33 MiB, including imports, seeding, and full-identity
+verification, not per-page memory. These timings exclude HTTP/DTO serialization, image network/decode,
+filesystem reconciliation, and concurrent writes. Query plans show temporary sorting B-trees for Results
+and Project-wide choice work: bounded output is not page-proportional work or a latency guarantee.
+Keep this observational baseline, not a release gate, distinct from deferred end-to-end, scan, image,
+and performance/polish work. It neither proves end-to-end speed nor mandates a new dependency or cache.
 
 ## Contracts and non-goals
 
@@ -222,11 +324,30 @@ Typed-provenance checkpoint verification passed: 1,326 backend tests, Ruff lint/
 build; 618 frontend tests, lint/typecheck and production build; and 14 real-API desktop/mobile tests in
 each of Vite and built same-origin modes. Narrow-screen screenshots were reviewed and a header overlap
 was fixed with a tools-row bounding-box regression. Earlier checkpoint counts remain historical.
-Final scope/owner acceptance is still pending.
+Final owner acceptance remains pending. The functional audit found no missing original requirement
+within the closed scope. It identified two bugs, now fixed: URL parsing rejects duplicate decoded JSON
+keys and non-integer seed/integer-parameter tokens before they can silently change query intent, and
+Diagnostics now distinguishes missing backend support from retryable read failures with restart guidance.
+
+Functional-audit verification: 679 frontend tests, lint/typecheck and build passed. Full Vite and built
+browser suites each passed 14 tests. An earlier Vite mobile execution-completion assertion timed out;
+the full Vite rerun and three focused mobile repeats passed without changing timeouts or assertions.
+The original timeout remains unexplained, not claimed fixed. In the captured repeats, two-Job backend
+execution took about 3.1 seconds and the UI observed completion in about 4.3 seconds. Backend code is
+unchanged since the recorded 1,330-test checkpoint.
+
+Post-`8b3ec48` diagnostics/Details checkpoint verification passed: 1,330 backend tests, Ruff lint/format,
+mypy and package build; 642 frontend tests, lint/typecheck and production build; and 14 real-API
+desktop/mobile tests in each of Vite and built same-origin modes. Diagnostics and Details screenshots
+were reviewed, including the 320px dialog layout. Earlier checkpoint evidence remains unchanged.
 
 - Backend: query boundaries, literal search, typed/Base matching, same-Job conjunction, multi-artifact
   identity, equal/offset/unknown dates, deterministic pages, malformed/mismatched/stale cursors,
   transaction consistency, failed-scan retention, migration preservation, and unchanged historical bytes.
+- Diagnostics: generation-bound paging, unenriched/unknown index state, no filesystem reads, safe
+  summaries and name clipping, header access independent of counts, GET-only Refresh, and explicit repair.
+- Details filters: frozen values, unrelated AND retention, same-key replacement, cap errors without
+  truncation, atomic URL navigation and dialog closure, and unchanged callers without a callback.
 - Frontend: view/Project/request races, draft and Preview retention, persistent execution ownership,
   cross-Run Details, loaded-page boundaries, refresh without jumping selection, and honest degraded states.
 - Browser: fake-backed desktop/mobile, Vite and built same-origin, keyboard focus and nested dialogs,
@@ -236,6 +357,23 @@ Final scope/owner acceptance is still pending.
 - Use DEVELOPMENT verification commands; update only BC-007 progress. Keep BC-007 In Progress until the
   full accepted scope and required automated/owner verification have succeeded.
 
-Planning estimate: approximately 2-3 developer weeks for the core browser, or 3-5 weeks including the
-complete provenance filters, secure thumbnails, visual polish, and verification. Reassess after the
-bounded-query and visual checkpoints.
+The earlier 2-3 week core / 3-5 week expanded planning estimate included optional work and is not a
+remaining-work commitment after scope closure.
+
+## Owner acceptance
+
+Use fake-backed development/test history per `LOCAL_INSTANCES.md`; everyday data or live ComfyUI requires
+explicit authorization. These steps are pending, not evidence of final UI acceptance:
+
+1. Browse Gallery and Runs across multiple pages in newest and oldest order; check stable Run/Job
+   ownership, zero-Result Runs, and non-image history.
+2. Exercise the required filters in the finite checklist, including typed Base/override and combined
+   same-Job conditions; find a frozen workflow with exact Workflow/Profile version filters.
+3. Inspect originals across Runs, open Run Plan and Details, and apply Filter Gallery while retaining
+   unrelated filters; check keyboard/touch use and return focus on desktop and mobile.
+4. Inspect degraded-history fixtures and Diagnostics; distinguish stale/unavailable from empty, use
+   GET-only Refresh and explicit Reindex Project, and confirm healthy history stays usable.
+5. Return to Batch with draft and valid Preview intact, check monitored ownership and URL Back/Forward,
+   then confirm guarded Project changes and fresh Preview on cold load.
+6. Review recorded regression evidence, audit fixes, and the intermittent browser-test caveat; record owner
+   sign-off against this finite scope before marking BC-007 Done. Do not add deferred extras as gates.
