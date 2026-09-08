@@ -429,7 +429,7 @@ so BC-006 remains `Planned` for those distinct workflows.
 | --- | --- |
 | ID | BC-007 |
 | Priority | P2 |
-| Status | In Progress |
+| Status | Done |
 | Area | Results / Indexing |
 | Summary | Add rebuildable Run, Job, parameter, Image Input, and Result indexes plus a Project-wide historical browser with useful provenance filters. |
 | Dependencies / Notes | Follow ADR 0003's derived-index rules. BC-020 delivered the rebuildable projections and initial Project-wide history browser. Result bytes remain filesystem-owned. BC-015 adds durable stars/favorites on top of this browser. |
@@ -513,7 +513,7 @@ across Vite and built same-origin modes, and the artifact-security/six-image bro
 mypy, frontend lint/typecheck, builds, distribution checks, current-source Gitleaks, actionlint, and
 `git diff --check` pass. Browser coverage confirms completion in the open Project and reopening history
 without manual reindex. Advanced filtering, sorting, and pagination were not part of that freshness
-slice; the broader BC-007 entry is not Done. The public v1 release gate remains separate.
+slice; the broader BC-007 entry was not Done at that checkpoint. The public v1 release gate remains separate.
 
 BC-007 bounded query sub-slice: additive Run/Result history endpoints now provide SQL-only keyset pages,
 newest/oldest microsecond ordering, literal Run-name/notes search, and exact Run/Batch/status/availability
@@ -562,10 +562,10 @@ Visual-checkpoint verification passed with 508 frontend tests, lint, typecheck, 
 twelve desktop/mobile browser tests in each of Vite and built same-origin modes. Browser coverage uses
 real paginated metadata, checks correct cross-Run Details, navigation and Preview retention, polling
 while reviewing, URL Back/Forward and reload, historical reuse, palettes, and a 320px layout. Desktop
-and mobile screenshots were reviewed. The owner has given positive feedback on this checkpoint;
-final BC-007 acceptance remains pending. Typed provenance filtering and bounded diagnostics have since
+and mobile screenshots were reviewed. The owner gave positive feedback on this checkpoint;
+final BC-007 acceptance was pending then. Typed provenance filtering and bounded diagnostics have since
 advanced as recorded below; complete facets, generated thumbnails, and filmstrip are now deferred options.
-BC-007 stays In Progress, not Done; the linked plan records the finite acceptance scope.
+BC-007 remained In Progress at that checkpoint; the linked plan records the finite acceptance scope.
 
 Imported-history visibility follow-up: the development frontend can hot-reload ahead of the Python
 backend. Missing browsing routes now report an actionable backend-restart message rather than a generic
@@ -679,10 +679,18 @@ durable format, candidate installation, or everyday-data changes are involved. V
 Browser verification passed with 14 desktop/mobile tests in each of Vite and built modes, including
 current-Run card and nested lightbox Details filters, draft/Preview retention, and dialog focus cleanup.
 
-Final owner acceptance remains pending. Scope approval
-does not mean final UI acceptance. Follow the plan's short
-[owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance); preserve meaningful tests
-and prior verification evidence. BC-007 remains In Progress, not Done; no architecture change or new ADR is required.
+Completion: the owner gave general acceptance following candidate feedback: "Ok perfect thanks Is
+BC007 good to go now? It looks good on my end." The main agent acknowledges this as overall owner
+acceptance of the closed scope. The latest implemented commit is `43a08f8`, including the current-Run
+Result Details filter follow-up and installation maintenance. The specific candidate commit installed
+by the owner is unknown; this does not claim an observed live GPU Job or that the owner performed every
+manual scenario. The plan's six finite acceptance areas are complete based on implemented behavior,
+recorded automated evidence, and this overall acceptance; its manual steps remain reference guidance.
+Previously recorded overall verification is 692 frontend tests, 1,384 backend tests including 54
+maintenance tests, and 14 browser tests in each of Vite and built modes, not additional tests run for
+this docs-only closure. Preserve the unexplained intermittent timeout caveat and deferred extras above.
+BC-007 is Done; no architecture or behavior change, new ADR, release publication, deployment, or
+installation change is authorized by this acceptance.
 
 ### BC-008: Video and generic file input slots
 

@@ -1,8 +1,9 @@
 # BC-007: Project-wide Run and Result browser
 
-Status: In Progress. Bounded browsing, visual workspace, typed provenance, diagnostics, Filter Gallery
+Status: Done. Bounded browsing, visual workspace, typed provenance, diagnostics, Filter Gallery
 from Details, and initial SQL measurement have recorded verification. Scope is closed by the user decision
-below; the functional audit and its fixes are complete. Final owner acceptance remains pending.
+below; the functional audit and its fixes are complete. Overall owner acceptance has been received
+following candidate feedback; see Owner acceptance below for the evidence and its limits.
 Backlog: [BC-007](../BACKLOG.md#bc-007-project-wide-run-and-result-browser).
 
 Current implementation: additive `/history/runs` and `/history/results` APIs, newest/oldest keyset
@@ -11,17 +12,18 @@ pagination, basic Run filters, SQL-clipped metadata, generation-scoped bookmarks
 `useProjectBrowserHistory`, `useWorkspaceNavigation`, App navigation/monitor integration, and native
 inspection modals. That historical visual checkpoint passed 508 frontend tests, lint/typecheck/build, and twelve
 desktop/mobile browser tests in each of Vite and built modes. Screenshots were reviewed; owner acceptance
-is separate. Typed JSON provenance filters, bounded historical choices, frontend `HistoryFilters`, and
-forward migration 0004 are now implemented. The pass after `8b3ec48` adds bounded diagnostic browsing,
+was separate at that checkpoint. Typed JSON provenance filters, bounded historical choices, frontend
+`HistoryFilters`, and forward migration 0004 are now implemented. The pass after `8b3ec48` adds bounded diagnostic browsing,
 Filter Gallery from Details, and a reproducible SQL measurement script. Complete facets and the other
-optional enhancements below are not completion requirements; BC-007 is not Done.
+optional enhancements below are not completion requirements; BC-007 is now Done within the closed scope.
 
 ## Scope closure
 
 The user approved removing accumulated plan extras from mandatory completion after reviewing gaps
 against the original BC-007 requirements. Usage and functionality take priority: the user works mostly
 over LAN and reports no slowness. Generated thumbnails and broader performance work are deferred until
-a reported or measured issue justifies them. This is scope approval, not acceptance of the final UI.
+a reported or measured issue justifies them. That decision was scope approval; overall owner acceptance
+was received later as recorded below.
 
 The original backlog requirements remain unchanged. Their sorting alternatives are satisfied by
 implemented newest/oldest ordering with deterministic Run ID ties and Job/artifact ordinal ordering;
@@ -38,28 +40,29 @@ conditional on BC-015 as originally specified.
 
 ### Finite acceptance checklist
 
-All six areas have implementation and checkpoint evidence below; final acceptance remains open.
+All six areas are complete based on implemented behavior, recorded automated evidence, and overall
+owner acceptance. These checks do not assert that the owner performed each manual scenario below.
 
-- [ ] Project-wide history: every indexed Run/Result is reachable through bounded pages, including
+- [x] Project-wide history: every indexed Run/Result is reachable through bounded pages, including
   non-image and zero-Result history, without session-held membership or per-Run Result-list fan-out.
   Newest/oldest ordering retains deterministic Run ID ties and Job/artifact ordinal order.
-- [ ] Required filters: typed parameter key/value and Base/override, seed, logical Prompt where frozen
+- [x] Required filters: typed parameter key/value and Base/override, seed, logical Prompt where frozen
   ancestry exists and exact PromptVersion, exact WorkflowVersion/ProfileVersion, Saved Batch/historical
   Batch, Run status/date, Image Input slot plus Asset/Base, and Asset in any slot. Job predicates match
   the same Job (the Result's own Job); missing values, false, zero, empty strings, and types stay distinct.
-- [ ] Image-first inspection: lazy originals, density controls, page-local cross-Run lightbox, frozen
+- [x] Image-first inspection: lazy originals, density controls, page-local cross-Run lightbox, frozen
   Run Plan and Result Details retain correct ownership and keyboard/touch access. Filter Gallery from
   Details preserves unrelated AND predicates and reports cap errors without truncation.
-- [ ] Safe degraded history: corrupt/missing Runs do not hide healthy history; unavailable execution,
+- [x] Safe degraded history: corrupt/missing Runs do not hide healthy history; unavailable execution,
   stale storage, no matches, and confirmed empty history remain distinct. Bounded diagnostics expose
   safe summaries; Refresh reads the index and Reindex Project is explicit repair.
-- [ ] Historical authority: typed and Image Input indexes retain identities/order and rebuild from
+- [x] Historical authority: typed and Image Input indexes retain identities/order and rebuild from
   filesystem Run/execution artifacts. SQLite stores no Result bytes, absolute paths are not portable
   identity, stale projections cannot authorize unsafe originals, and frozen files/migrations remain intact.
-- [ ] Workspace continuity: review preserves draft/valid in-memory Preview and execution ownership;
+- [x] Workspace continuity: review preserves draft/valid in-memory Preview and execution ownership;
   URL Back/Forward restores view/filters without switching Project or persisting cursor pages. Guarded
   Project switching and cold-load Preview invalidation remain unchanged. Required regressions remain
-   meaningful; confirmed audit fixes are verified before final owner sign-off.
+  meaningful; confirmed audit fixes have recorded verification.
 
 ## Outcome
 
@@ -166,7 +169,7 @@ these endpoints; old unpaginated APIs remain available for backward compatibilit
 - Repair modal focus containment, topmost Escape, background interaction, and focus restoration for
   shared inspection surfaces as they enter this workflow.
 
-Owner feedback on this checkpoint was positive; final acceptance is separate from automated verification.
+Owner feedback on this checkpoint was positive; final acceptance was still pending at that checkpoint.
 
 Implemented checkpoint details:
 
@@ -201,8 +204,8 @@ Implemented checkpoint details:
 - Shared Run Plan, Result Details, and ResultLightbox use native modal inspection via `useModalDialog`,
   with nested-dialog/topmost Escape handling, body scroll locking, and safe focus restoration. The
   browser's viewer and confirmation are native modals too. Automated verification and the imported-history
-  follow-up passed; counts are recorded in BC-007. The owner has given positive checkpoint feedback;
-  final acceptance of the complete backlog scope remains pending.
+  follow-up passed; counts are recorded in BC-007. The owner gave positive checkpoint feedback;
+  final acceptance of the complete backlog scope was pending at that checkpoint.
 
 ### 3. Provenance filters
 
@@ -331,7 +334,7 @@ Typed-provenance checkpoint verification passed: 1,326 backend tests, Ruff lint/
 build; 618 frontend tests, lint/typecheck and production build; and 14 real-API desktop/mobile tests in
 each of Vite and built same-origin modes. Narrow-screen screenshots were reviewed and a header overlap
 was fixed with a tools-row bounding-box regression. Earlier checkpoint counts remain historical.
-Final owner acceptance remains pending. The functional audit found no missing original requirement
+Final owner acceptance was pending at that checkpoint. The functional audit found no missing original requirement
 within the closed scope. It identified two bugs, now fixed: URL parsing rejects duplicate decoded JSON
 keys and non-integer seed/integer-parameter tokens before they can silently change query intent, and
 Diagnostics now distinguishes missing backend support from retryable read failures with restart guidance.
@@ -361,16 +364,28 @@ were reviewed, including the 320px dialog layout. Earlier checkpoint evidence re
   all palettes, non-overlay scrollbars, and narrow/intermediate widths. No live GPU/everyday data needed.
 - Performance/security: no all-Run Result fan-out; bounded caches and queries; original artifact security
   retained; thumbnail decoder/cache tests if derivatives are introduced.
-- Use DEVELOPMENT verification commands; update only BC-007 progress. Keep BC-007 In Progress until the
-  full accepted scope and required automated/owner verification have succeeded.
+- For subsequent maintenance, use DEVELOPMENT verification commands and preserve this completion record
+  and its automated/owner evidence without treating deferred extras as completion gates.
 
 The earlier 2-3 week core / 3-5 week expanded planning estimate included optional work and is not a
 remaining-work commitment after scope closure.
 
 ## Owner acceptance
 
-Use fake-backed development/test history per `LOCAL_INSTANCES.md`; everyday data or live ComfyUI requires
-explicit authorization. These steps are pending, not evidence of final UI acceptance:
+The owner gave general acceptance following candidate feedback: "Ok perfect thanks Is BC007 good to go
+now? It looks good on my end." The main agent acknowledges this as overall owner acceptance of the
+closed scope. The latest implemented commit is `43a08f8`, including current-Run Result Details filters
+and installation maintenance; the specific candidate commit installed by the owner is unknown.
+Completion rests on implemented behavior, previously recorded automated evidence, and overall owner
+acceptance, not an observed live GPU Job or an assertion that the owner performed every manual scenario.
+Previously recorded overall verification is 692 frontend tests, 1,384 backend tests including 54
+maintenance tests, and 14 browser tests in each of Vite and built modes. No tests were rerun for this
+docs-only closure. The unexplained intermittent timeout caveat and deferred extras remain unchanged.
+Acceptance does not authorize release publication, deployment, or installation changes.
+
+The manual steps below are retained as reference, not pending completion gates or a record of steps
+individually performed by the owner. Use fake-backed development/test history per `LOCAL_INSTANCES.md`;
+everyday data or live ComfyUI requires explicit authorization.
 
 1. Browse Gallery and Runs across multiple pages in newest and oldest order; check stable Run/Job
    ownership, zero-Result Runs, and non-image history.
@@ -382,5 +397,5 @@ explicit authorization. These steps are pending, not evidence of final UI accept
    GET-only Refresh and explicit Reindex Project, and confirm healthy history stays usable.
 5. Return to Batch with draft and valid Preview intact, check monitored ownership and URL Back/Forward,
    then confirm guarded Project changes and fresh Preview on cold load.
-6. Review recorded regression evidence, audit fixes, and the intermittent browser-test caveat; record owner
-   sign-off against this finite scope before marking BC-007 Done. Do not add deferred extras as gates.
+6. Review recorded regression evidence, audit fixes, the intermittent browser-test caveat, and the overall
+   owner acceptance recorded above. Do not add deferred extras as gates.

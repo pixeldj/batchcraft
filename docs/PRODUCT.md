@@ -309,8 +309,8 @@ Empty views automatically show newly discovered records rather than retaining an
 Storage failures preserve known history with a warning, not a claim of
 confirmed emptiness. Other Projects still require explicit import.
 
-The visual and typed-provenance checkpoints have reported automated verification; final owner acceptance
-of BC-007 and main-agent review of any confirmed audit fixes remain pending; it is not Done. Bounded
+BC-007 is Done based on implemented behavior, recorded automated verification, and overall owner
+acceptance following candidate feedback; the functional audit and its fixes are complete. Bounded
 diagnostics, Filter Gallery from Details, and an initial synthetic SQL measurement are also implemented.
 The user approved closing scope against the original requirements: newest/oldest with stable Run ID ties
 and Job/artifact order satisfies deterministic sorting, and exact frozen Workflow/Profile version
@@ -318,9 +318,9 @@ filters satisfy workflow lookup without claiming logical matching across revisio
 Run/Job sorts, logical Workflow/Profile across revisions, hash filters, multi-value OR, complete facets,
 and filmstrip are optional additions, not completion requirements. The user works mostly over LAN,
 reports no slowness, and prioritizes usage/functionality; generated thumbnails and broader performance
-work are deferred until a reported or measured issue. This is not final UI acceptance. The SQL baseline
+work are deferred until a reported or measured issue. The SQL baseline
 excludes HTTP/image costs, is not a release gate, and does not imply page-proportional work. See the
-[owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance).
+[owner acceptance record and reference steps](plans/BC-007-project-browser.md#owner-acceptance) for evidence limits.
 
 The Results Viewer should eventually support:
 

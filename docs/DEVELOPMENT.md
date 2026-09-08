@@ -672,9 +672,10 @@ multi-value OR, complete facets, and filmstrip are optional additions. The user 
 thumbnails and broader performance work until a reported/measured issue, prioritizing usage/functionality
 on mostly LAN use with no reported slowness. No dependency changes follow from this docs-only decision.
 Keep existing meaningful regressions and checkpoint evidence; the SQL baseline is not an end-to-end
-performance claim or release gate. BC-007 remains In Progress pending final owner acceptance and
-main-agent review of any confirmed audit fixes. Follow the plan's
-[owner acceptance checklist](plans/BC-007-project-browser.md#owner-acceptance), not the deferred extras.
+performance claim or release gate. BC-007 is Done based on implemented behavior, recorded automated
+verification, and overall owner acceptance following candidate feedback; the functional audit and its
+fixes are complete. The plan's [owner acceptance record and reference steps](plans/BC-007-project-browser.md#owner-acceptance)
+retain evidence limits and the intermittent timeout caveat; deferred extras are not completion gates.
 
 Regression checks cover absence of Batch Results and
 visible card labels, retained detail/lightbox accessibility and unavailable placeholders, strict reading

@@ -485,8 +485,9 @@ Invalid advanced URL filters show an explicit error and block browsing until cle
 silently showing an unfiltered collection. URL navigation never selects a Project or persists a cursor.
 The selected verified Project and existing guarded Project switching remain authoritative. Result Details
 now offers optional Filter Gallery actions from frozen provenance, and header Diagnostics opens bounded
-indexed diagnostics. BC-007 remains In Progress pending final owner acceptance and main-agent review
-of any confirmed audit fixes; see the [scoped checklist](plans/BC-007-project-browser.md#finite-acceptance-checklist).
+indexed diagnostics. BC-007 is Done based on implemented behavior, recorded automated verification,
+and overall owner acceptance following candidate feedback; see the
+[scoped checklist](plans/BC-007-project-browser.md#finite-acceptance-checklist) and its acceptance limits.
 Complete facets, additional dedicated Run/Job sort modes, and filmstrip are optional, not completion
 requirements. The user deferred thumbnails and broader performance work until a reported/measured issue.
 
