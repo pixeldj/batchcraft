@@ -273,6 +273,7 @@ function callbackProps() {
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
+    getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
     listProjects: vi.fn(async () => ({ projects: [] })),
     createProject: vi.fn(),
     adoptProject: vi.fn(),

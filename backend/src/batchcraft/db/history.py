@@ -2,11 +2,14 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from batchcraft.db.connection import open_connection
 from batchcraft.files.history import ProjectHistoryScan
 from batchcraft.files.models import AssetRecord
+from batchcraft.files.snapshots import BatchSnapshotV1
 
 
 class HistoricalProjectionError(ValueError):
@@ -98,6 +101,27 @@ class HistoricalProjectionStore:
                         )
                     self._delete_project_projection(connection, scan.project.id)
                     self._insert_projection(connection, scan)
+                    generation = uuid4().hex
+                    connection.execute(
+                        """
+                        INSERT INTO historical_projection_state (project_id, generation, scanned_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT (project_id) DO UPDATE SET
+                            generation = excluded.generation, scanned_at = excluded.scanned_at
+                        """,
+                        (
+                            scan.project.id,
+                            generation,
+                            datetime.now(UTC)
+                            .isoformat(timespec="microseconds")
+                            .replace("+00:00", "Z"),
+                        ),
+                    )
+                    connection.execute(
+                        "INSERT INTO historical_provenance_state VALUES (?, ?) "
+                        "ON CONFLICT(project_id) DO UPDATE SET generation = excluded.generation",
+                        (scan.project.id, generation),
+                    )
                     connection.commit()
                 except BaseException:
                     connection.rollback()
@@ -199,23 +223,16 @@ class HistoricalProjectionStore:
         )
 
     def _delete_project_projection(self, connection: sqlite3.Connection, project_id: str) -> None:
-        run_ids = [
-            row[0]
-            for row in connection.execute(
-                "SELECT run_id FROM historical_run WHERE project_id = ?", (project_id,)
-            )
-        ]
         for table in (
+            "historical_parameter_value",
+            "historical_prompt_snapshot",
+            "historical_run_provenance",
+            "historical_provenance_state",
             "historical_result",
             "historical_asset_use",
             "historical_image_input",
             "historical_resolved_parameter",
             "historical_job",
-        ):
-            if run_ids:
-                placeholders = ",".join("?" for _ in run_ids)
-                connection.execute(f"DELETE FROM {table} WHERE run_id IN ({placeholders})", run_ids)
-        for table in (
             "historical_run",
             "historical_batch",
             "historical_asset",
@@ -273,6 +290,44 @@ class HistoricalProjectionStore:
                 ),
             )
             labels = {item.key: item.label for item in run.compiled_plan.parameters}
+            types = {item.key: item.value_type for item in run.compiled_plan.parameters}
+            snapshot = BatchSnapshotV1.model_validate(run.batch_snapshot)
+            selection = snapshot.workflow_selection
+            saved = snapshot.source_saved_batch
+            connection.execute(
+                "INSERT INTO historical_run_provenance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    scan.project.id,
+                    run.run_id,
+                    selection.workflow_version_id,
+                    selection.workflow_name,
+                    None
+                    if selection.workflow_version_number is None
+                    else str(selection.workflow_version_number),
+                    selection.workflow_profile_version_id,
+                    selection.workflow_profile_name,
+                    None
+                    if selection.workflow_profile_version_number is None
+                    else str(selection.workflow_profile_version_number),
+                    None if saved is None else saved.id,
+                    snapshot.batch.name,
+                    None if saved is None else str(saved.revision),
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO historical_prompt_snapshot VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    (
+                        scan.project.id,
+                        run.run_id,
+                        prompt.id,
+                        prompt.prompt_id,
+                        prompt.name,
+                        None if prompt.version_number is None else str(prompt.version_number),
+                    )
+                    for prompt in snapshot.prompt_versions
+                ),
+            )
             for job in run.jobs:
                 execution = scanned.job_execution.get(job.job_id)
                 connection.execute(
@@ -312,6 +367,24 @@ class HistoricalProjectionStore:
                     ),
                 )
                 for position, parameter in enumerate(job.compiled_job.resolved_parameters, 1):
+                    value_type = types[parameter.parameter_key]
+                    value = parameter.value
+                    connection.execute(
+                        "INSERT INTO historical_parameter_value VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            scan.project.id,
+                            run.run_id,
+                            job.job_id,
+                            parameter.parameter_key,
+                            labels[parameter.parameter_key],
+                            value_type,
+                            int(value is None),
+                            value if value_type == "string" else None,
+                            value if value_type == "integer" else None,
+                            value if value_type == "float" else None,
+                            value if value_type == "boolean" else None,
+                        ),
+                    )
                     connection.execute(
                         "INSERT INTO historical_resolved_parameter VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (

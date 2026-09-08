@@ -21,6 +21,13 @@ import type {
   ExecutionStartedResponse,
   HistoricalResourceImportRequest,
   HistoricalWorkflowProfileImportRequest,
+  HistoryQuery,
+  HistoryDiagnosticQuery,
+  HistoryDiagnosticPageResponse,
+  HistoryChoiceKind,
+  HistoryChoicesResponse,
+  HistoryRunPageResponse,
+  HistoryResultPageResponse,
   LibraryPromptVersion,
   PreviewResponse,
   ProjectAdoptRequest,
@@ -78,6 +85,10 @@ export interface BatchcraftApi {
   importProject(body: ProjectImportRequest): Promise<ProjectImportResponse>;
   reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse>;
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse>;
+  browseProjectDiagnostics(projectId: string, query?: HistoryDiagnosticQuery, signal?: AbortSignal): Promise<HistoryDiagnosticPageResponse>;
+  getHistoryChoices(projectId: string, kind: HistoryChoiceKind, q?: string, signal?: AbortSignal): Promise<HistoryChoicesResponse>;
+  browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse>;
+  browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse>;
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse>;
   listProjectAssets(projectKey: string, signal?: AbortSignal): Promise<AssetsResponse>;
   listSavedBatches(projectId: string, includeArchived?: boolean, signal?: AbortSignal): Promise<SavedBatchesResponse>;
@@ -196,6 +207,28 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/runs`, { signal });
+  }
+
+  browseProjectDiagnostics(projectId: string, query?: HistoryDiagnosticQuery, signal?: AbortSignal): Promise<HistoryDiagnosticPageResponse> {
+    const params = new URLSearchParams();
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    if (query?.cursor !== undefined) params.set("cursor", query.cursor);
+    const suffix = params.size ? `?${params}` : "";
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/diagnostics${suffix}`, { signal });
+  }
+
+  browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/runs${historyQueryString(query)}`, { signal });
+  }
+
+  getHistoryChoices(projectId: string, kind: HistoryChoiceKind, q = "", signal?: AbortSignal): Promise<HistoryChoicesResponse> {
+    if (q.length > 200) return Promise.reject(new ApiError("Search must be at most 200 characters", "invalid_history_search", null));
+    const params = new URLSearchParams({ kind, q, limit: "30" });
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/choices?${params}`, { signal });
+  }
+
+  browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/results${historyQueryString(query)}`, { signal });
   }
 
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse> {
@@ -482,6 +515,13 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
       if (!response.ok) {
         const envelope = await readErrorEnvelope(response);
+        if (response.status === 404 && !envelope && /\/history\/(runs|results|choices|diagnostics)(\?|$)/.test(path)) {
+          throw new ApiError(
+            "The running backend does not support Gallery and Runs browsing. Restart the backend from the same version as the frontend, then Refresh. Reindexing cannot fix a missing API route.",
+            "history_browser_unavailable",
+            404,
+          );
+        }
         if ((init?.method ?? "GET") === "GET" && response.status === 503
           && envelope?.error.code === "read_capacity_exceeded" && attempt < 2) {
           const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
@@ -533,6 +573,15 @@ async function readErrorEnvelope(response: Response): Promise<ApiErrorEnvelope |
   } catch {
     return null;
   }
+}
+
+function historyQueryString(query?: HistoryQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value !== undefined && value !== null) params.set(key, key === "filters" ? JSON.stringify(value) : String(value));
+  }
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

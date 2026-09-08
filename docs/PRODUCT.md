@@ -247,17 +247,80 @@ Appearance changes no backend behavior, Batch state, Preview validity, or Run st
 
 A Run should be reviewable as a visual grid.
 
-Result review uses current-Run Results and Project History, without a separate Batch Results session
-gallery. Thumbnail cards omit visible `Verified` badges and `Job` captions; the info popup retains that
-metadata. Accessible descriptions, lightbox labels, integrity checks, and unavailable-artifact
-placeholders remain.
+The BC-007 visual checkpoint provides top-level **Batch**, **Gallery**, and **Runs** navigation.
+Gallery and Runs replace the bottom-of-page Project History, not current-Run Results, and do not restore
+the retired Batch Results session gallery. The Batch editor and current-Run monitor stay mounted while
+browsing, preserving editor drafts and a valid in-memory Preview. A compact current-Run strip shows
+the monitored Run's actual Project/Batch. Cold loads still require a fresh Preview; recovery v4 is unchanged.
 
-Opening Project History shows the existing index immediately and checks filesystem history in the
-background. Creating a Run or observing its completion, cancellation, discard, or durable detach refreshes
-that Project's history without a manual reindex. Storage failures leave known history visible with a
-warning; unavailable execution records retain metadata without claiming current image verification.
-Other Projects still require explicit import. Advanced history filters, sorting, and pagination are
-deferred beyond this v1 freshness slice.
+The selected, verified Project scopes review. URL query state records the view and filters
+(`view`, `q`, `sort`, `run`, `batch`, `status`, `available`, and JSON `filters`) with Back/Forward navigation; a URL cannot
+switch Project. Project changes remain explicit and guarded in Batch. Search matches Run names and notes;
+newest/oldest order, execution status/availability, and removable Run/Batch filter chips are available.
+
+Add filter offers typed parameter Equals/Base workflow/Any override, exact seed, logical Prompt where
+historical ancestry is known, exact Prompt/Workflow/Profile revisions, source Saved Batch, UTC creation
+date bounds, Image Input slot plus Asset or Base workflow, and Asset usage in any slot. Historical
+choices have bounded search over frozen labels and identities, including available revision labels;
+they do not depend on current library records or represent complete facets. Chips can be edited or
+removed. The UI supports one predicate per parameter key/type pair and per Image Input slot, and one
+value per identity field. All filters combine with AND, with Job conditions required to match the same
+Job. OR among multiple values in a dimension is not implemented. Base is not a missing parameter/slot,
+and overrides equal to Base, `false`, `0`, and empty strings retain their meaning.
+
+Invalid advanced filters in a URL explicitly block browsing until cleared, rather than silently
+showing all history. Advanced filters and choices need an enriched historical index; an older index
+still supports basic browsing and offers Reindex Project guidance for provenance queries. Reindexing
+preserves v1 Project files and historical revisions, including revisions larger than SQLite integers.
+
+Gallery holds one page of up to 48 Results; Runs holds up to 25 Runs. Previous/Next navigation retains
+at most 20 previous cursor bookmarks, not an accumulating collection. Gallery offers image-size controls
+and lazy, asynchronously decoded original images, not generated thumbnails. Inspection uses stable
+Run/Job/artifact identity, page-local cross-Run image navigation, and native modal Run Plan and Result
+Details surfaces with nested-dialog focus handling. Cards retain accessible descriptions and unavailable
+artifact placeholders without visible `Verified` badges or `Job` captions.
+
+In Project-browser and current-Run Result Details (including nested image Details), **Filter Gallery**
+actions use the selected frozen Job's parameter Base/typed value, seed, Prompt revision, Image Input slot
+Base/Asset, or Asset usage in any slot, plus
+available frozen Workflow/Profile revision identities. They preserve unrelated AND filters and replace
+only the same parameter key/type, slot, or scalar field. Exceeding filter bounds shows an error without
+discarding other predicates. Success closes inspection and opens Gallery with the new filters in one
+navigation step, preserving the existing search/status and unrelated AND predicates without forcing a
+Run filter. Current-Run actions require the selected, verified Project to match the frozen Run's Project.
+Otherwise Details explains how to switch to the Run Project using the existing guarded Project selector
+in Batch; no automatic Project switch, form replacement, query change, or dialog closure occurs.
+
+**Diagnostics** in the Gallery/Runs header opens a native dialog independently of diagnostic counts or
+filter matches. It shows indexed problems in scan order, 25 at a time, with at most 20 previous-page
+bookmarks, safe public summaries, and shortened historical names where needed. Opening, paging, and
+**Refresh** read the index only; Refresh restarts the diagnostic pages, not a storage scan. The dialog's
+**Reindex Project** closes it and invokes the browser's explicit storage repair. Old indexes do not need
+provenance enrichment to show diagnostics, and an empty diagnostic page is not a fresh storage check.
+
+Activating review reads the index first and checks filesystem history in the background. Run publication
+and observed terminal revisions, including cancellation, discard, and durable detach, also prompt checks
+while review is active; ordinary polls and filter/page changes do not scan. An identical first page can
+silently adopt a new generation without moving images. Changed pages retain metadata and show
+`History updated` until explicit **Refresh** starts a new page sequence; retained images and original
+links are disabled when the newly scanned page cannot validate them. **Reindex Project** remains the
+storage repair/retry action and displays the refreshed first page on success without another Refresh.
+Empty views automatically show newly discovered records rather than retaining an empty collection.
+Storage failures preserve known history with a warning, not a claim of
+confirmed emptiness. Other Projects still require explicit import.
+
+BC-007 is Done based on implemented behavior, recorded automated verification, and overall owner
+acceptance following candidate feedback; the functional audit and its fixes are complete. Bounded
+diagnostics, Filter Gallery from Details, and an initial synthetic SQL measurement are also implemented.
+The user approved closing scope against the original requirements: newest/oldest with stable Run ID ties
+and Job/artifact order satisfies deterministic sorting, and exact frozen Workflow/Profile version
+filters satisfy workflow lookup without claiming logical matching across revisions. Additional dedicated
+Run/Job sorts, logical Workflow/Profile across revisions, hash filters, multi-value OR, complete facets,
+and filmstrip are optional additions, not completion requirements. The user works mostly over LAN,
+reports no slowness, and prioritizes usage/functionality; generated thumbnails and broader performance
+work are deferred until a reported or measured issue. The SQL baseline
+excludes HTTP/image costs, is not a release gate, and does not imply page-proportional work. See the
+[owner acceptance record and reference steps](plans/BC-007-project-browser.md#owner-acceptance) for evidence limits.
 
 The Results Viewer should eventually support:
 

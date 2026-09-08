@@ -220,6 +220,30 @@ export interface ProjectImportResponse {
   diagnostic_count: number;
 }
 
+export interface HistoryDiagnosticQuery {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface HistoryDiagnosticItemResponse {
+  ordinal: number;
+  scope: string;
+  entity_id: string | null;
+  name_excerpt: string | null;
+  display_truncated: boolean;
+  code: string;
+  message: string;
+}
+
+export interface HistoryDiagnosticPageResponse {
+  project_id: string;
+  generation: string | null;
+  scanned_at: string | null;
+  items: HistoryDiagnosticItemResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface HistoryDiagnosticResponse {
   scope: string;
   filesystem_key: string | null;
@@ -251,6 +275,120 @@ export interface ProjectRunsResponse {
   project_id: string;
   runs: HistoricalRunResponse[];
   diagnostics: HistoryDiagnosticResponse[];
+}
+
+export interface HistoryParameterFilter {
+  key: string;
+  value_type: ParameterValueType;
+  mode: "equals" | "base" | "override";
+  value?: ParameterScalar;
+}
+
+export interface HistoryImageInputFilter {
+  slot_key: string;
+  mode: "base" | "asset";
+  asset_id?: string;
+}
+
+export interface HistoryProvenanceFilters {
+  seed?: number;
+  prompt_id?: string;
+  prompt_version_id?: string;
+  workflow_version_id?: string;
+  profile_version_id?: string;
+  saved_batch_id?: string;
+  created_from?: string;
+  created_before?: string;
+  asset_id?: string;
+  parameters?: HistoryParameterFilter[];
+  image_inputs?: HistoryImageInputFilter[];
+}
+
+export type HistoryChoiceKind = "parameter" | "prompt" | "prompt_version" | "workflow_version"
+  | "profile_version" | "saved_batch" | "batch" | "image_slot" | "asset";
+
+export interface HistoryChoice {
+  value: string;
+  label: string;
+  value_type?: ParameterValueType | null;
+  detail?: string | null;
+}
+
+export interface HistoryChoicesResponse {
+  project_id: string;
+  generation: string | null;
+  items: HistoryChoice[];
+  has_more: boolean;
+}
+
+export interface HistoryQuery {
+  filters?: HistoryProvenanceFilters | null;
+  limit?: number;
+  cursor?: string | null;
+  sort?: "newest" | "oldest";
+  q?: string;
+  run_id?: string | null;
+  batch_id?: string | null;
+  execution_status?: RunStatus | null;
+  execution_available?: boolean | null;
+}
+
+export interface HistoryRunSummaryResponse {
+  run_id: string;
+  batch_id: string;
+  batch_name: string;
+  run_number: number;
+  run_name: string | null;
+  run_description_excerpt: string | null;
+  display_truncated: boolean;
+  created_at: string;
+  job_count: number;
+  execution_available: boolean;
+  execution_status: string | null;
+  integrity_status: string;
+  replayable: boolean;
+}
+
+export interface HistoryRunItemResponse {
+  run: HistoryRunSummaryResponse;
+  result_count: number;
+}
+
+export interface HistoryResultItemResponse {
+  run: HistoryRunSummaryResponse;
+  job_id: string;
+  job_ordinal: number;
+  artifact_ordinal: number;
+  filename_excerpt: string;
+  filename_truncated: boolean;
+  content_type: string | null;
+  byte_size: number;
+  sha256: string;
+  integrity_status: string;
+  download_url: string | null;
+  download_unavailable_reason:
+    | "execution_unavailable"
+    | "artifact_unavailable"
+    | "unaddressable_run_id"
+    | null;
+}
+
+export interface HistoryRunPageResponse {
+  project_id: string;
+  generation: string | null;
+  scanned_at: string | null;
+  items: HistoryRunItemResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface HistoryResultPageResponse {
+  project_id: string;
+  generation: string | null;
+  scanned_at: string | null;
+  items: HistoryResultItemResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface AdoptableProject {

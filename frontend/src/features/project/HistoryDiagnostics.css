@@ -1,0 +1,22 @@
+.history-diagnostics {
+  width: min(44rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  background: var(--paper-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+.history-diagnostics::backdrop { background: rgba(var(--scrim-rgb), 0.55); }
+.history-diagnostics header,
+.history-diagnostics nav { display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
+.history-diagnostics h2 { margin: 0; }
+.history-diagnostics header button { flex-shrink: 0; }
+.history-diagnostics h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+.history-diagnostics ol { padding-left: 1.5rem; }
+.history-diagnostics li { padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+.history-diagnostics button { min-height: 44px; padding: 0.55rem 0.9rem; border: 1px solid var(--line); border-radius: 4px; background: var(--paper-raised); color: var(--ink); }
+.history-diagnostics footer { margin-top: 1rem; font-size: 0.875rem; }

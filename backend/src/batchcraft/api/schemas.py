@@ -52,6 +52,7 @@ from batchcraft.db import (
     WorkflowRecord,
     WorkflowVersionRecord,
 )
+from batchcraft.db.history_query import HistoryPage, HistoryQuery, HistoryResultItem, HistoryRunItem
 from batchcraft.diagnostics import HISTORY_MESSAGES, public_diagnostic
 from batchcraft.domain import (
     BatchDefinition,
@@ -523,6 +524,222 @@ class ProjectRunsResponse(ApiModel):
     project_id: str
     runs: list[HistoricalRunResponse]
     diagnostics: list[HistoryDiagnosticResponse]
+
+
+class HistoryDiagnosticQueryParameters(ApiModel):
+    limit: int = Field(default=25, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=8192)
+
+
+class HistoryDiagnosticItemResponse(ApiModel):
+    ordinal: int
+    scope: str
+    entity_id: str | None
+    name_excerpt: str | None
+    display_truncated: bool
+    code: str
+    message: str
+
+
+class HistoryDiagnosticPageResponse(ApiModel):
+    project_id: str
+    generation: str | None
+    scanned_at: str | None
+    items: list[HistoryDiagnosticItemResponse]
+    next_cursor: str | None
+    has_more: bool
+
+
+class HistoryChoiceQueryParameters(ApiModel):
+    kind: Literal[
+        "parameter",
+        "prompt",
+        "prompt_version",
+        "workflow_version",
+        "profile_version",
+        "saved_batch",
+        "batch",
+        "image_slot",
+        "asset",
+    ]
+    q: str = Field(default="", max_length=200)
+    limit: int = Field(default=30, ge=1, le=50)
+
+
+class HistoryChoiceResponse(ApiModel):
+    value: str
+    label: str
+    value_type: Literal["string", "integer", "float", "boolean"] | None = None
+    detail: str | None = None
+
+
+class HistoryChoicesResponse(ApiModel):
+    project_id: str
+    generation: str | None
+    items: list[HistoryChoiceResponse]
+    has_more: bool
+
+
+class HistoryQueryParameters(ApiModel):
+    filters: str | None = Field(default=None, max_length=16384)
+    limit: int = Field(default=50, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=8192)
+    sort: Literal["newest", "oldest"] = "newest"
+    q: str = Field(default="", max_length=200)
+    run_id: str | None = None
+    batch_id: str | None = None
+    execution_status: (
+        Literal["created", "running", "succeeded", "failed", "blocked", "cancelled"] | None
+    ) = None
+    execution_available: bool | None = None
+
+    def to_query(self) -> HistoryQuery:
+        return HistoryQuery(**self.model_dump())
+
+
+class HistoryRunSummaryResponse(ApiModel):
+    run_id: str
+    batch_id: str
+    batch_name: str
+    run_number: int
+    run_name: str | None
+    run_description_excerpt: str | None
+    display_truncated: bool
+    created_at: str
+    job_count: int
+    execution_available: bool
+    execution_status: str | None
+    integrity_status: str
+    replayable: bool
+
+    @classmethod
+    def from_record(cls, item: HistoricalRunRecord) -> Self:
+        return cls(
+            run_id=item.run_id,
+            batch_id=item.batch_id,
+            batch_name=item.batch_name[:256],
+            run_number=item.run_number,
+            run_name=None if item.name is None else item.name[:256],
+            run_description_excerpt=None if item.description is None else item.description[:512],
+            display_truncated=len(item.batch_name) > 256
+            or len(item.name or "") > 256
+            or len(item.description or "") > 512
+            or len(item.created_at) > 64,
+            created_at=item.created_at[:64],
+            job_count=item.job_count,
+            execution_available=item.execution_available,
+            execution_status=item.execution_status,
+            integrity_status=item.integrity_status,
+            replayable=item.replayable,
+        )
+
+
+class HistoryRunItemResponse(ApiModel):
+    run: HistoryRunSummaryResponse
+    result_count: int
+
+
+class HistoryResultItemResponse(ApiModel):
+    run: HistoryRunSummaryResponse
+    job_id: str
+    job_ordinal: int
+    artifact_ordinal: int
+    filename_excerpt: str
+    filename_truncated: bool
+    content_type: str | None
+    byte_size: int
+    sha256: str
+    integrity_status: str
+    download_url: str | None
+    download_unavailable_reason: (
+        Literal["execution_unavailable", "artifact_unavailable", "unaddressable_run_id"] | None
+    )
+
+    @classmethod
+    def from_item(cls, item: HistoryResultItem) -> Self:
+        result = item.result
+        reason: (
+            Literal["execution_unavailable", "artifact_unavailable", "unaddressable_run_id"] | None
+        ) = None
+        if not item.run.execution_available:
+            reason = "execution_unavailable"
+        elif result.integrity_status != "verified":
+            reason = "artifact_unavailable"
+        elif (
+            result.run_id in (".", "..")
+            or any(character in result.run_id for character in ("/", "\\"))
+            or any(ord(character) < 32 or ord(character) == 127 for character in result.run_id)
+        ):
+            reason = "unaddressable_run_id"
+        return cls(
+            run=HistoryRunSummaryResponse.from_record(item.run),
+            job_id=result.job_id,
+            job_ordinal=result.job_ordinal,
+            artifact_ordinal=result.artifact_ordinal,
+            filename_excerpt=result.remote_filename[:256],
+            filename_truncated=len(result.remote_filename) > 256,
+            content_type=(
+                result.content_type
+                if result.content_type is None or len(result.content_type) <= 256
+                else None
+            ),
+            byte_size=result.byte_size,
+            sha256=result.sha256,
+            integrity_status=result.integrity_status,
+            # These are index observations, not permission to bypass live download verification.
+            download_url=(
+                f"/api/runs/{quote(result.run_id, safe='')}/results/{result.job_ordinal}/{result.artifact_ordinal}"
+                if reason is None
+                else None
+            ),
+            download_unavailable_reason=reason,
+        )
+
+
+class HistoryRunPageResponse(ApiModel):
+    project_id: str
+    generation: str | None
+    scanned_at: str | None
+    items: list[HistoryRunItemResponse]
+    next_cursor: str | None
+    has_more: bool
+
+    @classmethod
+    def from_page(cls, project_id: str, page: HistoryPage[HistoryRunItem]) -> Self:
+        return cls(
+            project_id=project_id,
+            generation=page.generation,
+            scanned_at=page.scanned_at,
+            items=[
+                HistoryRunItemResponse(
+                    run=HistoryRunSummaryResponse.from_record(item.run),
+                    result_count=item.result_count,
+                )
+                for item in page.items
+            ],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+        )
+
+
+class HistoryResultPageResponse(ApiModel):
+    project_id: str
+    generation: str | None
+    scanned_at: str | None
+    items: list[HistoryResultItemResponse]
+    next_cursor: str | None
+    has_more: bool
+
+    @classmethod
+    def from_page(cls, project_id: str, page: HistoryPage[HistoryResultItem]) -> Self:
+        return cls(
+            project_id=project_id,
+            generation=page.generation,
+            scanned_at=page.scanned_at,
+            items=[HistoryResultItemResponse.from_item(item) for item in page.items],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+        )
 
 
 class ProjectUpdateRequest(ApiModel):

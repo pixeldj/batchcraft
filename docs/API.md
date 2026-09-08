@@ -138,8 +138,10 @@ import, and cancellation validation use joined file workers for their filesystem
 joins an active file operation before releasing its slot or closing its tempfile, without blocking the
 event loop.
 
-Project History fetches Result lists for at most two Runs concurrently and stops queued work when its
-Project changes or the view unmounts. The frontend HTTP client retries only GET responses carrying
+The Project browser uses bounded Run/Result history pages rather than the legacy unpaginated Run list
+and per-Run Result-list fan-out. Selected Result Details still fetches the selected owning Run's Result
+list; current-Run monitoring/detail reads remain separate. The frontend HTTP client retries only GET
+responses carrying
 `503 read_capacity_exceeded`, at most twice, with abortable delays of 1-5 seconds based on Retry-After.
 Other errors and all mutations are not retried by this policy. Ordinary image bursts use the backend's
 bounded wait queue; image elements do not gain an automatic retry loop. Sustained overload can still
@@ -158,6 +160,10 @@ GET  /api/projects/adoptable
 GET  /api/projects/{project_id}
 POST /api/projects/{project_id}/reindex
 GET  /api/projects/{project_id}/runs
+GET  /api/projects/{project_id}/history/runs
+GET  /api/projects/{project_id}/history/results
+GET  /api/projects/{project_id}/history/choices
+GET  /api/projects/{project_id}/history/diagnostics
 PATCH /api/projects/{project_id}
 POST /api/projects/{project_id}/archive
 GET  /api/projects/{project_id}/prompts
@@ -431,26 +437,214 @@ writers; they can still race a final check. Run creation, import, and reindex wo
 completion even if the request is cancelled. Published Runs are never rolled back by cancellation or
 an indexing failure; indexing failure emits a safe warning and can be repaired on the next refresh.
 
-The frontend first reads indexed history when opening a registered Project, then automatically calls
-reindex and reads the refreshed index. It shows a checking indicator while retaining known content.
-Run creation and observed terminal execution changes, including discard and durable detach, trigger
-another check for the Run's frozen Project identity. Ordinary execution polls do not trigger scans.
-Dispatched reindex requests are joined before newer checks in the same view; obsolete Result responses
-cannot replace newer history. No startup-wide scan, filesystem watcher, timer, focus refresh, or
-automatic import of other Projects is introduced. Changes made elsewhere are discovered on reopening
-history or using the retained manual Reindex Project repair/retry action.
+The frontend reads indexed history on Gallery/Runs activation, then calls reindex in the background and
+checks a bounded first page. Run creation and observed terminal execution revisions, including discard
+and durable detach, prompt another check for the frozen Run's Project while its review is active.
+Ordinary polls, filter/page changes, and density changes do not scan. Dispatched scans are joined before
+later scans; obsolete reads cannot replace newer history. No startup-wide scan, watcher, timer, focus
+refresh, or automatic import is introduced. Reindex Project remains an explicit storage repair/retry.
 
-Failed refreshes keep known history with an explicit stale/unavailable warning. When execution metadata
-is unavailable, an empty Result response is not treated as proof of no Results. The view preserves
-last-known metadata without images, artifact links, or current-verification claims until an available
-execution record and a successful fresh Result read agree. Overlapping older requests cannot clear
-that state or restore images early. Nothing is written to historical artifacts by these UI checks.
+An identical first page silently rebases generation, scan time, and continuation metadata while keeping
+item objects. An empty page adopts newly discovered records automatically, even with an existing
+generation. Explicit Reindex Project adopts the refreshed first page after a successful scan and read;
+it does not require a separate Refresh. A background change to a nonempty page retains its metadata with `History updated` pending explicit Refresh,
+which reads the latest index from page one and discards old bookmarks without itself scanning storage.
+Images and original links are disabled if the newly scanned page cannot validate their retained
+identity, availability, integrity, and artifact metadata. Absence from that bounded page is not proof of
+deletion. Failed reads/scans retain known content with stale/unavailable warnings; unavailable execution
+is not proof of zero Results. Overlapping older requests cannot restore images early. These UI checks
+never rewrite historical artifacts.
 
-`GET /api/projects/{project_id}/runs` returns Runs grouped by their recorded Batch identity in the UI,
-plus Project diagnostics. A Run is `verified` or `degraded`; structurally invalid Runs are excluded and
+`GET /api/projects/{project_id}/runs` retains the unpaginated Run list and Project diagnostics for
+backward compatibility, but the mounted browser no longer uses it. A Run is `verified` or `degraded`;
+structurally invalid Runs are excluded and
 reported by diagnostic. `execution_available: false` and null execution fields explicitly represent a
 missing or invalid execution record. This endpoint needs neither browser `localStorage` Run IDs nor
 mutable Prompt, Workflow, Profile, or Saved Batch rows.
+
+### Bounded historical browsing (BC-007)
+
+The BC-007 browser supplies bounded Gallery/Runs pages with typed provenance filters:
+
+- `GET /api/projects/{project_id}/history/runs`
+- `GET /api/projects/{project_id}/history/results`
+
+Both require a registered Project (otherwise `404 project_not_found`). They read only SQLite's last
+committed projection: no filesystem scan, per-Run Result listing, compiler expansion, or original-byte
+hashing occurs in a browse request. The browser now uses these endpoints; the old unpaginated APIs are
+retained for backward compatibility, not used to build Project-wide pages. Existing strict artifact
+downloads remain authoritative. Selected Result Details still uses `GET /api/runs/{run_id}/results`
+for the selected Run only, alongside its frozen Run detail, to match Job/artifact ordinals and hash.
+
+The UI requests 48 Results or 25 Runs per page, replaces rather than appends pages, retains at most 20
+previous cursor bookmarks, and caps its frozen-Run detail cache at 20 entries. Images are lazy-loaded,
+asynchronously decoded originals, not generated thumbnails. UI URL keys `view`, `q`, `sort`, `run`,
+`batch`, `status`, `available`, and JSON `filters` encode review mode and filters; identity/status keys
+map to the API parameters below. Add filter opens typed controls with editable/removable chips.
+Invalid advanced URL filters show an explicit error and block browsing until cleared rather than
+silently showing an unfiltered collection. URL navigation never selects a Project or persists a cursor.
+The selected verified Project and existing guarded Project switching remain authoritative. Result Details
+now offers optional Filter Gallery actions from frozen provenance, and header Diagnostics opens bounded
+indexed diagnostics. BC-007 is Done based on implemented behavior, recorded automated verification,
+and overall owner acceptance following candidate feedback; see the
+[scoped checklist](plans/BC-007-project-browser.md#finite-acceptance-checklist) and its acceptance limits.
+Complete facets, additional dedicated Run/Job sort modes, and filmstrip are optional, not completion
+requirements. The user deferred thumbnails and broader performance work until a reported/measured issue.
+
+Common query parameters:
+
+| Parameter | Contract |
+| --- | --- |
+| `limit` | Integer 1-100; default 50 |
+| `cursor` | Opaque continuation returned by the same endpoint; at most 8,192 characters |
+| `sort` | `newest` (default) or `oldest` |
+| `q` | At most 200 characters; literal substring of full frozen Run name or description |
+| `run_id`, `batch_id` | Optional exact historical identities, not mutable names |
+| `execution_status` | `created`, `running`, `succeeded`, `failed`, `blocked`, or `cancelled` |
+| `execution_available` | Optional boolean; distinct from execution status |
+| `filters` | Optional JSON object, at most 16,384 characters; typed provenance predicates below |
+
+Filters combine with AND. Text search uses SQLite's ASCII case folding; `%`, `_`, and quotes are literal
+text, not wildcards or query syntax. Empty `q` means no text filter. Unknown query parameters, invalid
+limits/sorts/statuses, and malformed cursors are rejected.
+
+`filters` accepts only these fields; unknown fields, duplicate JSON object keys, malformed shapes, and
+invalid typed values are rejected with `422 invalid_history_query` (query-schema bounds also return 422):
+
+| Field | Contract |
+| --- | --- |
+| `prompt_id`, `prompt_version_id` | Exact logical Prompt identity where frozen ancestry exists, or exact PromptVersion identity |
+| `workflow_version_id`, `profile_version_id`, `saved_batch_id` | Exact frozen WorkflowVersion, ProfileVersion, or source Saved Batch identity |
+| `asset_id` | Exact Asset used by the Job in any Image Input slot |
+| `seed` | JSON integer in `0..9007199254740991`; no string or boolean coercion |
+| `created_from`, `created_before` | Valid bounded ISO date/timestamp strings; inclusive lower and exclusive upper Run-creation bounds, compared in UTC; lower must precede upper |
+| `parameters` | At most 8 objects: `key`, `value_type`, `mode`, and `value` only for `equals` |
+| `image_inputs` | At most 4 objects: `slot_key`, `mode` (`base` or `asset`), and `asset_id` only for `asset` |
+
+Identity fields are nonempty strings; parameter/slot keys follow the stable-key grammar. Parameter
+`value_type` is `string`, `integer`, `float`, or `boolean`; `mode` is `equals`, `base`, or `override`
+(Any override). Equals requires the declared scalar type: integers have absolute value at most
+`9007199254740991`, floats accept finite JSON numbers, booleans do not count as numbers, and empty
+strings are concrete values. Base/override modes must omit `value`. Image Asset mode requires a
+nonblank Asset ID. Date-only and offset-free timestamps mean UTC, not browser local time; an upper
+date excludes that day. Unknown historical dates do not match date bounds.
+
+Every predicate combines with AND. Run browsing requires one Job satisfying all Job predicates;
+Result browsing requires the Result's own Job to satisfy them. Parameters, seed, Prompt, Image Inputs,
+and Asset usage cannot be satisfied by different Jobs in the same Run. A missing parameter/slot is not
+Base; an override equal to the workflow's Base literal remains an override. `false`, `0`, and `""`
+remain distinct typed overrides. The UI permits one predicate per parameter key/type pair and one per
+Image Input slot, with one value per identity field. API array predicates also use AND, not OR.
+Multi-value OR, logical Workflow/Profile across revisions, and hash filters are optional and deferred,
+not exposed. Exact frozen WorkflowVersion/ProfileVersion filters satisfy BC-007's scoped workflow
+lookup requirement without implying those broader capabilities.
+
+`GET /api/projects/{project_id}/history/choices` supplies bounded historical selection lists, not
+complete or active-filter-conditioned facets. Required `kind` is `parameter`, `prompt`, `prompt_version`,
+`workflow_version`, `profile_version`, `saved_batch`, `batch`, `image_slot`, or `asset`. Optional `q`
+is at most 200 characters and performs literal Unicode-casefolded substring search over historical
+display labels (including available revision suffixes) and identities. `limit` is 1-50, default 30.
+The response contains `project_id`, `generation`, `items`, and `has_more`; items contain exact `value`,
+`label`, nullable `value_type`, and nullable `detail`. Labels/details are clipped to 256 characters;
+identities are not clipped. Choices group by identity/type and sort deterministically by folded label
+and identity/type. They have no continuation cursor or facet counts: narrow `q` when `has_more` is true.
+The UI debounces choice search, displays at most 30 choices, and retains bounded historical labels for
+chips. Names, revisions, parameter types, slots, and Asset filenames come from historical projections,
+not today's mutable libraries; unavailable labels fall back to identities where applicable.
+
+Migration `0004_history_provenance` adds typed parameter rows, frozen Prompt/Run provenance, and a
+generation-bound enrichment marker. Nonempty advanced filters and all choices require enrichment for
+the current projection generation; otherwise they return `409 history_reindex_required`, not an
+authoritative empty collection. Successful import/reindex atomically publishes enrichment and generation;
+failure preserves the prior index. Basic browsing still works on old unenriched indexes. These GETs
+never scan or repair storage. Frozen revision metadata is stored as decimal TEXT because valid v1
+revisions can exceed SQLite's signed-64-bit integer range. Applied migrations 0001-0003 and v1 Project
+bytes remain unchanged; this is a rebuildable index extension, not a durable-format change.
+
+`GET /api/projects/{project_id}/history/diagnostics` requires a registered Project and accepts only
+`limit` (1-100, default 25) and optional `cursor` (at most 8,192 characters). It reads SQLite only,
+without filesystem access or a provenance-enrichment requirement. Old unenriched indexes remain
+inspectable. Items follow ascending scan-position ordinal; generation, scan time, bookmark validation,
+and page rows share one read transaction. The response contains `project_id`, nullable `generation`
+and `scanned_at`, `items`, `next_cursor`, and `has_more`. Each item contains `ordinal`, `scope`, nullable
+`entity_id` and `name_excerpt`, `display_truncated`, `code`, and `message`.
+
+Diagnostic cursors bind Project, endpoint, and generation, not page size. Malformed, mismatched, or
+missing bookmarks return `422 invalid_history_query`; a changed generation returns
+`409 history_generation_changed`, requiring a restart without a cursor. Names are SQL-clipped to 256
+characters with a truncation flag, using indexed names or a safe single-component filesystem-key
+fallback. Exact entity identities remain separate. Public codes/messages use the approved safe
+vocabulary, with messages capped at 512 characters; raw persisted diagnostic prose and filesystem paths
+are not returned. Unknown codes use the generic historical-data-invalid summary.
+
+The standalone `HistoryDiagnostics` native dialog is wired to ProjectBrowser's header Diagnostics
+action regardless of diagnostic count or filter matches. It retains one 25-row page and at most 20
+previous bookmarks. Its Refresh explicitly restarts at page one using GET only; opening, paging, and
+refreshing diagnostics never trigger a scan. Reindex Project closes the dialog and invokes the owning
+browser's explicit repair action. Empty diagnostics describe the last index, not newly verified storage.
+
+Project-browser and current-Run Result Details can apply parameter Base/typed equality, seed, exact
+Prompt revision, available Workflow/Profile revision identities, Image Input slot Base/Asset, and Asset-in-any-slot
+filters from the frozen Job and snapshots. The action preserves unrelated filters under AND, replaces
+the same parameter key/type or slot predicate (or scalar identity field), and validates the merged
+8-parameter/4-slot/JSON-size bounds. Failure stays in Details with an error; no filters are truncated.
+Success closes Details and image inspection, clears the cursor, and navigates to Gallery with the
+updated query in one navigation operation. No new mutation endpoint is involved. Current-Run card and
+nested lightbox Details are now wired to the same merge/validation path, preserving search/status and
+unrelated AND filters without adding an implicit Run filter. Navigation requires a selected, verified
+Project matching the frozen Run's Project; mismatches remain in Details with guidance to use the guarded
+Project selector in Batch, without changing forms or queries. Standalone callers without the optional
+callback still do not show these actions.
+
+Run/Result pages contain `project_id`, nullable `generation` and `scanned_at`, `items`, `next_cursor`, and `has_more`.
+Run items contain `run` plus projected `result_count`. Result items contain compact `run` context,
+exact `job_id`, `job_ordinal`, `artifact_ordinal`, filename excerpt/truncation flag, MIME, size, hash,
+projected integrity, and optional download URL. Stable Result identity is Run ID + Job ID + artifact
+ordinal, not filename or ordinal alone. Result counts count indexed artifacts, including degraded
+ones; zero is not proof that unavailable execution metadata never contained Results.
+
+Names are clipped at 256 characters, Run-description excerpts at 512, and timestamp display text at 64,
+with `display_truncated` on Run summaries. Filename excerpts are clipped at 256 with their own flag;
+oversized MIME values are omitted. SQL reads display fields with one sentinel character to detect
+truncation before materializing repeated Run context. Full notes still participate in search and remain
+available through existing detail reads. Exact identities are not truncated or newly restricted, so
+page size and display clipping are not an absolute byte budget for historically unbounded identities.
+
+Ordering uses normalized ISO instants at microsecond precision. Explicit offsets are normalized;
+naive timestamps mean UTC. Unparseable or oversized historical timestamps remain browsable in an
+unknown-date bucket after dated Runs for either direction. Run ID ascending breaks equal-instant ties;
+Results then use ascending Job and artifact ordinals. There is no global uniqueness assumption on Run
+number. No offset pagination is used. This newest/oldest order with stable Run/Job ties satisfies the
+original sorting alternatives; additional dedicated Run/Job sort modes are deferred, not required.
+
+Generation and page data (including Result counts and cursor bookmark resolution) share one read
+transaction. Every successful full replacement updates the generation and UTC scan-completion time in
+the same write transaction, even if the projected content is unchanged. Failed scans/replacements keep
+both unchanged. Null scan state means the index has not yet been reconciled since the browsing
+migration (or is a new empty Project), not that storage was just checked; existing rows remain readable.
+
+Cursors bind Project, endpoint, filter values, sort, and generation. Page size may change between
+requests. A bounded bookmark resolves the ordering key inside the read transaction without putting
+unbounded Run IDs into the cursor. Malformed, foreign-query, or missing bookmarks yield
+`422 invalid_history_query`. Generation changes yield `409 history_generation_changed`; restart without
+a cursor rather than append mixed-generation pages. Cursors are not authorization or trusted file paths.
+
+Integrity fields describe the projection at scan time, not a new verification of bytes. Missing/corrupt
+artifacts, unavailable execution, and Run IDs not representable by the existing single-segment download
+route have null `download_url` and an explicit `download_unavailable_reason`. Such identities remain
+browsable without rewriting v1 data. Eligible URLs still use the existing strict download boundary;
+stale verified index rows cannot authorize serving changed, missing, or unsafe original bytes.
+
+Browse reads and response serialization run off the event loop under the existing bulk-read admission
+budget. They neither consume execution-polling slots nor change reindex triggers. Filtering/search and
+joined sorting can still inspect more rows than one page; bounded responses are not a query-time
+guarantee or an incremental-index implementation.
+
+The opt-in SQL metadata benchmark and its measured limitations are documented in
+[DEVELOPMENT](DEVELOPMENT.md#history-browser-measurement) and the
+[BC-007 plan](plans/BC-007-project-browser.md#4-performance-and-polish). Result queries can use temporary
+sorting B-trees and choices still perform Project-wide work; bounded output is not page-proportional work.
+The baseline is observational, not a release gate; broader measurement is deferred until an issue warrants it.
 
 Direct Run and execution reads differ from this history projection: if `execution.json` is absent,
 they derive pristine `created` state from the frozen Run without writing a file. Invalid execution
@@ -573,9 +767,12 @@ blocked outcome. A discarded Run projects `cancelled` with `requested_at: null`.
 lost, the blocked filesystem diagnostic remains inspectable but does not manufacture a cancellation
 request object.
 
-Every execution response also includes ephemeral `execution_task_active`. This is `true` only while
-the current API process owns a live execution task for that Run. It is not persisted and is not evidence
-about whether a previously submitted remote ComfyUI Job is still running.
+Every execution response also includes ephemeral `execution_task_active`. Run-detail and execution
+reads sample process-local task ownership before reading persisted state and retain `true` if the task
+finishes during the read. If initially inactive, they check again after the read to observe a concurrent
+start. The conservative flag can briefly outlive task completion so a pre-terminal snapshot does not
+incorrectly stop browser polling. It is not persisted and is not evidence about whether a previously
+submitted remote ComfyUI Job is still running.
 
 An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the earlier Run.
 

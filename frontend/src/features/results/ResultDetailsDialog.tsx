@@ -1,16 +1,29 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   ExecutionResponse,
+  HistoryImageInputFilter,
+  HistoryParameterFilter,
   ResultResponse,
   RunPlanJobResponse,
   RunResponse,
 } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
+import { useModalDialog } from "../../components/useModalDialog";
 import { errorMessage } from "../../utils/errors";
 import { formatBaseWorkflowValue } from "../batch/baseWorkflowValue";
 import { profileImageInputs, profileParameters } from "../batch/form";
 import { runDisplayLabel } from "../run/runDisplay";
+import { validateHistoryFilters } from "../project/HistoryFilters";
+
+export type ResultDetailsFilter =
+  | { parameters: [HistoryParameterFilter & { mode: "base" | "equals" }] }
+  | { image_inputs: [HistoryImageInputFilter] }
+  | { seed: number }
+  | { prompt_version_id: string }
+  | { workflow_version_id: string }
+  | { profile_version_id: string }
+  | { asset_id: string };
 
 interface Props {
   runId: string;
@@ -20,6 +33,7 @@ interface Props {
   getCachedRun(runId: string): RunResponse | null;
   loadRun(runId: string): Promise<RunResponse>;
   onClose(): void;
+  onFilter?(filter: ResultDetailsFilter, run: RunResponse): void;
 }
 
 export function ResultDetailsDialog({
@@ -30,20 +44,17 @@ export function ResultDetailsDialog({
   getCachedRun,
   loadRun,
   onClose,
+  onFilter,
 }: Props) {
   const cachedRun = getCachedRun(runId);
-  const [run, setRun] = useState<RunResponse | null>(cachedRun);
-  const [loading, setLoading] = useState(cachedRun === null);
+  const [run, setRun] = useState<RunResponse | null>(cachedRun?.run_id === runId ? cachedRun : null);
+  const [loading, setLoading] = useState(cachedRun?.run_id !== runId);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [filterError, setFilterError] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const restoreTargetRef = useRef(restoreTarget);
-
-  useEffect(() => {
-    closeRef.current?.focus();
-    const target = restoreTargetRef.current;
-    return () => target?.focus();
-  }, []);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const modal = useModalDialog(dialogRef, onClose, restoreTarget, closeRef);
 
   useEffect(() => {
     if (run) {
@@ -53,7 +64,11 @@ export function ResultDetailsDialog({
     void loadRun(runId).then(
       (loadedRun) => {
         if (!current) return;
-        setRun(loadedRun);
+        if (loadedRun.run_id !== runId) {
+          setError("The frozen Run did not match the selected Run.");
+        } else {
+          setRun(loadedRun);
+        }
         setLoading(false);
       },
       (caught: unknown) => {
@@ -69,23 +84,15 @@ export function ResultDetailsDialog({
 
   const job = run?.plan.jobs.find((candidate) => candidate.ordinal === result.job_ordinal) ?? null;
 
-  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    }
-  }
-
   return (
     <OverlayPortal level="details" onBackdropClick={onClose}>
       <dialog
         className="result-details-dialog"
-        open
+        ref={dialogRef}
+        style={{ position: "fixed", inset: 0, margin: "auto" }}
         aria-modal="true"
         aria-labelledby="result-details-title"
-        onCancel={onClose}
-        onKeyDown={handleKeyDown}
-        onClick={(event) => event.stopPropagation()}
+        {...modal}
       >
         <div className="result-details-heading">
           <div>
@@ -119,7 +126,14 @@ export function ResultDetailsDialog({
           </div>
         ) : null}
 
-        {run && job ? <GenerationDetails run={run} job={job} /> : null}
+        {filterError ? <p className="operation-error" role="alert">{filterError}</p> : null}
+        {run && job ? <GenerationDetails run={run} job={job} onFilter={onFilter ? (filter) => {
+          try {
+            onFilter(filter, run);
+          } catch (caught) {
+            setFilterError(errorMessage(caught));
+          }
+        } : undefined} /> : null}
         {run && !job ? (
           <p className="operation-error" role="alert">
             Frozen Job {result.job_ordinal} is unavailable for this Run.
@@ -131,11 +145,20 @@ export function ResultDetailsDialog({
   );
 }
 
-function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResponse }) {
+function GenerationDetails({ run, job, onFilter }: {
+  run: RunResponse;
+  job: RunPlanJobResponse;
+  onFilter?: Props["onFilter"];
+}) {
   const snapshotPrompt = run.batch_snapshot.prompt_versions.find(
     (prompt) => prompt.id === job.prompt_version_id,
   );
   const selection = run.batch_snapshot.workflow_selection;
+  function action(label: string, filter: ResultDetailsFilter, text = "Filter Gallery..."): DetailAction[] {
+    return onFilter && !validateHistoryFilters(filter)
+      ? [{ label, text, onClick: () => onFilter(filter, run) }]
+      : [];
+  }
 
   return (
     <section className="result-generation-details" aria-label="Generation provenance">
@@ -143,7 +166,7 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
         <Detail label="Prompt" value={formatVersioned(
           snapshotPrompt?.name ?? job.prompt_version_name,
           snapshotPrompt?.version_number ?? null,
-        )} />
+        )} actions={action("Prompt revision", { prompt_version_id: job.prompt_version_id })} />
         <div className="result-details-wide">
           <dt>Resolved prompt</dt>
           <dd className="result-resolved-prompt">“{job.resolved_prompt}”</dd>
@@ -163,7 +186,7 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
             ) : "None"}
           </dd>
         </div>
-        <Detail label="Seed" value={String(job.seed)} />
+        <Detail label="Seed" value={String(job.seed)} actions={action("Seed", { seed: job.seed })} />
         {job.resolved_image_inputs.map((input) => {
           const baseValue = imageBaseValue(run, input.slot_key);
           return <Detail
@@ -172,15 +195,25 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
             value={input.filename ?? (input.asset_id ? "Project Asset" : baseValue.text)}
             title={input.asset_id === null ? baseValue.title : undefined}
             code={input.asset_id ?? undefined}
+            actions={[
+              ...action(`${input.label} slot`, { image_inputs: [input.asset_id === null
+                ? { slot_key: input.slot_key, mode: "base" }
+                : { slot_key: input.slot_key, mode: "asset", asset_id: input.asset_id }] }, "Filter Gallery: this slot"),
+              ...(input.asset_id ? action(`${input.label} Asset in any slot`, { asset_id: input.asset_id }, "Filter Gallery: Asset in any slot") : []),
+            ]}
           />;
         })}
         {job.resolved_parameters.map((parameter) => {
           const baseValue = parameterBaseValue(run, parameter.parameter_key);
+          const definition = profileParameters(selection.workflow_profile).find((candidate) => candidate.key === parameter.parameter_key);
           return <Detail
             key={parameter.parameter_key}
             label={parameter.label}
             value={parameter.value === null ? baseValue.text : formatParameterValue(parameter.value)}
             title={parameter.value === null ? baseValue.title : undefined}
+            actions={definition ? action(`${parameter.label} (${definition.value_type})`, { parameters: [parameter.value === null
+              ? { key: parameter.parameter_key, value_type: definition.value_type, mode: "base" }
+              : { key: parameter.parameter_key, value_type: definition.value_type, mode: "equals", value: parameter.value }] }) : []}
           />;
         })}
         {job.resolved_parameter_sets.map((set) => (
@@ -188,6 +221,7 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
         ))}
         <Detail
           label="Workflow"
+          actions={selection.workflow_version_id ? action("Workflow revision", { workflow_version_id: selection.workflow_version_id }) : []}
           value={formatVersioned(
             selection.workflow_name ?? "Frozen Workflow snapshot",
             selection.workflow_version_number,
@@ -195,6 +229,7 @@ function GenerationDetails({ run, job }: { run: RunResponse; job: RunPlanJobResp
         />
         <Detail
           label="Profile"
+          actions={selection.workflow_profile_version_id ? action("Profile revision", { profile_version_id: selection.workflow_profile_version_id }) : []}
           value={formatVersioned(
             selection.workflow_profile_name ?? "Frozen Profile snapshot",
             selection.workflow_profile_version_number,
@@ -239,7 +274,11 @@ function TechnicalDetails({
   );
 }
 
-function Detail({ label, value, title, code }: { label: string; value: string; title?: string; code?: string }) {
+interface DetailAction { label: string; text: string; onClick(): void }
+
+function Detail({ label, value, title, code, actions = [] }: {
+  label: string; value: string; title?: string; code?: string; actions?: DetailAction[];
+}) {
   return (
     <div>
       <dt>{label}</dt>
@@ -250,6 +289,13 @@ function Detail({ label, value, title, code }: { label: string; value: string; t
             <code>{code}</code>
           </>
         ) : value}
+        {actions.map((action) => <button
+          key={action.label}
+          type="button"
+          className="button-link compact result-detail-filter"
+          aria-label={`Filter Gallery by ${action.label}`}
+          onClick={action.onClick}
+        >{action.text}</button>)}
       </dd>
     </div>
   );
