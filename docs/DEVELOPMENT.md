@@ -62,6 +62,16 @@ ADR 0012 is Accepted. The cross-instance gate is Passed on owner-reported candid
 separately from portability acceptance. Durable format versions remain 1; applied migrations are unchanged.
 Exact Rerun is deferred beyond v1.
 
+BC-007's additive migration `0003_history_browsing` adds historical projection generation state and
+browsing indexes without changing migrations 0001/0002 or v1 Project files. Configured SQLite connections
+register deterministic `history_timestamp_us` for the derived sort indexes: bounded ISO dates/datetimes
+normalize to exact UTC epoch microseconds (naive means UTC), while unknown values sort in a separate
+bucket. Use `open_connection` for application/index writes so the index expression is available.
+Any future normalization change requires a forward migration rebuilding the affected derived indexes.
+Preexisting history remains readable with unknown generation/scan time until successful reconciliation;
+GET browsing does not initialize, rewrite, or scan it. See the [BC-007 plan](plans/BC-007-project-browser.md)
+and [API contract](API.md#bounded-historical-browsing-bc-007) for staged delivery and cursor semantics.
+
 The API resolves only trusted configured storage roots at `Settings` construction, including macOS
 `/var` aliases used by `tools.runtime`'s `TemporaryDirectory`. Filesystem helpers expect canonical
 anchors and reject symlinks within the store; never fix a failed artifact read by resolving that

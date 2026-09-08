@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, BinaryIO, cast
 
-from fastapi import Depends, FastAPI, File, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Query, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -88,6 +88,7 @@ from batchcraft.db import (
     apply_migrations,
     open_connection,
 )
+from batchcraft.db.history_query import HistoryGenerationChangedError, HistoryQueryError
 from batchcraft.diagnostics import public_error_message, safe_exception
 from batchcraft.domain import CompilationError, SeedInput
 from batchcraft.execution import execute_run
@@ -122,6 +123,9 @@ from .schemas import (
     HistoricalResourceImportCopyRequest,
     HistoricalRunResponse,
     HistoryDiagnosticResponse,
+    HistoryQueryParameters,
+    HistoryResultPageResponse,
+    HistoryRunPageResponse,
     LibraryPromptVersionResponse,
     PreviewResponse,
     ProjectAdoptRequest,
@@ -391,6 +395,34 @@ def create_app(
                 runs=[HistoricalRunResponse.from_record(item) for item in runs],
                 diagnostics=[HistoryDiagnosticResponse.from_record(item) for item in diagnostics],
             )
+            return Response(model.model_dump_json(), media_type="application/json")
+
+        async with bulk_reads.claim():
+            return await file_operation(read)
+
+    @app.get("/api/projects/{project_id}/history/runs", response_model=HistoryRunPageResponse)
+    async def browse_project_runs(
+        project_id: str,
+        query: Annotated[HistoryQueryParameters, Query()],
+        service: ServiceDependency,
+    ) -> Response:
+        def read() -> Response:
+            page = service.browse_project_runs(project_id, query.to_query())
+            model = HistoryRunPageResponse.from_page(project_id, page)
+            return Response(model.model_dump_json(), media_type="application/json")
+
+        async with bulk_reads.claim():
+            return await file_operation(read)
+
+    @app.get("/api/projects/{project_id}/history/results", response_model=HistoryResultPageResponse)
+    async def browse_project_results(
+        project_id: str,
+        query: Annotated[HistoryQueryParameters, Query()],
+        service: ServiceDependency,
+    ) -> Response:
+        def read() -> Response:
+            page = service.browse_project_results(project_id, query.to_query())
+            model = HistoryResultPageResponse.from_page(project_id, page)
             return Response(model.model_dump_json(), media_type="application/json")
 
         async with bulk_reads.claim():
@@ -1397,6 +1429,22 @@ def _register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProjectImportConflictError)
     async def project_import_conflict(_request: Request, error: Exception) -> JSONResponse:
         return _error_response(status.HTTP_409_CONFLICT, "project_import_conflict", str(error))
+
+    @app.exception_handler(HistoryGenerationChangedError)
+    async def stale_history_cursor(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "history_generation_changed",
+            "History changed; restart browsing without a cursor",
+        )
+
+    @app.exception_handler(HistoryQueryError)
+    async def invalid_history_query(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_history_query",
+            "History query or cursor is invalid; check filters or restart without a cursor",
+        )
 
     @app.exception_handler(ProjectImportError)
     async def project_import_failed(_request: Request, error: Exception) -> JSONResponse:

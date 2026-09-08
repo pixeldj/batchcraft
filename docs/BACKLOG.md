@@ -429,10 +429,15 @@ so BC-006 remains `Planned` for those distinct workflows.
 | --- | --- |
 | ID | BC-007 |
 | Priority | P2 |
-| Status | Planned |
+| Status | In Progress |
 | Area | Results / Indexing |
 | Summary | Add rebuildable Run, Job, parameter, Image Input, and Result indexes plus a Project-wide historical browser with useful provenance filters. |
 | Dependencies / Notes | Follow ADR 0003's derived-index rules. BC-020 delivered the rebuildable projections and initial Project-wide history browser. Result bytes remain filesystem-owned. BC-015 adds durable stars/favorites on top of this browser. |
+
+Implementation plan: [BC-007 Project browser](plans/BC-007-project-browser.md). Start with bounded,
+generation-consistent Run/Result queries, then deliver the image-first Gallery/Runs workspace,
+provenance filters, and measured performance/polish. Preserve draft/Preview and execution ownership
+while browsing. Stars/exports and additional historical reuse operations retain their separate entries.
 
 Primary product behavior:
 
@@ -470,9 +475,10 @@ Implementation progress: BC-020 delivered rebuildable Run, Job, resolved-paramet
 Result, and diagnostic projections plus explicit Project reindexing. Project History browses every indexed
 Run grouped by Batch, loads its Results without browser-held Run IDs, preserves the image gallery,
 lightbox, Run Plan, and Result Details, orders Runs newest-first, and isolates invalid or degraded history.
-The API and UI still return the complete history without pagination, expose no alternate sort controls,
-and provide none of BC-007's parameter, seed, Prompt, Workflow/Profile, Batch, status/date, Image Input,
-Asset, or future starred-result filters.
+The original API and current UI still return complete history without pagination or alternate sort
+controls. The new bounded query sub-slice below is additive; the UI has not yet adopted it. Advanced
+parameter, seed, Prompt, Workflow/Profile, date, Image Input, Asset, and future starred-result filters
+remain unimplemented.
 
 Results UI cleanup is complete: thumbnail Job/Verified labels moved to detail inspection, and the
 Batch Results gallery, accumulated state, and restoration requests were removed. Current Results,
@@ -506,8 +512,23 @@ Verification passed with 923 backend tests, 421 frontend tests, eight desktop/mo
 across Vite and built same-origin modes, and the artifact-security/six-image browser check. Ruff,
 mypy, frontend lint/typecheck, builds, distribution checks, current-source Gitleaks, actionlint, and
 `git diff --check` pass. Browser coverage confirms completion in the open Project and reopening history
-without manual reindex. Advanced filters, sorting, and pagination remain Planned; the broader BC-007
-entry is not Done. The public v1 release gate remains separate.
+without manual reindex. Advanced filtering, sorting, and pagination were not part of that freshness
+slice; the broader BC-007 entry is not Done. The public v1 release gate remains separate.
+
+BC-007 bounded query sub-slice: additive Run/Result history endpoints now provide SQL-only keyset pages,
+newest/oldest microsecond ordering, literal Run-name/notes search, and exact Run/Batch/status/availability
+filters. Project generation and scan time rotate atomically on successful reconciliation; cursors are
+generation-scoped bookmarks rather than unbounded historical IDs. SQL clips display metadata before
+materialization; strict artifact retrieval remains unchanged. Migration `0003_history_browsing` preserves
+all applied migration bytes and existing historical rows, which remain readable with unknown scan state
+until reindex. Project-scoped deletion no longer expands one SQL placeholder per Run.
+
+Verification passed with 1,301 backend tests, Ruff check/format, mypy, and package build; 434 frontend
+tests, lint/typecheck/build; and ten desktop/mobile browser checks in each of Vite and built same-origin
+modes. Coverage includes large metadata, long historical identities, unsafe-to-route IDs, exact timestamp
+ordering, pagination/query mismatch, concurrent replacement, failed-scan retention, and unchanged
+historical bytes. Gallery/Runs navigation, advanced provenance filters/facets, bounded diagnostics,
+thumbnail caching, and visual owner acceptance remain upcoming under the linked plan.
 
 ### BC-008: Video and generic file input slots
 

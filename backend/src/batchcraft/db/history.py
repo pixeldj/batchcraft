@@ -2,7 +2,9 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from batchcraft.db.connection import open_connection
 from batchcraft.files.history import ProjectHistoryScan
@@ -98,6 +100,21 @@ class HistoricalProjectionStore:
                         )
                     self._delete_project_projection(connection, scan.project.id)
                     self._insert_projection(connection, scan)
+                    connection.execute(
+                        """
+                        INSERT INTO historical_projection_state (project_id, generation, scanned_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT (project_id) DO UPDATE SET
+                            generation = excluded.generation, scanned_at = excluded.scanned_at
+                        """,
+                        (
+                            scan.project.id,
+                            uuid4().hex,
+                            datetime.now(UTC)
+                            .isoformat(timespec="microseconds")
+                            .replace("+00:00", "Z"),
+                        ),
+                    )
                     connection.commit()
                 except BaseException:
                     connection.rollback()
@@ -199,23 +216,12 @@ class HistoricalProjectionStore:
         )
 
     def _delete_project_projection(self, connection: sqlite3.Connection, project_id: str) -> None:
-        run_ids = [
-            row[0]
-            for row in connection.execute(
-                "SELECT run_id FROM historical_run WHERE project_id = ?", (project_id,)
-            )
-        ]
         for table in (
             "historical_result",
             "historical_asset_use",
             "historical_image_input",
             "historical_resolved_parameter",
             "historical_job",
-        ):
-            if run_ids:
-                placeholders = ",".join("?" for _ in run_ids)
-                connection.execute(f"DELETE FROM {table} WHERE run_id IN ({placeholders})", run_ids)
-        for table in (
             "historical_run",
             "historical_batch",
             "historical_asset",

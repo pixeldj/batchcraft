@@ -55,6 +55,14 @@ from batchcraft.db import (
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
 )
+from batchcraft.db.history_query import (
+    HistoryPage,
+    HistoryQuery,
+    HistoryResultItem,
+    HistoryRunItem,
+    query_results,
+    query_runs,
+)
 from batchcraft.diagnostics import safe_exception
 from batchcraft.domain import BatchDefinition, CompiledRunPlan, SeedInput, compile_batch
 from batchcraft.execution import (
@@ -977,6 +985,18 @@ class BatchcraftService:
     def list_project_diagnostics(self, project_id: str) -> tuple[HistoricalDiagnosticRecord, ...]:
         self._registered_project_key(project_id)
         return self.history_store.list_diagnostics(project_id)
+
+    def browse_project_runs(
+        self, project_id: str, query: HistoryQuery
+    ) -> HistoryPage[HistoryRunItem]:
+        self._registered_project_key(project_id)
+        return query_runs(self.history_store.database_path, project_id, query)
+
+    def browse_project_results(
+        self, project_id: str, query: HistoryQuery
+    ) -> HistoryPage[HistoryResultItem]:
+        self._registered_project_key(project_id)
+        return query_results(self.history_store.database_path, project_id, query)
 
     def _registered_project_key(self, project_id: str) -> str:
         try:

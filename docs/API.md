@@ -452,6 +452,79 @@ reported by diagnostic. `execution_available: false` and null execution fields e
 missing or invalid execution record. This endpoint needs neither browser `localStorage` Run IDs nor
 mutable Prompt, Workflow, Profile, or Saved Batch rows.
 
+### Bounded historical browsing (BC-007)
+
+The first BC-007 query slice adds two endpoints for the upcoming Gallery/Runs workspace:
+
+- `GET /api/projects/{project_id}/history/runs`
+- `GET /api/projects/{project_id}/history/results`
+
+Both require a registered Project (otherwise `404 project_not_found`). They read only SQLite's last
+committed projection: no filesystem scan, per-Run Result listing, compiler expansion, or original-byte
+hashing occurs in a browse request. The existing Project History UI and unpaginated APIs remain
+unchanged until the visual checkpoint. Existing strict artifact downloads remain authoritative.
+
+Common query parameters:
+
+| Parameter | Contract |
+| --- | --- |
+| `limit` | Integer 1-100; default 50 |
+| `cursor` | Opaque continuation returned by the same endpoint; at most 8,192 characters |
+| `sort` | `newest` (default) or `oldest` |
+| `q` | At most 200 characters; literal substring of full frozen Run name or description |
+| `run_id`, `batch_id` | Optional exact historical identities, not mutable names |
+| `execution_status` | `created`, `running`, `succeeded`, `failed`, `blocked`, or `cancelled` |
+| `execution_available` | Optional boolean; distinct from execution status |
+
+Filters combine with AND. Text search uses SQLite's ASCII case folding; `%`, `_`, and quotes are literal
+text, not wildcards or query syntax. Empty `q` means no text filter. Unknown query parameters, invalid
+limits/sorts/statuses, and malformed cursors are rejected. Provenance facets, date intervals, alternate
+Run/Job sorts, typed parameter/seed/Prompt/Workflow/Profile/Asset filters, and paginated diagnostics are
+not yet exposed.
+
+Pages contain `project_id`, nullable `generation` and `scanned_at`, `items`, `next_cursor`, and `has_more`.
+Run items contain `run` plus projected `result_count`. Result items contain compact `run` context,
+exact `job_id`, `job_ordinal`, `artifact_ordinal`, filename excerpt/truncation flag, MIME, size, hash,
+projected integrity, and optional download URL. Stable Result identity is Run ID + Job ID + artifact
+ordinal, not filename or ordinal alone. Result counts count indexed artifacts, including degraded
+ones; zero is not proof that unavailable execution metadata never contained Results.
+
+Names are clipped at 256 characters, Run-description excerpts at 512, and timestamp display text at 64,
+with `display_truncated` on Run summaries. Filename excerpts are clipped at 256 with their own flag;
+oversized MIME values are omitted. SQL reads display fields with one sentinel character to detect
+truncation before materializing repeated Run context. Full notes still participate in search and remain
+available through existing detail reads. Exact identities are not truncated or newly restricted, so
+page size and display clipping are not an absolute byte budget for historically unbounded identities.
+
+Ordering uses normalized ISO instants at microsecond precision. Explicit offsets are normalized;
+naive timestamps mean UTC. Unparseable or oversized historical timestamps remain browsable in an
+unknown-date bucket after dated Runs for either direction. Run ID ascending breaks equal-instant ties;
+Results then use ascending Job and artifact ordinals. There is no global uniqueness assumption on Run
+number. No offset pagination is used.
+
+Generation and page data (including Result counts and cursor bookmark resolution) share one read
+transaction. Every successful full replacement updates the generation and UTC scan-completion time in
+the same write transaction, even if the projected content is unchanged. Failed scans/replacements keep
+both unchanged. Null scan state means the index has not yet been reconciled since the browsing
+migration (or is a new empty Project), not that storage was just checked; existing rows remain readable.
+
+Cursors bind Project, endpoint, filter values, sort, and generation. Page size may change between
+requests. A bounded bookmark resolves the ordering key inside the read transaction without putting
+unbounded Run IDs into the cursor. Malformed, foreign-query, or missing bookmarks yield
+`422 invalid_history_query`. Generation changes yield `409 history_generation_changed`; restart without
+a cursor rather than append mixed-generation pages. Cursors are not authorization or trusted file paths.
+
+Integrity fields describe the projection at scan time, not a new verification of bytes. Missing/corrupt
+artifacts, unavailable execution, and Run IDs not representable by the existing single-segment download
+route have null `download_url` and an explicit `download_unavailable_reason`. Such identities remain
+browsable without rewriting v1 data. Eligible URLs still use the existing strict download boundary;
+stale verified index rows cannot authorize serving changed, missing, or unsafe original bytes.
+
+Browse reads and response serialization run off the event loop under the existing bulk-read admission
+budget. They neither consume execution-polling slots nor change reindex triggers. Filtering/search and
+joined sorting can still inspect more rows than one page; bounded responses are not a query-time
+guarantee or an incremental-index implementation.
+
 Direct Run and execution reads differ from this history projection: if `execution.json` is absent,
 they derive pristine `created` state from the frozen Run without writing a file. Invalid execution
 records fail direct reads rather than being replaced with created state. Neither a missing history
