@@ -396,7 +396,8 @@
 .pb-modal > div > p {
   line-height: 1.6;
 }
-.pb-image-modal {
+.pb-modal.pb-image-modal {
+  max-width: calc(100vw - 1rem);
   height: calc(100dvh - 2rem);
   padding: 0.5rem;
 }

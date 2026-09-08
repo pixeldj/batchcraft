@@ -549,8 +549,24 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
   await expect(viewer).toContainText("Amber valley");
   await expect(viewer.locator("img")).toHaveJSProperty("naturalWidth", 384);
   const originalViewport = page.viewportSize()!;
-  for (const viewport of [originalViewport, { width: 320, height: 720 }, { width: 720, height: 320 }]) {
+  for (const viewport of [
+    { ...originalViewport, wideFont: false },
+    { width: 320, height: 720, wideFont: false },
+    { width: 720, height: 320, wideFont: false },
+    { width: 320, height: 720, wideFont: true },
+    { width: 720, height: 320, wideFont: true },
+  ]) {
     await page.setViewportSize(viewport);
+    // Stress platform font metrics and a full page's widest counter without extra GPU Jobs.
+    const fontOverride = viewport.wideFont ? await page.addStyleTag({ content:
+      '.pb-image-modal .pb-modal-heading, .pb-image-modal .pb-modal-heading button { font-family: Verdana, Arial, sans-serif; }',
+    }) : null;
+    const counter = viewer.locator(".pb-viewer-navigation span");
+    const originalCounter = await counter.evaluate((element) => [...element.childNodes].map((node) => node.nodeValue));
+    if (viewport.wideFont) await counter.evaluate((element) => {
+      element.firstChild!.nodeValue = "48";
+      element.lastChild!.nodeValue = "48";
+    });
     await expect(viewer.locator(".pb-modal-heading")).toHaveCount(1);
     await expect(viewer.getByRole("heading")).toHaveCount(0);
     await expect(viewer.getByText("Project Result image", { exact: true })).toHaveCount(0);
@@ -568,18 +584,25 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
         dialog: box(element),
         toolbar: box(element.querySelector(".pb-modal-heading")!),
         controls: [...element.querySelectorAll(".pb-modal-heading button, .pb-viewer-navigation span")].map(box),
+        buttons: [...element.querySelectorAll(".pb-modal-heading button")].map(box),
+        padding: getComputedStyle(element).padding,
+        maxWidth: getComputedStyle(element).maxWidth,
         image: box(element.querySelector("img")!),
         link: box(element.querySelector(".pb-viewer-link")!),
         caption: box(element.querySelector(".pb-viewer-caption")!),
         noOverflow: element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight,
       };
     });
-    await page.screenshot({ path: testInfo.outputPath(`project-viewer-${viewport.width}x${viewport.height}.png`), scale: "css" });
+    const artifact = `project-viewer-${viewport.width}x${viewport.height}${viewport.wideFont ? "-wide-font" : ""}`;
+    await testInfo.attach(`${artifact}-layout`, { body: JSON.stringify(layout), contentType: "application/json" });
+    await page.screenshot({ path: testInfo.outputPath(`${artifact}.png`), scale: "css" });
     expect(layout.noOverflow).toBe(true);
     expect(layout.dialog.x).toBeGreaterThanOrEqual(0);
     expect(layout.dialog.x + layout.dialog.width).toBeLessThanOrEqual(viewport.width);
     expect(layout.dialog.y).toBeGreaterThanOrEqual(0);
     expect(layout.dialog.y + layout.dialog.height).toBeLessThanOrEqual(viewport.height);
+    for (const button of layout.buttons) expect(button.height).toBeGreaterThanOrEqual(32);
+    if (viewport.wideFont) await expect(counter).toHaveText("48/48");
     for (const control of layout.controls) {
       expect(control.y).toBeGreaterThanOrEqual(layout.toolbar.y);
       expect(control.y + control.height).toBeLessThanOrEqual(layout.toolbar.y + layout.toolbar.height + 1);
@@ -591,6 +614,10 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
     expect(layout.image).toEqual(layout.link);
     expect(layout.image.y).toBeGreaterThanOrEqual(layout.toolbar.y + layout.toolbar.height);
     expect(layout.image.y + layout.image.height).toBeLessThanOrEqual(layout.caption.y);
+    await fontOverride?.evaluate((element) => element.parentNode!.removeChild(element));
+    await counter.evaluate((element, values) => {
+      element.childNodes.forEach((node, index) => { node.nodeValue = values[index]; });
+    }, originalCounter);
   }
   await page.setViewportSize(originalViewport);
   await expect(viewer.getByRole("button", { name: "Previous", exact: true })).toBeDisabled();
