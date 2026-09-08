@@ -55,6 +55,10 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "historical_result",
             "historical_diagnostic",
             "historical_projection_state",
+            "historical_provenance_state",
+            "historical_run_provenance",
+            "historical_prompt_snapshot",
+            "historical_parameter_value",
         }
         indexes = {
             row[0]
@@ -85,6 +89,11 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "historical_job_project_idx",
             "historical_resolved_parameter_project_idx",
             "historical_image_input_project_idx",
+            "historical_run_provenance_filter_idx",
+            "historical_prompt_snapshot_identity_idx",
+            "historical_parameter_value_choice_idx",
+            "historical_job_provenance_idx",
+            "historical_image_input_provenance_idx",
         }
         triggers = {
             row[0]
@@ -135,6 +144,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
         )
         migration_two_path = migration_path.with_name("0002_historical_projections.sql")
         migration_three_path = migration_path.with_name("0003_history_browsing.sql")
+        migration_four_path = migration_path.with_name("0004_history_provenance.sql")
         assert connection.execute(
             "SELECT version, name, checksum, applied_at FROM schema_migration ORDER BY version"
         ).fetchall() == [
@@ -156,10 +166,16 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
                 hashlib.sha256(migration_three_path.read_bytes()).hexdigest(),
                 "2026-08-28T12:30:00.000000Z",
             ),
+            (
+                4,
+                "history_provenance",
+                hashlib.sha256(migration_four_path.read_bytes()).hexdigest(),
+                "2026-08-28T12:30:00.000000Z",
+            ),
         ]
 
         apply_migrations(connection, clock=lambda: pytest.fail("no migration should run"))
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (3,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (4,)
     finally:
         connection.close()
 
@@ -245,7 +261,10 @@ def test_future_contiguous_migration_preserves_existing_data(
                 migration_root / "0002_historical_projections.sql"
             ).read_text(),
             "0003_history_browsing.sql": (migration_root / "0003_history_browsing.sql").read_text(),
-            "0004_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
+            "0004_history_provenance.sql": (
+                migration_root / "0004_history_provenance.sql"
+            ).read_text(),
+            "0005_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -275,22 +294,28 @@ def test_future_contiguous_migration_preserves_existing_data(
             (1, "initial"),
             (2, "historical_projections"),
             (3, "history_browsing"),
-            (4, "future"),
+            (4, "history_provenance"),
+            (5, "future"),
         ]
     finally:
         connection.close()
 
 
+@pytest.mark.parametrize("prior_version", [2, 3])
 def test_history_browsing_migration_preserves_unreconciled_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prior_version: int
 ) -> None:
     migration_root = Path(__file__).parents[2] / "src" / "batchcraft" / "db" / "migrations"
     package = _migration_package(
         tmp_path,
-        "prior_history_migrations",
+        f"prior_history_migrations_{prior_version}",
         {
             name: (migration_root / name).read_text()
-            for name in ("0001_initial.sql", "0002_historical_projections.sql")
+            for name in (
+                "0001_initial.sql",
+                "0002_historical_projections.sql",
+                "0003_history_browsing.sql",
+            )[:prior_version]
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -338,7 +363,8 @@ def test_history_browsing_migration_preserves_unreconciled_rows(
 
         assert (
             connection.execute(
-                "SELECT * FROM schema_migration WHERE version <= 2 ORDER BY version"
+                "SELECT * FROM schema_migration WHERE version <= ? ORDER BY version",
+                (prior_version,),
             ).fetchall()
             == old_history
         )
@@ -348,6 +374,8 @@ def test_history_browsing_migration_preserves_unreconciled_rows(
         )
         assert connection.execute("SELECT * FROM project").fetchall() == old_projects
         assert connection.execute("SELECT * FROM historical_projection_state").fetchall() == []
+        assert connection.execute("SELECT * FROM historical_provenance_state").fetchall() == []
+        assert connection.execute("SELECT * FROM historical_parameter_value").fetchall() == []
         assert connection.execute(
             "SELECT version, name FROM schema_migration WHERE version = 3"
         ).fetchone() == (3, "history_browsing")
@@ -426,7 +454,7 @@ def test_concurrent_startup_serializes_migration_application(tmp_path: Path) -> 
 
     connection = open_connection(database_path)
     try:
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (3,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (4,)
     finally:
         connection.close()
 
@@ -436,7 +464,7 @@ def test_unknown_newer_database_and_history_gap_are_rejected(tmp_path: Path) -> 
     gap = open_connection(tmp_path / "gap.sqlite3")
     try:
         apply_migrations(newer)
-        newer.execute("INSERT INTO schema_migration VALUES (4, 'future', ?, 'now')", ("0" * 64,))
+        newer.execute("INSERT INTO schema_migration VALUES (5, 'future', ?, 'now')", ("0" * 64,))
         newer.commit()
         with pytest.raises(MigrationError, match="newer than application"):
             apply_migrations(newer)

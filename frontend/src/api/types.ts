@@ -253,7 +253,52 @@ export interface ProjectRunsResponse {
   diagnostics: HistoryDiagnosticResponse[];
 }
 
+export interface HistoryParameterFilter {
+  key: string;
+  value_type: ParameterValueType;
+  mode: "equals" | "base" | "override";
+  value?: ParameterScalar;
+}
+
+export interface HistoryImageInputFilter {
+  slot_key: string;
+  mode: "base" | "asset";
+  asset_id?: string;
+}
+
+export interface HistoryProvenanceFilters {
+  seed?: number;
+  prompt_id?: string;
+  prompt_version_id?: string;
+  workflow_version_id?: string;
+  profile_version_id?: string;
+  saved_batch_id?: string;
+  created_from?: string;
+  created_before?: string;
+  asset_id?: string;
+  parameters?: HistoryParameterFilter[];
+  image_inputs?: HistoryImageInputFilter[];
+}
+
+export type HistoryChoiceKind = "parameter" | "prompt" | "prompt_version" | "workflow_version"
+  | "profile_version" | "saved_batch" | "batch" | "image_slot" | "asset";
+
+export interface HistoryChoice {
+  value: string;
+  label: string;
+  value_type?: ParameterValueType | null;
+  detail?: string | null;
+}
+
+export interface HistoryChoicesResponse {
+  project_id: string;
+  generation: string | null;
+  items: HistoryChoice[];
+  has_more: boolean;
+}
+
 export interface HistoryQuery {
+  filters?: HistoryProvenanceFilters | null;
   limit?: number;
   cursor?: string | null;
   sort?: "newest" | "oldest";

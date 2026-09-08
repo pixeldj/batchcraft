@@ -40,6 +40,7 @@ export function useProjectBrowserHistory(
     query.batch_id ?? null,
     query.execution_status ?? null,
     query.execution_available ?? null,
+    query.filters ?? null,
   ]);
   const [page, setPage] = useState<{
     key: string;

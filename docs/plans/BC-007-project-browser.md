@@ -1,17 +1,19 @@
 # BC-007: Project-wide Run and Result browser
 
-Status: In Progress. Bounded query foundation and visual checkpoint implemented and automated checks
-passed; owner UI acceptance pending.
+Status: In Progress. Bounded browsing, visual workspace, and typed-provenance checkpoint implemented;
+reported automated evidence is recorded below. Final owner acceptance remains pending.
 Backlog: [BC-007](../BACKLOG.md#bc-007-project-wide-run-and-result-browser).
 
 Current implementation: additive `/history/runs` and `/history/results` APIs, newest/oldest keyset
 pagination, basic Run filters, SQL-clipped metadata, generation-scoped bookmarks, and forward migration
-0003 are implemented. The visual checkpoint adds `ProjectBrowser`,
+0003 are implemented. The visual checkpoint added `ProjectBrowser`,
 `useProjectBrowserHistory`, `useWorkspaceNavigation`, App navigation/monitor integration, and native
-inspection modals. The visual checkpoint passes 508 frontend tests, lint/typecheck/build, and twelve
+inspection modals. That historical visual checkpoint passed 508 frontend tests, lint/typecheck/build, and twelve
 desktop/mobile browser tests in each of Vite and built modes. Screenshots were reviewed; owner acceptance
-is separate. Advanced provenance filters/facets, bounded
-diagnostic detail browsing, generated thumbnails, and filmstrip remain upcoming; BC-007 is not Done.
+is separate. Typed JSON provenance filters, bounded historical choices, frontend `HistoryFilters`, and
+forward migration 0004 are now implemented. This is not complete faceting: filter-from-Details,
+additional Run/Job sorts, logical Workflow/Profile and hash filters, multi-value OR, bounded diagnostic
+detail browsing, generated thumbnails, filmstrip, and performance work remain; BC-007 is not Done.
 
 ## Outcome
 
@@ -57,7 +59,7 @@ History presentation, not current-Run Results.
 
 Start with Run-name/notes search, newest/oldest sorting, Run/Batch identity, and execution status and
 availability. Use an Add filter control and removable/editable chips instead of a permanently expanded
-form. Complete the remaining BC-007 filters in the provenance checkpoint:
+form. The table describes the intended scope; current coverage and remaining work are distinguished below:
 
 | Filter | Interaction |
 | --- | --- |
@@ -70,11 +72,13 @@ form. Complete the remaining BC-007 filters in the provenance checkpoint:
 | Image Input | Slot key plus Asset, or Base workflow |
 | Asset usage | Concrete Asset in any slot |
 
-Search labels must describe the fields actually searched. AND combines filter dimensions; OR combines
-multiple selected values within a dimension. Job predicates must match the **same Job**, not different
+Search labels must describe the fields actually searched. Current filters combine with AND; the UI
+supports one predicate per parameter key/type pair or Image Input slot and one value per identity field.
+OR among multiple selected values within a dimension is planned, not implemented. Job predicates match the **same Job**, not different
 Jobs in one Run. Missing parameters/slots are not Base; an override equal to a Base literal is still an
 override. Preserve false, zero, empty string, numeric types, and historical identities without current
-library records. Facets should be bounded and derived from historical indexes, not mutable libraries.
+library records. Implemented choices are bounded historical searches, not complete or active-filter-conditioned
+facets. Logical Workflow/Profile and hash filters remain planned; exact revision filters are implemented.
 
 ## Delivery checkpoints
 
@@ -111,7 +115,7 @@ these endpoints; old unpaginated APIs remain available for backward compatibilit
 - Repair modal focus containment, topmost Escape, background interaction, and focus restoration for
   shared inspection surfaces as they enter this workflow.
 
-Owner visual review at this checkpoint precedes the complete advanced-filter UI.
+Owner feedback on this checkpoint was positive; final acceptance is separate from automated verification.
 
 Implemented checkpoint details:
 
@@ -119,7 +123,7 @@ Implemented checkpoint details:
   inactive authoring is hidden. Drafts and valid in-memory Preview survive review navigation, and the
   compact monitor shows the actual frozen Project/Batch. Cold loads still invalidate Preview; recovery
   v4 is unchanged.
-- URL query keys are `view`, `q`, `sort`, `run`, `batch`, `status`, and `available`, with Back/Forward
+- URL query keys are `view`, `q`, `sort`, `run`, `batch`, `status`, `available`, and now JSON `filters`, with Back/Forward
   and in-memory per-view scroll restoration. URLs encode review mode/filters only, never Project
   selection or cursor pages. Project selection remains verified and guarded in Batch; an accepted
   Project switch clears review filters. Destination changes close open dialogs, including portals.
@@ -129,7 +133,8 @@ Implemented checkpoint details:
   still reads `getResults` for its selected owning Run and validates the artifact against frozen detail.
 - Search covers Run names/notes, with newest/oldest order, status/availability controls, and removable
   Run/Batch chips. Runs offer Show Results, frozen Run Plan, and guarded Load Run as Batch with native
-  unsaved-work confirmation. Full advanced-filter controls and historical facets are not implemented.
+  unsaved-work confirmation. Typed advanced controls and historical choices are implemented as described
+  below; complete facets remain unfinished.
 - Gallery uses natural-aspect lazy original images with asynchronous decoding and density controls,
   not generated thumbnails. Image selection uses Run/Job/artifact identity and navigation is limited
   to eligible images on the loaded page. A filmstrip is not implemented.
@@ -150,14 +155,40 @@ Implemented checkpoint details:
 
 ### 3. Provenance filters
 
-- Extend projections with declared parameter types, explicit Base state, and typed value columns.
-- Project optional Prompt ancestry, Workflow/Profile identities, hashes, and source Saved Batch identity
-  from frozen snapshots. Never infer missing historical ancestry from today's libraries.
-- Add required indexes and same-Job query predicates without multiplying Results through joins.
-- Add bounded historical facet requests, date filters, typed controls, and filter-from-Details actions.
-- Mark newly required projection enrichment incomplete until successful filesystem reconciliation;
-  incomplete indexes must not return misleadingly authoritative empty filtered collections.
-- Complete deterministic Run/Job ordering options without sorting by globally non-unique Run number alone.
+Implemented:
+
+- `history_filters` parses strict JSON `filters` (at most 16,384 characters), rejecting unknown fields,
+  duplicate object keys, invalid shapes/types, unsafe integers, nonfinite floats, and invalid date bounds.
+  Up to 8 parameter predicates and 4 Image Input predicates are accepted. Seed is `0..2^53-1`;
+  parameter integer equality is bounded by absolute value `2^53-1`.
+- Filters cover typed parameter equality/Base/Any override, seed, logical Prompt where frozen ancestry
+  exists, exact Prompt/Workflow/Profile version IDs, source Saved Batch, Asset usage, Image Input
+  slot plus Asset/Base, and inclusive-from/exclusive-before Run creation instants. Dates normalize to
+  UTC; offset-free timestamps and date-only inputs mean UTC. Unknown dates do not match date bounds.
+- All predicates use AND. Run queries require one qualifying Job; Result queries bind predicates to
+  that Result's own Job, without multiplying artifacts. Missing parameters/slots are not Base, and
+  `false`, `0`, empty strings, declared numeric types, and overrides equal to Base remain distinct.
+- `history_choices` serves `/history/choices` for parameter, Prompt/revision, Workflow/Profile revision,
+  Saved Batch, historical Batch, Image Input slot, and Asset identities. It reads only historical SQLite
+  projections in a generation-consistent transaction. `q` is a literal Unicode-casefolded label/identity
+  search of at most 200 characters, including available revision suffixes; limit is 1-50 (default 30).
+  Labels/details are clipped to 256 characters, identities remain exact, and `has_more` requires
+  narrowing search rather than cursor pagination. These are not conditioned facets or facet counts.
+- Migration `0004_history_provenance` adds typed parameter rows, frozen Prompt/Run provenance, indexes,
+  and generation-bound enrichment state. Historical revision metadata uses decimal TEXT to preserve
+  valid v1 revisions beyond signed-64-bit integers. Applied migrations 0001-0003 and v1 files are unchanged.
+- Nonempty advanced filters and all choices return `409 history_reindex_required` until enrichment
+  matches the current generation. Successful reconciliation publishes both atomically; failed scans
+  preserve prior state. Basic old-index browsing still works. GET requests never scan or repair history.
+- Frontend `HistoryFilters` supplies Add filter, native typed editing, removable/editable chips,
+  debounced bounded choice search, historical labels, and explicit reindex/retry guidance. It retains
+  one predicate per parameter key/type pair or slot, replacing the existing predicate when edited.
+  JSON `filters` round-trips through URL Back/Forward; invalid advanced URL intent shows an explicit
+  error and blocks browsing until cleared. Project guards, drafts, Preview, and recovery v4 stay unchanged.
+
+Remaining: filter-from-Details actions; additional deterministic Run/Job sorts; logical Workflow/Profile
+and hash filters; multi-value OR within a dimension and complete facets. Do not infer missing historical
+ancestry from today's libraries or assume Run numbers are globally unique.
 
 ### 4. Performance and polish
 
@@ -186,6 +217,12 @@ saved filter collections, arbitrary query languages, and cross-Project concurren
 of this first implementation. A new routing/component framework is not assumed.
 
 ## Verification
+
+Typed-provenance checkpoint verification passed: 1,326 backend tests, Ruff lint/format, mypy, and package
+build; 618 frontend tests, lint/typecheck and production build; and 14 real-API desktop/mobile tests in
+each of Vite and built same-origin modes. Narrow-screen screenshots were reviewed and a header overlap
+was fixed with a tools-row bounding-box regression. Earlier checkpoint counts remain historical.
+Final scope/owner acceptance is still pending.
 
 - Backend: query boundaries, literal search, typed/Base matching, same-Job conjunction, multi-artifact
   identity, equal/offset/unknown dates, deterministic pages, malformed/mismatched/stale cursors,

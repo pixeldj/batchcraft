@@ -12,6 +12,7 @@ import base64
 import binascii
 import hashlib
 import json
+import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -19,6 +20,14 @@ from typing import Any, Literal
 
 from batchcraft.db.connection import open_connection
 from batchcraft.db.history import HistoricalResultRecord, HistoricalRunRecord, _run_from_row
+from batchcraft.db.history_filters import (
+    HistoryQueryError as HistoryQueryError,
+)
+from batchcraft.db.history_filters import (
+    HistoryReindexRequiredError,
+    filter_sql,
+    parse_filters,
+)
 
 _STATUSES = ("created", "running", "succeeded", "failed", "blocked", "cancelled")
 _TIMESTAMP = "history_timestamp_us(r.created_at)"
@@ -30,10 +39,6 @@ _RESULT_COLUMNS = """a.run_id, a.job_id, a.job_ordinal, a.artifact_ordinal, '', 
     substr(a.remote_filename, 1, 257), '', '', '', substr(a.content_type, 1, 257),
     a.byte_size, a.sha256, a.integrity_status"""
 _RUN_WIDTH = len(fields(HistoricalRunRecord))
-
-
-class HistoryQueryError(ValueError):
-    """A history query or continuation cursor is invalid."""
 
 
 class HistoryGenerationChangedError(HistoryQueryError):
@@ -50,8 +55,10 @@ class HistoryQuery:
     batch_id: str | None = None
     execution_status: str | None = None
     execution_available: bool | None = None
+    filters: str | None = None
 
     def __post_init__(self) -> None:
+        parse_filters(self.filters)
         if type(self.limit) is not int or not 1 <= self.limit <= 100:
             raise HistoryQueryError("limit must be an integer between 1 and 100")
         if self.sort not in ("newest", "oldest"):
@@ -132,6 +139,10 @@ def _query(
     keys = [f"{_TIMESTAMP} IS NULL", timestamp, "r.run_id"]
     predicates = ["r.project_id = ?"]
     parameters: list[object] = [project_id]
+    filters = parse_filters(query.filters)
+    advanced_predicates, advanced_values = filter_sql(filters, results=kind == "results")
+    predicates.extend(advanced_predicates)
+    parameters.extend(advanced_values)
     for column, value in (
         ("run_id", query.run_id),
         ("batch_id", query.batch_id),
@@ -168,6 +179,8 @@ def _query(
                 (project_id,),
             ).fetchone()
             generation, scanned_at = (None, None) if state is None else state
+            if filters:
+                require_provenance(connection, project_id, generation)
             # Bind semantic inputs and generation, not page size. Validate using
             # the cursor's generation first to distinguish mismatch from staleness.
             binding = hashlib.sha256(
@@ -182,7 +195,9 @@ def _query(
                         query.execution_status,
                         query.execution_available,
                         generation if cursor is None else cursor["generation"],
-                    ],
+                    ]
+                    + ([filters] if filters else []),
+                    sort_keys=True,
                     ensure_ascii=True,
                     separators=(",", ":"),
                 ).encode("ascii")
@@ -216,6 +231,18 @@ def _query(
             {"v": 2, "binding": binding, "generation": generation, "rowid": rows[-1][-1]}
         )
     return HistoryPage(tuple(row[:-1] for row in rows), generation, scanned_at, next_cursor)
+
+
+def require_provenance(
+    connection: sqlite3.Connection, project_id: str, generation: str | None
+) -> None:
+    state = connection.execute(
+        "SELECT generation FROM historical_provenance_state WHERE project_id = ?", (project_id,)
+    ).fetchone()
+    if generation is None or state is None or state[0] != generation:
+        raise HistoryReindexRequiredError(
+            "Reindex Project to enable provenance filters and choices"
+        )
 
 
 def _bounded_text(name: str, value: str, maximum: int | None = None) -> None:

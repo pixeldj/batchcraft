@@ -1115,6 +1115,7 @@ function visualProfileSnapshot(promptNodeId = "34") {
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
+    getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
     listWorkflows: vi.fn(async () => ({ workflows: [] })),
     listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [] })),
     listWorkflowProfiles: vi.fn(async () => ({ workflow_profiles: [] })),

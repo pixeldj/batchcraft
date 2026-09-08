@@ -72,6 +72,14 @@ Preexisting history remains readable with unknown generation/scan time until suc
 GET browsing does not initialize, rewrite, or scan it. See the [BC-007 plan](plans/BC-007-project-browser.md)
 and [API contract](API.md#bounded-historical-browsing-bc-007) for staged delivery and cursor semantics.
 
+Migration `0004_history_provenance` adds typed parameter/Base rows, frozen Prompt and Run provenance,
+and generation-bound enrichment state without changing migrations 0001-0003 or v1 files. Frozen
+Prompt/Workflow/Profile version numbers and source Saved Batch revisions use decimal TEXT, preserving
+valid v1 values beyond SQLite's signed-64-bit range. Successful reconciliation atomically publishes the
+enrichment marker with the projection generation; failures retain prior state. Basic browsing remains
+available on unenriched indexes, but nonempty advanced filters and historical choices return
+`409 history_reindex_required` until reconciliation succeeds. GET requests never enrich or scan storage.
+
 The API resolves only trusted configured storage roots at `Settings` construction, including macOS
 `/var` aliases used by `tools.runtime`'s `TemporaryDirectory`. Filesystem helpers expect canonical
 anchors and reject symlinks within the store; never fix a failed artifact read by resolving that
@@ -595,11 +603,23 @@ continues with a compact strip showing the frozen Run's actual Project/Batch, in
 identity. In-app review preserves editor-local drafts and valid in-memory Preview. Cold-load Preview
 invalidation and the recovery v4 key/schema remain unchanged.
 
-Use query-string navigation only: `view`, `q`, `sort`, `run`, `batch`, `status`, and `available` support
+Use query-string navigation only: `view`, `q`, `sort`, `run`, `batch`, `status`, `available`, and JSON
+`filters` support
 Back/Forward without SPA path fallback. These encode review mode/filters, not Project identity, cursor
 pages, or draft authority. URLs never switch Project; retain verified identity and guarded selection in
 Batch, clearing review filters on an accepted Project change. Restore per-view scroll in memory and
 close open dialogs when changing destinations, including body-portaled editor dialogs.
+
+`HistoryFilters` provides Add filter, typed native-dialog controls, and editable/removable chips backed
+by bounded `/history/choices` search, not mutable libraries or complete conditioned facets. The UI uses
+one predicate per parameter key/type pair or Image Input slot; all predicates combine with same-Job AND.
+Preserve explicit Base versus override, including `false`, `0`, and empty-string equality. Enforce the
+16,384-character JSON limit, 8 parameter/4 slot limits, safe integer seeds/values, finite floats, and
+inclusive-from/exclusive-before UTC date semantics. Invalid advanced URL intent must show an error and
+block browsing, not silently clear filters. Backend parsing remains authoritative. Choices use bounded
+`q` search and historical labels/revision suffixes; `has_more` asks users to narrow search, not load all
+history. Reindex-required errors need explicit repair guidance; a missing route needs backend restart
+guidance rather than repeated reindexing.
 
 The browser retains at most two metadata pages, one per view: 48 Results or 25 Runs, with Previous/Next
 navigation and at most 20 previous cursor bookmarks per view. App's frozen-Run cache is capped at 20
@@ -622,9 +642,11 @@ deletion. Failed reads/scans retain known content with honest stale/unavailable 
 Run Plan, Result Details, and ResultLightbox use shared `useModalDialog` with native `showModal`, body
 scroll locking, topmost Escape, and focus restoration only to connected visible openers. Preserve nested
 inspection behavior and prevent focus returning into a hidden destination. The Project browser also
-uses native inspection/confirmation dialogs. Full provenance filters/facets, diagnostic detail browsing,
-generated thumbnails, and a filmstrip remain future work. Automated verification passed for this visual
-checkpoint; see BC-007 for evidence. Owner UI acceptance remains pending; do not mark BC-007 Done.
+uses native inspection/confirmation dialogs. Typed provenance filters and historical choices are now
+implemented. Filter-from-Details actions, additional deterministic Run/Job sorts, logical Workflow/Profile
+and hash filters, multi-value OR within a dimension, complete facets, diagnostic detail browsing,
+generated thumbnails, filmstrip, and performance measurement remain future work. See BC-007 for
+checkpoint-specific verification evidence. Final owner acceptance remains pending; do not mark BC-007 Done.
 
 Regression checks cover absence of Batch Results and
 visible card labels, retained detail/lightbox accessibility and unavailable placeholders, strict reading
@@ -633,7 +655,10 @@ independent current/active Run restoration, cancellation, and historical detail.
 below and fake-backed browser verification from `LOCAL_INSTANCES.md`. For BC-007, also check mounted
 draft/Preview and monitor retention, URL Back/Forward and guarded Project selection, bounded pages and
 cache eviction, stale-generation/late-response races, silent identical-page rebase, disabled unvalidated
-images, selected-Run-only detail reads, and native nested-dialog focus on desktop/mobile.
+images, selected-Run-only detail reads, and native nested-dialog focus on desktop/mobile. Provenance
+regressions also cover strict JSON/URL bounds, same-Job AND, typed Base/false/zero/empty values,
+historical choice search/labels without libraries, stale choice responses, enrichment-required repair,
+and preservation of large v1 revisions and historical bytes.
 
 Execution responses distinguish durable status from the ephemeral active-task ownership of the current
 API process. A restored `running` Run without an active task remains historically unchanged, but the UI

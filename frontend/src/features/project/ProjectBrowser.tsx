@@ -13,6 +13,7 @@ import { errorMessage } from "../../utils/errors";
 import { useModalDialog } from "../../components/useModalDialog";
 import { ResultDetailsDialog } from "../results/ResultDetailsDialog";
 import { RunPlanDialog } from "../run/RunPlanDialog";
+import { HistoryFilters } from "./HistoryFilters";
 import {
   historyResultIdentity as identity,
   useProjectBrowserHistory,
@@ -120,6 +121,7 @@ function Browser({
     query.batch_id ?? null,
     query.execution_status ?? null,
     query.execution_available ?? null,
+    query.filters ?? null,
   ]);
   useEffect(() => {
     const sequence = request;
@@ -153,13 +155,14 @@ function Browser({
     ? images.findIndex((item) => identity(item) === viewedImage.identity)
     : -1;
   const selected = images[selectedIndex];
-  const filtered = !!(
+  const basicFiltered = !!(
     query.q ||
     query.run_id ||
     query.batch_id ||
     query.execution_status ||
     query.execution_available != null
   );
+  const filtered = basicFiltered || Object.keys(query.filters ?? {}).length > 0;
   const count = history.page?.response.items.length ?? 0;
   const busy = !!inspection || !!viewedImage;
 
@@ -309,7 +312,7 @@ function Browser({
           </select>
         </label>
         <details className="pb-filters">
-          <summary>Filters{filtered ? " (active)" : ""}</summary>
+          <summary>Status{query.execution_status || query.execution_available != null ? " (active)" : ""}</summary>
           <div>
             <label>
               Execution status
@@ -378,7 +381,10 @@ function Browser({
           </label>
         ) : null}
       </div>
-      {filtered ? (
+      <div className="pb-provenance-filters">
+        <HistoryFilters api={api} projectId={projectId} value={query} disabled={busy} onChange={onQueryChange} />
+      </div>
+      {basicFiltered ? (
         <div className="pb-chips" aria-label="Active filters">
           {query.q ? (
             <button disabled={busy} onClick={() => changeQuery({ q: "" })}>

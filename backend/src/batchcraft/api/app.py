@@ -88,6 +88,7 @@ from batchcraft.db import (
     apply_migrations,
     open_connection,
 )
+from batchcraft.db.history_filters import HistoryReindexRequiredError
 from batchcraft.db.history_query import HistoryGenerationChangedError, HistoryQueryError
 from batchcraft.diagnostics import public_error_message, safe_exception
 from batchcraft.domain import CompilationError, SeedInput
@@ -122,6 +123,8 @@ from .schemas import (
     HistoricalProfileImportCopyRequest,
     HistoricalResourceImportCopyRequest,
     HistoricalRunResponse,
+    HistoryChoiceQueryParameters,
+    HistoryChoicesResponse,
     HistoryDiagnosticResponse,
     HistoryQueryParameters,
     HistoryResultPageResponse,
@@ -395,6 +398,20 @@ def create_app(
                 runs=[HistoricalRunResponse.from_record(item) for item in runs],
                 diagnostics=[HistoryDiagnosticResponse.from_record(item) for item in diagnostics],
             )
+            return Response(model.model_dump_json(), media_type="application/json")
+
+        async with bulk_reads.claim():
+            return await file_operation(read)
+
+    @app.get("/api/projects/{project_id}/history/choices", response_model=HistoryChoicesResponse)
+    async def browse_project_choices(
+        project_id: str,
+        query: Annotated[HistoryChoiceQueryParameters, Query()],
+        service: ServiceDependency,
+    ) -> Response:
+        def read() -> Response:
+            page = service.browse_project_choices(project_id, query.kind, query.q, query.limit)
+            model = HistoryChoicesResponse.model_validate(page, from_attributes=True)
             return Response(model.model_dump_json(), media_type="application/json")
 
         async with bulk_reads.claim():
@@ -1444,6 +1461,14 @@ def _register_error_handlers(app: FastAPI) -> None:
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "invalid_history_query",
             "History query or cursor is invalid; check filters or restart without a cursor",
+        )
+
+    @app.exception_handler(HistoryReindexRequiredError)
+    async def history_reindex_required(_request: Request, _error: Exception) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "history_reindex_required",
+            "Reindex Project to enable provenance filters and choices",
         )
 
     @app.exception_handler(ProjectImportError)

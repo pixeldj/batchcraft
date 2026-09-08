@@ -13,6 +13,7 @@ import type {
   BatchReconstructionResponse,
   ExecutionResponse,
   HistoryResultPageResponse,
+  HistoryProvenanceFilters,
   HistoryRunPageResponse,
   LibraryPromptVersion,
   PreviewResponse,
@@ -337,6 +338,159 @@ describe("Workspace navigation", () => {
     expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
     expect(api.getResults).not.toHaveBeenCalled();
+  });
+});
+
+describe("Workspace provenance filters", () => {
+  const basicParams = { q: "portrait & detail", sort: "oldest", run: "historical-run", batch: "batch-1", status: "failed", available: "false" };
+  const basicQuery = { q: basicParams.q, sort: "oldest", run_id: basicParams.run, batch_id: basicParams.batch, execution_status: "failed", execution_available: false };
+  const typedFilters: HistoryProvenanceFilters = {
+    seed: 0,
+    parameters: [
+      { key: "flag", value_type: "boolean", mode: "equals", value: false },
+      { key: "steps", value_type: "integer", mode: "equals", value: 0 },
+      { key: "caption", value_type: "string", mode: "equals", value: "" },
+    ],
+  };
+
+  it.each(["gallery", "runs"] as const)("passes valid URL provenance and basic filters to %s browsing", async (view) => {
+    const filters: HistoryProvenanceFilters = {
+      ...typedFilters,
+      prompt_version_id: "prompt revision / &",
+      workflow_version_id: "workflow-v1",
+      profile_version_id: "profile-v1",
+      saved_batch_id: "saved-batch-1",
+      image_inputs: [{ slot_key: "reference", mode: "base" }],
+      created_from: "2026-09-07T12:00:00+05:30",
+      created_before: "2026-09-08",
+    };
+    window.history.replaceState(null, "", `/?${new URLSearchParams({ ...basicParams, view, filters: JSON.stringify(filters) })}`);
+    const api = makeApi();
+    render(<App api={api} />);
+    const browse = view === "gallery" ? api.browseProjectResults : api.browseProjectRuns;
+    await waitFor(() => expect(browse).toHaveBeenCalledWith("project-1", {
+      ...basicQuery, filters, limit: view === "gallery" ? 48 : 25, cursor: null,
+    }, expect.any(AbortSignal)));
+    for (const [, query] of vi.mocked(browse).mock.calls) expect(query?.filters).toEqual(filters);
+    expect(view === "gallery" ? api.browseProjectRuns : api.browseProjectResults).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: 'Edit caption (string): ""' })).toBeVisible();
+    expect(api.getHistoryChoices).not.toHaveBeenCalled();
+    expect(api.listProjectRuns).not.toHaveBeenCalled();
+  });
+
+  it("changes and removes an advanced filter without losing any basic filter", async () => {
+    window.history.replaceState(null, "", `/?${new URLSearchParams({ ...basicParams, view: "gallery", filters: JSON.stringify({ seed: 0 }) })}`);
+    const api = makeApi();
+    render(<App api={api} />);
+    const edit = await screen.findByRole("button", { name: "Edit Seed: 0" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    fireEvent.change(screen.getByLabelText(/^Exact seed/), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", {
+      ...basicQuery, filters: { seed: 7 }, limit: 48, cursor: null,
+    }, expect.any(AbortSignal)));
+    expect(JSON.parse(new URLSearchParams(window.location.search).get("filters")!)).toEqual({ seed: 7 });
+    const remove = screen.getByRole("button", { name: "Remove Seed: 7" });
+    await waitFor(() => expect(remove).toBeEnabled());
+    fireEvent.click(remove);
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", {
+      ...basicQuery, limit: 48, cursor: null,
+    }, expect.any(AbortSignal)));
+    expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({ ...basicParams, view: "gallery" });
+    expect(screen.queryByRole("button", { name: /^Edit Seed:/ })).not.toBeInTheDocument();
+  });
+
+  it("restores false, zero, and empty-string types and editor values with Back and Forward", async () => {
+    window.history.replaceState(null, "", `/?${new URLSearchParams({ ...basicParams, view: "gallery", filters: JSON.stringify(typedFilters) })}`);
+    const api = makeApi();
+    render(<App api={api} />);
+    const clear = await screen.findByRole("button", { name: "Clear advanced" });
+    await waitFor(() => expect(clear).toBeEnabled());
+    const filteredUrl = window.location.href;
+    fireEvent.click(clear);
+    const clearedUrl = window.location.href;
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", { ...basicQuery, limit: 48, cursor: null }, expect.any(AbortSignal)));
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.href).toBe(filteredUrl));
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", { ...basicQuery, filters: typedFilters, limit: 48, cursor: null }, expect.any(AbortSignal)));
+    for (const [name, text] of [["flag (boolean): false", "false"], ["steps (integer): 0", "0"], ['caption (string): ""', ""]]) {
+      const edit = screen.getByRole("button", { name: `Edit ${name}` });
+      await waitFor(() => expect(edit).toBeEnabled());
+      fireEvent.click(edit);
+      expect(screen.getByLabelText(/^Exact value/)).toHaveValue(text);
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    }
+    expect(screen.getByRole("button", { name: "Edit Seed: 0" })).toBeVisible();
+    act(() => window.history.forward());
+    await waitFor(() => expect(window.location.href).toBe(clearedUrl));
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", { ...basicQuery, limit: 48, cursor: null }, expect.any(AbortSignal)));
+    expect(screen.queryByRole("button", { name: "Clear advanced" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["invalid JSON", "{not-json"],
+    ["unknown fields", JSON.stringify({ seed: 0, unknown: "must not be ignored" })],
+  ])("blocks both browse endpoints for %s until Clear invalid filters", async (_label, raw) => {
+    window.history.replaceState(null, "", `/?${new URLSearchParams({ ...basicParams, view: "gallery", filters: raw })}`);
+    const api = makeApi();
+    render(<App api={api} />);
+    await screen.findByText("ComfyUI Online");
+    expect(screen.getByRole("alert")).toHaveTextContent("The history filters in this link are invalid");
+    expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
+    navigateWorkspace("Runs");
+    await screen.findByRole("alert");
+    expect(new URLSearchParams(window.location.search).get("filters")).toBe(raw);
+    expect(screen.getByRole("alert")).toHaveTextContent("Clear them to browse this Project");
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear invalid filters" }));
+    await waitFor(() => expect(api.browseProjectRuns).toHaveBeenLastCalledWith("project-1", {
+      ...basicQuery, limit: 25, cursor: null,
+    }, expect.any(AbortSignal)));
+    expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({ ...basicParams, view: "runs" });
+    expect(screen.queryByRole("button", { name: "Clear invalid filters" })).not.toBeInTheDocument();
+    navigateWorkspace("Gallery");
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", {
+      ...basicQuery, limit: 48, cursor: null,
+    }, expect.any(AbortSignal)));
+  });
+
+  it("retains raw Batch and Run metadata drafts and the same Preview through filter edits and removal", async () => {
+    const api = makeApi();
+    render(<App api={api} />);
+    await expandConfiguration("Variable bindings");
+    const raw = "  fox  \n\n wolf \n";
+    fireEvent.change(screen.getByLabelText("Values"), { target: { value: raw } });
+    await reachPreview();
+    fireEvent.change(screen.getByRole("textbox", { name: /Run Name/ }), { target: { value: "Unsubmitted Run name" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Notes/ }), { target: { value: "Unsubmitted notes" } });
+    const preview = screen.getByRole("region", { name: "Preview" });
+    const draft = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    navigateWorkspace("Gallery");
+    const add = await screen.findByRole("button", { name: "+ Add filter" });
+    await waitFor(() => expect(add).toBeEnabled());
+    fireEvent.click(add);
+    fireEvent.click(screen.getByRole("radio", { name: "Seed" }));
+    fireEvent.change(screen.getByLabelText(/^Exact seed/), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    await waitFor(() => expect(api.browseProjectResults).toHaveBeenLastCalledWith("project-1", expect.objectContaining({ filters: { seed: 0 } }), expect.any(AbortSignal)));
+    navigateWorkspace("Runs");
+    const remove = screen.getByRole("button", { name: "Remove Seed: 0" });
+    await waitFor(() => expect(remove).toBeEnabled());
+    fireEvent.click(remove);
+    await waitFor(() => expect(api.browseProjectRuns).toHaveBeenLastCalledWith("project-1", expect.not.objectContaining({ filters: expect.anything() }), expect.any(AbortSignal)));
+    navigateWorkspace("Batch");
+    expect(screen.getByLabelText("Values")).toHaveValue(raw);
+    expect(screen.getByRole("textbox", { name: /Run Name/ })).toHaveValue("Unsubmitted Run name");
+    expect(screen.getByRole("textbox", { name: /Notes/ })).toHaveValue("Unsubmitted notes");
+    expect(screen.getByRole("region", { name: "Preview" })).toBe(preview);
+    expect(preview).toBeVisible();
+    expect(within(preview).getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)).toBe(draft);
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(api.createRun).not.toHaveBeenCalled();
   });
 });
 
@@ -4235,6 +4389,7 @@ function makeApi(
     browseProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     browseProjectResults: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
+    getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
     listSavedBatches: vi.fn(async () => ({ batches: [] })),
     createSavedBatch: vi.fn(),
     getSavedBatch: vi.fn(async () => { throw new ApiError("Saved Batch was not found", "saved_batch_not_found", 404); }),

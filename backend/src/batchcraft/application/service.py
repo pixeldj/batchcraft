@@ -55,6 +55,7 @@ from batchcraft.db import (
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
 )
+from batchcraft.db.history_choices import ChoiceKind, HistoryChoices, query_choices
 from batchcraft.db.history_query import (
     HistoryPage,
     HistoryQuery,
@@ -985,6 +986,12 @@ class BatchcraftService:
     def list_project_diagnostics(self, project_id: str) -> tuple[HistoricalDiagnosticRecord, ...]:
         self._registered_project_key(project_id)
         return self.history_store.list_diagnostics(project_id)
+
+    def browse_project_choices(
+        self, project_id: str, kind: ChoiceKind, q: str = "", limit: int = 30
+    ) -> HistoryChoices:
+        self._registered_project_key(project_id)
+        return query_choices(self.history_store.database_path, project_id, kind, q, limit)
 
     def browse_project_runs(
         self, project_id: str, query: HistoryQuery

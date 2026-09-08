@@ -22,6 +22,8 @@ import type {
   HistoricalResourceImportRequest,
   HistoricalWorkflowProfileImportRequest,
   HistoryQuery,
+  HistoryChoiceKind,
+  HistoryChoicesResponse,
   HistoryRunPageResponse,
   HistoryResultPageResponse,
   LibraryPromptVersion,
@@ -81,6 +83,7 @@ export interface BatchcraftApi {
   importProject(body: ProjectImportRequest): Promise<ProjectImportResponse>;
   reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse>;
   listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse>;
+  getHistoryChoices(projectId: string, kind: HistoryChoiceKind, q?: string, signal?: AbortSignal): Promise<HistoryChoicesResponse>;
   browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse>;
   browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse>;
   listAdoptableProjects(signal?: AbortSignal): Promise<AdoptableProjectsResponse>;
@@ -205,6 +208,12 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
   browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/runs${historyQueryString(query)}`, { signal });
+  }
+
+  getHistoryChoices(projectId: string, kind: HistoryChoiceKind, q = "", signal?: AbortSignal): Promise<HistoryChoicesResponse> {
+    if (q.length > 200) return Promise.reject(new ApiError("Search must be at most 200 characters", "invalid_history_search", null));
+    const params = new URLSearchParams({ kind, q, limit: "30" });
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/choices?${params}`, { signal });
   }
 
   browseProjectResults(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryResultPageResponse> {
@@ -495,7 +504,7 @@ export class BatchcraftApiClient implements BatchcraftApi {
 
       if (!response.ok) {
         const envelope = await readErrorEnvelope(response);
-        if (response.status === 404 && !envelope && /\/history\/(runs|results)(\?|$)/.test(path)) {
+        if (response.status === 404 && !envelope && /\/history\/(runs|results|choices)(\?|$)/.test(path)) {
           throw new ApiError(
             "The running backend does not support Gallery and Runs browsing. Restart the backend from the same version as the frontend, then Refresh. Reindexing cannot fix a missing API route.",
             "history_browser_unavailable",
@@ -558,7 +567,7 @@ async function readErrorEnvelope(response: Response): Promise<ApiErrorEnvelope |
 function historyQueryString(query?: HistoryQuery): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query ?? {})) {
-    if (value !== undefined && value !== null) params.set(key, String(value));
+    if (value !== undefined && value !== null) params.set(key, key === "filters" ? JSON.stringify(value) : String(value));
   }
   const encoded = params.toString();
   return encoded ? `?${encoded}` : "";

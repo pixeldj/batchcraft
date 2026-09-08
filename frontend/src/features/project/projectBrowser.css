@@ -131,6 +131,7 @@
   gap: 0.4rem;
   padding: 0.65rem 0 0;
 }
+.pb-provenance-filters { padding-top: 0.75rem; }
 .pb-chips button:not(.button-link) {
   display: flex;
   gap: 0.65rem;

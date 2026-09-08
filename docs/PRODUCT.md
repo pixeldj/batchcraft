@@ -253,10 +253,25 @@ the retired Batch Results session gallery. The Batch editor and current-Run moni
 browsing, preserving editor drafts and a valid in-memory Preview. A compact current-Run strip shows
 the monitored Run's actual Project/Batch. Cold loads still require a fresh Preview; recovery v4 is unchanged.
 
-The selected, verified Project scopes review. URL query state records only the view and basic filters
-(`view`, `q`, `sort`, `run`, `batch`, `status`, `available`) with Back/Forward navigation; a URL cannot
+The selected, verified Project scopes review. URL query state records the view and filters
+(`view`, `q`, `sort`, `run`, `batch`, `status`, `available`, and JSON `filters`) with Back/Forward navigation; a URL cannot
 switch Project. Project changes remain explicit and guarded in Batch. Search matches Run names and notes;
 newest/oldest order, execution status/availability, and removable Run/Batch filter chips are available.
+
+Add filter offers typed parameter Equals/Base workflow/Any override, exact seed, logical Prompt where
+historical ancestry is known, exact Prompt/Workflow/Profile revisions, source Saved Batch, UTC creation
+date bounds, Image Input slot plus Asset or Base workflow, and Asset usage in any slot. Historical
+choices have bounded search over frozen labels and identities, including available revision labels;
+they do not depend on current library records or represent complete facets. Chips can be edited or
+removed. The UI supports one predicate per parameter key/type pair and per Image Input slot, and one
+value per identity field. All filters combine with AND, with Job conditions required to match the same
+Job. OR among multiple values in a dimension is not implemented. Base is not a missing parameter/slot,
+and overrides equal to Base, `false`, `0`, and empty strings retain their meaning.
+
+Invalid advanced filters in a URL explicitly block browsing until cleared, rather than silently
+showing all history. Advanced filters and choices need an enriched historical index; an older index
+still supports basic browsing and offers Reindex Project guidance for provenance queries. Reindexing
+preserves v1 Project files and historical revisions, including revisions larger than SQLite integers.
 
 Gallery holds one page of up to 48 Results; Runs holds up to 25 Runs. Previous/Next navigation retains
 at most 20 previous cursor bookmarks, not an accumulating collection. Gallery offers image-size controls
@@ -276,9 +291,10 @@ Empty views automatically show newly discovered records rather than retaining an
 Storage failures preserve known history with a warning, not a claim of
 confirmed emptiness. Other Projects still require explicit import.
 
-This checkpoint is implemented with automated verification passed and owner UI acceptance pending; BC-007 is not
-Done. Full advanced provenance filters/facets, diagnostic detail browsing, generated thumbnails, and a
-filmstrip remain deferred to later checkpoints.
+The visual and typed-provenance checkpoints have reported automated verification; final owner acceptance
+of BC-007 remains pending and it is not Done. Filter-from-Details actions, additional Run/Job sorts,
+logical Workflow/Profile and hash filters, multi-value OR and complete facets, diagnostic detail browsing,
+generated thumbnails, filmstrip, and performance measurement remain for later checkpoints.
 
 The Results Viewer should eventually support:
 

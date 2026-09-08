@@ -519,6 +519,7 @@ function history(
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
+    getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
     listProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, runs: [], diagnostics: [] })),
     reindexProject: vi.fn(async (id: string) => importResponse(id)),
     getResults: vi.fn(async (runId: string) => ({ run_id: runId, results: [] })),

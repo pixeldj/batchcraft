@@ -1139,6 +1139,7 @@ function props(api: BatchcraftApi): ProjectBrowserProps {
 }
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
+    getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
     browseProjectResults: vi.fn(async () => page([item("original")])),
     browseProjectRuns: vi.fn(async () => ({
       ...page([]),

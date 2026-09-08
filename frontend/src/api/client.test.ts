@@ -10,6 +10,56 @@ describe("BatchcraftApiClient", () => {
     vi.unstubAllEnvs();
   });
 
+  it("encodes historical choice searches literally and forwards cancellation", async () => {
+    const response = { project_id: "p /?", generation: "g", items: [], has_more: false };
+    const fetchMock = successfulFetch(response);
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await expect(new BatchcraftApiClient().getHistoryChoices("p /?", "parameter", "a &%_+?", controller.signal)).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects/p%20%2F%3F/history/choices?kind=parameter&q=a+%26%25_%2B%3F&limit=30", { signal: controller.signal });
+  });
+
+  it("rejects oversized choice searches without fetching", async () => {
+    const fetchMock = successfulFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new BatchcraftApiClient().getHistoryChoices("p", "asset", "x".repeat(201))).rejects.toMatchObject({ code: "invalid_history_search" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves AbortError for historical choices", async () => {
+    const error = new DOMException("Aborted", "AbortError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
+    await expect(new BatchcraftApiClient().getHistoryChoices("p", "prompt")).rejects.toBe(error);
+  });
+
+  it("explains an older backend's missing choices route", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })));
+    await expect(new BatchcraftApiClient().getHistoryChoices("p", "asset")).rejects.toMatchObject({ status: 404, message: expect.stringContaining("Restart the backend") });
+  });
+
+  it.each(["runs", "results"] as const)("serializes advanced %s filters as typed JSON without mutating the query", async (kind) => {
+    const fetchMock = successfulFetch({ items: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    const query: HistoryQuery = {
+      q: "a & b", run_id: "r", execution_available: false, limit: 25,
+      filters: { seed: 0, prompt_id: "prompt/?", parameters: [
+        { key: "text", value_type: "string", mode: "equals", value: "" },
+        { key: "flag", value_type: "boolean", mode: "equals", value: false },
+        { key: "count", value_type: "integer", mode: "equals", value: 0 },
+        { key: "scale", value_type: "float", mode: "equals", value: 1.5 },
+        { key: "base", value_type: "string", mode: "base" },
+      ], image_inputs: [{ slot_key: "ref", mode: "base" }] },
+    };
+    const before = structuredClone(query);
+    const client = new BatchcraftApiClient();
+    await (kind === "runs" ? client.browseProjectRuns("p", query) : client.browseProjectResults("p", query));
+    const params = new URL(String(fetchMock.mock.calls[0][0]), "http://test").searchParams;
+    expect(JSON.parse(params.get("filters")!)).toEqual(query.filters);
+    expect(params.get("execution_available")).toBe("false");
+    expect(params.get("q")).toBe("a & b");
+    expect(query).toEqual(before);
+  });
+
   it.each(["runs", "results"] as const)("explains a missing %s browsing route on an older backend", async (kind) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })));
     const client = new BatchcraftApiClient();

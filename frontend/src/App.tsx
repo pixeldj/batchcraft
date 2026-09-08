@@ -1170,11 +1170,17 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             requestAnimationFrame(() => document.getElementById("current-run-workspace")?.scrollIntoView({ block: "start" }));
           }}
         />
+        {navigation.filterError && navigation.view !== "batch" ? (
+          <div className="operation-error" role="alert">
+            <p>{navigation.filterError}</p>
+            <button type="button" className="button-secondary" onClick={() => navigation.changeQuery({ ...navigation.query, filters: null }, true)}>Clear invalid filters</button>
+          </div>
+        ) : null}
         <ProjectBrowser
           api={api}
           projectId={projectVerified ? selectedProjectId : null}
           projectName={form.projectName}
-          active={navigation.view !== "batch"}
+          active={navigation.view !== "batch" && !navigation.filterError}
           view={navigation.view === "runs" ? "runs" : "gallery"}
           query={navigation.query}
           onQueryChange={navigation.changeQuery}

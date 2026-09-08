@@ -629,6 +629,7 @@ function libraryPrompt(
 
 function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
   return {
+    getHistoryChoices: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, items: [], has_more: false })),
     browseProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     browseProjectResults: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     getComfyUIStatus: vi.fn(async () => ({ reachable: true, version: null, devices: [], diagnostic: null })),

@@ -476,9 +476,9 @@ Result, and diagnostic projections plus explicit Project reindexing. The origina
 every indexed Run grouped by Batch, loaded its Results without browser-held Run IDs, preserved the image
 gallery, lightbox, Run Plan, and Result Details, ordered Runs newest-first, and isolated invalid or degraded history.
 The original unpaginated API remains for backward compatibility; the visual checkpoint below replaces
-that UI with bounded Gallery/Runs pages and newest/oldest sorting. Advanced
-parameter, seed, Prompt, Workflow/Profile, date, Image Input, Asset, and future starred-result filters
-remain unimplemented.
+that UI with bounded Gallery/Runs pages and newest/oldest sorting. The later typed-provenance checkpoint
+below adds parameter, seed, Prompt, exact Workflow/Profile revision, date, Image Input, and Asset
+filters. Future starred-result filtering remains dependent on BC-015.
 
 Results UI cleanup is complete: thumbnail Job/Verified labels moved to detail inspection, and the
 Batch Results gallery, accumulated state, and restoration requests were removed. Current Results,
@@ -535,7 +535,7 @@ and the current-Run monitor remain mounted, preserving local drafts and valid in
 compact monitor exposes the frozen Run's actual Project/Batch. Cold loads still invalidate Preview and
 working-session recovery v4 is unchanged.
 
-- URL query state uses only `view`, `q`, `sort`, `run`, `batch`, `status`, and `available` for review
+- At the visual checkpoint, URL query state used `view`, `q`, `sort`, `run`, `batch`, `status`, and `available` for review
   mode/filters and Back/Forward. URLs never switch Project; verified guarded selection stays in Batch.
 - Each view holds a bounded page of 48 Results or 25 Runs, with Previous/Next and at most 20 previous
   cursor bookmarks. At most two pages retain Gallery/Runs positions across view changes. Frozen-Run
@@ -563,9 +563,9 @@ twelve desktop/mobile browser tests in each of Vite and built same-origin modes.
 real paginated metadata, checks correct cross-Run Details, navigation and Preview retention, polling
 while reviewing, URL Back/Forward and reload, historical reuse, palettes, and a 320px layout. Desktop
 and mobile screenshots were reviewed. The owner has given positive feedback on this checkpoint;
-final BC-007 acceptance remains pending. Full advanced provenance filters/facets, bounded
-diagnostic detail browsing, generated thumbnails, and filmstrip remain upcoming. BC-007 stays In Progress,
-not Done; the linked plan records the remaining checkpoints.
+final BC-007 acceptance remains pending. Typed provenance filtering has since advanced as recorded below;
+complete facets, bounded diagnostic detail browsing, generated thumbnails, and filmstrip remain upcoming.
+BC-007 stays In Progress, not Done; the linked plan records the remaining checkpoints.
 
 Imported-history visibility follow-up: the development frontend can hot-reload ahead of the Python
 backend. Missing browsing routes now report an actionable backend-restart message rather than a generic
@@ -576,6 +576,43 @@ checks both Gallery and Runs for empty-page recovery and explicit repair behavio
 Verification: 515 frontend tests, lint/typecheck/build, and four focused desktop/mobile history and
 execution browser checks in each of Vite and built modes passed. The restarted fake-backed development
 instance displayed the imported Project's six Runs and 48 decoded images on its first Gallery page.
+
+Typed-provenance checkpoint: `history_filters`, `history_choices`, migration `0004_history_provenance`,
+and frontend `HistoryFilters` now extend the bounded browser without changing architecture or v1 formats.
+
+- Strict JSON `filters` is bounded to 16,384 characters, 8 parameter predicates, and 4 Image Input
+  predicates. It validates declared types, finite numbers, safe integers, seed `0..2^53-1`, and UTC
+  inclusive-from/exclusive-before creation dates; unknown fields and duplicate JSON object keys fail.
+- Implemented filters cover parameter Equals/Base/Any override, seed, logical Prompt where frozen
+  ancestry exists, exact Prompt/Workflow/Profile revisions, source Saved Batch, Image Input slot plus
+  Asset/Base, and Asset use in any slot. All predicates combine with same-Job AND; Result predicates
+  match the Result's own Job. Missing fields are not Base, and `false`, `0`, empty strings, declared
+  types, and overrides equal to a Base literal retain their meaning.
+- `/history/choices` provides bounded historical label/identity search with available revision labels,
+  not mutable-library lookups or complete conditioned facets. `q` is at most 200 characters, limit is
+  1-50 (default 30), labels/details are clipped to 256 characters, and `has_more` asks for narrower search.
+- Enrichment is generation-bound and published atomically by successful reconciliation. Nonempty
+  advanced filters and choices return `409 history_reindex_required` before enrichment; basic browsing
+  on old indexes still works. Failed scans retain prior state, and GETs never scan or repair storage.
+  Migration 0004 preserves applied 0001-0003 bytes and valid v1 files; frozen revision metadata uses
+  decimal TEXT to preserve values beyond SQLite's signed-64-bit range.
+- Add filter opens typed native-dialog controls with historical choices and editable/removable chips.
+  The UI supports one predicate per parameter key/type pair or Image Input slot and one value per
+  identity field, not multi-value OR. URL JSON `filters` supports Back/Forward; invalid advanced URL
+  intent explicitly blocks browsing until cleared. Draft/Preview, guarded Project selection, and
+  recovery v4 remain unchanged.
+
+Verification passed: 1,326 backend tests, Ruff lint/format, mypy, and package build; 618 frontend tests,
+lint/typecheck and production build; and 14 real-API desktop/mobile tests in each of Vite and built
+same-origin modes. The new browser coverage exercises typed Base/override and same-Job seed matching,
+filter editing/removal, URL restoration, and draft retention. Reviewed 320px screenshots exposed a header
+overlap, fixed with a separate tools row and a bounding-box regression. Pagination checks now await the
+refreshed page before capturing its identity rather than capturing deliberately retained stale content.
+
+Remaining scope: filter-from-Details actions, additional deterministic Run/Job sorts, logical
+Workflow/Profile and hash filters, planned OR within a dimension and complete facets, bounded diagnostic
+detail browsing, generated thumbnails, filmstrip, and performance measurement/polish. Final owner
+acceptance remains pending. BC-007 remains In Progress, not Done; no architecture change or new ADR is required.
 
 ### BC-008: Video and generic file input slots
 

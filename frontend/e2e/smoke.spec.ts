@@ -9,6 +9,7 @@ import type {
   SavedBatchDetail,
   RunCreatedResponse,
   ExecutionResponse,
+  PreviewResponse,
 } from "../src/api/types";
 
 const apiUrl = "http://127.0.0.1:8002";
@@ -19,7 +20,7 @@ async function post<T>(request: APIRequestContext, path: string, data: unknown):
   return await response.json() as T;
 }
 
-async function seed(request: APIRequestContext, subject = "mountain") {
+async function seed(request: APIRequestContext, subject = "mountain", provenance = false) {
   const suffix = randomUUID().slice(0, 8);
   const project = await post<ProjectResponse>(request, "/api/projects", {
     name: `Browser ${suffix}`, filesystem_key: `browser_${suffix}`,
@@ -54,14 +55,16 @@ async function seed(request: APIRequestContext, subject = "mountain") {
       prompt_version_id: prompt.version.id,
       name_snapshot: prompt.version.name_snapshot, text: prompt.version.text,
     }],
-    variable_bindings: [{ placeholder: "subject", values: [subject, "river"] }],
+    variable_bindings: [{ placeholder: "subject", values: provenance ? [subject] : [subject, "river"] }],
     image_bindings: [],
     parameter_bindings: [
-      { parameter_key: "steps", mode: "values", values: [null] },
+      { parameter_key: "steps", mode: "values", values: provenance ? [null, 20] : [null] },
       { parameter_key: "cfg", mode: "values", values: [null] },
     ],
     linked_parameter_sets: [],
-    seed_intent: { mode: "fixed", values: [42], random_seed_count: null },
+    seed_intent: provenance
+      ? { mode: "random", values: [], random_seed_count: 1 }
+      : { mode: "fixed", values: [42], random_seed_count: null },
     selected_workflow_version: {
       id: workflow.version.id, content_sha256: workflow.version.content_sha256,
       workflow: workflow.version.workflow,
@@ -75,6 +78,152 @@ async function seed(request: APIRequestContext, subject = "mountain") {
   });
   return { project, batch };
 }
+
+test("real API: typed HistoryFilters distinguish Base and override on the same Job and roundtrip without changing draft", async ({ page, request }, testInfo) => {
+  const { project, batch } = await seed(request, "mountain", true);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByLabel("Active Project").selectOption(project.id);
+  await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
+  await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  const previewResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/batches/preview");
+  await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  const preview = await (await previewResponse).json() as PreviewResponse;
+  expect(preview.job_count).toBe(2);
+  const base = preview.jobs.find((job) => job.resolved_parameters.find((p) => p.parameter_key === "steps")?.value === null)!;
+  const override = preview.jobs.find((job) => job.resolved_parameters.find((p) => p.parameter_key === "steps")?.value === 20)!;
+  expect(base.seed).not.toBe(override.seed);
+  await page.getByLabel(/^Run Name/).fill("Base and equal override");
+  await page.getByRole("button", { name: "Create Run", exact: true }).click();
+  await page.getByRole("button", { name: "Start Run", exact: true }).click();
+  await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
+
+  // This unsaved authoring change must survive review navigation and cold reload.
+  await page.getByRole("group", { name: "Seeds", exact: true }).getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("combobox", { name: "Seed mode", exact: true }).selectOption("fixed");
+  await page.getByRole("spinbutton", { name: /^Seed / }).fill("987654");
+  await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Create (Another )?Run$/ })).toBeEnabled();
+  await page.getByLabel(/^Run Name/).fill("Unpublished draft - keep me");
+  const nav = page.getByRole("navigation", { name: "Workspace" });
+  const browser = page.getByRole("region", { name: "Project browser" });
+  const dialog = page.getByRole("dialog", { name: "Find the exact experiment", exact: true });
+  const add = browser.getByRole("button", { name: "+ Add filter", exact: true });
+  const parameterChip = browser.getByRole("button", { name: /^Edit .*\(integer\):/ });
+  const filters = () => JSON.parse(new URL(page.url()).searchParams.get("filters") ?? "{}");
+  await nav.getByRole("button", { name: "Gallery", exact: true }).click();
+  await expect(browser.locator(".pb-result")).toHaveCount(2);
+  await expect(browser.locator(".pb-image-button img").first()).toHaveJSProperty("naturalWidth", 384);
+  await add.click();
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await dialog.getByLabel("Search historical choices").fill("Steps");
+  await dialog.getByRole("radio", { name: /^Steps integer/ }).check();
+  await dialog.getByLabel("Match mode").selectOption("base");
+  await dialog.getByRole("button", { name: "Apply filter", exact: true }).click();
+  await expect(browser.locator(".pb-result")).toHaveCount(1);
+  const baseIdentity = await browser.locator(".pb-result").getAttribute("data-result-identity");
+  expect(filters()).toEqual({ parameters: [{ key: "steps", value_type: "integer", mode: "base" }] });
+  await add.click();
+  await dialog.getByRole("radio", { name: "Seed", exact: true }).check();
+  await dialog.getByLabel("Exact seed").fill(String(override.seed));
+  await dialog.getByRole("button", { name: "Apply filter", exact: true }).click();
+  await expect(browser.locator(".pb-result")).toHaveCount(0);
+  await expect(browser.getByRole("heading", { name: "No matches in this view.", exact: true })).toBeVisible();
+  await nav.getByRole("button", { name: "Runs", exact: true }).click();
+  // Both conditions exist in this Run, but on different Jobs: it must not match.
+  await expect(browser.locator(".pb-run")).toHaveCount(0);
+  await expect(browser.getByRole("heading", { name: "No matches in this view.", exact: true })).toBeVisible();
+  await parameterChip.click();
+  await dialog.getByLabel("Match mode").selectOption("override");
+  await dialog.getByRole("button", { name: "Apply filter", exact: true }).click();
+  await expect(browser.locator(".pb-run")).toHaveCount(1);
+  await expect(browser.locator(".pb-run")).toContainText("Base and equal override");
+  await nav.getByRole("button", { name: "Gallery", exact: true }).click();
+  await expect(browser.locator(".pb-result")).toHaveCount(1);
+  await expect(browser.locator(".pb-result")).not.toHaveAttribute("data-result-identity", baseIdentity!);
+  const overrideUrl = page.url();
+  await parameterChip.click();
+  await dialog.getByLabel("Match mode").selectOption("equals");
+  await dialog.getByLabel("Exact value").fill("20");
+  await dialog.getByRole("button", { name: "Apply filter", exact: true }).click();
+  await expect(browser.locator(".pb-result")).toHaveCount(1);
+  expect(filters()).toEqual({ seed: override.seed, parameters: [{ key: "steps", value_type: "integer", mode: "equals", value: 20 }] });
+  const exactUrl = page.url();
+  await page.goBack();
+  await expect(page).toHaveURL(overrideUrl);
+  await expect(parameterChip).toContainText("Any override");
+  await page.goForward();
+  await expect(page).toHaveURL(exactUrl);
+  await expect(parameterChip).toContainText("20");
+  await nav.getByRole("button", { name: "Batch", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: /^Seed / })).toHaveValue("987654");
+  await expect(page.getByLabel(/^Run Name/)).toHaveValue("Unpublished draft - keep me");
+  await expect(page.getByRole("button", { name: /^Create (Another )?Run$/ })).toBeEnabled();
+  await nav.getByRole("button", { name: "Gallery", exact: true }).click();
+  await expect(page).toHaveURL((url) => url.searchParams.get("view") === "gallery"
+    && url.searchParams.get("filters") === new URL(exactUrl).searchParams.get("filters"));
+  await page.reload();
+  await expect(browser.locator(".pb-result")).toHaveCount(1);
+  expect(filters()).toEqual({ seed: override.seed, parameters: [{ key: "steps", value_type: "integer", mode: "equals", value: 20 }] });
+
+  await page.setViewportSize({ width: 320, height: 720 });
+  const brandBounds = await page.locator(".app-header .brand-block").boundingBox();
+  const toolsBounds = await page.locator(".app-header .header-tools").boundingBox();
+  expect(brandBounds).not.toBeNull();
+  expect(toolsBounds).not.toBeNull();
+  expect(toolsBounds!.y, "Header tools must occupy a separate row below the brand at 320px")
+    .toBeGreaterThanOrEqual(brandBounds!.y + brandBounds!.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("history-filters-active-320.png"), scale: "css", fullPage: true });
+  await parameterChip.click();
+  await expect(dialog.getByLabel("Exact value")).toHaveValue("20");
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await dialog.getByRole("button", { name: "Apply filter", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  // Chromium may visit browser chrome before wrapping a native modal's tab order.
+  if (await page.evaluate(() => !document.hasFocus() && document.activeElement === document.body)) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  if (await page.evaluate(() => !document.hasFocus() && document.activeElement === document.body)) {
+    await page.keyboard.press("Shift+Tab");
+  }
+  await expect(dialog.getByRole("button", { name: "Apply filter", exact: true })).toBeFocused();
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const bounds = await dialog.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+  await page.screenshot({ path: testInfo.outputPath("history-filter-dialog-320.png"), scale: "css" });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(parameterChip).toBeFocused();
+  await browser.getByRole("button", { name: `Edit Seed: ${override.seed}`, exact: true }).click();
+  await dialog.getByLabel("Exact seed").fill(String(base.seed));
+  await dialog.getByLabel("Exact seed").press("Enter");
+  // Equals 20 is an explicit override, not the Base workflow's literal 20.
+  await expect(browser.locator(".pb-result")).toHaveCount(0);
+  await expect(browser.getByRole("heading", { name: "No matches in this view.", exact: true })).toBeVisible();
+  await browser.getByRole("button", { name: /^Remove .*\(integer\):/ }).click();
+  expect(filters()).toEqual({ seed: base.seed });
+  await expect(browser.locator(".pb-result")).toHaveCount(1);
+  await expect(browser.locator(".pb-result")).toHaveAttribute("data-result-identity", baseIdentity!);
+  await nav.getByRole("button", { name: "Runs", exact: true }).click();
+  await expect(browser.locator(".pb-run")).toHaveCount(1);
+  await browser.getByRole("button", { name: `Remove Seed: ${base.seed}`, exact: true }).click();
+  expect(new URL(page.url()).searchParams.has("filters")).toBe(false);
+  await nav.getByRole("button", { name: "Gallery", exact: true }).click();
+  await expect(browser.locator(".pb-result")).toHaveCount(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("history-filters-gallery-320.png"), scale: "css", fullPage: true });
+  await nav.getByRole("button", { name: "Batch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
+  await page.getByRole("group", { name: "Seeds", exact: true }).getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: /^Seed / })).toHaveValue("987654");
+  await expect(page.getByRole("button", { name: /^Create (Another )?Run$/ })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
 
 test("real API: Preview, execution, images, closed-tab recovery, historical reuse", async ({ page, context, request }, testInfo) => {
   const errors: string[] = [];
@@ -218,7 +367,10 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
   await nav.getByRole("button", { name: "Gallery", exact: true }).click();
   await expect(browser.getByText("Checking Project history...", { exact: true })).toHaveCount(0);
   await browser.getByRole("button", { name: "Refresh", exact: true }).click();
+  // Refresh retains the old two-card page while reading; its count is not readiness.
+  await expect(browser.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
   await expect(browser.locator(".pb-result")).toHaveCount(2);
+  await expect(browser.locator(".pb-result strong")).toHaveText(["Blue hour", "Blue hour"]);
   const firstIdentity = await browser.locator(".pb-result").first().getAttribute("data-result-identity");
   await expect(browser.locator(".pb-image-button img").first()).toHaveJSProperty("naturalWidth", 384);
   await browser.getByLabel("Image size").selectOption("spacious");
@@ -226,6 +378,7 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
   await page.screenshot({ path: testInfo.outputPath("project-gallery.png"), scale: "css", fullPage: true });
   await browser.getByRole("button", { name: "Next page", exact: true }).click();
   await expect(browser.getByText("Page 2", { exact: true })).toBeVisible();
+  await expect(browser.locator(".pb-result strong")).toHaveText(["Amber valley", "Amber valley"]);
   await expect(browser.locator(".pb-result").first()).not.toHaveAttribute("data-result-identity", firstIdentity!);
   await browser.locator(".pb-image-button").first().click();
   const viewer = page.getByRole("dialog", { name: "Project Result image", exact: true });

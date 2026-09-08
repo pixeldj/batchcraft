@@ -162,6 +162,7 @@ POST /api/projects/{project_id}/reindex
 GET  /api/projects/{project_id}/runs
 GET  /api/projects/{project_id}/history/runs
 GET  /api/projects/{project_id}/history/results
+GET  /api/projects/{project_id}/history/choices
 PATCH /api/projects/{project_id}
 POST /api/projects/{project_id}/archive
 GET  /api/projects/{project_id}/prompts
@@ -462,7 +463,7 @@ mutable Prompt, Workflow, Profile, or Saved Batch rows.
 
 ### Bounded historical browsing (BC-007)
 
-The BC-007 query foundation supplies the implemented Gallery/Runs visual checkpoint:
+The BC-007 browser supplies bounded Gallery/Runs pages with typed provenance filters:
 
 - `GET /api/projects/{project_id}/history/runs`
 - `GET /api/projects/{project_id}/history/results`
@@ -477,11 +478,13 @@ for the selected Run only, alongside its frozen Run detail, to match Job/artifac
 The UI requests 48 Results or 25 Runs per page, replaces rather than appends pages, retains at most 20
 previous cursor bookmarks, and caps its frozen-Run detail cache at 20 entries. Images are lazy-loaded,
 asynchronously decoded originals, not generated thumbnails. UI URL keys `view`, `q`, `sort`, `run`,
-`batch`, `status`, and `available` encode mode/basic filters only; identity/status keys map to the API
-parameters below. URL navigation never selects a Project or persists a cursor. The selected verified
-Project and existing guarded Project switching remain authoritative. Full advanced filters/facets,
-diagnostic detail browsing, thumbnails, and filmstrip are not part of this implemented checkpoint;
-automated verification has passed and owner UI acceptance remains pending (see BC-007 for evidence).
+`batch`, `status`, `available`, and JSON `filters` encode review mode and filters; identity/status keys
+map to the API parameters below. Add filter opens typed controls with editable/removable chips.
+Invalid advanced URL filters show an explicit error and block browsing until cleared rather than
+silently showing an unfiltered collection. URL navigation never selects a Project or persists a cursor.
+The selected verified Project and existing guarded Project switching remain authoritative. Complete
+facets, filter-from-Details actions, additional Run/Job sorts, diagnostic detail browsing, thumbnails,
+and filmstrip remain unfinished; BC-007 is In Progress (see its entry for checkpoint evidence).
 
 Common query parameters:
 
@@ -494,12 +497,63 @@ Common query parameters:
 | `run_id`, `batch_id` | Optional exact historical identities, not mutable names |
 | `execution_status` | `created`, `running`, `succeeded`, `failed`, `blocked`, or `cancelled` |
 | `execution_available` | Optional boolean; distinct from execution status |
+| `filters` | Optional JSON object, at most 16,384 characters; typed provenance predicates below |
 
 Filters combine with AND. Text search uses SQLite's ASCII case folding; `%`, `_`, and quotes are literal
 text, not wildcards or query syntax. Empty `q` means no text filter. Unknown query parameters, invalid
-limits/sorts/statuses, and malformed cursors are rejected. Provenance facets, date intervals, alternate
-Run/Job sorts, typed parameter/seed/Prompt/Workflow/Profile/Asset filters, and paginated diagnostics are
-not yet exposed.
+limits/sorts/statuses, and malformed cursors are rejected.
+
+`filters` accepts only these fields; unknown fields, duplicate JSON object keys, malformed shapes, and
+invalid typed values are rejected with `422 invalid_history_query` (query-schema bounds also return 422):
+
+| Field | Contract |
+| --- | --- |
+| `prompt_id`, `prompt_version_id` | Exact logical Prompt identity where frozen ancestry exists, or exact PromptVersion identity |
+| `workflow_version_id`, `profile_version_id`, `saved_batch_id` | Exact frozen WorkflowVersion, ProfileVersion, or source Saved Batch identity |
+| `asset_id` | Exact Asset used by the Job in any Image Input slot |
+| `seed` | JSON integer in `0..9007199254740991`; no string or boolean coercion |
+| `created_from`, `created_before` | Valid bounded ISO date/timestamp strings; inclusive lower and exclusive upper Run-creation bounds, compared in UTC; lower must precede upper |
+| `parameters` | At most 8 objects: `key`, `value_type`, `mode`, and `value` only for `equals` |
+| `image_inputs` | At most 4 objects: `slot_key`, `mode` (`base` or `asset`), and `asset_id` only for `asset` |
+
+Identity fields are nonempty strings; parameter/slot keys follow the stable-key grammar. Parameter
+`value_type` is `string`, `integer`, `float`, or `boolean`; `mode` is `equals`, `base`, or `override`
+(Any override). Equals requires the declared scalar type: integers have absolute value at most
+`9007199254740991`, floats accept finite JSON numbers, booleans do not count as numbers, and empty
+strings are concrete values. Base/override modes must omit `value`. Image Asset mode requires a
+nonblank Asset ID. Date-only and offset-free timestamps mean UTC, not browser local time; an upper
+date excludes that day. Unknown historical dates do not match date bounds.
+
+Every predicate combines with AND. Run browsing requires one Job satisfying all Job predicates;
+Result browsing requires the Result's own Job to satisfy them. Parameters, seed, Prompt, Image Inputs,
+and Asset usage cannot be satisfied by different Jobs in the same Run. A missing parameter/slot is not
+Base; an override equal to the workflow's Base literal remains an override. `false`, `0`, and `""`
+remain distinct typed overrides. The UI permits one predicate per parameter key/type pair and one per
+Image Input slot, with one value per identity field. API array predicates also use AND, not OR.
+Multi-value OR within a dimension is planned, not implemented. Logical Workflow/Profile and hash
+filters are not exposed; exact revision filters do not imply those broader capabilities.
+
+`GET /api/projects/{project_id}/history/choices` supplies bounded historical selection lists, not
+complete or active-filter-conditioned facets. Required `kind` is `parameter`, `prompt`, `prompt_version`,
+`workflow_version`, `profile_version`, `saved_batch`, `batch`, `image_slot`, or `asset`. Optional `q`
+is at most 200 characters and performs literal Unicode-casefolded substring search over historical
+display labels (including available revision suffixes) and identities. `limit` is 1-50, default 30.
+The response contains `project_id`, `generation`, `items`, and `has_more`; items contain exact `value`,
+`label`, nullable `value_type`, and nullable `detail`. Labels/details are clipped to 256 characters;
+identities are not clipped. Choices group by identity/type and sort deterministically by folded label
+and identity/type. They have no continuation cursor or facet counts: narrow `q` when `has_more` is true.
+The UI debounces choice search, displays at most 30 choices, and retains bounded historical labels for
+chips. Names, revisions, parameter types, slots, and Asset filenames come from historical projections,
+not today's mutable libraries; unavailable labels fall back to identities where applicable.
+
+Migration `0004_history_provenance` adds typed parameter rows, frozen Prompt/Run provenance, and a
+generation-bound enrichment marker. Nonempty advanced filters and all choices require enrichment for
+the current projection generation; otherwise they return `409 history_reindex_required`, not an
+authoritative empty collection. Successful import/reindex atomically publishes enrichment and generation;
+failure preserves the prior index. Basic browsing still works on old unenriched indexes. These GETs
+never scan or repair storage. Frozen revision metadata is stored as decimal TEXT because valid v1
+revisions can exceed SQLite's signed-64-bit integer range. Applied migrations 0001-0003 and v1 Project
+bytes remain unchanged; this is a rebuildable index extension, not a durable-format change.
 
 Pages contain `project_id`, nullable `generation` and `scanned_at`, `items`, `next_cursor`, and `has_more`.
 Run items contain `run` plus projected `result_count`. Result items contain compact `run` context,

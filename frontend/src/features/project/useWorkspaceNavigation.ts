@@ -1,15 +1,31 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { HistoryQuery, RunStatus } from "../../api/types";
+import type { HistoryProvenanceFilters, HistoryQuery, RunStatus } from "../../api/types";
+import { validateHistoryFilters } from "./HistoryFilters";
 
 export type WorkspaceView = "batch" | "gallery" | "runs";
 const statuses = new Set<RunStatus>(["created", "running", "succeeded", "failed", "blocked", "cancelled"]);
 
-function readLocation(): { view: WorkspaceView; query: HistoryQuery } {
+function readLocation(): { view: WorkspaceView; query: HistoryQuery; filterError: string | null } {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get("view");
   const status = params.get("status") as RunStatus | null;
+  let filters: HistoryProvenanceFilters | undefined;
+  let filterError: string | null = null;
+  const raw = params.get("filters");
+  if (raw !== null) {
+    try {
+      if (raw.length > 16384) throw new Error("History filters exceed the supported size.");
+      const parsed: unknown = JSON.parse(raw);
+      const error = validateHistoryFilters(parsed);
+      if (error) throw new Error(error);
+      filters = parsed as HistoryProvenanceFilters;
+    } catch {
+      filterError = "The history filters in this link are invalid. Clear them to browse this Project.";
+    }
+  }
   return {
+    filterError,
     view: requested === "gallery" || requested === "runs" ? requested : "batch",
     query: {
       q: (params.get("q") ?? "").slice(0, 200),
@@ -18,6 +34,7 @@ function readLocation(): { view: WorkspaceView; query: HistoryQuery } {
       batch_id: params.get("batch") || undefined,
       execution_status: status && statuses.has(status) ? status : undefined,
       execution_available: params.get("available") === "true" ? true : params.get("available") === "false" ? false : undefined,
+      ...(filters ? { filters } : {}),
     },
   };
 }
@@ -102,11 +119,12 @@ export function useWorkspaceNavigation() {
 }
 
 function writeQuery(url: URL, query: HistoryQuery) {
-  for (const key of ["q", "sort", "run", "batch", "status", "available"]) url.searchParams.delete(key);
+  for (const key of ["q", "sort", "run", "batch", "status", "available", "filters"]) url.searchParams.delete(key);
   if (query.q) url.searchParams.set("q", query.q.slice(0, 200));
   if (query.sort === "oldest") url.searchParams.set("sort", query.sort);
   if (query.run_id) url.searchParams.set("run", query.run_id);
   if (query.batch_id) url.searchParams.set("batch", query.batch_id);
   if (query.execution_status) url.searchParams.set("status", query.execution_status);
   if (query.execution_available != null) url.searchParams.set("available", String(query.execution_available));
+  if (query.filters && Object.keys(query.filters).length) url.searchParams.set("filters", JSON.stringify(query.filters));
 }

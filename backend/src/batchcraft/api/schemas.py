@@ -526,7 +526,38 @@ class ProjectRunsResponse(ApiModel):
     diagnostics: list[HistoryDiagnosticResponse]
 
 
+class HistoryChoiceQueryParameters(ApiModel):
+    kind: Literal[
+        "parameter",
+        "prompt",
+        "prompt_version",
+        "workflow_version",
+        "profile_version",
+        "saved_batch",
+        "batch",
+        "image_slot",
+        "asset",
+    ]
+    q: str = Field(default="", max_length=200)
+    limit: int = Field(default=30, ge=1, le=50)
+
+
+class HistoryChoiceResponse(ApiModel):
+    value: str
+    label: str
+    value_type: Literal["string", "integer", "float", "boolean"] | None = None
+    detail: str | None = None
+
+
+class HistoryChoicesResponse(ApiModel):
+    project_id: str
+    generation: str | None
+    items: list[HistoryChoiceResponse]
+    has_more: bool
+
+
 class HistoryQueryParameters(ApiModel):
+    filters: str | None = Field(default=None, max_length=16384)
     limit: int = Field(default=50, ge=1, le=100)
     cursor: str | None = Field(default=None, max_length=8192)
     sort: Literal["newest", "oldest"] = "newest"
