@@ -767,9 +767,12 @@ blocked outcome. A discarded Run projects `cancelled` with `requested_at: null`.
 lost, the blocked filesystem diagnostic remains inspectable but does not manufacture a cancellation
 request object.
 
-Every execution response also includes ephemeral `execution_task_active`. This is `true` only while
-the current API process owns a live execution task for that Run. It is not persisted and is not evidence
-about whether a previously submitted remote ComfyUI Job is still running.
+Every execution response also includes ephemeral `execution_task_active`. Run-detail and execution
+reads sample process-local task ownership before reading persisted state and retain `true` if the task
+finishes during the read. If initially inactive, they check again after the read to observe a concurrent
+start. The conservative flag can briefly outlive task completion so a pre-terminal snapshot does not
+incorrectly stop browser polling. It is not persisted and is not evidence about whether a previously
+submitted remote ComfyUI Job is still running.
 
 An execution request is accepted only when `execution.json` does not yet exist. A cancelled Run cannot execute. The API does not resume, retry, or reconcile partial, blocked, failed, or succeeded Runs. A process restart loses only the in-memory task reference; persisted nonterminal state remains visible and requires a future explicit recovery mechanism. Creating another Run remains independent and freezes a new plan without changing the earlier Run.
 

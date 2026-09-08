@@ -1076,9 +1076,12 @@ def create_app(
     ) -> Response:
         async with bulk_reads.claim():
             run = await file_operation(lambda: service.get_historical_run(run_id))
+            # Completion publishes state before releasing task ownership. Keep a
+            # conservative active flag if the task finishes during these reads.
+            active = service.execution_task_active(run_id)
             state = await file_operation(lambda: service.get_historical_execution_state(run))
             cancellation = await file_operation(lambda: service.get_run_cancellation(state))
-            active = service.execution_task_active(run_id)
+            active = active or service.execution_task_active(run_id)
 
             def serialize() -> Response:
                 model = RunResponse.from_run_and_state(
@@ -1207,9 +1210,12 @@ def create_app(
     ) -> Response:
         async with execution_reads.claim():
             run = await file_operation(lambda: service.get_historical_run(run_id))
+            # Sample before state so completion cannot strand a pre-terminal
+            # snapshot; the second sample also observes a concurrent start.
+            active = service.execution_task_active(run_id)
             state = await file_operation(lambda: service.get_historical_execution_state(run))
             cancellation = await file_operation(lambda: service.get_run_cancellation(state))
-            active = service.execution_task_active(run_id)
+            active = active or service.execution_task_active(run_id)
 
             def serialize() -> Response:
                 model = ExecutionResponse.from_state(

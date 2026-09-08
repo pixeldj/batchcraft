@@ -97,6 +97,7 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   await page.getByLabel("Active Project").selectOption(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
   const previewResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/batches/preview");
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
   const preview = await (await previewResponse).json() as PreviewResponse;
@@ -504,6 +505,7 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
   await page.getByLabel("Active Project").selectOption(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
   const nav = page.getByRole("navigation", { name: "Workspace" });
   const browser = page.getByRole("region", { name: "Project browser" });
   for (const name of ["Amber valley", "Blue hour"]) {
