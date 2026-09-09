@@ -483,6 +483,12 @@ uv run mypy
 
 pytest covers behavior, Ruff owns formatting and linting, and mypy checks the typed domain boundary. Add another tool only when it covers a distinct need.
 
+The API tests' `_wait_for_status` uses a configurable 10-second functional completion budget,
+not a two-second disk-performance requirement: multi-Job Result ingestion includes durable file and
+directory syncs. It retains exact expected-status checks, fails early on unexpected terminal states,
+and reports elapsed time and the last response (including task ownership and Jobs) on failure.
+Tests of timing or responsiveness must keep explicit deadlines; this helper budget is not an API SLA.
+
 ### Distribution notice checks
 
 From the checkout root, after installing locked development dependencies:
