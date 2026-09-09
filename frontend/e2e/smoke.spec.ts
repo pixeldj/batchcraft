@@ -10,6 +10,8 @@ import type {
   RunCreatedResponse,
   ExecutionResponse,
   PreviewResponse,
+  BatchRequest,
+  RunResponse,
 } from "../src/api/types";
 
 const apiUrl = "http://127.0.0.1:8002";
@@ -78,6 +80,164 @@ async function seed(request: APIRequestContext, subject = "mountain", provenance
   });
   return { project, batch };
 }
+
+test("real API: Explicit seed ranges preserve order through Preview, Saved Batch reload, and published history", async ({ page, request }, testInfo) => {
+  const { project, batch } = await seed(request);
+  await page.goto("/");
+  await page.getByLabel("Active Project").selectOption(project.id);
+  await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
+  await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
+  const seeds = page.getByRole("group", { name: "Seeds", exact: true });
+  await seeds.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("combobox", { name: "Seed mode", exact: true }).selectOption("explicit");
+  const values = [5, 6, 7, 8, 9, 10];
+  await page.getByLabel(/Explicit seeds/).fill("5-10");
+  await seeds.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(seeds.getByText("Explicit · 6 seeds", { exact: true })).toBeVisible();
+  await expect(page.getByLabel(/Explicit seeds/)).toHaveCount(0);
+  await seeds.screenshot({ path: testInfo.outputPath("explicit-range-summary.png"), scale: "css" });
+  const previewResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/batches/preview");
+  await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  const response = await previewResponse;
+  expect(response.ok()).toBe(true);
+  const sent = response.request().postDataJSON() as BatchRequest;
+  expect(sent.seeds).toMatchObject({ mode: "explicit", values });
+  expect(sent.batch_snapshot.seed_intent).toEqual({ mode: "explicit", values, random_seed_count: null });
+  const preview = await response.json() as PreviewResponse;
+  expect(preview.job_count).toBe(12);
+  expect(preview.jobs.map((job) => [job.resolved_prompt, job.seed])).toEqual(
+    ["mountain", "river"].flatMap((subject) => values.map((value) => [`A ${subject} at sunset`, value])),
+  );
+  const savedResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/batches/${batch.id}`
+    && response.request().method() === "PATCH");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  expect((await savedResponse).ok()).toBe(true);
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  const storedResponse = await request.get(`${apiUrl}/api/batches/${batch.id}`);
+  expect(storedResponse.ok()).toBe(true);
+  expect(await storedResponse.json()).toMatchObject({ seed_mode: "explicit", seed_values: values, random_seed_count: null });
+
+  // Clear browser draft recovery so this is a real Saved Batch load, not a cached range string.
+  await page.addInitScript(() => localStorage.removeItem("batchcraft.working-session-recovery.v4"));
+  await page.reload();
+  await page.getByLabel("Active Project").selectOption(project.id);
+  await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
+  await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await expect(seeds).toContainText("Explicit · 6 seeds");
+  await seeds.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Seed mode", exact: true })).toHaveValue("explicit");
+  await expect(page.getByLabel(/Explicit seeds/)).toHaveValue(values.join("\n"));
+  await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  const created = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs" && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Create Run", exact: true }).click();
+  const run = await (await created).json() as RunCreatedResponse;
+  const frozenResponse = await request.get(`${apiUrl}/api/runs/${run.run_id}`);
+  expect(frozenResponse.ok()).toBe(true);
+  const frozen = await frozenResponse.json() as RunResponse;
+  expect(frozen.batch_snapshot.seed_intent).toEqual(sent.batch_snapshot.seed_intent);
+  expect(frozen.plan.jobs.map((job) => job.seed)).toEqual([...values, ...values]);
+  // A selected unstarted Run locks Batch replacement. Reopen without its browser pointer;
+  // history must discover the published filesystem Run without executing its 12 Jobs.
+  await page.reload();
+  await page.getByLabel("Active Project").selectOption(project.id);
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Runs", exact: true }).click();
+  const history = page.getByRole("region", { name: "Project browser" });
+  await history.getByRole("button", { name: "Load Run as Batch", exact: true }).click();
+  if (await page.getByRole("dialog", { name: "Replace unsaved Batch?", exact: true }).isVisible()) {
+    await page.getByRole("button", { name: "Replace Batch", exact: true }).click();
+  }
+  await expect(page.getByText(/loaded as an unsaved Batch draft/)).toBeVisible();
+  if (await seeds.getByRole("button", { name: "Edit", exact: true }).isVisible()) {
+    await seeds.getByRole("button", { name: "Edit", exact: true }).click();
+  }
+  await expect(page.getByRole("combobox", { name: "Seed mode", exact: true })).toHaveValue("explicit");
+  await expect(page.getByLabel(/Explicit seeds/)).toHaveValue(values.join("\n"));
+  await expect(seeds).toContainText("Explicit · 6 seeds");
+  await expect(page.getByRole("button", { name: "Create Run", exact: true })).toHaveCount(0);
+});
+
+test("real API: Explicit range validation and ordering leave Fixed and Random generation intact", async ({ page, request }, testInfo) => {
+  const { project, batch } = await seed(request);
+  const previewRequests: BatchRequest[] = [];
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (sent) => {
+    if (new URL(sent.url()).pathname === "/api/batches/preview") previewRequests.push(sent.postDataJSON() as BatchRequest);
+  });
+  await page.goto("/");
+  await page.getByLabel("Active Project").selectOption(project.id);
+  await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
+  await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
+  const seeds = page.getByRole("group", { name: "Seeds", exact: true });
+  await seeds.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("combobox", { name: "Seed mode", exact: true }).selectOption("explicit");
+  for (const [text, values] of [["10-5", [10, 9, 8, 7, 6, 5]], ["1,5-7\n20", [1, 5, 6, 7, 20]]] as const) {
+    await page.getByLabel(/Explicit seeds/).fill(text);
+    const response = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/batches/preview");
+    await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+    const received = await response;
+    expect(received.ok()).toBe(true);
+    const preview = await received.json() as PreviewResponse;
+    expect(preview.jobs.map((job) => [job.resolved_prompt, job.seed])).toEqual(
+      ["mountain", "river"].flatMap((subject) => values.map((value) => [`A ${subject} at sunset`, value])),
+    );
+    expect(previewRequests.at(-1)?.seeds).toMatchObject({ mode: "explicit", values });
+  }
+  const beforeInvalid = previewRequests.length;
+  for (const text of ["foo", "5-1-abc", "0-9007199254740991"]) {
+    await page.getByLabel(/Explicit seeds/).fill(text);
+    await expect(seeds).toContainText("Explicit · incomplete");
+    await expect(seeds.getByRole("button", { name: "Done", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Create Run", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+    await expect(page.getByText(text.startsWith("0-")
+      ? /exceeds the 10,000 Explicit seeds limit\. Reduce the range or remove items/
+      : /must be a nonnegative integer or inclusive range such as 5-10/)).toBeVisible();
+    expect(previewRequests).toHaveLength(beforeInvalid);
+  }
+  await page.screenshot({ path: testInfo.outputPath("explicit-huge-range-error.png"), scale: "css", fullPage: true });
+  // Exercise another UI action after the huge range rather than imposing a machine-speed threshold.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  expect(previewRequests).toHaveLength(beforeInvalid);
+  for (const mode of ["fixed", "random"] as const) {
+    await page.getByRole("combobox", { name: "Seed mode", exact: true }).selectOption(mode);
+    if (mode === "fixed") await page.getByRole("spinbutton", { name: /^Seed / }).fill("42");
+    else await page.getByLabel(/Random seed count/).fill("1");
+    const response = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/batches/preview");
+    await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+    const preview = await (await response).json() as PreviewResponse;
+    expect(preview.job_count).toBe(2);
+    const assignments = preview.jobs.map((job) => job.seed);
+    if (mode === "fixed") expect(assignments).toEqual([42, 42]);
+    else {
+      expect(new Set(assignments).size).toBe(2);
+      expect(previewRequests.at(-1)?.seeds).toEqual({ mode: "random", values: [], random_seed_count: 1 });
+      for (const value of assignments) {
+        expect(Number.isSafeInteger(value)).toBe(true);
+        expect(value).toBeGreaterThanOrEqual(0);
+      }
+    }
+    const created = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs" && response.request().method() === "POST");
+    await page.getByRole("button", { name: /^Create (Another )?Run$/ }).click();
+    const run = await (await created).json() as RunCreatedResponse;
+    await page.getByRole("button", { name: "Start Run", exact: true }).click();
+    await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
+    const executionResponse = await request.get(`${apiUrl}/api/runs/${run.run_id}/execution`);
+    const execution = await executionResponse.json() as ExecutionResponse;
+    expect(execution.jobs.map((job) => job.status)).toEqual(["succeeded", "succeeded"]);
+    const frozenResponse = await request.get(`${apiUrl}/api/runs/${run.run_id}`);
+    expect((await frozenResponse.json() as RunResponse).plan.jobs.map((job) => job.seed)).toEqual(assignments);
+    await expect(page.locator("img.result-image")).toHaveCount(2);
+    await expect(page.locator("img.result-image").first()).toHaveJSProperty("naturalWidth", 384);
+  }
+  expect(errors).toEqual([]);
+});
 
 test("real API: typed HistoryFilters distinguish Base and override on the same Job and roundtrip without changing draft", async ({ page, request }, testInfo) => {
   const { project, batch } = await seed(request, "mountain", true);

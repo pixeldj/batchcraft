@@ -125,6 +125,7 @@ export interface BatchRequestContext {
 }
 
 export const MAX_RANDOM_SEED_COUNT = 100;
+export const MAX_EXPLICIT_SEEDS = 10_000;
 export const MAX_PARAMETER_ALTERNATIVES = 10_000;
 const MAX_DECIMAL_LENGTH = 100;
 const SIMPLE_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
@@ -263,7 +264,7 @@ export function buildBatchRequest(
       values: [],
       random_seed_count: parseRandomSeedCount(form.randomSeedCount),
     }
-    : { mode: form.seedMode, values: parseSeedValues(form.seedValues) };
+    : { mode: form.seedMode, values: batchSnapshot.seed_intent.values };
 
   return {
     project: batchSnapshot.project,
@@ -387,7 +388,9 @@ export function buildEditableBatchSnapshot(
     }
     : {
       mode: form.seedMode,
-      values: parseSeedValues(form.seedValues),
+      values: form.seedMode === "explicit"
+        ? parseExplicitSeedValues(form.seedValues)
+        : parseSeedValues(form.seedValues),
       random_seed_count: null,
     };
 
@@ -1068,6 +1071,50 @@ function parseRandomSeedCount(value: string): number {
     );
   }
   return count;
+}
+
+export function parseExplicitSeedValues(input: string): number[] {
+  const maximum = String(Number.MAX_SAFE_INTEGER);
+  let count = 0n;
+  const segments = splitSeeds(input).map((item) => {
+    const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(item);
+    if (!match) {
+      throw new FormBuildError(
+        "seeds",
+        `Seed item ${JSON.stringify(item)} must be a nonnegative integer or inclusive range such as 5-10.`,
+      );
+    }
+    const [start, end] = [match[1], match[2] ?? match[1]].map((raw) => {
+      // Bound decimal text before BigInt conversion, including very long pasted endpoints.
+      const digits = raw.replace(/^0+/, "") || "0";
+      if (digits.length > maximum.length || (digits.length === maximum.length && digits > maximum)) {
+        throw new FormBuildError(
+          "seeds",
+          `Seed item ${JSON.stringify(item)} must use integers between 0 and ${maximum}.`,
+        );
+      }
+      return BigInt(digits);
+    });
+    const length = (start > end ? start - end : end - start) + 1n;
+    count += length;
+    if (count > BigInt(MAX_EXPLICIT_SEEDS)) {
+      throw new FormBuildError(
+        "seeds",
+        `Seed item ${JSON.stringify(item)} exceeds the ${MAX_EXPLICIT_SEEDS.toLocaleString("en-US")} Explicit seeds limit. Reduce the range or remove items.`,
+      );
+    }
+    return { start, length, step: start > end ? -1n : 1n };
+  });
+  if (count === 0n) {
+    throw new FormBuildError("seeds", "Enter at least one seed or inclusive range such as 5-10.");
+  }
+  const seeds: number[] = [];
+  for (const { start, length, step } of segments) {
+    for (let offset = 0n; offset < length; offset += 1n) {
+      seeds.push(Number(start + offset * step));
+    }
+  }
+  return seeds;
 }
 
 function parseSeedValues(value: string): number[] {

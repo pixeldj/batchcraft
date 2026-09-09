@@ -730,6 +730,36 @@ the frozen Base value beside an override. `Add Parameter` routes through Workflo
 selected compatible Profile, creates one when the Workflow has no Profiles, or focuses the chooser when
 multiple existing Profiles require an explicit selection.
 
+Explicit seed authoring uses the shared exported `parseExplicitSeedValues` in
+`frontend/src/features/batch/form.ts` for request building, Saved Batch saving, canonical intent,
+summary, and Seeds completion. It accepts comma/newline-separated items, ignores blank items, and
+preserves order and duplicates. A trimmed item must match digits or two digit-only endpoints separated
+by a hyphen with optional whitespace around it. Inclusive `5-10` becomes `[5,6,7,8,9,10]`, `10-5`
+descends to `[10,9,8,7,6,5]`, and `1,5-7` followed by a newline and `20` becomes `[1,5,6,7,20]`.
+Direction is automatic with increment `+1` or `-1`; no Step syntax or fourth mode exists. Dedicated
+Increment mode (BC-012), including persisted increment intent, is superseded rather than implemented.
+
+Literals and endpoints must be integers in `0..9007199254740991` (`2^53-1`). Explicit rejects negative
+grammar including `-0`; Fixed parsing is unchanged. Strip leading zeros and bound decimal text by length
+and maximum-value comparison before BigInt conversion, including enormous pasted endpoints. BigInt
+arithmetic validates/counts endpoints exactly. `MAX_EXPLICIT_SEEDS = 10000` limits the aggregate authored
+count across all literals and expanded ranges; check it before any seed-value materialization, not
+after expansion or once per range. The overall backend Job budget remains a separate limit.
+
+The summary for `5-10` is `Explicit · 6 seeds`. Invalid drafts have no valid count, leave Seeds incomplete,
+and show actionable Seeds errors when Preview is attempted without sending an API request. Canonical
+intent compares valid shorthand by its expanded values; invalid drafts retain raw text for comparison.
+Durable Saved Batch and Run snapshots keep Explicit arrays only. Saved Batch reload and `Load Run as
+Batch` normalize arrays to newline-separated values. Existing browser working-session recovery may
+retain raw draft text: no persisted shorthand means durable files, not a new persisted browser
+seed-intent requirement. Historical arrays above 10,000 are still read in full, without a new read limit
+or truncation; new frontend writes and Preview apply the cap. API, backend compiler, SQLite, and v1
+schemas are unchanged, as are Fixed, Explicit, and Random execution semantics.
+
+Regression coverage includes huge-range rejection before expansion, normalized persistence, summary
+and incomplete states, historical reads above the authoring cap, and unchanged Fixed/Random behavior.
+Real-API browser checks use fake ComfyUI; see BC-012 for verification evidence.
+
 Random seed intent remains editable frontend and Batch snapshot state as
 `{ mode: "random", random_seed_count: N }`. Preview sends that intent without concrete values. The
 backend first computes the complete non-seed expansion, then uses `secrets.randbelow` to materialize one

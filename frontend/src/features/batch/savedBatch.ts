@@ -12,6 +12,7 @@ import {
   newPrompt,
   newVariableBinding,
   normalizedBindingValues,
+  parseExplicitSeedValues,
   buildParameterBindings,
   buildLinkedParameterSets,
   reconcileImageBindings,
@@ -207,6 +208,14 @@ export function savedBatchToForm(
 }
 
 export function canonicalBatchIntent(form: BatchFormState): string {
+  let seedValues: number[] | string[] | string = splitSeeds(form.seedValues);
+  if (form.seedMode === "explicit") {
+    try {
+      seedValues = parseExplicitSeedValues(form.seedValues);
+    } catch {
+      seedValues = form.seedValues;
+    }
+  }
   return canonical({
     name: form.batchName.trim(),
     description: form.batchDescription.trim() || null,
@@ -239,7 +248,7 @@ export function canonicalBatchIntent(form: BatchFormState): string {
     linkedParameterSets: form.linkedParameterSets,
     seed: form.seedMode === "random"
       ? { mode: "random", randomSeedCount: form.randomSeedCount.trim() }
-      : { mode: form.seedMode, values: splitSeeds(form.seedValues) },
+      : { mode: form.seedMode, values: seedValues },
     workflow: {
       projectId: form.workflowLibraryProjectId,
       workflowId: form.workflowId,
@@ -317,12 +326,11 @@ function savedSeedIntent(form: BatchFormState) {
     }
     return { mode: "random" as const, values: [], random_seed_count: count };
   }
-  const values = parseSeeds(form.seedValues);
+  const values = form.seedMode === "explicit"
+    ? parseExplicitSeedValues(form.seedValues)
+    : parseSeeds(form.seedValues);
   if (form.seedMode === "fixed" && values.length !== 1) {
     throw new FormBuildError("seeds", "Fixed seed intent requires exactly one seed.");
-  }
-  if (form.seedMode === "explicit" && values.length === 0) {
-    throw new FormBuildError("seeds", "Explicit seed intent requires at least one seed.");
   }
   return { mode: form.seedMode, values, random_seed_count: null };
 }

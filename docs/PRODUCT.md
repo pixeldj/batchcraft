@@ -152,6 +152,32 @@ from Run and Job identity.
 
 A Batch can be previewed before execution.
 
+#### Seed Authoring
+
+Seeds retain three modes: Fixed, Explicit, and Random. Dedicated Increment mode (BC-012) is no longer
+planned; the existing Explicit list instead accepts inclusive integer `start-end` shorthand. There is
+no fourth mode or Step syntax. Direction is automatic, increasing or decreasing by one:
+
+- `5-10` becomes `[5,6,7,8,9,10]`, summarized as `Explicit · 6 seeds`.
+- `10-5` becomes `[10,9,8,7,6,5]`.
+- `1,5-7` followed by a newline and `20` becomes `[1,5,6,7,20]`.
+
+Comma/newline-separated items may mix literals and ranges. Blank items are ignored; order and duplicates
+are preserved. Each item is digits or two digit-only endpoints separated by a hyphen with optional
+surrounding whitespace. Values must be integers in `0..9007199254740991` (`2^53-1`); negative spelling,
+including Explicit `-0`, is rejected. Fixed parsing and existing execution behavior in all three modes
+are unchanged.
+
+New frontend authoring allows at most 10,000 Explicit seeds across all literals and expanded ranges,
+checked before any seed values are materialized. The overall Job budget remains separate. Invalid Seeds
+stay incomplete with no valid count; Preview shows an actionable Seeds error without sending a request.
+
+Shorthand is an authoring convenience, not durable seed intent. Saved Batches and Run snapshots retain
+ordinary Explicit arrays; Saved Batch reload and `Load Run as Batch` display newline-separated values.
+Existing browser recovery may retain raw draft text, but durable files do not persist shorthand.
+Historical arrays larger than 10,000 remain fully readable without truncation; new frontend saving and
+Preview enforce the cap. No API, backend compiler, SQLite, or v1 schema change is introduced.
+
 ### Run
 
 An execution whose compiled plan and provenance freeze at successful Run creation.

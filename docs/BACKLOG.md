@@ -852,12 +852,44 @@ Expected behavior:
 | --- | --- |
 | ID | BC-012 |
 | Priority | P4 |
-| Status | Planned |
+| Status | Superseded |
 | Area | Seeds |
-| Summary | Add deterministic incrementing seed intent with a start seed, count, and optional increment step. |
-| Dependencies / Notes | Materialize concrete seeds before compilation. Preserve current seed bounds, Preview-to-Run consistency, and frozen concrete Run provenance. |
+| Summary | Dedicated Increment mode is no longer planned; inclusive start-end shorthand in the existing Explicit seed list supersedes this proposal. |
+| Dependencies / Notes | Keep the three modes Fixed, Explicit, and Random. Shorthand is frontend authoring only; durable Explicit arrays, Preview-to-Run consistency, and frozen concrete Run provenance remain unchanged. No new backlog ID. |
 
-Suggested editable intent:
+Current replacement behavior:
+
+- Explicit accepts `5-10` as `[5,6,7,8,9,10]` and `10-5` as `[10,9,8,7,6,5]`.
+  Direction is automatic with a positive or negative unit increment; there is no Step syntax or fourth mode.
+- Comma/newline-separated literals and ranges may be mixed: `1,5-7` followed by a newline and `20`
+  yields `[1,5,6,7,20]`. Blank items are ignored; order and duplicates are preserved.
+- Each trimmed item is digits or digits plus optional whitespace, a hyphen, optional whitespace, and
+  digits. Integers/endpoints must be within `0..9007199254740991` (`2^53-1`). Explicit rejects `-0`
+  under the negative-number grammar rule; Fixed parsing is unchanged.
+- The shared exported `parseExplicitSeedValues` in `form.ts` bounds normalized decimal endpoint text
+  before BigInt conversion, including enormous pasted values, and uses BigInt for exact validation and
+  counting. `MAX_EXPLICIT_SEEDS = 10000` caps the aggregate of all authored literals and expanded ranges,
+  checked before any seed-value materialization. The overall Job budget is a separate check.
+- Request building, Saved Batch saving, canonical intent, summary, and completion use that parser.
+  `5-10` summarizes as `Explicit · 6 seeds`; invalid input has no valid count, leaves Seeds incomplete,
+  and produces actionable Seeds errors on Preview without sending an API request.
+- Durable Saved Batch and Run snapshot values remain Explicit arrays; Saved Batch reload and
+  `Load Run as Batch` normalize them to newline-separated values. No shorthand is persisted in durable
+  files. Existing browser working-session recovery may retain raw draft text; this is not a new
+  persisted seed-intent requirement. No API, backend compiler, SQLite, or v1 schema changes are needed.
+- Historical arrays above 10,000 remain readable in full, without a new read limit or truncation;
+  new frontend writes and Preview still enforce the authoring cap. Existing Fixed, Explicit, and Random
+  execution behavior is preserved.
+
+Verification passed: 756 frontend tests, typecheck, lint, and production build; 18 fake-backed browser
+tests in each of Vite and built modes; plus 4 focused built-browser checks with screenshots. Browser
+acceptance covers summary, ordered Preview, numeric save/reload, historical restore, descending/mixed
+input, huge-range errors, and Fixed/Random execution. These are real application flows against fake
+ComfyUI, not owner manual acceptance or live-GPU generation.
+
+Historical superseded proposal, not implemented steps or current requirements:
+
+The former dedicated Increment mode would have used this editable intent:
 
 ```text
 Start seed: 1000
@@ -865,13 +897,13 @@ Count: 5
 Step: 1
 ```
 
-Materialized values:
+Its proposed materialized values:
 
 ```text
 1000, 1001, 1002, 1003, 1004
 ```
 
-Requirements:
+Historical requirements (superseded, not delivered as an Increment mode):
 
 - support positive or negative nonzero step if current seed bounds permit the resulting values;
 - reject overflow/out-of-range results;
@@ -880,6 +912,9 @@ Requirements:
 - Saved Batch and editable Run snapshot preserve increment intent;
 - concrete Jobs contain only explicit seeds;
 - no randomness occurs in the compiler.
+
+BC-012 is Superseded, not Done: the dedicated mode, configurable step, and persisted increment intent
+above were not implemented. The replacement expands frontend shorthand into the existing Explicit list.
 
 ### BC-013: Persistent local configuration
 

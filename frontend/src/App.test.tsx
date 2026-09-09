@@ -41,6 +41,95 @@ beforeEach(() => {
   saveWorkingSession(populatedBatchForm(), null, "project-1");
 });
 
+describe("Explicit seed ranges", () => {
+  it.each([
+    ["5-10", [5, 6, 7, 8, 9, 10]],
+    ["10-5", [10, 9, 8, 7, 6, 5]],
+    ["1,5-7\n20", [1, 5, 6, 7, 20]],
+    ["5-7,6", [5, 6, 7, 6]],
+  ])("previews %s as ordered numeric values and counts expanded seeds", async (text, values) => {
+    const api = makeApi();
+    render(<App api={api} />);
+    await expandConfiguration("Seeds");
+    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "explicit" } });
+    fireEvent.change(screen.getByLabelText(/Explicit seeds/), { target: { value: text } });
+    const seeds = screen.getByRole("group", { name: "Seeds" });
+    fireEvent.click(within(seeds).getByRole("button", { name: "Done" }));
+    expect(within(seeds).getByText(`Explicit · ${values.length} seeds`)).toBeVisible();
+    expect(screen.queryByLabelText(/Explicit seeds/)).not.toBeInTheDocument();
+    await reachPreview();
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(vi.mocked(api.previewBatch).mock.calls[0][0]).toMatchObject({
+      seeds: { mode: "explicit", values },
+      batch_snapshot: { seed_intent: { mode: "explicit", values, random_seed_count: null } },
+    });
+    await expandConfiguration("Seeds");
+    expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue(text);
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+  });
+
+  it.each(["foo", "5-1-abc", "0-9007199254740991"])("keeps %s incomplete and blocks Preview locally", async (text) => {
+    const api = makeApi();
+    render(<App api={api} />);
+    await reachPreview();
+    vi.mocked(api.previewBatch).mockClear();
+    await expandConfiguration("Seeds");
+    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "explicit" } });
+    fireEvent.change(screen.getByLabelText(/Explicit seeds/), { target: { value: text } });
+    const seeds = screen.getByRole("group", { name: "Seeds" });
+    expect(within(seeds).getByText("Explicit · incomplete")).toBeVisible();
+    expect(within(seeds).getByRole("button", { name: "Done" })).toBeDisabled();
+    expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue(text);
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    expect(await screen.findByText(text.startsWith("0-")
+      ? /exceeds the 10,000 Explicit seeds limit\. Reduce the range or remove items/
+      : /must be a nonnegative integer or inclusive range such as 5-10/)).toBeVisible();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+    expect(api.createRun).not.toHaveBeenCalled();
+    expect(loadWorkingSession().form.seedValues).toBe(text);
+  });
+
+  it("saves numeric range values and reloads normalized text with a clean Saved Batch baseline", async () => {
+    let detail = savedBatchDetail();
+    saveWorkingSession(savedBatchToForm(detail, projectResponse()), null, "project-1", undefined, detail.id, detail.revision);
+    const api = makeApi({
+      getSavedBatch: vi.fn(async () => detail),
+      listSavedBatches: vi.fn(async () => ({ batches: [detail] })),
+      updateSavedBatch: vi.fn(async (_id, input) => {
+        detail = { ...detail, revision: 2, seed_mode: input.seed_intent.mode,
+          seed_values: input.seed_intent.values, random_seed_count: input.seed_intent.random_seed_count };
+        return detail;
+      }),
+    });
+    const view = render(<App api={api} />);
+    await screen.findByText("Saved");
+    await expandConfiguration("Seeds");
+    fireEvent.change(screen.getByLabelText("Seed mode"), { target: { value: "explicit" } });
+    fireEvent.change(screen.getByLabelText(/Explicit seeds/), { target: { value: "5-10" } });
+    await screen.findByText("Unsaved changes");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved");
+    expect(api.updateSavedBatch).toHaveBeenCalledOnce();
+    expect(vi.mocked(api.updateSavedBatch).mock.calls[0][1].seed_intent).toEqual({
+      mode: "explicit", values: [5, 6, 7, 8, 9, 10], random_seed_count: null,
+    });
+    view.unmount();
+    localStorage.removeItem(WORKING_SESSION_RECOVERY_KEY);
+    render(<App api={api} />);
+    fireEvent.change(await screen.findByLabelText("Active Project"), { target: { value: "project-1" } });
+    fireEvent.change(await screen.findByLabelText("Saved Batch"), { target: { value: detail.id } });
+    fireEvent.click(await screen.findByRole("button", { name: "Discard and switch" }));
+    await screen.findByText("Saved");
+    expect(screen.getByLabelText("Saved Batch")).toHaveValue(detail.id);
+    expect(screen.getByRole("group", { name: "Seeds" })).toHaveTextContent("Explicit · 6 seeds");
+    await expandConfiguration("Seeds");
+    expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue("5\n6\n7\n8\n9\n10");
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+});
+
 describe("Session notices", () => {
   it.each(["", "Development - simulated ComfyUI"])("only shows an explicit instance label: %s", async (label) => {
     vi.stubEnv("VITE_BATCHCRAFT_INSTANCE", label);
