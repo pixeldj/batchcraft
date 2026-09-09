@@ -3,10 +3,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { HistoryProvenanceFilters, HistoryQuery, RunStatus } from "../../api/types";
 import { parseHistoryFilters } from "./parseHistoryFilters";
 
-export type WorkspaceView = "batch" | "gallery" | "runs";
+export type WorkspaceView = "batch" | "gallery" | "runs" | "workflows";
 const statuses = new Set<RunStatus>(["created", "running", "succeeded", "failed", "blocked", "cancelled"]);
 
-function readLocation(): { view: WorkspaceView; query: HistoryQuery; filterError: string | null } {
+function readLocation(): { view: WorkspaceView; query: HistoryQuery; libraryQuery: string; filterError: string | null } {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get("view");
   const status = params.get("status") as RunStatus | null;
@@ -22,7 +22,8 @@ function readLocation(): { view: WorkspaceView; query: HistoryQuery; filterError
   }
   return {
     filterError,
-    view: requested === "gallery" || requested === "runs" ? requested : "batch",
+    libraryQuery: (params.get("library_q") ?? "").slice(0, 200),
+    view: requested === "gallery" || requested === "runs" || requested === "workflows" ? requested : "batch",
     query: {
       q: (params.get("q") ?? "").slice(0, 200),
       sort: params.get("sort") === "oldest" ? "oldest" : "newest",
@@ -111,7 +112,15 @@ export function useWorkspaceNavigation() {
     setLocation(readLocation());
   }
 
-  return { ...location, navigate, changeQuery };
+  function changeLibraryQuery(query: string) {
+    const url = new URL(window.location.href);
+    if (query) url.searchParams.set("library_q", query.slice(0, 200));
+    else url.searchParams.delete("library_q");
+    if (url.href !== window.location.href) window.history.pushState(null, "", url);
+    setLocation(readLocation());
+  }
+
+  return { ...location, navigate, changeQuery, changeLibraryQuery };
 }
 
 function writeQuery(url: URL, query: HistoryQuery) {

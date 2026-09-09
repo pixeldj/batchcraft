@@ -1,0 +1,15 @@
+.global-library { padding: 1rem; }
+.global-library h2, .global-library-dialog h2 { font-size: 1.15rem; margin: 0; }
+.global-library-grid { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr); gap: 1rem; margin-top: 1rem; }
+.global-library-item { display: block; width: 100%; text-align: left; margin-bottom: .4rem; overflow-wrap: anywhere; }
+.global-library-item small { display: block; }
+.global-library pre, .global-library-dialog pre { max-height: 20rem; overflow: auto; font-size: .75rem; }
+.global-library .field-help { overflow-wrap: anywhere; }
+.global-library-dialog { width: min(42rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; padding: 1rem; }
+.global-library-dialog fieldset { min-width: 0; }
+.global-profile-choice { margin-block: .6rem; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .global-library-grid { grid-template-columns: 1fr; }
+  .workspace-navigation nav { flex-wrap: wrap; }
+  .workspace-navigation nav button { min-width: 0; padding-inline: .65rem; }
+}

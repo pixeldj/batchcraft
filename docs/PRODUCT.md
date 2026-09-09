@@ -98,6 +98,25 @@ The three core mappings are required. A ProfileVersion also has an ordered `imag
 may be empty. Each named slot has a stable key, editable label, and exact workflow target. Slot keys are
 lowercase readable snake case, start with a letter, and do not change when labels are edited.
 
+### Global Workflow Library
+
+BC-026's first slice adds Workflow Library above Projects. Browse and inspect reusable setups without
+selecting a Project. Import to Library currently opens a source Project chooser, then an exact Workflow
+revision and compatible Profile selections; it does not import JSON directly or read frozen Run setups
+yet. Choosing any registered source Project here does not switch the current Batch draft.
+
+Global browsing inspects the most recent active WorkflowVersion and exact compatible Profile details.
+It is not yet a full global version-history editor. Use in this Project first copies the reviewed setup
+into the selected, verified Project under independent identities. After copying, Use copied setup and
+replacement confirmation explicitly apply the chosen copied Profile (or Workflow alone) to the Batch.
+Only application changes the draft and invalidates Preview; browsing/import/copy alone do not.
+Copies never follow source edits automatically, and changed Project/draft guards prevent stale apply.
+
+Historical Run import, direct global JSON import, full global revision management and archive endpoints
+remain queued, not completed. Existing v1 Project archives still carry setups used by Runs, not unused
+global libraries. BC-026 remains In Progress. The target is v1.2.0 after all agreed Workflow updates and
+verification; the actual application version remains 1.1.0 and this first slice is not a release.
+
 ### Prompt Template
 
 Reusable prompt text that may contain named placeholders.

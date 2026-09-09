@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import { copiedSetup, workflowLibraryApi } from "./test/workflowLibraryFixtures";
 import {
   ApiError,
   type BatchcraftApi,
@@ -25,7 +26,7 @@ import type {
   SavedBatchDetail,
 } from "./api/types";
 import { editableBatchSnapshotToForm, initialBatchForm, newPrompt } from "./features/batch/form";
-import { savedBatchToForm } from "./features/batch/savedBatch";
+import { canonicalBatchIntent, savedBatchToForm } from "./features/batch/savedBatch";
 import {
   WORKING_SESSION_RECOVERY_KEY,
   loadWorkingSessionRecovery as loadWorkingSession,
@@ -130,6 +131,89 @@ describe("Explicit seed ranges", () => {
   });
 });
 
+describe("Global Workflow Library navigation", () => {
+  it("opens without a Project and ignores invalid history filters without scanning history", async () => {
+    localStorage.clear();
+    window.history.replaceState(null, "", "/?view=workflows&q=history&library_q=portrait&filters=invalid");
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    await screen.findByRole("heading", { name: "Workflow Library" });
+    await waitFor(() => expect(api.browseGlobalWorkflows).toHaveBeenCalledWith({ q: "portrait", limit: 20, cursor: undefined }, expect.any(AbortSignal)));
+    expect(screen.queryByText(/history filters in this link are invalid/)).not.toBeInTheDocument();
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Search Workflow Library"), { target: { value: "global search" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search library" }));
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("q")).toBe("history");
+    expect(params.get("library_q")).toBe("global search");
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByLabelText("Search Workflow Library")).toHaveValue("portrait"));
+    act(() => window.history.forward());
+    await waitFor(() => expect(screen.getByLabelText("Search Workflow Library")).toHaveValue("global search"));
+    fireEvent.click(screen.getByRole("button", { name: "Gallery" }));
+    expect(screen.getByText(/history filters in this link are invalid/)).toBeVisible();
+  });
+
+  it("keeps Preview when browsing and importing from another source Project without switching the draft", async () => {
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    await reachPreview();
+    const baseline = canonicalBatchIntent(loadWorkingSession().form);
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByRole("option", { name: "Other Project" });
+    fireEvent.change(screen.getByLabelText("Source Project"), { target: { value: "project-2" } });
+    await screen.findByRole("option", { name: "Reusable portrait" });
+    fireEvent.change(screen.getByLabelText("Source Workflow"), { target: { value: "copied-w" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review import" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Review import" }));
+    await screen.findByRole("checkbox", { name: "Portrait mapping / v1" });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    await screen.findByText(/Imported into Workflow Library/);
+    expect(api.importProjectSetup).toHaveBeenCalledWith(expect.objectContaining({ project_id: "project-2" }), expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Batch" }));
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toEqual(baseline);
+    expect(api.reindexProject).not.toHaveBeenCalled();
+  });
+
+  it("copies before applying ordinary Project identities and then previews the selected pair", async () => {
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    const api = makeApi(workflowLibraryApi());
+    vi.mocked(api.listWorkflows).mockResolvedValueOnce({ workflows: [] });
+    render(<App api={api} />);
+    await reachPreview();
+    const before = vi.mocked(api.previewBatch).mock.calls[0][0];
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use in this Project" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Portrait mapping / v1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    await screen.findByText(/Copied to Project/);
+    expect(loadWorkingSession().form.workflowVersionId).not.toBe("copied-w-v1");
+    fireEvent.click(screen.getByRole("button", { name: "Use copied setup" }));
+    expect(screen.getByRole("dialog", { name: "Review Project copy" })).toBeVisible();
+    expect(loadWorkingSession().form.workflowVersionId).not.toBe("copied-w-v1");
+    fireEvent.click(screen.getByRole("button", { name: "Use copied setup" }));
+    await waitFor(() => expect(loadWorkingSession().form.workflowVersionId).toBe("copied-w-v1"));
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    await screen.findByRole("option", { name: "Reusable portrait" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledTimes(2));
+    const request = vi.mocked(api.previewBatch).mock.calls.at(-1)![0];
+    expect(request.workflow).toEqual(copiedSetup.workflow.version.workflow);
+    expect(request.workflow_profile).toEqual(copiedSetup.profiles[0].version.profile);
+    expect(request.prompt_versions).toEqual(before.prompt_versions);
+    expect(request.seeds).toEqual(before.seeds);
+    expect(request.variable_bindings).toEqual(before.variable_bindings);
+    expect(request.image_bindings).toEqual(before.image_bindings);
+    expect(loadWorkingSession().form.workflowProfileVersionId).toBe("copied-p-v1");
+  });
+});
+
 describe("Session notices", () => {
   it.each(["", "Development - simulated ComfyUI"])("only shows an explicit instance label: %s", async (label) => {
     vi.stubEnv("VITE_BATCHCRAFT_INSTANCE", label);
@@ -188,7 +272,7 @@ describe("Session notices", () => {
 });
 
 describe("Workspace navigation", () => {
-  it("retains the raw dirty Batch, Preview, Run metadata draft, and polling monitor across Gallery and Runs", async () => {
+  it("retains the raw dirty Batch, Preview, Run metadata draft, and polling monitor across Workflow Library, Gallery and Runs", async () => {
     const form = populatedBatchForm();
     form.batchId = "batch-1";
     form.batchFilesystemKey = "batch_1";
@@ -214,6 +298,16 @@ describe("Workspace navigation", () => {
     const preview = screen.getByRole("region", { name: "Preview" });
     const monitor = currentRunSection();
     const draft = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    expect(preview).not.toBeVisible();
+    expect(monitor).not.toBeVisible();
+    const libraryPolls = vi.mocked(api.getExecution).mock.calls.length;
+    await waitFor(() => expect(vi.mocked(api.getExecution).mock.calls.length).toBeGreaterThan(libraryPolls));
+    expect(screen.getByRole("region", { name: "Current Run" })).toHaveTextContent("Run 7");
     expect(api.reindexProject).not.toHaveBeenCalled();
     expect(api.browseProjectResults).not.toHaveBeenCalled();
     expect(api.browseProjectRuns).not.toHaveBeenCalled();
@@ -882,7 +976,7 @@ describe("Batch preview", () => {
     expect(screen.getByRole("heading", { name: "Run" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Results" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Batch", "Gallery", "Runs"]);
+    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Batch", "Gallery", "Runs", "Workflow Library"]);
     expect(screen.queryByRole("heading", { name: "Batch Results" })).not.toBeInTheDocument();
     expect(screen.queryByText("One Batch. An explicit Job plan. A durable Run.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Working draft/)).not.toBeInTheDocument();
@@ -4629,6 +4723,12 @@ function makeApi(
     placeholders: ["subject"],
   };
   return {
+    browseGlobalWorkflows: vi.fn(async () => ({ items: [], next_cursor: null })),
+    getGlobalWorkflowVersion: vi.fn(async () => { throw new Error("No global Workflow fixture"); }),
+    browseGlobalProfiles: vi.fn(async () => ({ items: [], next_cursor: null })),
+    getGlobalProfileVersion: vi.fn(async () => { throw new Error("No global Profile fixture"); }),
+    importProjectSetup: vi.fn(async () => { throw new Error("No import fixture"); }),
+    useGlobalSetup: vi.fn(async () => { throw new Error("No copy fixture"); }),
     getComfyUIStatus: vi.fn(async () => ({
       reachable: true,
       version: "0.31.0",

@@ -588,6 +588,45 @@ export interface Workflow {
   archived_at: string | null;
 }
 
+export interface LibraryPageQuery {
+  q?: string;
+  limit?: number;
+  cursor?: string;
+}
+export interface LibraryPage<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+export type GlobalWorkflow = Omit<Workflow, "project_id"> & { source: JsonObject };
+export type GlobalWorkflowVersion = Omit<LibraryWorkflowVersion, "project_id">;
+export type GlobalProfile = Omit<WorkflowProfile, "project_id">;
+export type GlobalProfileVersion = Omit<LibraryWorkflowProfileVersion, "project_id">;
+export type GlobalCatalogItem = GlobalWorkflow & { latest_version_id: string | null };
+export type GlobalProfileMetadata = Omit<GlobalProfileVersion, "profile" | "note" | "archived_at"> & {
+  name: string;
+  description: string | null;
+};
+export interface SetupCopyRequest {
+  request_id: string;
+  project_id: string;
+  workflow_version_id: string;
+  profiles: Array<{ version_id: string; name?: string | null }>;
+  name?: string | null;
+  description?: string | null;
+}
+export interface GlobalCopyResponse {
+  request_id: string;
+  workflow: { workflow: GlobalWorkflow; version: GlobalWorkflowVersion };
+  profiles: Array<{ workflow_profile: GlobalProfile; version: GlobalProfileVersion }>;
+  source: JsonObject;
+}
+export interface ProjectCopyResponse {
+  request_id: string;
+  workflow: CreateWorkflowResponse;
+  profiles: CreateWorkflowProfileResponse[];
+  source: JsonObject;
+}
+
 export interface LibraryWorkflowVersion {
   id: string;
   workflow_id: string;

@@ -185,6 +185,33 @@ updated_at
 
 Membership should preserve deterministic ordering.
 
+## Global Workflow Library
+
+BC-026 migration `0005_global_workflow_library.sql` adds application-owned `global_workflow`,
+`global_workflow_version`, `global_workflow_profile`, and `global_workflow_profile_version` tables.
+These are separate from the Project-owned records described below; existing `project_id` fields do not
+become nullable. Global records contain the analogous logical metadata, immutable version snapshots,
+canonical JSON and hashes, with no Project owner. Each global ProfileVersion targets one exact version
+of its own global Workflow family, enforced by composite foreign keys. Version-content update triggers
+preserve immutable snapshots independently of archive state.
+
+Global Workflow names are unique across the catalog, and Profile names within their Workflow, including
+archived rows. Copies do not merge by equal names or payloads. Each successful copy creates a new
+Workflow family/version and zero to 50 selected Profile families/versions, all starting at destination
+version 1. Profile payload IDs/names are rewritten to their destination identities and revalidated;
+copied Profiles target the new WorkflowVersion. Project copies retain ordinary Project ownership.
+
+Global Workflow `source_json` records source scope and exact version identities/hashes.
+`global_workflow_copy_receipt` stores an immutable request ID, canonical request, full response, and
+creation timestamp in the same transaction as all copies. Request IDs are application-wide across both
+directions; changed request reuse conflicts. Receipts have no source foreign keys, so retries can return
+the original copies after source loss. Failure rolls back the whole setup without orphan copy rows.
+
+This catalog is durable mutable application state covered by whole-data backups, not a historical
+filesystem index. It does not travel as unused library data in v1 Project archives. Existing Run
+snapshots remain historical authority. Archive fields exist, but global archive HTTP endpoints and full
+revision-management UI are not implemented in this first slice.
+
 ## Workflow
 
 A stable Project-scoped library identity for an imported ComfyUI API workflow. Editable name,

@@ -12,6 +12,68 @@ execution outcomes, Assets, and Results.
 Authentication, a global scheduler, executor restart recovery, and remote ComfyUI interruption remain
 deferred. Stop-after-current cancellation and local `Stop waiting` detach are supported.
 
+## Global Workflow Library
+
+BC-026 adds six routes through `api/global_library.py` and `db/global_workflows.py`. Global reads need
+no selected Project and perform no ComfyUI generation or historical projection generation/reindex.
+The GET routes use the application read-capacity boundary.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/library/workflows` | Active global Workflow metadata with `latest_version_id` and `source`; no Workflow JSON. |
+| GET | `/api/library/workflow-versions/{version_id}` | Exact global WorkflowVersion, including full `workflow` JSON and version metadata. |
+| GET | `/api/library/workflow-profile-versions/{version_id}` | Exact global ProfileVersion, including full `profile` JSON and version metadata. |
+| GET | `/api/library/workflow-versions/{version_id}/profiles` | Active compatible ProfileVersion metadata targeting exactly this WorkflowVersion; no Profile JSON or incompatible logical-Profile placeholder rows. |
+| POST | `/api/library/workflows/import-project` | Copy an exact Project-owned setup into new global records. |
+| POST | `/api/library/workflows/use-in-project` | Copy an exact global setup into new ordinary Project-owned records. |
+
+Both list routes return `{items, next_cursor}` and accept `q` (default empty, maximum 200 characters),
+`limit` (default 25, range 1..50), and optional `cursor` (maximum 2048 characters). Search is literal,
+case-insensitive substring matching: Workflow name/description or Profile name. Ordering is ascending
+`created_at, id`. Opaque keyset cursors bind the exact query, limit, and optional target WorkflowVersion;
+malformed cursors or changed bindings return 422. Global Profile metadata includes IDs, target IDs,
+version number, name snapshot, hash, creation time, logical name and description. Fetch the selected
+exact detail to inspect the full payload; metadata lists are not full JSON or archive-management reads.
+
+Both copy routes accept this shape (optional names default to source version name snapshots):
+
+```json
+{
+  "request_id": "unique-operation-id",
+  "project_id": "registered-project-id",
+  "workflow_version_id": "exact-source-version-id",
+  "profiles": [{"version_id": "exact-source-profile-version-id", "name": "Optional copy name"}],
+  "name": "Optional Workflow copy name",
+  "description": "Optional destination Workflow description"
+}
+```
+
+`request_id`, `project_id`, and version IDs are required nonempty strings of at most 200 characters.
+`profiles` defaults to `[]` and permits at most 50 unique exact ProfileVersion selections; each optional
+copy name is nonblank and at most 200 characters. Optional `description` is nonblank and at most 2000
+characters. Names/description may be omitted or null. Import reads a registered source Project,
+including an archived Project; use requires a registered, active destination. In import, all source
+versions must belong to the supplied Project. In both directions every selected Profile must belong to
+the source Workflow family and target the exact source WorkflowVersion. The server reads and validates
+source payloads; clients do not submit Workflow/Profile JSON for these copy operations.
+
+Both writes return **200**, including receipt retries, with
+`{request_id, workflow: {workflow, version}, profiles: [{workflow_profile, version}], source}`.
+`profiles` is always an array, including Workflow-only copies. `source` identifies the source scope,
+Project ID (null for global), and exact Workflow/Profile version IDs, revision numbers, and hashes.
+Destination versions start at 1 with new identities. Use returns existing Project resource DTOs.
+
+The transaction persists the complete setup and receipt atomically. `request_id` is unique across the
+application, not per Project or endpoint; its fingerprint includes direction, Project, source version,
+ordered Profile selections, and optional names/description. An identical retry returns the stored
+response even after source changes/loss. Changed request reuse, including the other direction, or a
+destination name/identity collision returns 409. Name uniqueness includes archived entries. Validation
+failures return 422; missing exact versions return 404. Corrected copy requests should use a new
+operation ID. Closing a browser dialog stops waiting, not the server transaction.
+
+No direct global JSON import, frozen Run import, global revision-management or archive endpoints are
+provided yet. Copying alone does not select a Batch setup or invalidate Preview.
+
 ## Local Startup
 
 These manual commands start only the API with a real ComfyUI client. They do not launch Vite or isolate

@@ -36,6 +36,7 @@ interface Props {
   savedBatchId: string | null;
   savedBatchRevision: number | null;
   savedBatchListRefresh: number;
+  workflowLibraryRefresh: number;
   savingBatch: boolean;
   saveAsRequest: boolean;
   error: string | null;
@@ -68,6 +69,7 @@ export function BatchEditor({
   savedBatchId,
   savedBatchRevision,
   savedBatchListRefresh,
+  workflowLibraryRefresh,
   savingBatch,
   saveAsRequest,
   error,
@@ -216,6 +218,7 @@ export function BatchEditor({
 
       <WorkflowLibraryEditor
         api={api}
+        refreshToken={workflowLibraryRefresh}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
         form={form}
         sourceRunId={historicalSourceRunId}

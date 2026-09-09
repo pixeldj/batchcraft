@@ -259,9 +259,22 @@ No prompt expansion should occur inside ComfyUI for core batchcraft functionalit
 
 ## Workflow Profile Boundary
 
-A logical Workflow Profile belongs to one Project-scoped Workflow. Its immutable versions each target
+A Project-owned logical Workflow Profile belongs to one Project-scoped Workflow. Its immutable versions each target
 one exact immutable WorkflowVersion and store a complete `{id, name, mappings, image_inputs, parameters}` snapshot. Changing a
 WorkflowVersion never edits or retargets an existing ProfileVersion.
+
+BC-026 also provides an application-owned global Workflow Library in separate SQLite tables, not a
+synthetic Project or nullable Project ownership. `api/global_library.py` exposes six library routes;
+`db/global_workflows.py` owns metadata/detail reads and atomic, receipt-backed setup copies. Global
+Profiles likewise belong to a global Workflow and target an exact global WorkflowVersion. Existing
+Project resource and Saved Batch relationships remain Project-scoped: using a global setup first
+creates independent Project-owned identities, never live references to global records.
+
+`features/batch/GlobalWorkflowLibrary.tsx` supplies the application-wide browser. Browsing and copying
+do not apply a setup to the Batch; explicit guarded application is a separate draft edit. These library
+operations do not contact ComfyUI, compile Jobs, or change historical projections or v1 Run files.
+Project-source import is implemented; frozen Run import and full global revision/archive management
+remain queued under [BC-026](plans/BC-026-global-workflow-library.md) and ADR 0016.
 
 Logical Profiles remain discoverable when the selected WorkflowVersion has no compatible
 ProfileVersion. The frontend derives a visual node/input catalog from the selected immutable API-format

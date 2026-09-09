@@ -537,6 +537,44 @@ checksums, and transactional application reject gaps, changed history, and newer
 Test migration behavior and preservation of existing rows against file-backed temporary databases rather
 than only `:memory:`. Those test databases may be recreated; user databases may not.
 
+BC-026 adds `0005_global_workflow_library.sql` for application-owned catalog records and atomic copy
+receipts. Preserve applied migrations 0001-0004 byte-for-byte; 0005 is additive, not a replacement
+baseline. Existing Project rows, Saved Batch ownership and valid v1 filesystem formats remain unchanged.
+
+### BC-026 first slice
+
+The backend implementation is `api/global_library.py` (six routes) and `db/global_workflows.py`;
+the frontend is `features/batch/GlobalWorkflowLibrary.tsx`. Global Workflow and compatible Profile
+lists each request 20 metadata rows, with exact JSON details fetched on selection. REST permits at most
+50 rows per page. Each pager keeps a sliding window of 20 Previous bookmarks, not a 20-page forward
+limit; Next continues while the server returns a cursor, and Reload returns to the first page. Profile
+copy selections are separately capped at 50. Project-source pickers still use existing unpaginated
+Project/Workflow/Profile and revision list contracts, including full version payloads where those legacy
+contracts return them. Do not describe all library-related reads as bounded metadata reads.
+
+Navigation uses `view=workflows` and independent `library_q`. Only Gallery/Runs activate Project history;
+opening Workflow Library must not trigger history reads or reindex. Browsing and Import to Library need
+no selected Batch Project. The import source chooser can select another registered Project without
+switching the current Project/draft. Global inspection opens the most recent active WorkflowVersion,
+not a full global Workflow history editor; selected exact Profile details remain inspectable.
+
+Use in this Project reviews names and selected Profiles, then Confirm copy persists independent copies.
+Only the later Use copied setup action, followed by replacement confirmation, applies them and
+invalidates Preview. One copied Profile is preselected; multiple copies require choosing one, while a
+Workflow-only copy can be applied for subsequent mapping. Apply guards reject changed Project/draft
+identity or intent and execution locks; already-persisted copies remain available in Project Workflow
+Setup. Browsing, import, copy, and cancelled application preserve the draft and valid Preview.
+
+Verification passed: 782 frontend tests and 1433 backend tests; full fake-backed browser suites passed
+22 tests in each serving mode after the pager fix. Lint, formatting, type checks, builds, and diff checks
+passed. Vite reports a non-fatal approximately 515 kB minified chunk warning. Malformed-cursor rejection and forward
+paging beyond 20 pages have regression coverage. This first-pass evidence is not release acceptance.
+Coverage includes Project A -> global -> Project B -> Preview -> two fake Jobs, persisted independent
+copies, idempotent receipts, rollback without orphan rows, exact Profile metadata/detail, and name
+collisions. Historical-source import, direct global JSON import and global revision/archive management
+remain queued. Application version remains 1.1.0; v1.2.0 requires the remaining agreed Workflow updates
+and final verification, with no release or everyday-installation update authorized by this checkpoint.
+
 Cancellation changes require tests for durable and idempotent intent, both request/admission race
 orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and
 blocked precedence, succeeded-prefix/cancelled-suffix validation, absence of ComfyUI interrupt or queue

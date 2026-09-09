@@ -4,6 +4,43 @@ import { ApiError, BatchcraftApiClient } from "./client";
 import type { HistoryQuery, HistoryResultPageResponse, HistoryRunPageResponse, HistoryRunSummaryResponse } from "./types";
 
 describe("BatchcraftApiClient", () => {
+  it("encodes global catalog and exact detail paths and forwards cancellation", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ items: [], next_cursor: null })));
+    vi.stubGlobal("fetch", fetcher);
+    const api = new BatchcraftApiClient("");
+    const controller = new AbortController();
+    await api.browseGlobalWorkflows({ q: "a &+", limit: 20, cursor: "a+/=" }, controller.signal);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflows?q=a+%26%2B&limit=20&cursor=a%2B%2F%3D", { signal: controller.signal });
+    await api.getGlobalWorkflowVersion("v /?", controller.signal);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflow-versions/v%20%2F%3F", { signal: controller.signal });
+    await api.browseGlobalProfiles("v /?", { limit: 20, cursor: "next+" }, controller.signal);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflow-versions/v%20%2F%3F/profiles?limit=20&cursor=next%2B", { signal: controller.signal });
+    await api.getGlobalProfileVersion("p /?", controller.signal);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflow-profile-versions/p%20%2F%3F", { signal: controller.signal });
+  });
+
+  it.each(["importProjectSetup", "useGlobalSetup"] as const)("posts exact copy selections and preserves nested %s replies", async (method) => {
+    const response = { request_id: "stable", workflow: { workflow: { id: "new-w" }, version: { id: "new-v" } }, profiles: [{ workflow_profile: { id: "new-p" }, version: { id: "new-pv" } }], source: { scope: "project" } };
+    const fetcher = successfulFetch(response); vi.stubGlobal("fetch", fetcher);
+    const body = { request_id: "stable", project_id: "p", workflow_version_id: "v", profiles: [{ version_id: "pv", name: "New Profile" }], name: "New Workflow" };
+    const controller = new AbortController();
+    await expect(new BatchcraftApiClient("")[method](body, controller.signal)).resolves.toEqual(response);
+    expect(fetcher).toHaveBeenCalledWith(`/api/library/workflows/${method === "importProjectSetup" ? "import-project" : "use-in-project"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
+  });
+
+  it("preserves global copy error codes and never automatically retries a write", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: { code: "workflow_conflict", message: "Name exists" } }), { status: 409 })); vi.stubGlobal("fetch", fetcher);
+    await expect(new BatchcraftApiClient().useGlobalSetup({ request_id: "r", project_id: "p", workflow_version_id: "w", profiles: [] })).rejects.toMatchObject({ code: "workflow_conflict", status: 409, message: "Name exists" });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("preserves AbortError on global reads and copies", async () => {
+    const aborted = new DOMException("Aborted", "AbortError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(aborted));
+    const api = new BatchcraftApiClient();
+    await expect(api.browseGlobalWorkflows()).rejects.toBe(aborted);
+    await expect(api.importProjectSetup({ request_id: "r", project_id: "p", workflow_version_id: "w", profiles: [] })).rejects.toBe(aborted);
+  });
   it("requests bounded diagnostic pages with encoded Project and cursor and cancellation", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const controller = new AbortController();

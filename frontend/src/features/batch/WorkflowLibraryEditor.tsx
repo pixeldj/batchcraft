@@ -15,6 +15,7 @@ import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
 import { reconcileFormBindings, type BatchFormState } from "./form";
 import { WorkflowProfileMapper } from "./WorkflowProfileMapper";
+import { applyProfile, applyWorkflow, clearProfileSelectionAndSnapshot, detach } from "./workflowSelection";
 
 interface Props {
   api: BatchcraftApi;
@@ -22,6 +23,7 @@ interface Props {
   form: BatchFormState;
   sourceRunId?: string | null;
   profileEditorRequest?: number;
+  refreshToken?: number;
   onChange(form: BatchFormState): void;
   onHistoricalImport?(form: BatchFormState): void;
   onMetadataChange(form: BatchFormState): void;
@@ -74,7 +76,7 @@ const EMPTY_DETAIL: DetailState = {
   error: null,
 };
 
-export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null, profileEditorRequest = 0, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
+export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null, profileEditorRequest = 0, refreshToken = 0, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
   const [library, setLibrary] = useState<LibraryState>({ projectId: "", workflows: [], loading: false, error: null });
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL);
   const [profileHistory, setProfileHistory] = useState<ProfileHistoryState>({ profileId: "", loading: false });
@@ -195,7 +197,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
       },
     );
     return () => controller.abort();
-  }, [api, loadAttempt, normalizedProjectId]);
+  }, [api, loadAttempt, normalizedProjectId, refreshToken]);
 
   useEffect(() => {
     setHistoricalImport({ sourceRunId, workflow: null, saving: false, error: null });
@@ -969,29 +971,6 @@ function WorkflowDialog({ state, workflow, canCopyProfile, sourceWorkflowVersion
   </form><button className="button-link" type="button" onClick={onCancel}>Cancel</button></dialog>;
 }
 
-function applyProfile(form: BatchFormState, profile: ProjectWorkflowProfile, version: LibraryWorkflowProfileVersion): BatchFormState {
-  const profileJson = pretty(version.profile);
-  return reconcileFormBindings({ ...form, workflowProfileId: profile.id, workflowProfileName: profile.name, workflowProfileVersionId: version.id, workflowProfileVersionNumber: version.version_number, workflowProfileWorkflowVersionId: version.workflow_version_id, workflowProfileContentSha256: version.content_sha256, workflowProfileJson: profileJson, historicalProfileVersionId: null, historicalProfileResourceStatus: null, historicalProfileResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowProfileVersion: null } }, profileJson);
-}
-
-function applyWorkflow(
-  form: BatchFormState,
-  projectId: string,
-  workflow: ProjectWorkflow,
-  version: LibraryWorkflowVersion,
-): BatchFormState {
-  return {
-    ...clearProfileSelectionAndSnapshot(detach(form)),
-    workflowLibraryProjectId: projectId,
-    workflowId: workflow.id,
-    workflowName: workflow.name,
-    workflowVersionId: version.id,
-    workflowVersionNumber: version.version_number,
-    workflowContentSha256: version.content_sha256,
-    workflowJson: pretty(version.workflow),
-  };
-}
-
 function selectProfileWithoutVersion(
   form: BatchFormState,
   profile: ProjectWorkflowProfile,
@@ -1013,18 +992,6 @@ function selectProfileWithoutVersion(
       workflowProfileVersion: null,
     },
   };
-}
-
-function clearProfileLink(form: BatchFormState): BatchFormState {
-  return { ...form, workflowProfileId: null, workflowProfileName: "", workflowProfileVersionId: null, workflowProfileVersionNumber: null, workflowProfileWorkflowVersionId: null, workflowProfileContentSha256: null, historicalProfileVersionId: null, historicalProfileResourceStatus: null, historicalProfileResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowProfileVersion: null } };
-}
-
-function clearProfileSelectionAndSnapshot(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowProfileJson: "{}", imageBindings: [], parameterBindings: [], linkedParameterSets: [] };
-}
-
-function detach(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowLibraryProjectId: null, workflowId: null, workflowName: "", workflowVersionId: null, workflowVersionNumber: null, workflowContentSha256: null, historicalWorkflowVersionId: null, historicalWorkflowResourceStatus: null, historicalWorkflowResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowVersion: null, workflowProfileVersion: null } };
 }
 
 function linkedStatus(form: BatchFormState): LinkStatus {
