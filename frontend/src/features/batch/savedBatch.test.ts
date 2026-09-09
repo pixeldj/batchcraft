@@ -1,12 +1,58 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProjectResponse, SavedBatchDetail } from "../../api/types";
-import { initialBatchForm } from "./form";
+import { FormBuildError, initialBatchForm } from "./form";
 import {
   buildSavedBatchDefinition,
   canonicalBatchIntent,
   savedBatchToForm,
 } from "./savedBatch";
+
+describe("Saved Batch seeds", () => {
+  it("saves numeric Explicit values and reopens normalized text without becoming dirty", () => {
+    const detail = savedBatchDetail();
+    const form = savedBatchToForm(detail, project());
+    form.seedMode = "explicit";
+    form.seedValues = "005-007,6\n2-0";
+    const definition = buildSavedBatchDefinition(form);
+    expect(definition.seed_intent).toEqual({ mode: "explicit", values: [5, 6, 7, 6, 2, 1, 0], random_seed_count: null });
+    const reopened = savedBatchToForm({ ...detail, seed_mode: "explicit", seed_values: definition.seed_intent.values }, project());
+    expect(reopened.seedValues).toBe("5\n6\n7\n6\n2\n1\n0");
+    expect(canonicalBatchIntent(form)).toBe(canonicalBatchIntent(reopened));
+    expect(buildSavedBatchDefinition(reopened)).toEqual(definition);
+    expect(form.seedValues).toBe("005-007,6\n2-0");
+    expect(canonicalBatchIntent({ ...form, seedValues: "5-7,2-0" })).not.toBe(canonicalBatchIntent(form));
+    expect(canonicalBatchIntent({ ...form, seedValues: "2-0,5-7,6" })).not.toBe(canonicalBatchIntent(form));
+  });
+
+  it.each(["", "-0", "5--10", "0-10000", "9007199254740992"])(
+    "rejects invalid Explicit saves but preserves raw dirty identity: %j", (seedValues) => {
+      const form = { ...initialBatchForm(), seedMode: "explicit" as const, seedValues };
+      expect(() => buildSavedBatchDefinition(form)).toThrow(FormBuildError);
+      expect(JSON.parse(canonicalBatchIntent(form)).seed).toEqual({ mode: "explicit", values: seedValues });
+    },
+  );
+
+  it("accepts the authoring boundary but reads larger historical arrays without truncation", () => {
+    const form = { ...initialBatchForm(), seedMode: "explicit" as const, seedValues: "0-9999" };
+    expect(buildSavedBatchDefinition(form).seed_intent.values).toHaveLength(10_000);
+    const values = Array.from({ length: 10_001 }, (_, index) => index);
+    const restored = savedBatchToForm({ ...savedBatchDetail(), seed_mode: "explicit", seed_values: values }, project());
+    expect(restored.seedValues).toBe(values.join("\n"));
+    expect(() => canonicalBatchIntent(restored)).not.toThrow();
+    expect(() => buildSavedBatchDefinition(restored)).toThrow(/10,000 Explicit seeds limit/);
+  });
+
+  it("preserves Fixed validation and Random's existing count parser", () => {
+    const form = initialBatchForm();
+    expect(buildSavedBatchDefinition(form).seed_intent).toEqual({ mode: "fixed", values: [1], random_seed_count: null });
+    for (const seedValues of ["-0", "5-10", "1,2"]) {
+      expect(() => buildSavedBatchDefinition({ ...form, seedValues })).toThrow(FormBuildError);
+    }
+    expect(buildSavedBatchDefinition({ ...form, seedMode: "random", seedValues: "invalid", randomSeedCount: "1e1" }).seed_intent)
+      .toEqual({ mode: "random", values: [], random_seed_count: 10 });
+  });
+});
 
 describe("Saved Batch Variable Bindings", () => {
   it("saves ordered values and one exact empty value while normalizing the payload boundary", () => {

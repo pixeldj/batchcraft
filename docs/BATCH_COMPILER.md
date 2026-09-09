@@ -228,6 +228,32 @@ A fixed seed input must contain exactly one seed. An explicit seed list must con
 and compilation preserves its order. Both modes reuse their configured values for every non-seed
 configuration.
 
+Frontend Explicit authoring accepts inclusive integer `start-end` shorthand, not a new compiler mode:
+`5-10` becomes `[5,6,7,8,9,10]`, `10-5` becomes `[10,9,8,7,6,5]`, and `1,5-7` followed by a newline and
+`20` becomes `[1,5,6,7,20]`. Commas/newlines separate items, blank items are ignored, and order and
+duplicates survive expansion. Direction is automatic with increment `+1` or `-1`; there is no Step
+syntax. BC-012's dedicated Increment mode and persisted increment intent are superseded, not implemented.
+Fixed, Explicit, and Random remain the only three modes with unchanged execution semantics.
+
+The shared frontend `parseExplicitSeedValues` accepts trimmed digit-only literals or digit-only
+endpoints with optional whitespace around a hyphen. Values must be integers in `0..2^53-1`
+(`9007199254740991`); Explicit `-0` is rejected as negative grammar, without changing Fixed parsing.
+Normalized decimal text is bounded against the maximum before BigInt conversion, so enormous endpoints
+are rejected before conversion. Exact BigInt endpoint arithmetic counts all literals and inclusive ranges
+against the aggregate `MAX_EXPLICIT_SEEDS = 10000` before any seed values are materialized. This frontend
+authoring cap is separate from the overall backend Job-budget preflight, not a new compiler read limit.
+
+Request building, saving, canonical intent, summary, and Seeds completion share that parser. The summary
+for `5-10` is `Explicit · 6 seeds`. Invalid input leaves the count invalid and Seeds incomplete; Preview
+returns actionable Seeds errors locally without an API request. Only expanded Explicit arrays cross the
+API or enter durable Saved Batch/Run snapshots. Reloading a Saved Batch or using `Load Run as Batch`
+normalizes those arrays to newline-separated values. Existing browser recovery may keep raw draft text;
+the no-persisted-shorthand rule applies to durable files, not a new browser seed-intent format.
+Historical arrays above 10,000 remain readable in full without truncation, while new frontend writes
+and Preview enforce the cap. No API, backend compiler, SQLite, or v1 schema change is introduced.
+
+### Random Seeds
+
 Random x N means N fastest-varying repetitions for every ordered non-seed configuration. The backend
 Preview boundary determines the final Job count and materializes one unique concrete seed per Job within
 `0..2^53-1`. It then passes those ordered assignments to the pure logical compiler; the compiler performs

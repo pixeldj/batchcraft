@@ -13,6 +13,7 @@ import {
   buildLinkedParameterSets,
   missingPromptPlaceholders,
   parameterRangeCount,
+  parseExplicitSeedValues,
   newVariableBinding,
   normalizedBindingValues,
   profileParameters,
@@ -106,7 +107,17 @@ export function BatchEditor({
       && normalizedBindingValues(binding.values).length > 0,
     ),
   );
-  const seedsComplete = form.seedMode === "random"
+  let explicitSeedCount: number | null = null;
+  if (form.seedMode === "explicit") {
+    try {
+      explicitSeedCount = parseExplicitSeedValues(form.seedValues).length;
+    } catch {
+      // Keep invalid drafts expanded for repair.
+    }
+  }
+  const seedsComplete = form.seedMode === "explicit"
+    ? explicitSeedCount !== null
+    : form.seedMode === "random"
     ? /^\d+$/.test(form.randomSeedCount.trim())
     : form.seedValues.trim().length > 0;
   const parametersComplete = parameterBindingsComplete(form.parameterBindings, form.linkedParameterSets, parameters);
@@ -331,7 +342,7 @@ export function BatchEditor({
 
       <ConfigurationSection
         title="Seeds"
-        summary={seedSummary(form)}
+        summary={seedSummary(form, explicitSeedCount)}
         expanded={seedsExpanded}
         collapsible={seedsComplete}
         controlsId="seed-controls"
@@ -381,7 +392,7 @@ export function BatchEditor({
               id="seed-values"
               className="short-list"
               label="Explicit seeds"
-              hint="Integers, one per line or comma-separated"
+              hint="Integers or inclusive ranges such as 5-10, one per line or comma-separated"
               value={form.seedValues}
               onChange={(event) => update("seedValues", event.target.value)}
             />
@@ -550,11 +561,11 @@ function displayBindingValue(value: string): string {
   return value === "" ? "(empty)" : value;
 }
 
-function seedSummary(form: BatchFormState): string {
+function seedSummary(form: BatchFormState, explicitSeedCount: number | null): string {
   if (form.seedMode === "random") return `Random × ${form.randomSeedCount.trim() || "?"}`;
   if (form.seedMode === "fixed") return `Fixed · ${form.seedValues.trim() || "not set"}`;
-  const seeds = form.seedValues.split(/[\n,]/).map((seed) => seed.trim()).filter(Boolean);
-  return `Explicit · ${seeds.length} ${seeds.length === 1 ? "seed" : "seeds"}`;
+  if (explicitSeedCount === null) return "Explicit · incomplete";
+  return `Explicit · ${explicitSeedCount} ${explicitSeedCount === 1 ? "seed" : "seeds"}`;
 }
 
 function parameterBindingsComplete(

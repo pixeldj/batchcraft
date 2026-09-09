@@ -7,6 +7,9 @@ import {
   editableBatchSnapshotToForm,
   editableBatchSnapshotIdentity,
   initialBatchForm,
+  FormBuildError,
+  MAX_EXPLICIT_SEEDS,
+  parseExplicitSeedValues,
   MAX_RANDOM_SEED_COUNT,
   missingPromptPlaceholders,
   newPrompt,
@@ -19,6 +22,53 @@ import {
   restoreHistoricalResourceState,
   withMaterializedRandomSeeds,
 } from "./form";
+
+describe("parseExplicitSeedValues", () => {
+  it.each([
+    ["5-10", [5, 6, 7, 8, 9, 10]],
+    ["3 - 0", [3, 2, 1, 0]],
+    ["005 - 007,6", [5, 6, 7, 6]],
+    [" ,\n0, 02\r\n 4-4,\n", [0, 2, 4]],
+    ["9,3-1\n5-6,9", [9, 3, 2, 1, 5, 6, 9]],
+    ["9007199254740990-9007199254740991", [9007199254740990, 9007199254740991]],
+    ["9007199254740991-9007199254740990", [9007199254740991, 9007199254740990]],
+  ])("expands %j inclusively in order", (input, expected) => {
+    expect(parseExplicitSeedValues(input)).toEqual(expected);
+  });
+
+  it.each([
+    "foo", "5-", "-5", "-0", "5--10", "5-foo", "1-20:2", "1..20",
+    "1e3", "1E3", "+5", "1.0", "0x10", "5 6", "1;2", "5-6-7", "1/2",
+    "9007199254740992", "0-9007199254740992", "9007199254740992-0",
+  ])("rejects invalid item %j with a seeds-field error", (item) => {
+    expect(() => parseExplicitSeedValues(`1,${item}`)).toThrow(FormBuildError);
+    expect(() => parseExplicitSeedValues(`1,${item}`)).toThrow(expect.objectContaining({
+      field: "seeds", message: expect.stringContaining(JSON.stringify(item)),
+    }));
+  });
+
+  it.each(["", " , \n ,\r\n"])("rejects empty input %j", (input) => {
+    expect(() => parseExplicitSeedValues(input)).toThrow(/Enter at least one seed/);
+  });
+
+  it("bounds long endpoints before BigInt conversion without limiting leading zeros", () => {
+    expect(parseExplicitSeedValues(`${"0".repeat(100_000)}5-6`)).toEqual([5, 6]);
+    expect(() => parseExplicitSeedValues("9".repeat(100_000))).toThrow(/between 0 and 9007199254740991/);
+  });
+
+  it.each(["0-9999", "9999-0", "0-9998,0", Array(10_000).fill("5").join(",")])(
+    "accepts exactly 10000 values (case %#)", (input) => {
+      expect(parseExplicitSeedValues(input)).toHaveLength(MAX_EXPLICIT_SEEDS);
+    },
+  );
+
+  it.each([
+    "0-10000", "10000-0", "0-9999,0", "0,0-9999", "0-4999,5000-10000",
+    "0-9007199254740991", "9007199254740991-0", Array(10_001).fill("5").join(","),
+  ])("rejects aggregate overflow before expansion (case %#)", (input) => {
+    expect(() => parseExplicitSeedValues(input)).toThrow(/10,000 Explicit seeds limit/);
+  });
+});
 
 describe("Prompt placeholder requirements", () => {
   const prompts = [
@@ -63,6 +113,51 @@ describe("Prompt placeholder requirements", () => {
 });
 
 describe("buildBatchRequest", () => {
+  it("uses expanded Explicit values in both request and snapshot without editing raw text", () => {
+    const form = { ...populatedBatchForm(), seedMode: "explicit" as const, seedValues: "005-007,6" };
+    const request = buildBatchRequest(form);
+    expect(request.seeds).toEqual({ mode: "explicit", values: [5, 6, 7, 6] });
+    expect(request.batch_snapshot.seed_intent).toEqual({ mode: "explicit", values: [5, 6, 7, 6], random_seed_count: null });
+    expect(form.seedValues).toBe("005-007,6");
+    expect(editableBatchSnapshotIdentity(request.batch_snapshot)).toBe(editableBatchSnapshotIdentity(
+      buildEditableBatchSnapshot({ ...form, seedValues: "5\n6\n7\n6" }),
+    ));
+  });
+
+  it.each(["5--10", "0-10000"])("rejects invalid Explicit authoring in both builders: %s", (seedValues) => {
+    const form = { ...populatedBatchForm(), seedMode: "explicit" as const, seedValues };
+    expect(() => buildBatchRequest(form)).toThrow(FormBuildError);
+    expect(() => buildEditableBatchSnapshot(form)).toThrow(FormBuildError);
+  });
+
+  it("preserves Fixed negative zero and rejection of range syntax", () => {
+    const form = { ...populatedBatchForm(), seedValues: "-0" };
+    expect(buildBatchRequest(form).seeds.values).toEqual([-0]);
+    expect(() => buildBatchRequest({ ...form, seedValues: "5-10" })).toThrow(/not an integer/);
+  });
+
+  it.each([
+    { values: [5, 6, 7, 6] },
+    { values: Array.from({ length: 10_001 }, (_, index) => index) },
+  ])(
+    "restores historical Explicit arrays unchanged (case %#)", ({ values }) => {
+      const snapshot = buildEditableBatchSnapshot(populatedBatchForm());
+      snapshot.seed_intent = { mode: "explicit", values, random_seed_count: null };
+      const detached = { historical_version_id: null, status: "detached" as const, reason: "missing", linked_version_id: null, linked_resource_id: null };
+      const form = editableBatchSnapshotToForm({
+        run_id: "run-1", batch_snapshot: snapshot,
+        resources: { prompt_versions: [], workflow_version: detached, workflow_profile_version: detached },
+      });
+      expect(form.seedValues).toBe(values.join("\n"));
+      expect(form.seedMode).toBe("explicit");
+      if (values.length > MAX_EXPLICIT_SEEDS) {
+        expect(() => buildBatchRequest(form)).toThrow(/10,000 Explicit seeds limit/);
+      } else {
+        expect(buildBatchRequest(form).seeds.values).toEqual(values);
+      }
+    },
+  );
+
   it("starts without a Project or selected PromptVersions", () => {
     expect(initialBatchForm()).toMatchObject({
       projectId: "",
