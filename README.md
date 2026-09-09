@@ -14,10 +14,13 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 ## Status
 
-Source-only macOS v1.0.0 is available from the public `v1.0.0` tag. The [cross-instance portability gate](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md)
-has passed with owner-reported candidate acceptance, and ADR 0012 is Accepted.
-The [GitHub Release page](https://github.com/pixeldj/batchcraft/releases/tag/v1.0.0) contains release notes and source downloads.
-See BC-025 in [BACKLOG.md](docs/BACKLOG.md) for publication evidence and completion status.
+This source tree targets **v1.1.0**, source-only on macOS. See the
+[v1.1.0 release notes](docs/V1_1_RELEASE_NOTES.md) for changes since v1.0.0 and upgrade precautions.
+The [v1.1.0 GitHub Release page](https://github.com/pixeldj/batchcraft/releases/tag/v1.1.0)
+is the publication point for release notes and source downloads.
+The original [v1 cross-instance portability gate](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md) passed with
+owner-reported candidate acceptance, and ADR 0012 is Accepted. BC-025 in
+[BACKLOG.md](docs/BACKLOG.md) preserves the historical v1.0.0 publication evidence.
 Automated browser coverage is Chromium at desktop and mobile viewport sizes; this is not Safari or
 Windows application acceptance.
 
@@ -34,20 +37,29 @@ editing, deterministic Job preview, durable Run creation,
 background execution start, Job progress, uncropped Result viewing, backend Random seed
 materialization, and repeated Run creation. Random assigns one unique seed per final Job within
 `0..2^53-1`; Run creation uses the exact assignments inspected in Preview.
-Result review uses current-Run Results and Project History grouped by Batch. History refreshes
-automatically when opening a registered Project and after local Run creation or execution finishes;
-normal use does not require pressing Reindex Project. Thumbnails are image-first, with Job and
-integrity metadata available in Result Details.
+Result review uses current-Run Results and Project-wide Gallery/Runs views with bounded pages of
+48 Results or 25 Runs, Run-name/notes search, newest/oldest sorting, and typed historical provenance
+filters. Job-level predicates must match the same Job, including each Result's producing Job.
+Switching review views preserves the Batch draft, valid in-memory Preview, and execution monitoring.
+History reads the index first, then reconciles on review activation and local Run publication/completion;
+changed nonempty pages offer Refresh without moving the current inspection. Reindex Project remains
+an explicit repair action. Image-first cards retain Job and integrity metadata in Result Details,
+with Filter Gallery actions in both historical and current-Run Details and bounded history diagnostics.
+Settings offers System, Light, or Dark appearance with nine curated palettes, stored per browser origin.
+Explicit seeds accept inclusive ascending or descending shorthand such as `5-10` or `10-5`, mixed with
+comma/newline-separated values. New frontend authoring is capped at 10,000 Explicit seeds before
+expansion; Saved Batches and Run snapshots still store ordinary numeric arrays.
 Frozen Run Plan inspection and explicit unavailable execution state remain available. The backend includes
 mutable Project metadata, distinct ownerless adoption, immutable-version libraries, durable Saved Batches, and
 rebuildable historical projections. `Load Run as Batch` restores editable intent, with detached-resource
 relinking and explicit import; Random intent requests fresh seeds on Preview. Exact Rerun is deferred
-beyond v1. Broader Project-history filtering, a global scheduler, and automatic backend recovery remain
-unimplemented. Stop-after-current and local `Stop waiting` detach are supported; neither interrupts ComfyUI.
+beyond v1. Generated thumbnails, richer historical filter combinations, a global scheduler, and automatic
+backend recovery remain deferred. Stop-after-current and local `Stop waiting` detach are supported;
+neither interrupts ComfyUI.
 
 ## Install From Source (macOS)
 
-V1 is source-only on macOS, not a standalone app bundle. Prerequisites: Git,
+v1.1.0 is source-only on macOS, not a standalone app bundle. Prerequisites: Git,
 [`uv`](https://docs.astral.sh/uv/getting-started/installation/) with Python 3.13 or newer,
 and Node.js with npm satisfying `^22.22.2 || ^24.15.0 || >=26.0.0`.
 Node 24.15 or newer in the 24.x line is recommended for the locked frontend dependencies.
@@ -55,7 +67,7 @@ Node 24.15 or newer in the 24.x line is recommended for the locked frontend depe
 ComfyUI must be installed separately; see its [installation guide](https://docs.comfy.org/installation/overview).
 batchcraft does not install GPUs, models, or custom nodes. Replace the URL below with the ComfyUI
 engine's base URL reachable from this Mac, such as `http://<generation-host>:8188`, not batchcraft's URL.
-Use the `v1.0.0` tag for `--revision`.
+Use the published `v1.1.0` tag for `--revision`; the command below targets that release.
 
 ```bash
 git clone https://github.com/pixeldj/batchcraft.git
@@ -65,7 +77,7 @@ uv run --directory backend python -m tools.install_app \
   --app-path "$HOME/ai/batchcraft-app" \
   --data-root "$HOME/ai/batchcraft-data" \
   --comfyui-url "http://<generation-host>:8188" \
-  --revision v1.0.0
+  --revision v1.1.0
 ```
 
 `--revision` is optional and defaults to the source clone's `HEAD`, which is not a release guarantee.
@@ -83,8 +95,12 @@ Open `http://127.0.0.1:8000`. Access is loopback-only by default. Add `--lan-acc
 only for a trusted LAN: there is no authentication, and anyone who can reach the app can read or modify
 data and start GPU Jobs. Do not expose it to the internet.
 
-There are no automatic updates, and the installer does not reuse existing destinations. Follow
-[updating and backing up](docs/LOCAL_INSTANCES.md#updating-and-backing-up) before changing an installation.
+There are no automatic updates, and the installer does not reuse existing destinations. Before updating
+an existing installation, finish active Runs, stop its backend, and back up the **entire data root**,
+including SQLite and any sidecars plus Projects. v1.1.0 preserves the v1 filesystem formats but includes
+forward SQLite migrations `0003_history_browsing` and `0004_history_provenance`. Returning to older code
+after migration requires a deliberate restore of the matching whole-data backup, not just a Git revision
+change. Follow [updating and backing up](docs/LOCAL_INSTANCES.md#updating-and-backing-up).
 
 From the source checkout, after stopping daily and test backends, maintenance commands can refresh an
 independent live-test candidate or update daily to a stable release:
@@ -94,9 +110,11 @@ uv run --directory backend python -m tools.refresh_test
 uv run --directory backend python -m tools.update_daily --fetch
 ```
 
-Test refresh replaces only validated test folders and copies daily data using committed `HEAD`.
-Daily updates accept only stable version tags and take a full data backup before changing code.
-Both require confirmation and leave servers stopped. See [maintenance details and failure recovery](docs/LOCAL_INSTANCES.md#refresh-a-live-test-candidate).
+Test refresh defaults to committed `HEAD`, excludes uncommitted changes, replaces only validated test
+folders, and copies daily data without modifying it. The candidate retains the live ComfyUI host; it is
+not the fake-backed development sandbox. Daily updates accept only stable version tags, refuse downgrades,
+and take a full data backup before changing code. Both require confirmation and leave servers stopped;
+there is no automatic rollback. See [maintenance details and failure recovery](docs/LOCAL_INSTANCES.md#refresh-a-live-test-candidate).
 
 ### Development Sandbox
 
@@ -297,8 +315,8 @@ HTTP/WebSocket operations, sequential Run execution, SQLite-backed Projects, Pro
 Workflow Profiles, and Saved Batches, a thin FastAPI boundary under `backend/`, and the first browser
 workflow under `frontend/`.
 
-Later application slices may add exact replay, broader history filtering,
-scheduler selection, and deeper Result review.
+Project-wide Gallery/Runs browsing and typed provenance filtering are implemented. Later application
+slices may add Exact Rerun, richer filter combinations, scheduler selection, and deeper Result review.
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for working conventions.
 
