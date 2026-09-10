@@ -25,6 +25,42 @@ class SetupCopyRequest(ApiModel):
     description: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
+class AuthoringRequest(ApiModel):
+    request_id: str = Field(min_length=1, max_length=200)
+
+
+class WorkflowSaveRequest(AuthoringRequest):
+    workflow: dict[str, object]
+    note: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
+class WorkflowNewRequest(WorkflowSaveRequest):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
+class ProfileSaveRequest(AuthoringRequest):
+    workflow_version_id: str = Field(min_length=1, max_length=200)
+    mappings: dict[str, object]
+    image_inputs: list[dict[str, object]] = Field(default_factory=list)
+    parameters: list[dict[str, object]]
+    note: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
+class ProfileNewRequest(ProfileSaveRequest):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
+class MetadataRequest(AuthoringRequest):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
+class ArchiveRequest(AuthoringRequest):
+    archived: bool = Field(strict=True)
+
+
 class GlobalWorkflowResponse(ApiModel):
     id: str
     name: str
@@ -122,6 +158,43 @@ class GlobalProfilesResponse(ApiModel):
     next_cursor: str | None
 
 
+class WorkflowHistoryItem(ApiModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    name_snapshot: str
+    content_sha256: str
+    note: str | None
+    created_at: datetime
+    archived_at: datetime | None
+
+
+class ProfileHistoryItem(WorkflowHistoryItem):
+    workflow_profile_id: str
+    workflow_version_id: str
+
+
+class ProfileFamilyItem(GlobalProfileResponse):
+    latest_active_version_id: str | None
+    latest_compatible_version_id: str | None
+    latest_compatible_version: ProfileHistoryItem | None
+
+
+class WorkflowHistoryResponse(ApiModel):
+    items: list[WorkflowHistoryItem]
+    next_cursor: str | None
+
+
+class ProfileHistoryResponse(ApiModel):
+    items: list[ProfileHistoryItem]
+    next_cursor: str | None
+
+
+class ProfileFamiliesResponse(ApiModel):
+    items: list[ProfileFamilyItem]
+    next_cursor: str | None
+
+
 def global_library_router(database_path: Path, reads: ReadCapacity) -> APIRouter:
     router = APIRouter(prefix="/api/library")
     store = GlobalWorkflowStore(database_path)
@@ -131,11 +204,12 @@ def global_library_router(database_path: Path, reads: ReadCapacity) -> APIRouter
         q: str = Query(default="", max_length=200),
         limit: int = Query(default=25, ge=1, le=50),
         cursor: str | None = Query(default=None, max_length=2048),
+        include_archived: bool = False,
     ) -> GlobalCatalogResponse:
         async with reads.claim():
             return await file_operation(
                 lambda: GlobalCatalogResponse.model_validate(
-                    store.browse(q=q, limit=limit, cursor=cursor)
+                    store.browse(q=q, limit=limit, cursor=cursor, include_archived=include_archived)
                 )
             )
 
@@ -184,6 +258,203 @@ def global_library_router(database_path: Path, reads: ReadCapacity) -> APIRouter
         return await file_operation(
             lambda: ProjectCopyResponse.model_validate(
                 store.copy(direction="use", **request.model_dump())
+            )
+        )
+
+    @router.get("/workflows/{workflow_id}", response_model=GlobalCatalogItem)
+    async def workflow_family(workflow_id: str) -> GlobalCatalogItem:
+        async with reads.claim():
+            return await file_operation(
+                lambda: GlobalCatalogItem.model_validate(store.get_workflow(workflow_id))
+            )
+
+    @router.get("/workflows/{workflow_id}/versions", response_model=WorkflowHistoryResponse)
+    async def workflow_history(
+        workflow_id: str,
+        q: str = Query(default="", max_length=200),
+        limit: int = Query(default=25, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=2048),
+        include_archived: bool = False,
+    ) -> WorkflowHistoryResponse:
+        async with reads.claim():
+            return await file_operation(
+                lambda: WorkflowHistoryResponse.model_validate(
+                    store.history(
+                        workflow_id,
+                        kind="workflows",
+                        q=q,
+                        limit=limit,
+                        cursor=cursor,
+                        include_archived=include_archived,
+                    )
+                )
+            )
+
+    @router.get("/workflows/{workflow_id}/profiles", response_model=ProfileFamiliesResponse)
+    async def profile_families(
+        workflow_id: str,
+        workflow_version_id: str | None = Query(default=None, min_length=1, max_length=200),
+        q: str = Query(default="", max_length=200),
+        limit: int = Query(default=25, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=2048),
+        include_archived: bool = False,
+    ) -> ProfileFamiliesResponse:
+        async with reads.claim():
+            return await file_operation(
+                lambda: ProfileFamiliesResponse.model_validate(
+                    store.history(
+                        workflow_id,
+                        kind="profiles",
+                        workflow_version_id=workflow_version_id,
+                        q=q,
+                        limit=limit,
+                        cursor=cursor,
+                        include_archived=include_archived,
+                    )
+                )
+            )
+
+    @router.get("/workflow-profiles/{profile_id}/versions", response_model=ProfileHistoryResponse)
+    async def profile_history(
+        profile_id: str,
+        workflow_version_id: str | None = Query(default=None, min_length=1, max_length=200),
+        q: str = Query(default="", max_length=200),
+        limit: int = Query(default=25, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=2048),
+        include_archived: bool = False,
+    ) -> ProfileHistoryResponse:
+        async with reads.claim():
+            return await file_operation(
+                lambda: ProfileHistoryResponse.model_validate(
+                    store.history(
+                        profile_id,
+                        kind="profile_versions",
+                        workflow_version_id=workflow_version_id,
+                        q=q,
+                        limit=limit,
+                        cursor=cursor,
+                        include_archived=include_archived,
+                    )
+                )
+            )
+
+    @router.post("/workflows", response_model=GlobalWorkflowCreatedResponse, status_code=201)
+    async def create_workflow(request: WorkflowNewRequest) -> GlobalWorkflowCreatedResponse:
+        return await file_operation(
+            lambda: GlobalWorkflowCreatedResponse.model_validate(
+                store.save_workflow(**request.model_dump())
+            )
+        )
+
+    @router.post(
+        "/workflows/{workflow_id}/versions",
+        response_model=GlobalWorkflowVersionResponse,
+        status_code=201,
+    )
+    async def save_workflow(
+        workflow_id: str, request: WorkflowSaveRequest
+    ) -> GlobalWorkflowVersionResponse:
+        return await file_operation(
+            lambda: GlobalWorkflowVersionResponse.model_validate(
+                store.save_workflow(workflow_id=workflow_id, **request.model_dump())
+            )
+        )
+
+    @router.post(
+        "/workflows/{workflow_id}/profiles",
+        response_model=GlobalProfileCreatedResponse,
+        status_code=201,
+    )
+    async def create_profile(
+        workflow_id: str, request: ProfileNewRequest
+    ) -> GlobalProfileCreatedResponse:
+        return await file_operation(
+            lambda: GlobalProfileCreatedResponse.model_validate(
+                store.save_profile(workflow_id=workflow_id, **request.model_dump())
+            )
+        )
+
+    @router.post(
+        "/workflow-profiles/{profile_id}/versions",
+        response_model=GlobalProfileVersionResponse,
+        status_code=201,
+    )
+    async def save_profile(
+        profile_id: str, request: ProfileSaveRequest
+    ) -> GlobalProfileVersionResponse:
+        return await file_operation(
+            lambda: GlobalProfileVersionResponse.model_validate(
+                store.save_profile(profile_id=profile_id, **request.model_dump())
+            )
+        )
+
+    @router.patch("/workflows/{workflow_id}", response_model=GlobalWorkflowResponse)
+    async def workflow_metadata(
+        workflow_id: str, request: MetadataRequest
+    ) -> GlobalWorkflowResponse:
+        return await file_operation(
+            lambda: GlobalWorkflowResponse.model_validate(
+                store.update_metadata(
+                    workflow_id,
+                    request_id=request.request_id,
+                    changes=request.model_dump(exclude={"request_id"}, exclude_unset=True),
+                )
+            )
+        )
+
+    @router.patch("/workflow-profiles/{profile_id}", response_model=GlobalProfileResponse)
+    async def profile_metadata(profile_id: str, request: MetadataRequest) -> GlobalProfileResponse:
+        return await file_operation(
+            lambda: GlobalProfileResponse.model_validate(
+                store.update_metadata(
+                    profile_id,
+                    request_id=request.request_id,
+                    profile=True,
+                    changes=request.model_dump(exclude={"request_id"}, exclude_unset=True),
+                )
+            )
+        )
+
+    @router.post("/workflows/{workflow_id}/archive", response_model=GlobalWorkflowResponse)
+    async def workflow_archive(workflow_id: str, request: ArchiveRequest) -> GlobalWorkflowResponse:
+        return await file_operation(
+            lambda: GlobalWorkflowResponse.model_validate(
+                store.set_archived(workflow_id, kind="workflow", **request.model_dump())
+            )
+        )
+
+    @router.post("/workflow-profiles/{profile_id}/archive", response_model=GlobalProfileResponse)
+    async def profile_archive(profile_id: str, request: ArchiveRequest) -> GlobalProfileResponse:
+        return await file_operation(
+            lambda: GlobalProfileResponse.model_validate(
+                store.set_archived(profile_id, kind="workflow_profile", **request.model_dump())
+            )
+        )
+
+    @router.post(
+        "/workflow-versions/{version_id}/archive", response_model=GlobalWorkflowVersionResponse
+    )
+    async def workflow_version_archive(
+        version_id: str, request: ArchiveRequest
+    ) -> GlobalWorkflowVersionResponse:
+        return await file_operation(
+            lambda: GlobalWorkflowVersionResponse.model_validate(
+                store.set_archived(version_id, kind="workflow_version", **request.model_dump())
+            )
+        )
+
+    @router.post(
+        "/workflow-profile-versions/{version_id}/archive",
+        response_model=GlobalProfileVersionResponse,
+    )
+    async def profile_version_archive(
+        version_id: str, request: ArchiveRequest
+    ) -> GlobalProfileVersionResponse:
+        return await file_operation(
+            lambda: GlobalProfileVersionResponse.model_validate(
+                store.set_archived(
+                    version_id, kind="workflow_profile_version", **request.model_dump()
+                )
             )
         )
 

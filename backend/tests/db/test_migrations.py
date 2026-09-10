@@ -30,6 +30,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "global_workflow_profile",
             "global_workflow_profile_version",
             "global_workflow_copy_receipt",
+            "global_workflow_authoring_receipt",
             "schema_migration",
             "project",
             "prompt",
@@ -74,6 +75,9 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
         assert indexes == {
             "global_workflow_catalog",
             "global_profile_target",
+            "global_profile_families",
+            "global_workflow_history",
+            "global_profile_history",
             "prompt_project_idx",
             "prompt_version_prompt_idx",
             "workflow_project_idx",
@@ -112,6 +116,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
             "global_workflow_version_immutable",
             "global_profile_version_immutable",
             "global_copy_receipt_immutable",
+            "global_authoring_receipt_immutable",
             "prompt_version_immutable",
             "workflow_version_immutable",
             "workflow_profile_version_immutable",
@@ -156,6 +161,7 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
         migration_three_path = migration_path.with_name("0003_history_browsing.sql")
         migration_four_path = migration_path.with_name("0004_history_provenance.sql")
         migration_five_path = migration_path.with_name("0005_global_workflow_library.sql")
+        migration_six_path = migration_path.with_name("0006_global_workflow_authoring.sql")
         assert connection.execute(
             "SELECT version, name, checksum, applied_at FROM schema_migration ORDER BY version"
         ).fetchall() == [
@@ -189,10 +195,16 @@ def test_initial_migration_creates_schema_and_history(tmp_path: Path) -> None:
                 hashlib.sha256(migration_five_path.read_bytes()).hexdigest(),
                 "2026-08-28T12:30:00.000000Z",
             ),
+            (
+                6,
+                "global_workflow_authoring",
+                hashlib.sha256(migration_six_path.read_bytes()).hexdigest(),
+                "2026-08-28T12:30:00.000000Z",
+            ),
         ]
 
         apply_migrations(connection, clock=lambda: pytest.fail("no migration should run"))
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (5,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (6,)
     finally:
         connection.close()
 
@@ -284,7 +296,10 @@ def test_future_contiguous_migration_preserves_existing_data(
             "0005_global_workflow_library.sql": (
                 migration_root / "0005_global_workflow_library.sql"
             ).read_text(),
-            "0006_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
+            "0006_global_workflow_authoring.sql": (
+                migration_root / "0006_global_workflow_authoring.sql"
+            ).read_text(),
+            "0007_future.sql": "CREATE TABLE future_marker (id TEXT PRIMARY KEY) STRICT;",
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -316,7 +331,8 @@ def test_future_contiguous_migration_preserves_existing_data(
             (3, "history_browsing"),
             (4, "history_provenance"),
             (5, "global_workflow_library"),
-            (6, "future"),
+            (6, "global_workflow_authoring"),
+            (7, "future"),
         ]
     finally:
         connection.close()
@@ -524,7 +540,7 @@ def test_concurrent_startup_serializes_migration_application(tmp_path: Path) -> 
 
     connection = open_connection(database_path)
     try:
-        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (5,)
+        assert connection.execute("SELECT count(*) FROM schema_migration").fetchone() == (6,)
     finally:
         connection.close()
 
@@ -534,7 +550,7 @@ def test_unknown_newer_database_and_history_gap_are_rejected(tmp_path: Path) -> 
     gap = open_connection(tmp_path / "gap.sqlite3")
     try:
         apply_migrations(newer)
-        newer.execute("INSERT INTO schema_migration VALUES (6, 'future', ?, 'now')", ("0" * 64,))
+        newer.execute("INSERT INTO schema_migration VALUES (7, 'future', ?, 'now')", ("0" * 64,))
         newer.commit()
         with pytest.raises(MigrationError, match="newer than application"):
             apply_migrations(newer)

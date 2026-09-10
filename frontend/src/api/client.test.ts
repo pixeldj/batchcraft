@@ -4,6 +4,56 @@ import { ApiError, BatchcraftApiClient } from "./client";
 import type { HistoryQuery, HistoryResultPageResponse, HistoryRunPageResponse, HistoryRunSummaryResponse } from "./types";
 
 describe("BatchcraftApiClient", () => {
+  it("reads bounded global roots, families, and histories with exact target and archive scope", async () => {
+    const fetcher = repeatedSuccessfulFetch({ items: [], next_cursor: null }); vi.stubGlobal("fetch", fetcher);
+    const api = new BatchcraftApiClient("");
+    const signal = new AbortController().signal;
+    await api.getGlobalWorkflow("w /?", signal);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflows/w%20%2F%3F", { signal });
+    const query = { q: "old &+", limit: 20, cursor: "next+/=", include_archived: true, workflow_version_id: "exact /" };
+    for (const [method, path] of [["listGlobalWorkflowVersions", "workflows/w%20%2F%3F/versions"], ["listGlobalProfileFamilies", "workflows/w%20%2F%3F/profiles"], ["listGlobalProfileVersions", "workflow-profiles/w%20%2F%3F/versions"]] as const) {
+      await api[method]("w /?", query, signal);
+      expect(fetcher).toHaveBeenLastCalledWith(`/api/library/${path}?q=old+%26%2B&limit=20&cursor=next%2B%2F%3D&include_archived=true&workflow_version_id=exact+%2F`, { signal });
+    }
+  });
+
+  it("sends create and append authoring bodies without changing names, source targets, or optional values", async () => {
+    const response = { workflow: { id: "family" }, version: { id: "exact" } };
+    const fetcher = repeatedSuccessfulFetch(response); vi.stubGlobal("fetch", fetcher);
+    const api = new BatchcraftApiClient("");
+    const workflow = { request_id: "stable-w", workflow: { node: { inputs: { seed: 0 } } }, note: null };
+    const profile = { request_id: "stable-p", workflow_version_id: "old-exact", mappings: {}, image_inputs: [], parameters: [], note: "repair" };
+    await expect(api.createGlobalWorkflow({ ...workflow, name: "Named", description: null })).resolves.toEqual(response);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflows", expect.objectContaining({ method: "POST", body: JSON.stringify({ ...workflow, name: "Named", description: null }) }));
+    await api.appendGlobalWorkflow("w /", workflow);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflows/w%20%2F/versions", expect.objectContaining({ method: "POST", body: JSON.stringify(workflow) }));
+    await api.createGlobalProfile("w /", { ...profile, name: "Mapping" });
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflows/w%20%2F/profiles", expect.objectContaining({ method: "POST", body: JSON.stringify({ ...profile, name: "Mapping" }) }));
+    await api.appendGlobalProfile("p /", profile);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/library/workflow-profiles/p%20%2F/versions", expect.objectContaining({ method: "POST", body: JSON.stringify(profile) }));
+  });
+
+  it.each(["updateGlobalWorkflow", "updateGlobalProfile"] as const)("preserves omitted versus null metadata in %s", async (method) => {
+    const fetcher = repeatedSuccessfulFetch({ id: "root" }); vi.stubGlobal("fetch", fetcher);
+    const api = new BatchcraftApiClient("");
+    for (const body of [{ request_id: "rename", name: "Current name" }, { request_id: "clear", description: null }]) {
+      await api[method]("root /", body);
+      expect(fetcher).toHaveBeenLastCalledWith(`/api/library/${method === "updateGlobalWorkflow" ? "workflows" : "workflow-profiles"}/root%20%2F`, expect.objectContaining({ method: "PATCH", body: JSON.stringify(body) }));
+    }
+  });
+
+  it.each(["workflows", "workflow-profiles", "workflow-versions", "workflow-profile-versions"] as const)("archives and unarchives %s without automatic retries", async (kind) => {
+    const fetcher = repeatedSuccessfulFetch({ id: "entry" }); vi.stubGlobal("fetch", fetcher);
+    const api = new BatchcraftApiClient("");
+    for (const archived of [true, false]) {
+      const body = { request_id: `stable-${archived}`, archived };
+      await api.archiveGlobalEntry(kind, "entry /", body);
+      expect(fetcher).toHaveBeenLastCalledWith(`/api/library/${kind}/entry%20%2F/archive`, expect.objectContaining({ method: "POST", body: JSON.stringify(body) }));
+    }
+    fetcher.mockRejectedValueOnce(new Error("lost response"));
+    await expect(api.archiveGlobalEntry(kind, "entry", { request_id: "retry", archived: true })).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
   it("encodes global catalog and exact detail paths and forwards cancellation", async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ items: [], next_cursor: null })));
     vi.stubGlobal("fetch", fetcher);

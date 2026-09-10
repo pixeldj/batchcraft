@@ -7,7 +7,7 @@ export function useModalDialog(
   dialogRef: RefObject<HTMLDialogElement | null>,
   onClose: () => void,
   restoreTarget: HTMLElement | null,
-  closeRef: RefObject<HTMLButtonElement | null>,
+  initialFocusRef: RefObject<HTMLElement | null>,
   enabled = true,
 ) {
   const restoreTargetRef = useRef(restoreTarget);
@@ -20,7 +20,7 @@ export function useModalDialog(
     if (modalStack.length === 0) previousOverflow = document.body.style.overflow;
     modalStack.push(dialog);
     document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
+    initialFocusRef.current?.focus();
     return () => {
       modalStack.splice(modalStack.indexOf(dialog), 1);
       dialog.close();
@@ -36,7 +36,7 @@ export function useModalDialog(
       const remaining = modalStack.at(-1);
       if (!remaining || remaining.contains(target)) target.focus();
     };
-  }, [closeRef, dialogRef, enabled]);
+  }, [initialFocusRef, dialogRef, enabled]);
 
   function onCancel(event: SyntheticEvent<HTMLDialogElement>) {
     event.preventDefault();

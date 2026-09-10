@@ -100,22 +100,36 @@ lowercase readable snake case, start with a letter, and do not change when label
 
 ### Global Workflow Library
 
-BC-026's first slice adds Workflow Library above Projects. Browse and inspect reusable setups without
-selecting a Project. Import to Library currently opens a source Project chooser, then an exact Workflow
-revision and compatible Profile selections; it does not import JSON directly or read frozen Run setups
-yet. Choosing any registered source Project here does not switch the current Batch draft.
+BC-026 adds Workflow Library above Projects. The first slice established Project-independent browsing
+and Project-source copies. Import to Library opens a source Project chooser, then an exact Workflow
+revision and compatible Profile selections. Choosing another registered source Project does not switch
+the current Batch draft. Import from frozen Run Plan/Result Details remains queued.
 
-Global browsing inspects the most recent active WorkflowVersion and exact compatible Profile details.
-It is not yet a full global version-history editor. Use in this Project first copies the reviewed setup
+The current authoring checkpoint adds New Workflow directly in the global library. Its single Save
+action saves the Workflow, then opens the shared Profile mapper with `${name}-profile` prefilled.
+Cancel keeps the saved Workflow; Profile save errors retain the Profile draft without creating another
+Workflow. Paste ComfyUI API-format JSON or choose a JSON-object file up to 64 MiB. The backend validates
+the API format; batchcraft does not convert ComfyUI editor-format files.
+
+Project and global authoring share Workflow/Profile dialogs, with independently scrolling content,
+stable heading/actions, explicit initial field focus, and confirmation before discarding dirty drafts.
+Global Edit/Save creates immutable internal revisions without changing Project copies or Batch/Preview.
+Version numbers and technical revision details belong in History, not normal browsing. History supports
+exact inspection and restoring old content as a new revision. Metadata names/descriptions can change
+without rewriting old snapshots or hashes. Archive/unarchive covers families and revisions; names remain
+reserved and nothing is hard-deleted. Profile families remain visible when their mappings need review
+against the viewed exact Workflow; repairs use the same mapper rather than silently retargeting them.
+
+Use in this Project first copies the reviewed setup
 into the selected, verified Project under independent identities. After copying, Use copied setup and
 replacement confirmation explicitly apply the chosen copied Profile (or Workflow alone) to the Batch.
 Only application changes the draft and invalidates Preview; browsing/import/copy alone do not.
 Copies never follow source edits automatically, and changed Project/draft guards prevent stale apply.
 
-Historical Run import, direct global JSON import, full global revision management and archive endpoints
-remain queued, not completed. Existing v1 Project archives still carry setups used by Runs, not unused
-global libraries. BC-026 remains In Progress. The target is v1.2.0 after all agreed Workflow updates and
-verification; the actual application version remains 1.1.0 and this first slice is not a release.
+Existing v1 Project archives still carry setups used by Runs, not unused global libraries. BC-026 remains
+In Progress pending historical Import to Library and final acceptance. Workflow images are deferred,
+optional upcoming work, not a v1.2.0 completion gate. The target is v1.2.0 after agreed work and
+verification; the actual application version remains 1.1.0. This checkpoint does not publish a tag or release.
 
 ### Prompt Template
 

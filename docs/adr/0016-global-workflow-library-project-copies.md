@@ -46,13 +46,32 @@ old Run files, or broaden v1 import into restoration of all unused mutable resou
 
 ## Consequences
 
-Implementation checkpoint: the first slice provides separate global tables via migration 0005,
+Historical checkpoint: the first slice provided separate global tables via migration 0005,
 six library API routes, Project-source import, atomic receipt-backed Project copies, and application-wide
-browsing with explicit guarded application. The UI inspects the most recent active exact global
+browsing with explicit guarded application. That UI inspected the most recent active exact global
 WorkflowVersion and selected compatible Profile details, not full global Workflow version history.
-Direct global JSON import, frozen Run import, global revision-management surfaces and archive endpoints
-remain queued. This incremental implementation does not change Accepted status or the v1 portability
-contract; application version remains 1.1.0 pending the remaining agreed v1.2.0 Workflow work.
+At that checkpoint, direct global JSON authoring, frozen Run import, revision-management surfaces and
+archive endpoints were queued.
+
+Current authoring checkpoint: global create/append, logical metadata, archive/unarchive, bounded
+Profile-family and revision History reads are implemented. Migration 0006 adds a separate authoring
+receipt table and indexes without changing applied 0005. Each mutation atomically stores its request
+ID, canonical operation/target/payload and response; exact retries replay, incompatible reuse conflicts
+with 409. These receipts do not change the copy-receipt namespace or Project persistence contract.
+
+Project and global authoring reuse one dialog/mapper while retaining separate ownership semantics.
+Global New Workflow saves once, then opens the prefilled `${name}-profile` mapper; cancelling or failing
+the Profile stage does not undo or recreate the Workflow. Edit/Save appends internal immutable revisions;
+History exposes version numbers and technical identity and restores old content by append. Metadata
+names/descriptions and logical/version archive state do not rewrite old snapshots or hashes. Names
+remain reserved through archival, and no hard delete is exposed. Profile families needing review remain
+discoverable; exact target relationships are never silently reassigned. Global operations do not alter
+Project Batch/Preview state, independent copies, or frozen Runs.
+
+Frozen Run Plan/Result Details Import to Library remains queued. BC-026 remains In Progress; this
+incremental implementation does not change Accepted status or the v1 portability contract. Application
+version remains 1.1.0 with no v1.2.0 tag; final acceptance is still required. Workflow images are deferred
+optional upcoming work, not a v1.2.0 completion gate.
 
 - Global and Project copies intentionally diverge. There is no automatic upgrade or synchronization.
 - The first slice can import existing Project setups before adding historical sources or catalog editors.

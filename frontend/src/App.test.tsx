@@ -132,6 +132,62 @@ describe("Explicit seed ranges", () => {
 });
 
 describe("Global Workflow Library navigation", () => {
+  it("creates and edits global content without a Project, retaining an unfinished dialog across workspace navigation", async () => {
+    localStorage.clear();
+    window.history.replaceState(null, "", "/?view=workflows");
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Independent setup" } });
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Workflow JSON"), { target: { value: JSON.stringify(copiedSetup.workflow.version.workflow) } });
+    act(() => {
+      window.history.pushState(null, "", "/?view=batch");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    expect(await screen.findByLabelText("Name")).toHaveValue("Independent setup");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    const dialog = await screen.findByRole("dialog", { name: "New Profile" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Independent setup-profile");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.appendGlobalWorkflow).toHaveBeenCalledOnce());
+    expect(api.createGlobalWorkflow).toHaveBeenCalledOnce();
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.createWorkflow).not.toHaveBeenCalled();
+    expect(api.createWorkflowProfile).not.toHaveBeenCalled();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+  });
+
+  it("preserves the current Batch and valid Preview through global creation, metadata editing, and archive", async () => {
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    await reachPreview();
+    const baseline = canonicalBatchIntent(loadWorkingSession().form);
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Workflow" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Global only" } });
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Workflow JSON"), { target: { value: JSON.stringify(copiedSetup.workflow.version.workflow) } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    const profile = await screen.findByRole("dialog", { name: "New Profile" });
+    fireEvent.click(within(profile).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Workflow metadata" }));
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Description (optional)"), { target: { value: "Catalog description" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: "Archive Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Batch" }));
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toEqual(baseline);
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(api.useGlobalSetup).not.toHaveBeenCalled();
+    expect(api.reindexProject).not.toHaveBeenCalled();
+  });
+
   it("opens without a Project and ignores invalid history filters without scanning history", async () => {
     localStorage.clear();
     window.history.replaceState(null, "", "/?view=workflows&q=history&library_q=portrait&filters=invalid");
@@ -190,7 +246,7 @@ describe("Global Workflow Library navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
     fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use in this Project" }));
-    fireEvent.click(await screen.findByRole("checkbox", { name: "Portrait mapping / v1" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Portrait mapping" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
     await screen.findByText(/Copied to Project/);
     expect(loadWorkingSession().form.workflowVersionId).not.toBe("copied-w-v1");
@@ -272,6 +328,84 @@ describe("Session notices", () => {
 });
 
 describe("Workspace navigation", () => {
+  it("suspends the dirty Project Workflow portal on Back/Forward despite declined cancellation", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const api = makeApi({ createWorkflow: vi.fn(async () => copiedSetup.workflow) });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "New Workflow" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Unfinished Project Workflow" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    for (const destination of ["gallery", "runs"]) {
+      act(() => {
+        window.history.pushState(null, "", `/?view=${destination}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(dialog).not.toHaveAttribute("open");
+      expect(document.body.style.overflow).not.toBe("hidden");
+      expect(window.location.search).toBe(`?view=${destination}`);
+      act(() => {
+        window.history.pushState(null, "", "/");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      expect(await screen.findByRole("dialog", { name: "New Workflow" })).toBe(dialog);
+      expect(within(dialog).getByLabelText("Name")).toHaveValue("Unfinished Project Workflow");
+    }
+    expect(confirm).toHaveBeenCalledOnce();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Workflow" }));
+    await waitFor(() => expect(api.createWorkflow).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    confirm.mockRestore();
+  });
+
+  it.each(["succeeded", "failed"])("suspends a pending Project save and returns to its latest %s state", async (outcome) => {
+    const pending = deferred<void>();
+    const api = makeApi({ createWorkflow: vi.fn(async () => {
+      await pending.promise;
+      if (outcome === "failed") throw new Error("Workflow save failed");
+      return copiedSetup.workflow;
+    }) });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "New Workflow" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Pending Workflow" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Workflow" }));
+    await waitFor(() => expect(api.createWorkflow).toHaveBeenCalledOnce());
+    act(() => {
+      window.history.pushState(null, "", "/?view=workflows");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    // Returning before completion must not remount an unlocked editor or start another save.
+    navigateWorkspace("Batch");
+    expect(await screen.findByRole("dialog", { name: "New Workflow" })).toBe(dialog);
+    expect(within(dialog).getByRole("button", { name: "Saving..." })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    act(() => {
+      window.history.pushState(null, "", "/?view=workflows");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await act(async () => pending.resolve());
+    expect(window.location.search).toBe("?view=workflows");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    navigateWorkspace("Batch");
+    if (outcome === "succeeded") {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(loadWorkingSession().form.workflowVersionId).toBe(copiedSetup.workflow.version.id);
+    } else {
+      const reopened = await screen.findByRole("dialog", { name: "New Workflow" });
+      expect(reopened).toBe(dialog);
+      expect(within(reopened).getByLabelText("Name")).toHaveValue("Pending Workflow");
+      expect(within(reopened).getByRole("alert")).toHaveTextContent("Workflow save failed");
+      expect(within(reopened).getByRole("button", { name: "Create Workflow" })).toBeEnabled();
+    }
+    expect(api.createWorkflow).toHaveBeenCalledOnce();
+  });
+
   it("retains the raw dirty Batch, Preview, Run metadata draft, and polling monitor across Workflow Library, Gallery and Runs", async () => {
     const form = populatedBatchForm();
     form.batchId = "batch-1";
@@ -4723,6 +4857,7 @@ function makeApi(
     placeholders: ["subject"],
   };
   return {
+    ...workflowLibraryApi(),
     browseGlobalWorkflows: vi.fn(async () => ({ items: [], next_cursor: null })),
     getGlobalWorkflowVersion: vi.fn(async () => { throw new Error("No global Workflow fixture"); }),
     browseGlobalProfiles: vi.fn(async () => ({ items: [], next_cursor: null })),

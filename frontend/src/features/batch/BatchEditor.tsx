@@ -25,6 +25,7 @@ import { SavedBatchSelector, type SavedBatchCreateInput } from "./SavedBatchSele
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
 interface Props {
+  active: boolean;
   form: BatchFormState;
   historicalSourceRunId: string | null;
   api: BatchcraftApi;
@@ -58,6 +59,7 @@ interface Props {
 }
 
 export function BatchEditor({
+  active,
   api,
   form,
   historicalSourceRunId,
@@ -217,6 +219,7 @@ export function BatchEditor({
       </fieldset>
 
       <WorkflowLibraryEditor
+        active={active}
         api={api}
         refreshToken={workflowLibraryRefresh}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}

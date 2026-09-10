@@ -8,6 +8,11 @@
 .global-library-dialog { width: min(42rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; padding: 1rem; }
 .global-library-dialog fieldset { min-width: 0; }
 .global-profile-choice { margin-block: .6rem; overflow-wrap: anywhere; }
+.global-workflow-detail { min-width: 0; }
+.global-workflow-detail h3, .global-workflow-detail h4 { overflow-wrap: anywhere; }
+.global-workflow-detail .global-profile-choice { border-block-end: 1px solid var(--line); padding-block: .7rem; }
+.global-workflow-detail section { margin-block: 1rem; padding: .7rem; border: 1px solid var(--line); border-radius: .5rem; }
+.global-workflow-detail .action-row { flex-wrap: wrap; }
 @media (max-width: 640px) {
   .global-library-grid { grid-template-columns: 1fr; }
   .workspace-navigation nav { flex-wrap: wrap; }

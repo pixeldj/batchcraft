@@ -1529,28 +1529,47 @@ Acceptance scope:
 - Verify Project A -> library -> Project B -> Preview/Run, and historical Project import -> frozen setup
   -> library without the original SQLite/global library. Preserve applied migrations and v1 file bytes.
 
-First implementation pass: global SQLite catalog, bounded reads, Project-source Import to Library,
-Use in this Project, and the application-wide browser. Historical-source import and richer catalog
-revision management remain explicit follow-ups until implemented and verified. Do not mark Done or
-bump/tag v1.2.0 merely because the first pass is usable; the release target does not authorize deployment.
+Historical first implementation pass: global SQLite catalog, bounded reads, Project-source Import to
+Library, Use in this Project, and the application-wide browser. Do not mark Done or bump/tag v1.2.0 merely
+because a checkpoint is usable; the release target does not authorize deployment.
 
-Implemented checkpoint: `api/global_library.py` exposes six routes backed by `db/global_workflows.py`
+Historical checkpoint: `api/global_library.py` exposed six routes backed by `db/global_workflows.py`
 and additive migration `0005_global_workflow_library.sql`; `features/batch/GlobalWorkflowLibrary.tsx`
 provides Project-independent navigation, source-Project import without switching the draft, exact
 Profile inspection, and copy-then-explicit-apply with confirmation and Project/draft guards. Global
 lists use 20-row pages and 20 sliding Previous bookmarks, not a forward-page cap (REST maximum 50).
 Legacy Project-source pickers remain unpaginated. Global Workflow inspection uses the most recent
-active exact version; direct global JSON import, historical Run import, full global revision management
-and archive endpoints are still queued. Copies are atomic, independently persisted and receipt-idempotent;
+active exact version; direct global JSON authoring, historical Run import, full global revision management
+and archive endpoints were then queued. Copies are atomic, independently persisted and receipt-idempotent;
 name collisions do not merge families or leave orphan rows. Applied migrations 0001-0004 and v1 formats
 are unchanged. Actual application version remains 1.1.0.
 
-Verification passed: 782 frontend tests, 1433 backend tests, and 22 fake-backed E2E tests each on Vite
+Historical verification passed: 782 frontend tests, 1433 backend tests, and 22 fake-backed E2E tests each on Vite
 and the built frontend after the pager fix, including Project A -> global -> Project B -> two fake Jobs.
 Lint, formatting, type checks, builds, and diff checks passed; malformed-cursor rejection and forward
 paging beyond 20 pages have regression coverage. Vite reports a non-fatal approximately 515 kB minified
 chunk warning. Four focused browser cases per serving mode passed after the display cleanup.
 This first checkpoint is not final acceptance or a release. See the plan for remaining scope.
+
+Current authoring checkpoint: global create/Edit/Save, logical name/description edits, archive/unarchive
+for families and revisions, and bounded Profile-family/History UI/API are implemented. Migration 0006
+adds atomic authoring receipts (request ID, operation/target/payload, response; conflicting reuse 409),
+separate from copy receipts; applied 0005 remains unchanged. Metadata never rewrites old snapshots or
+hashes. History Restore creates a new revision; archived names remain reserved, with no hard delete.
+Profile families needing review remain visible and preserve exact WorkflowVersion compatibility.
+
+Project/global authoring share dialogs and the mapper. Global New Workflow has one Save, then the
+prefilled `${name}-profile` mapper; Cancel keeps the Workflow, and Profile errors retain drafts without
+duplicating it. JSON-object file input is capped at 64 MiB; backend API-format validation does not convert
+ComfyUI editor format. Dialogs have independently scrolling content, stable heading/footer, explicit
+initial focus and dirty-close confirmation; navigation guards retain draft/pending stages. Stale Profile
+callbacks and repeated receipt hydration cannot overwrite newer drafts/exact choices. Global authoring
+does not change Project Batch/Preview or independent copies; revision numbers stay in History.
+
+Latest authoring verification is tracked in the plan's [current checkpoint](plans/BC-026-global-workflow-library.md#current-authoring-checkpoint).
+BC-026 remains **In Progress**: frozen Run Plan/Result Details Import to Library remains queued, and final
+acceptance is outstanding. Version stays **1.1.0**, with no v1.2.0 tag/release. Workflow images are deferred
+optional upcoming work, not a v1.2.0 completion gate.
 
 ## Maintenance rules
 

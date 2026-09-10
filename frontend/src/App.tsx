@@ -1106,6 +1106,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           </div>
         ) : null}
         <BatchEditor
+          active={navigation.view === "batch"}
           api={api}
           form={form}
           historicalSourceRunId={historicalSourceRunId}

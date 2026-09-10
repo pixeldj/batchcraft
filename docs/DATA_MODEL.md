@@ -201,16 +201,35 @@ Workflow family/version and zero to 50 selected Profile families/versions, all s
 version 1. Profile payload IDs/names are rewritten to their destination identities and revalidated;
 copied Profiles target the new WorkflowVersion. Project copies retain ordinary Project ownership.
 
-Global Workflow `source_json` records source scope and exact version identities/hashes.
+For copied global Workflows, `source_json` records source scope and exact version identities/hashes.
+Directly authored Workflows use `{"scope":"library"}` rather than inventing copy ancestry.
 `global_workflow_copy_receipt` stores an immutable request ID, canonical request, full response, and
-creation timestamp in the same transaction as all copies. Request IDs are application-wide across both
+creation timestamp in the same transaction as all copies. Copy request IDs are application-wide across both
 directions; changed request reuse conflicts. Receipts have no source foreign keys, so retries can return
 the original copies after source loss. Failure rolls back the whole setup without orphan copy rows.
 
 This catalog is durable mutable application state covered by whole-data backups, not a historical
 filesystem index. It does not travel as unused library data in v1 Project archives. Existing Run
-snapshots remain historical authority. Archive fields exist, but global archive HTTP endpoints and full
-revision-management UI are not implemented in this first slice.
+snapshots remain historical authority. The first slice introduced these tables and copy contracts;
+the current authoring checkpoint adds create/append, metadata, archive/unarchive and History surfaces.
+
+Forward migration `0006_global_workflow_authoring.sql` leaves applied 0005 bytes unchanged. It adds
+`global_workflow_authoring_receipt` with `request_id` primary key, canonical `request_json` containing
+operation, target and payload, full `response_json`, and `created_at`; an update trigger protects receipt
+immutability. This namespace is independent of copy receipts. The receipt and mutation commit atomically;
+exact retries replay the stored response after restart, while incompatible ID reuse conflicts (HTTP 409).
+It also adds indexes for Profile-family browsing and Workflow/Profile revision History.
+
+Content saves append immutable internal revisions. Logical metadata edits do not rewrite old name
+snapshots, Profile payload names, canonical JSON or hashes. Logical families and individual versions
+can be archived/unarchived independently, without hard deletion or releasing reserved names. Bounded
+History reads exclude archived versions by default. Restore from History appends old content as a new
+revision, retaining the Profile's exact WorkflowVersion target and normal validation.
+
+Bounded Profile-family reads preserve families with no active revision compatible with the viewed exact
+WorkflowVersion. They expose latest active and latest compatible IDs plus compatible revision metadata,
+not full payloads. A needs-review family is not implicitly retargeted; saving repaired mappings creates
+a new ProfileVersion. None of these catalog operations rewrites Project copies, Batch references or Runs.
 
 ## Workflow
 

@@ -1,6 +1,6 @@
 import { vi } from "vitest";
-import type { BatchcraftApi } from "../api/client";
-import type { GlobalCatalogItem, GlobalCopyResponse, GlobalProfileMetadata, GlobalWorkflowVersion, ProjectCopyResponse } from "../api/types";
+import type { BatchcraftApi, LibraryApi } from "../api/client";
+import type { GlobalCatalogItem, GlobalCopyResponse, GlobalProfileFamily, GlobalProfileMetadata, GlobalWorkflowVersion, ProjectCopyResponse } from "../api/types";
 
 const metadata = { created_at: "2026-09-09T10:00:00Z", updated_at: "2026-09-09T10:00:00Z", archived_at: null, description: null };
 export const globalWorkflow: GlobalCatalogItem = { ...metadata, id: "global-w", name: "Reusable portrait", source: {}, latest_version_id: "global-w-v1" };
@@ -20,9 +20,21 @@ export const copiedSetup: ProjectCopyResponse = {
   } }],
 };
 export const importedSetup: GlobalCopyResponse = { request_id: "receipt", source: {}, workflow: { workflow: globalWorkflow, version: globalVersion }, profiles: [] };
+export const globalProfileFamily: GlobalProfileFamily = { ...metadata, id: "global-p", workflow_id: "global-w", name: "Portrait mapping", latest_active_version_id: globalProfile.id, latest_compatible_version_id: globalProfile.id, latest_compatible_version: { ...globalProfile, note: null, archived_at: null } };
 
-export function workflowLibraryApi(): Partial<BatchcraftApi> {
+export function workflowLibraryApi(): LibraryApi & Partial<BatchcraftApi> {
   return {
+    getGlobalWorkflow: vi.fn(async () => globalWorkflow),
+    listGlobalWorkflowVersions: vi.fn(async () => ({ items: [globalVersion], next_cursor: null })),
+    listGlobalProfileFamilies: vi.fn(async () => ({ items: [globalProfileFamily], next_cursor: null })),
+    listGlobalProfileVersions: vi.fn(async () => ({ items: [{ ...globalProfile, note: null, archived_at: null }], next_cursor: null })),
+    createGlobalWorkflow: vi.fn(async (body) => ({ workflow: { ...globalWorkflow, name: body.name, description: body.description ?? null }, version: { ...globalVersion, name_snapshot: body.name, workflow: body.workflow } })),
+    appendGlobalWorkflow: vi.fn(async (_id, body) => ({ ...globalVersion, id: "global-w-v2", version_number: 2, workflow: body.workflow })),
+    createGlobalProfile: vi.fn(async (_id, body) => ({ workflow_profile: { ...globalProfileFamily, name: body.name }, version: { ...globalProfile, note: null, archived_at: null, profile: { mappings: body.mappings, image_inputs: body.image_inputs, parameters: body.parameters } } })),
+    appendGlobalProfile: vi.fn(async (_id, body) => ({ ...globalProfile, id: "global-p-v2", version_number: 2, note: null, archived_at: null, profile: { mappings: body.mappings, image_inputs: body.image_inputs, parameters: body.parameters } })),
+    updateGlobalWorkflow: vi.fn(async (_id, body) => ({ ...globalWorkflow, ...body })),
+    updateGlobalProfile: vi.fn(async (_id, body) => ({ ...globalProfileFamily, ...body })),
+    archiveGlobalEntry: vi.fn(async () => globalWorkflow),
     browseGlobalWorkflows: vi.fn(async () => ({ items: [globalWorkflow], next_cursor: null })),
     getGlobalWorkflowVersion: vi.fn(async () => globalVersion),
     browseGlobalProfiles: vi.fn(async () => ({ items: [globalProfile], next_cursor: null })),

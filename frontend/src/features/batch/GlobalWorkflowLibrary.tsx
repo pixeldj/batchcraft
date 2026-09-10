@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { BatchcraftApi } from "../../api/client";
-import type { GlobalCatalogItem, GlobalWorkflowVersion, GlobalProfileMetadata, JsonObject, LibraryPage, LibraryWorkflowVersion, LibraryWorkflowProfileVersion, ProjectCopyResponse, ProjectResponse, ProjectWorkflow, SetupCopyRequest } from "../../api/types";
+import type { GlobalCatalogItem, GlobalProfile, GlobalWorkflowVersion, JsonObject, LibraryPage, LibraryWorkflowVersion, LibraryWorkflowProfileVersion, ProjectCopyResponse, ProjectResponse, ProjectWorkflow, SetupCopyRequest } from "../../api/types";
 import { useModalDialog } from "../../components/useModalDialog";
 import { errorMessage } from "../../utils/errors";
+import { GlobalWorkflowDetail, GlobalLibraryHistory } from "./GlobalWorkflowDetail";
+import { useGlobalWorkflowAuthoring } from "./useGlobalWorkflowAuthoring";
 import "./globalWorkflowLibrary.css";
 
 interface Props {
@@ -18,7 +20,7 @@ interface Props {
   onApply(copy: ProjectCopyResponse, profileId: string | null, guard: string): boolean;
 }
 type Receipt = { fingerprint: string; request: SetupCopyRequest; guard: string };
-type Review = { direction: "import" | "use"; version: GlobalWorkflowVersion | LibraryWorkflowVersion; projectId: string; name: string; restored?: SetupCopyRequest };
+type Review = { direction: "import" | "use"; version: GlobalWorkflowVersion | LibraryWorkflowVersion; projectId: string; name: string; restored?: SetupCopyRequest; preferred?: { version_id: string; name: string; familyId: string; version: number } };
 
 export function GlobalWorkflowLibrary(props: Props) {
   const { api, active, query, onQueryChange, projectId, projectName } = props;
@@ -26,20 +28,23 @@ export function GlobalWorkflowLibrary(props: Props) {
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [cursor, setCursor] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  const [preserveExact, setPreserveExact] = useState(false);
+  const [updatedProfile, setUpdatedProfile] = useState<GlobalProfile>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<GlobalCatalogItem | null>(null);
-  const [version, setVersion] = useState<GlobalWorkflowVersion | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [importing, setImporting] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const receipt = useRef<Receipt | null>(null);
   const [search, setSearch] = useState(query);
+  const authoring = useGlobalWorkflowAuthoring(api, active, (root, preserve, profile) => { if (root) setSelected(root); setUpdatedProfile(profile); reload(preserve); });
   // Query changes from Back/Forward reset cursors before a new read can use them.
   const [previousQuery, setPreviousQuery] = useState(query);
   if (query !== previousQuery) {
     setPreviousQuery(query); setSearch(query); setCursor(undefined); setBookmarks([]); setPage(null);
   }
-  const requestKey = JSON.stringify([active, query, cursor, refresh]);
+  const requestKey = JSON.stringify([active, query, cursor, refresh, showArchived]);
   const [previousRequest, setPreviousRequest] = useState(requestKey);
   if (requestKey !== previousRequest) {
     setPreviousRequest(requestKey); setLoading(true); setError(null); setPage(null);
@@ -47,58 +52,46 @@ export function GlobalWorkflowLibrary(props: Props) {
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
-    void api.browseGlobalWorkflows({ q: query, limit: 20, cursor }, controller.signal).then((result) => {
+    void api.browseGlobalWorkflows({ q: query, limit: 20, cursor, ...(showArchived ? { include_archived: true } : {}) }, controller.signal).then((result) => {
       if (!controller.signal.aborted) setPage(result);
     }).catch((caught: unknown) => {
       if (!controller.signal.aborted) setError(errorMessage(caught));
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [active, api, query, cursor, refresh]);
-  useEffect(() => {
-    if (!active || !selected?.latest_version_id) return;
-    const controller = new AbortController();
-    void api.getGlobalWorkflowVersion(selected.latest_version_id, controller.signal).then((result) => {
-      if (!controller.signal.aborted) setVersion(result);
-    }).catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); });
-    return () => controller.abort();
-  }, [active, api, selected, refresh]);
-  function reload() { setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }
+  }, [active, api, query, cursor, refresh, showArchived]);
+  function reload(preserve = false) { setPreserveExact(preserve); setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }
   function openReview(value: Review) {
     const previous = receipt.current;
     setReview({ ...value, restored: previous?.request.project_id === value.projectId && previous.request.workflow_version_id === value.version.id ? previous.request : undefined });
   }
   return <section hidden={!active} className="global-library section-card" aria-label="Global Workflow Library">
-    <div className="action-row"><h2>Workflow Library</h2><button type="button" className="button-secondary compact" onClick={() => setImporting(true)}>Import to Library</button></div>
+    <div className="action-row"><h2>Workflow Library</h2><button type="button" className="button-primary compact" disabled={authoring.occupied} onClick={() => authoring.open({ kind: "workflow", create: true })}>New Workflow</button><button type="button" className="button-secondary compact" disabled={authoring.occupied} onClick={() => setImporting(true)}>Import to Library</button></div>
     <p className="field-help">Reusable setups across Projects. Copies are independent; browsing never changes your Batch.</p>
     <form className="action-row" onSubmit={(event) => { event.preventDefault(); onQueryChange(search); }}>
       <label className="field"><span className="field-label">Search Workflow Library</span><input maxLength={200} value={search} onChange={(event) => setSearch(event.target.value)} /></label>
       <button type="submit" className="button-secondary">Search library</button>
-      <button type="button" className="button-secondary" onClick={reload}>Reload library</button>
+      <button type="button" className="button-secondary" onClick={() => reload()}>Reload library</button>
     </form>
+    <label><input type="checkbox" checked={showArchived} onChange={(event) => { setShowArchived(event.target.checked); setCursor(undefined); setBookmarks([]); }} />Show archived entries</label>
     {error && <p role="alert">{error}</p>}
     {loading && <p role="status">Loading library...</p>}
     <div className="global-library-grid">
       <div>
-        {page?.items.length === 0 && <p>No Workflows found. Import a Project setup to start.</p>}
-        {page?.items.map((item) => <button key={item.id} type="button" className="global-library-item button-secondary" aria-pressed={selected?.id === item.id} onClick={() => { setSelected({ ...item }); setVersion(null); }}>{item.name}<small>{item.description}</small></button>)}
+        {page?.items.length === 0 && <p>No Workflows found. Create a Workflow or import a Project setup.</p>}
+        {page?.items.map((item) => <button key={item.id} type="button" className="global-library-item button-secondary" aria-pressed={selected?.id === item.id} disabled={authoring.occupied} onClick={() => setSelected({ ...item })}>{item.name}<small>{item.description}{item.archived_at ? " (archived)" : ""}</small></button>)}
         <div className="action-row">
           <button type="button" className="button-secondary compact" disabled={loading || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); }}>Previous Workflows</button>
           <button type="button" className="button-secondary compact" disabled={loading || !page?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(page?.next_cursor ?? undefined); }}>Next Workflows</button>
         </div>
         <p>Previous keeps up to 20 pages. Reload library returns to the first page.</p>
       </div>
-      <div>{version ? <>
-        <h3>{version.name_snapshot} / v{version.version_number}</h3>
-        <p className="field-help">Created {new Date(version.created_at).toLocaleString()}</p>
-        {version.note && <p>{version.note}</p>}
-        <details><summary>Workflow JSON and metadata</summary><pre>{JSON.stringify(version, null, 2)}</pre></details>
-        <button className="button-secondary" type="button" onClick={() => openReview({ direction: "use", version, projectId: projectId ?? "", name: selected?.name ?? version.name_snapshot })}>Inspect compatible Profiles</button>
-        <button className="button-primary" type="button" disabled={!projectId} onClick={() => projectId && openReview({ direction: "use", version, projectId, name: selected?.name ?? version.name_snapshot })}>Use in this Project</button>
-        <p className="field-help">{projectId ? `Copy into ${projectName}, then explicitly apply to Batch.` : "Select and verify a Project in Batch to use this setup."}</p>
-      </> : <p>Select a Workflow to inspect its exact catalog version.</p>}</div>
+      {selected ? <GlobalWorkflowDetail key={selected.id} api={api} id={selected.id} active={active} refresh={refresh} preserveExact={preserveExact} updatedProfile={updatedProfile} showArchived={showArchived} disabled={authoring.occupied}
+        projectId={projectId} projectName={projectName} onEdit={authoring.open} onBeginAuthoringRead={authoring.beginRead}
+        onUse={(root, version, profile) => openReview({ direction: "use", version, projectId: projectId ?? "", name: root.name, preferred: profile ? { version_id: profile.version.id, name: profile.family.name, familyId: profile.family.id, version: profile.version.version_number } : undefined })} /> : <p>Select a Workflow to inspect its exact catalog version.</p>}
     </div>
     {active && importing && <ProjectImport api={api} onClose={() => setImporting(false)} onReview={(value) => { setImporting(false); openReview(value); }} />}
     {active && review && <SetupReview key={`${review.direction}:${review.projectId}:${review.version.id}`} {...props} review={review} receiptRef={receipt} onClose={() => setReview(null)} onImported={reload} />}
+    {authoring.dialog}
   </section>;
 }
 
@@ -155,8 +148,14 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
   const handlers = useModalDialog(dialog, onClose, opener, close);
   const restored = review.restored;
   const [name, setName] = useState(restored ? restored.name ?? "" : review.name);
-  const [profiles, setProfiles] = useState<Array<{ id: string; familyId: string; name: string; version: number }>>([]);
-  const [choices, setChoices] = useState<Array<{ version_id: string; name: string }>>(restored?.profiles.map((item) => ({ ...item, name: item.name ?? "" })) ?? []);
+  const [profiles, setProfiles] = useState<Array<{ id: string; familyId: string; name: string; version: number; incompatible?: boolean }>>([]);
+  const [choices, setChoices] = useState<Array<{ version_id: string; name: string }>>(restored?.profiles.map((item) => ({ ...item, name: item.name ?? "" })) ?? (review.preferred ? [{ version_id: review.preferred.version_id, name: review.preferred.name }] : []));
+  const [historyFamily, setHistoryFamily] = useState<string | null>(null);
+  const [historySelection, setHistorySelection] = useState<{ id: string; familyId: string; previousId: string } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyInvalid, setHistoryInvalid] = useState(false);
+  const exactChoices = useRef(new Map<string, { id: string; version: number }>(!restored && review.preferred ? [[review.preferred.familyId, { id: review.preferred.version_id, version: review.preferred.version }]] : []));
+  const restoredChoicesHydrated = useRef(false);
   const [cursor, setCursor] = useState<string>();
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [profileQuery, setProfileQuery] = useState("");
@@ -179,6 +178,26 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
     if (review.direction === "use") setProfiles([]);
   }
   useEffect(() => () => write.current?.abort(), []);
+  useEffect(() => {
+    if (!historySelection) return;
+    const controller = new AbortController();
+    void api.getGlobalProfileVersion(historySelection.id, controller.signal).then((version) => {
+      if (controller.signal.aborted) return;
+      setInspection(version.profile);
+      if (version.workflow_version_id !== review.version.id || version.archived_at) {
+        setHistoryInvalid(true);
+        setError("Profile mappings need review before this revision can be copied with the viewed Workflow.");
+        return;
+      }
+      receiptRef.current = null; setError(null); setHistoryInvalid(false);
+      exactChoices.current.set(historySelection.familyId, { id: version.id, version: version.version_number });
+      setProfiles((rows) => rows.map((row) => row.familyId === historySelection.familyId ? { ...row, id: version.id, version: version.version_number, incompatible: false } : row));
+      setChoices((rows) => rows.map((row) => row.version_id === historySelection.previousId ? { ...row, version_id: version.id } : row));
+    }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) { setHistoryInvalid(true); setError(errorMessage(caught)); }
+    }).finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
+    return () => controller.abort();
+  }, [api, historySelection, receiptRef, review.version.id]);
   useEffect(() => {
     if (!inspectSelection) return;
     const controller = new AbortController();
@@ -205,9 +224,22 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         setProfiles((previous) => items.map((item) => previous.find((row) => row.familyId === item.familyId) ?? item)); setNext(null);
         if (!restored && refresh === 0) setChoices(items.slice(0, 50).map((item) => ({ version_id: item.id, name: item.name })));
       } else {
-        const result: LibraryPage<GlobalProfileMetadata> = await api.browseGlobalProfiles(review.version.id, { q: profileQuery, limit: 20, cursor }, controller.signal);
+        const result = await api.listGlobalProfileFamilies(review.version.workflow_id, { workflow_version_id: review.version.id, q: profileQuery, limit: 20, cursor }, controller.signal);
         if (controller.signal.aborted) return;
-        setProfiles(result.items.map((item) => ({ id: item.id, familyId: item.workflow_profile_id, name: item.name, version: item.version_number }))); setNext(result.next_cursor);
+        if (restored && !restoredChoicesHydrated.current) {
+          const restoredVersions = new Map<string, { id: string; version: number }>();
+          for (const choice of restored.profiles) {
+            const version = await api.getGlobalProfileVersion(choice.version_id, controller.signal);
+            if (controller.signal.aborted) return;
+            restoredVersions.set(version.workflow_profile_id, { id: version.id, version: version.version_number });
+          }
+          // Publish only a complete hydration; explicit choices made in flight take precedence.
+          for (const [familyId, version] of restoredVersions) {
+            if (!exactChoices.current.has(familyId)) exactChoices.current.set(familyId, version);
+          }
+          restoredChoicesHydrated.current = true;
+        }
+        setProfiles(result.items.map((item) => ({ id: item.latest_compatible_version_id ?? item.latest_active_version_id ?? "", familyId: item.id, name: item.name, version: item.latest_compatible_version?.version_number ?? 0, incompatible: !item.latest_compatible_version_id, ...exactChoices.current.get(item.id) }))); setNext(result.next_cursor);
       }
       setReady(true);
     })().catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -215,7 +247,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
   }, [api, review, cursor, refresh, restored, profileQuery]);
   function fieldsChanged() { receiptRef.current = null; setError(null); }
   async function submit() {
-    if (busy || !ready || loading || choices.length > 50 || (review.direction === "use" && projectId !== review.projectId)) return;
+    if (busy || !ready || loading || historyLoading || historyInvalid || choices.length > 50 || (review.direction === "use" && projectId !== review.projectId)) return;
     const payload = { project_id: review.projectId, workflow_version_id: review.version.id, profiles: choices, name: name.trim() || null };
     const fingerprint = JSON.stringify([review.direction, payload]);
     if (receiptRef.current?.fingerprint !== fingerprint) receiptRef.current = { fingerprint, request: { ...payload, request_id: crypto.randomUUID() }, guard: draftGuard };
@@ -238,11 +270,11 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
   const stale = projectId !== review.projectId || copied?.guard !== draftGuard;
   return <dialog ref={dialog} {...handlers} className="global-library-dialog" aria-label={review.direction === "import" ? "Review library import" : "Review Project copy"}>
     <h2>{review.direction === "import" ? "Review library import" : "Review Project copy"}</h2>
-    <p>{review.version.name_snapshot} / v{review.version.version_number}</p>
+    <p>{review.name}</p>
     <details><summary>Inspect exact Workflow JSON</summary><pre>{JSON.stringify(review.version.workflow, null, 2)}</pre></details>
     {copied ? <>
       <p role="status">Copied to Project. Your Batch has not changed.</p>
-      {copied.result.profiles.length > 0 ? <label className="field"><span className="field-label">Copied Profile to apply</span><select value={applyProfileId} onChange={(event) => setApplyProfileId(event.target.value)}><option value="">Choose one copied Profile</option>{copied.result.profiles.map((item) => <option key={item.version.id} value={item.version.id}>{item.workflow_profile.name} / v{item.version.version_number}</option>)}</select></label> : <p>No Profiles copied. Apply the Workflow, then configure mappings in Batch.</p>}
+      {copied.result.profiles.length > 0 ? <label className="field"><span className="field-label">Copied Profile to apply</span><select value={applyProfileId} onChange={(event) => setApplyProfileId(event.target.value)}><option value="">Choose one copied Profile</option>{copied.result.profiles.map((item) => <option key={item.version.id} value={item.version.id}>{item.workflow_profile.name}</option>)}</select></label> : <p>No Profiles copied. Apply the Workflow, then configure mappings in Batch.</p>}
       {stale && <p role="alert">The destination Project or Batch draft changed. Copies are saved; select them from Workflow Setup in Batch instead.</p>}
       {applyDisabled && <p>Finish or release the current Run before applying a copied setup.</p>}
       <button type="button" className="button-primary" disabled={stale || applyDisabled || (copied.result.profiles.length > 0 && !applyProfileId)} onClick={() => { try { if (onApply(copied.result, applyProfileId || null, copied.guard)) onClose(); } catch (caught) { setError(errorMessage(caught)); } }}>Use copied setup</button>
@@ -255,9 +287,12 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         {!loading && !profiles.length && <p>No compatible Profiles on this page. Workflow-only copies are allowed.</p>}
         {profiles.map((item) => {
           const chosen = choices.find((choice) => choice.version_id === item.id);
-          return <div className="global-profile-choice" key={item.id}>
-            <label><input type="checkbox" checked={Boolean(chosen)} disabled={!chosen && choices.length >= 50} onChange={(event) => { fieldsChanged(); setChoices(event.target.checked ? [...choices, { version_id: item.id, name: item.name }] : choices.filter((choice) => choice.version_id !== item.id)); }} /> {item.name} / v{item.version}</label>
-            <button type="button" className="button-link" onClick={() => { setInspection(null); setInspectSelection({ id: item.id }); }}>Inspect {item.name}</button>
+          return <div className="global-profile-choice" key={item.familyId}>
+            <label><input type="checkbox" checked={Boolean(chosen)} disabled={item.incompatible || (!chosen && choices.length >= 50)} onChange={(event) => { fieldsChanged(); setChoices(event.target.checked ? [...choices, { version_id: item.id, name: item.name }] : choices.filter((choice) => choice.version_id !== item.id)); }} /> {item.name}{review.direction === "import" ? ` / v${item.version}` : ""}</label>
+            {item.incompatible && <p>Profile mappings need review</p>}
+            <button type="button" className="button-link" disabled={!item.id} onClick={() => { setInspection(null); setInspectSelection({ id: item.id }); }}>Inspect {item.name}</button>
+            {review.direction === "use" && <button type="button" className="button-link" onClick={() => setHistoryFamily(historyFamily === item.familyId ? null : item.familyId)}>Copy History for {item.name}</button>}
+            {review.direction === "use" && historyFamily === item.familyId && <GlobalLibraryHistory api={api} id={item.familyId} kind="profile" active onSelect={(id) => { setHistoryLoading(true); setHistorySelection({ id, familyId: item.familyId, previousId: item.id }); }} />}
             {review.direction === "import" && <ProjectProfileRevision api={api} familyId={item.familyId} workflowVersionId={review.version.id} selectedId={item.id} name={item.name} onChange={(version) => {
               fieldsChanged();
               setProfiles(profiles.map((row) => row.familyId === item.familyId ? { ...row, id: version.id, version: version.version_number } : row));
@@ -272,7 +307,9 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         {review.direction === "use" && <p>Previous keeps up to 20 pages. Reload Profiles returns to the first page.</p>}
       </fieldset>
       {review.direction === "use" && projectId !== review.projectId && <p role="alert">Select and verify the destination Project in Batch before copying.</p>}
-      <button type="button" className="button-primary" disabled={busy || loading || !ready || choices.some((item) => !item.name.trim()) || (review.direction === "use" && projectId !== review.projectId)} onClick={() => void submit()}>{busy ? "Copying..." : "Confirm copy"}</button>
+      {historyLoading && <p role="status">Loading exact Profile revision...</p>}
+      {historyInvalid && <button type="button" className="button-link" onClick={() => { setHistorySelection(null); setHistoryInvalid(false); setHistoryLoading(false); setInspection(null); setError(null); }}>Keep previous compatible selection</button>}
+      <button type="button" className="button-primary" disabled={busy || loading || historyLoading || historyInvalid || !ready || choices.some((item) => !item.name.trim()) || (review.direction === "use" && projectId !== review.projectId)} onClick={() => void submit()}>{busy ? "Copying..." : "Confirm copy"}</button>
       <button type="button" className="button-secondary" disabled={busy} onClick={() => { setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }}>Reload Profiles</button>
     </>}
     {error && <p role="alert">{error}</p>}

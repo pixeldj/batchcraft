@@ -592,6 +592,8 @@ export interface LibraryPageQuery {
   q?: string;
   limit?: number;
   cursor?: string;
+  include_archived?: boolean;
+  workflow_version_id?: string;
 }
 export interface LibraryPage<T> {
   items: T[];
@@ -602,6 +604,27 @@ export type GlobalWorkflowVersion = Omit<LibraryWorkflowVersion, "project_id">;
 export type GlobalProfile = Omit<WorkflowProfile, "project_id">;
 export type GlobalProfileVersion = Omit<LibraryWorkflowProfileVersion, "project_id">;
 export type GlobalCatalogItem = GlobalWorkflow & { latest_version_id: string | null };
+export type GlobalWorkflowHistoryItem = Omit<GlobalWorkflowVersion, "workflow">;
+export type GlobalProfileHistoryItem = Omit<GlobalProfileVersion, "profile">;
+export type GlobalProfileFamily = GlobalProfile & {
+  latest_active_version_id: string | null;
+  latest_compatible_version_id: string | null;
+  latest_compatible_version: GlobalProfileHistoryItem | null;
+};
+export type GlobalWorkflowSaveRequest = CreateWorkflowVersionRequest & { request_id: string };
+export type GlobalWorkflowNewRequest = CreateWorkflowRequest & { request_id: string };
+export interface GlobalProfileSaveRequest {
+  request_id: string;
+  workflow_version_id: string;
+  mappings: JsonObject;
+  image_inputs: JsonObject[];
+  parameters: JsonObject[];
+  note?: string | null;
+}
+export type GlobalProfileNewRequest = GlobalProfileSaveRequest & { name: string; description?: string | null };
+export type GlobalMetadataRequest = { request_id: string; name?: string; description?: string | null };
+export type GlobalArchiveKind = "workflows" | "workflow-profiles" | "workflow-versions" | "workflow-profile-versions";
+export type GlobalArchiveRequest = { request_id: string; archived: boolean };
 export type GlobalProfileMetadata = Omit<GlobalProfileVersion, "profile" | "note" | "archived_at"> & {
   name: string;
   description: string | null;

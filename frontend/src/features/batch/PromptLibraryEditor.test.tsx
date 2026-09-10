@@ -634,6 +634,7 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     browseProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     browseProjectResults: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     getComfyUIStatus: vi.fn(async () => ({ reachable: true, version: null, devices: [], diagnostic: null })),
+    ...workflowLibraryApi(),
     browseGlobalWorkflows: vi.fn(async () => ({ items: [], next_cursor: null })),
     getGlobalWorkflowVersion: vi.fn(async () => { throw new Error("No global Workflow fixture"); }),
     browseGlobalProfiles: vi.fn(async () => ({ items: [], next_cursor: null })),
@@ -681,3 +682,4 @@ function deferred<T>() {
   const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
   return { promise, resolve };
 }
+import { workflowLibraryApi } from "../../test/workflowLibraryFixtures";
