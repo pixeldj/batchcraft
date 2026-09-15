@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from "@playwright/test";
-import type { GlobalCopyResponse, ProjectResponse, ProjectCopyResponse, SetupCopyRequest } from "../src/api/types";
+import type { GlobalCopyResponse, GlobalProfileFamily, LibraryPage, ProjectResponse, ProjectCopyResponse, SetupCopyRequest } from "../src/api/types";
 import { appearanceStorageKey, paletteStorageKey } from "../src/features/settings/appearance";
 
 // BC-026: reusable real-API before/after fixtures. Use a fresh output directory per capture.
@@ -20,6 +20,149 @@ async function post<T>(request: APIRequestContext, path: string, data: object): 
   expect(response.ok(), await response.text()).toBe(true);
   return await response.json() as T;
 }
+
+test("BC-026 singleton intent, direct Refresh recovery and conservative discovery", async ({ page, request }, testInfo) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(({ appearanceStorageKey, paletteStorageKey }) => {
+    localStorage.setItem(appearanceStorageKey, "dark");
+    localStorage.setItem(paletteStorageKey, "synthwave");
+  }, { appearanceStorageKey, paletteStorageKey });
+  const name = `Singleton ${randomUUID()}`;
+  const project = await post<ProjectResponse>(request, "/api/projects", { name, filesystem_key: `copy_${randomUUID()}` });
+  const source = await post<GlobalCopyResponse["workflow"]>(request, "/api/library/workflows", { request_id: randomUUID(), name, workflow });
+  const profile = await post<GlobalCopyResponse["profiles"][number]>(request, `/api/library/workflows/${source.workflow.id}/profiles`, {
+    request_id: randomUUID(), name: "Sampling controls", workflow_version_id: source.version.id,
+    mappings: {
+      prompt: { node_id: "1", input_name: "text", value_type: "string" },
+      seed: { node_id: "2", input_name: "seed", value_type: "integer" },
+      output_prefix: { node_id: "3", input_name: "filename_prefix", value_type: "string" },
+    }, image_inputs: [], parameters: [],
+  });
+  await page.goto("/");
+  await page.getByLabel("Active Project").selectOption(project.id);
+  const unchangedWorkflow = await page.getByLabel("Workflow JSON", { exact: true }).inputValue();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Workflow Library", exact: true }).click();
+  const library = page.getByRole("region", { name: "Global Workflow Library" });
+  await library.getByLabel("Search Workflow Library").fill(name);
+  await library.getByLabel("Search Workflow Library").press("Enter");
+  await library.getByRole("button", { name, exact: true }).click();
+  const path = `/api/library/workflows/${source.workflow.id}/profiles`;
+  const pattern = `**${path}?*`;
+  const discovery = page.waitForResponse((response) => new URL(response.url()).pathname === path);
+  await library.getByRole("button", { name: "Add to Project", exact: true }).click();
+  const response = await discovery;
+  expect(response.ok()).toBe(true);
+  expect(new URL(response.url()).searchParams.get("workflow_version_id")).toBe(source.version.id);
+  const metadata = await response.json() as LibraryPage<GlobalProfileFamily>;
+  expect(metadata.next_cursor).toBeNull();
+  expect(metadata.items).toHaveLength(1);
+  expect(metadata.items[0].latest_compatible_version_id).toBe(profile.version.id);
+  const review = page.getByRole("dialog", { name: "Add workflow to Project", exact: true });
+  const add = review.getByRole("button", { name: "Add to Project", exact: true });
+  const refresh = review.getByRole("button", { name: "Refresh", exact: true });
+  const checkbox = review.getByRole("checkbox", { name: profile.workflow_profile.name, exact: true });
+  const label = review.locator("label.checkbox-row > span").filter({ hasText: profile.workflow_profile.name });
+  const trigger = review.getByRole("button", { name: `Copy actions for ${profile.workflow_profile.name}`, exact: true });
+  const writes: SetupCopyRequest[] = [];
+  page.on("request", (sent) => { if (sent.method() === "POST" && sent.url().endsWith("/use-in-project")) writes.push(sent.postDataJSON() as SetupCopyRequest); });
+  await expect(add).toBeEnabled();
+  await expect(checkbox).toBeChecked();
+  await expect(review.getByRole("button", { name: "Profile list actions", exact: true })).toHaveCount(0);
+  await expect(refresh.locator("svg")).toBeVisible();
+  await expect(refresh.locator("svg")).toHaveAttribute("aria-hidden", "true");
+  await expect(review.getByText("1 selected", { exact: true })).toHaveCount(0);
+  await trigger.press("ArrowDown");
+  await expect(review.getByRole("menuitem")).toHaveText(["Inspect mappings", "Rename", "Choose revision"]);
+  await page.keyboard.press("ArrowDown");
+  await expect(review.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const rename = review.getByLabel(`Copy name for ${profile.workflow_profile.name}`);
+  await expect(rename).toBeFocused();
+  await rename.fill("Pinned copy name");
+  await expect(checkbox).toBeChecked();
+
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  let reads = 0;
+  await page.route(pattern, async (route) => {
+    reads++;
+    await barrier;
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "fixture_unavailable", message: "Synthetic refresh unavailable" } }) });
+  });
+  await refresh.click();
+  await expect(refresh).toBeDisabled();
+  await refresh.evaluate((element: HTMLButtonElement) => { element.click(); element.click(); });
+  await expect.poll(() => reads).toBe(1);
+  await expect(add).toBeDisabled();
+  await expect(checkbox).toBeChecked();
+  await expect(rename).toHaveValue("Pinned copy name");
+  await capture(page, testInfo, "singleton-refresh-loading");
+  release();
+  await expect(review.getByRole("alert")).toContainText("Synthetic refresh unavailable");
+  await expect(checkbox).toBeChecked();
+  await expect(rename).toHaveValue("Pinned copy name");
+  await capture(page, testInfo, "singleton-refresh-failure");
+  await page.unroute(pattern);
+  await review.getByRole("button", { name: "Retry Profiles", exact: true }).click();
+  await expect(add).toBeEnabled();
+  await expect(checkbox).toBeChecked();
+  await expect(rename).toHaveValue("Pinned copy name");
+  expect(writes).toEqual([]);
+  const copied = page.waitForResponse((item) => item.url().endsWith("/use-in-project") && item.request().method() === "POST");
+  await add.click();
+  expect((await copied).ok()).toBe(true);
+  expect(writes[0]).toMatchObject({ workflow_version_id: source.version.id, profiles: [{ version_id: profile.version.id, name: "Pinned copy name" }] });
+  await expect(review).not.toBeVisible();
+
+  await library.getByRole("button", { name: "Add to Project", exact: true }).click();
+  await expect(checkbox).toBeChecked();
+  await label.click();
+  await expect(checkbox).not.toBeChecked();
+  await trigger.click();
+  await expect(checkbox).not.toBeChecked();
+  await expect(review.getByRole("menuitem", { name: "Rename", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await refresh.click();
+  await expect(add).toBeEnabled();
+  await expect(checkbox).not.toBeChecked();
+  await expect(review.getByText("Only the Workflow will be added", { exact: true })).toBeVisible();
+  await expect(review.getByRole("alert")).toHaveCount(0);
+  await capture(page, testInfo, "singleton-deliberately-unchecked");
+  await review.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  // An older metadata response cannot establish singleton eligibility, even if Refresh later can.
+  await page.route(pattern, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as LibraryPage<GlobalProfileFamily>;
+    expect(body.items).toHaveLength(1);
+    body.items[0].latest_compatible_version = null;
+    await route.fulfill({ response, json: body });
+  });
+  await library.getByRole("button", { name: "Add to Project", exact: true }).click();
+  await expect(add).toBeEnabled();
+  await expect(checkbox).not.toBeChecked();
+  await page.unroute(pattern);
+  await refresh.click();
+  await expect(add).toBeEnabled();
+  await expect(checkbox).not.toBeChecked();
+  await review.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await library.getByRole("button", { name: profile.workflow_profile.name, exact: true }).click();
+  await expect(library.getByRole("region", { name: "Selected Profile", exact: true })).toBeVisible();
+  await library.getByRole("button", { name: "Clear Profile selection", exact: true }).click();
+  await library.getByRole("button", { name: "Reload library", exact: true }).click();
+  for (let session = 0; session < 2; session++) {
+    await library.getByRole("button", { name: "Add to Project", exact: true }).click();
+    await expect(add).toBeEnabled();
+    await expect(checkbox).not.toBeChecked();
+    await refresh.click();
+    await expect(add).toBeEnabled();
+    await expect(checkbox).not.toBeChecked();
+    await review.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  expect(writes).toHaveLength(1);
+  expect(await page.getByLabel("Workflow JSON", { exact: true }).inputValue()).toBe(unchangedWorkflow);
+});
 
 test("BC-026 Add recovery, exact revisions, pending receipt and explicit Apply", async ({ page, request }, testInfo) => {
   test.setTimeout(120_000);
@@ -147,6 +290,33 @@ test("BC-026 Add recovery, exact revisions, pending receipt and explicit Apply",
   await review.getByRole("button", { name: "Close revision chooser", exact: true }).click();
   await expect(trigger).toBeFocused();
 
+  const exactPattern = `**/api/library/workflow-profile-versions/${profile.version.id}`;
+  await page.route(exactPattern, (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { code: "not_found", message: "Synthetic missing exact revision" } }) }));
+  await review.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(review.getByRole("alert")).toContainText("Synthetic missing exact revision");
+  await expect(add).toBeDisabled();
+  await expect(review.getByRole("checkbox", { name: renamed, exact: true })).toBeChecked();
+  expect(writes).toHaveLength(0);
+  await page.unroute(exactPattern);
+  await review.getByRole("button", { name: "Retry Profiles", exact: true }).click();
+  await expect(add).toBeEnabled();
+  await post(request, `/api/library/workflow-profile-versions/${profile.version.id}/archive`, { request_id: randomUUID(), archived: true });
+  await review.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(review.getByRole("alert")).toContainText("archived");
+  await expect(add).toBeDisabled();
+  const pinned = review.getByRole("checkbox", { name: renamed, exact: true });
+  await expect(pinned).toBeChecked();
+  await pinned.uncheck();
+  await expect(add).toBeEnabled();
+  await expect(review.getByText("Only the Workflow will be added", { exact: true })).toBeVisible();
+  expect(writes).toHaveLength(0);
+  await post(request, `/api/library/workflow-profile-versions/${profile.version.id}/archive`, { request_id: randomUUID(), archived: false });
+  await review.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(add).toBeEnabled();
+  await expect(pinned).not.toBeChecked();
+  await pinned.check();
+  await expect(add).toBeEnabled();
+
   let releaseWrite!: () => void;
   let reachedWrite!: () => void;
   const writeBarrier = new Promise<void>((resolve) => { releaseWrite = resolve; });
@@ -172,7 +342,9 @@ test("BC-026 Add recovery, exact revisions, pending receipt and explicit Apply",
   await expect(review).not.toBeVisible();
   releaseWrite();
   await page.unrouteAll({ behavior: "wait" });
+  await post(request, `/api/library/workflow-profile-versions/${profile.version.id}/archive`, { request_id: randomUUID(), archived: true });
   await library.getByRole("button", { name: "Add to Project", exact: true }).click();
+  await expect(review.getByRole("alert")).toContainText("archived");
   await expect(add).toBeEnabled();
   await review.getByRole("button", { name: "Rename Workflow", exact: true }).click();
   await expect(review.getByLabel("New Workflow name (optional)")).toHaveValue(name);
@@ -231,6 +403,23 @@ async function capture(page: Page, testInfo: TestInfo, state: string) {
       expect.soft(geometry.headerTop).toBeGreaterThanOrEqual(0);
       expect.soft(geometry.footerBottom).toBeLessThanOrEqual(900);
       if (state === "one-profile" && width >= 1024) expect.soft(geometry.height, "Common case is content-sized, not a reserved list panel").toBeLessThan(500);
+      const rows = await modal.locator(".project-add-profile").evaluateAll((elements) => elements.map((element) => {
+        const checkbox = element.querySelector("input[type=checkbox]")!.getBoundingClientRect();
+        const name = element.querySelector("label > span")!.getBoundingClientRect();
+        const menu = element.querySelector("button")!.getBoundingClientRect();
+        return { centerDelta: Math.abs(checkbox.top + checkbox.height / 2 - name.top - name.height / 2), nameRight: name.right, menuLeft: menu.left, menuWidth: menu.width };
+      }));
+      for (const row of rows) {
+        expect.soft(row.centerDelta, `${state}/${width}: checkbox vertically centered with source name`).toBeLessThanOrEqual(2);
+        expect.soft(row.menuLeft - row.nameRight, `${state}/${width}: name does not overlap menu`).toBeGreaterThanOrEqual(4);
+        expect.soft(row.menuWidth, `${state}/${width}: compact row menu trigger`).toBeLessThanOrEqual(48);
+      }
+      const workflowName = modal.locator(".project-add-workflow p");
+      if (await workflowName.count()) {
+        const value = await workflowName.boundingBox();
+        const rename = await modal.getByRole("button", { name: "Rename Workflow", exact: true }).boundingBox();
+        expect.soft(Math.abs(value!.y + value!.height - rename!.y - rename!.height), `${state}/${width}: Rename aligned with Workflow value`).toBeLessThanOrEqual(2);
+      }
     }
     await writeFile(output(`${width}.json`), JSON.stringify({
       text: await dialog.innerText(),
@@ -296,7 +485,7 @@ for (const scenario of cases) {
     await library.getByLabel("Search Workflow Library").fill(name);
     await library.getByLabel("Search Workflow Library").press("Enter");
     await library.getByRole("button", { name, exact: true }).click();
-    if (profiles.length) {
+    if (profiles.length && scenario !== "one-profile" && scenario !== "many-profiles") {
       await library.getByRole("button", { name: profiles[0].workflow_profile.name, exact: true }).click();
       await expect(library.getByRole("region", { name: "Selected Profile", exact: true })).toBeVisible();
     }
@@ -315,8 +504,13 @@ for (const scenario of cases) {
       await expect(review.getByRole("button", { name: /Review all selected Profiles/ })).toHaveCount(0);
     }
     if (profiles.length) {
+      if (scenario === "many-profiles") {
+        await expect(review.locator('input[type="checkbox"]:checked')).toHaveCount(0);
+        await expect(review.getByText("0 selected", { exact: true })).toBeVisible();
+        await review.getByRole("checkbox", { name: profiles[0].workflow_profile.name, exact: true }).check();
+      }
       await expect(review.getByRole("checkbox", { name: profiles[0].workflow_profile.name, exact: true })).toBeChecked();
-      await expect(review).toContainText("1 Profile selected");
+      await expect(review.getByText("1 selected", { exact: true })).toHaveCount(scenario === "many-profiles" ? 1 : 0);
       await expect(review).not.toContainText("1/50");
     }
     await capture(page, testInfo, scenario);
@@ -333,6 +527,11 @@ for (const scenario of cases) {
 
     if (scenario === "long-names") {
       const profileName = profiles[0].workflow_profile.name;
+      await review.getByRole("button", { name: `Copy actions for ${profileName}`, exact: true }).click();
+      await expect(review.getByRole("menuitem")).toHaveText(["Inspect mappings", "Rename", "Choose revision"]);
+      await expect(review.getByRole("checkbox", { name: profileName, exact: true })).toBeChecked();
+      await capture(page, testInfo, "long-names-menu");
+      await page.keyboard.press("Escape");
       const trigger = await profileAction(profileName, "Inspect mappings");
       await expect(review.getByRole("region", { name: "Inspect Profile mappings" })).toContainText("Sampling steps");
       await review.getByRole("button", { name: "Close mappings", exact: true }).click();
@@ -383,7 +582,7 @@ for (const scenario of cases) {
       await expect(review.getByRole("checkbox")).toHaveCount(1);
       await expect(review.getByRole("checkbox", { name: profiles[22].workflow_profile.name, exact: true })).not.toBeChecked();
       await capture(page, testInfo, "many-profiles-selected-filtered");
-      await expect(review).toContainText("2 Profiles selected");
+      await expect(review.getByText("2 selected", { exact: true })).toBeVisible();
       await review.getByRole("button", { name: "Review all selected Profiles (2)", exact: true }).click();
       await expect(review.getByRole("button", { name: `Remove ${profiles[0].workflow_profile.name}`, exact: true })).toBeVisible();
       await review.getByRole("button", { name: `Rename selected ${profiles[20].workflow_profile.name}`, exact: true }).click();

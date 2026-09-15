@@ -325,15 +325,16 @@ test("BC-026 Workflow Library layout, exact selections and copy review", async (
   await library.getByRole("button", { name: "Add to Project", exact: true }).click();
   const review = page.getByRole("dialog", { name: "Add workflow to Project" });
   await expect(review.getByRole("checkbox", { name: profileName, exact: true })).toBeChecked();
-  await expect(review).toContainText("1 Profile selected");
+  await expect(review.getByText("1 selected", { exact: true })).toBeVisible();
   await capture(page, testInfo, "07-copy-one-historical");
   await review.getByRole("checkbox", { name: profileName, exact: true }).uncheck();
-  await expect(review).toContainText("0 Profiles selected");
+  await expect(review.getByText("0 selected", { exact: true })).toBeVisible();
+  await expect(review.getByText("Only the Workflow will be added", { exact: true })).toBeVisible();
   await expect(review.getByRole("button", { name: "Add to Project", exact: true })).toBeEnabled();
   await capture(page, testInfo, "08-copy-workflow-only");
   await review.getByRole("checkbox", { name: profileName, exact: true }).check();
   await review.getByRole("checkbox", { name: "Boolean and string controls", exact: true }).check();
-  await expect(review).toContainText("2 Profiles selected");
+  await expect(review.getByText("2 selected", { exact: true })).toBeVisible();
   await capture(page, testInfo, "09-copy-multiple");
   const copiedResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/library/workflows/use-in-project");
   await review.getByRole("button", { name: "Add to Project", exact: true }).click();
@@ -507,6 +508,8 @@ test("BC-026 bounded summary loading, errors, search and 50-Profile copy cap", a
       await review.getByRole("button", { name: "Next Profiles", exact: true }).click();
     }
     await review.getByRole("checkbox", { name: profiles[index].workflow_profile.name, exact: true }).check();
+    if (index === 43) await expect(review).not.toContainText("/50 selected");
+    if (index === 44) await expect(review).toContainText("45/50 selected");
   }
   await expect(review).toContainText("50/50 selected");
   await expect(review.getByRole("checkbox", { name: profiles[50].workflow_profile.name, exact: true })).toBeDisabled();

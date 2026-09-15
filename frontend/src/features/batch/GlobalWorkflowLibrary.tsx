@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ApiError, type BatchcraftApi } from "../../api/client";
-import type { GlobalCatalogItem, GlobalProfile, GlobalWorkflowVersion, JsonObject, LibraryPage, LibraryWorkflowVersion, LibraryWorkflowProfileVersion, ProjectCopyResponse, ProjectResponse, ProjectWorkflow, SetupCopyRequest } from "../../api/types";
+import type { GlobalCatalogItem, GlobalProfile, GlobalProfileFamily, GlobalProfileHistoryItem, GlobalWorkflowVersion, JsonObject, LibraryPage, LibraryWorkflowVersion, LibraryWorkflowProfileVersion, ProjectCopyResponse, ProjectResponse, ProjectWorkflow, SetupCopyRequest } from "../../api/types";
 import { useModalDialog } from "../../components/useModalDialog";
 import { errorMessage } from "../../utils/errors";
 import { GlobalWorkflowDetail, GlobalLibraryHistory } from "./GlobalWorkflowDetail";
@@ -24,7 +24,7 @@ interface Props {
   onApply(copy: ProjectCopyResponse, profileId: string | null, guard: string): boolean;
 }
 type Receipt = { fingerprint: string; request: SetupCopyRequest; guard: string };
-type Review = { direction: "import" | "use"; version: GlobalWorkflowVersion | LibraryWorkflowVersion; projectId: string; destinationName?: string; name: string; restored?: SetupCopyRequest; preferred?: { version_id: string; name: string; familyId: string; version: number } };
+type Review = { direction: "import" | "use"; version: GlobalWorkflowVersion | LibraryWorkflowVersion; projectId: string; destinationName?: string; name: string; restored?: SetupCopyRequest; selectionSupplied?: boolean; preferred?: { version_id: string; name: string; familyId: string; family: GlobalProfileFamily; version: number } };
 type AddedSetup = { result: ProjectCopyResponse; guard: string; sourceWorkflowId: string; destinationName: string; applyProfileId: string };
 
 export function GlobalWorkflowLibrary(props: Props) {
@@ -99,7 +99,7 @@ export function GlobalWorkflowLibrary(props: Props) {
           {applyError && <p role="alert">{applyError}</p>}
           <button type="button" className="button-primary" disabled={Boolean(staleAdded) || props.applyDisabled || (added.result.profiles.length > 0 && !added.applyProfileId)} onClick={() => { try { if (props.onApply(added.result, added.applyProfileId || null, added.guard)) { setAdded(null); setApplyError(null); } } catch (caught) { setApplyError(errorMessage(caught)); } }}>Apply to Batch</button>
         </section>}
-        onUse={(root, version, profile) => openReview({ direction: "use", version, projectId: projectId ?? "", destinationName: projectName, name: root.name, preferred: profile ? { version_id: profile.version.id, name: profile.family.name, familyId: profile.family.id, version: profile.version.version_number } : undefined })} /> : <p>Select a Workflow to inspect its exact catalog version.</p>}
+        onUse={(root, version, profile, selectionSupplied) => openReview({ direction: "use", version, projectId: projectId ?? "", destinationName: projectName, name: root.name, selectionSupplied, preferred: profile ? { version_id: profile.version.id, name: profile.family.name, familyId: profile.family.id, family: profile.family, version: profile.version.version_number } : undefined })} /> : <p>Select a Workflow to inspect its exact catalog version.</p>}
     </div>
     {active && importing && <ProjectImport api={api} onClose={() => setImporting(false)} onReview={(value) => { setImporting(false); openReview(value); }} />}
     {active && review && <SetupReview key={`${review.direction}:${review.projectId}:${review.version.id}`} {...props} review={review} receiptRef={receipt} onClose={() => setReview(null)} onImported={reload} onAdded={(value) => { setAdded(value); setApplyError(null); setReview(null); }} />}
@@ -159,6 +159,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const handlers = useModalDialog(dialog, cancelReview, opener, close);
   const restored = review.restored;
+  const [replay, setReplay] = useState(Boolean(restored));
   const [name, setName] = useState(restored ? restored.name ?? "" : review.name);
   const [profiles, setProfiles] = useState<Array<{ id: string; familyId: string; name: string; version: number; incompatible?: boolean }>>([]);
   const [choices, setChoices] = useState<Array<{ version_id: string; name: string }>>(restored?.profiles.map((item) => ({ ...item, name: item.name ?? "" })) ?? (review.preferred ? [{ version_id: review.preferred.version_id, name: review.preferred.name }] : []));
@@ -168,7 +169,13 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
   const [historyInvalid, setHistoryInvalid] = useState(false);
   const historyRead = useRef<AbortController | null>(null);
   const exactChoices = useRef(new Map<string, { id: string; version: number }>(!restored && review.preferred ? [[review.preferred.familyId, { id: review.preferred.version_id, version: review.preferred.version }]] : []));
-  const restoredChoicesHydrated = useRef(false);
+  // Receipt presence includes an explicitly empty selection; discovery gets only one decision.
+  const defaultSettled = useRef(Boolean(restored || review.preferred || review.selectionSupplied));
+  const [families, setFamilies] = useState<LibraryPage<GlobalProfileFamily> | null>(null);
+  const [completeCount, setCompleteCount] = useState<number | null>(null);
+  const [validation, setValidation] = useState<Record<string, string | null>>({});
+  const knownFamilies = useRef(new Map<string, GlobalProfileFamily>(review.preferred ? [[review.preferred.familyId, review.preferred.family]] : []));
+  const refreshRead = useRef(false);
   const [cursor, setCursor] = useState<string>();
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [profileQuery, setProfileQuery] = useState("");
@@ -191,9 +198,11 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
   const write = useRef<AbortController | null>(null);
   const requestKey = JSON.stringify([cursor, refresh, profileQuery]);
   const [previousRequest, setPreviousRequest] = useState(requestKey);
+  const [previousRefresh, setPreviousRefresh] = useState(refresh);
   if (requestKey !== previousRequest) {
     setPreviousRequest(requestKey); setLoading(true); setReady(false); setError(null);
-    if (review.direction === "use") setProfiles([]);
+    setPreviousRefresh(refresh);
+    if (review.direction === "use" && refresh === previousRefresh) setProfiles([]);
   }
   useEffect(() => () => write.current?.abort(), []);
   useEffect(() => {
@@ -203,12 +212,12 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
     void api.getGlobalProfileVersion(historySelection.id, controller.signal).then((version) => {
       if (controller.signal.aborted) return;
       setInspection(version.profile);
-      if (version.workflow_version_id !== review.version.id || version.archived_at) {
+      if (version.id !== historySelection.id || version.workflow_profile_id !== historySelection.familyId || version.workflow_id !== review.version.workflow_id || version.workflow_version_id !== review.version.id || version.archived_at !== null) {
         setHistoryInvalid(true);
         setError("Profile mappings need review before this revision can be copied with the viewed Workflow.");
         return;
       }
-      receiptRef.current = null; setError(null); setHistoryInvalid(false);
+      receiptRef.current = null; setReplay(false); setError(null); setHistoryInvalid(false);
       exactChoices.current.set(historySelection.familyId, { id: version.id, version: version.version_number });
       setSourceNames((names) => ({ ...names, [version.id]: names[historySelection.previousId] ?? version.name_snapshot }));
       setRenaming((ids) => ids.has(historySelection.previousId) ? new Set([...ids, version.id]) : ids);
@@ -218,7 +227,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
       if (!controller.signal.aborted) { setHistoryInvalid(true); setError(errorMessage(caught)); }
     }).finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
     return () => { controller.abort(); if (historyRead.current === controller) historyRead.current = null; };
-  }, [api, historySelection, receiptRef, review.version.id]);
+  }, [api, historySelection, receiptRef, review.version.id, review.version.workflow_id]);
   useEffect(() => {
     if (!inspectSelection) return;
     const controller = new AbortController();
@@ -226,6 +235,16 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
     void request.then((result) => { if (!controller.signal.aborted) setInspection(result.profile); }).catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); });
     return () => controller.abort();
   }, [api, inspectSelection, review.direction]);
+  const eligibility = useEffectEvent((family: GlobalProfileFamily): boolean | null => {
+    const version = family.latest_compatible_version;
+    if (family.workflow_id !== review.version.workflow_id || family.archived_at === undefined) return null;
+    if (family.archived_at !== null) return false;
+    if (version === undefined) return null;
+    if (!version) return family.latest_compatible_version_id === null ? false : null;
+    if (!family.latest_active_version_id) return null;
+    if (version.id !== family.latest_compatible_version_id || version.workflow_profile_id !== family.id || version.workflow_id !== family.workflow_id || version.workflow_version_id !== review.version.id || version.archived_at === undefined) return null;
+    return version.archived_at === null;
+  });
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
@@ -248,34 +267,78 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         const result = await api.listGlobalProfileFamilies(review.version.workflow_id, { workflow_version_id: review.version.id, q: profileQuery, limit: 20, cursor }, controller.signal);
         if (controller.signal.aborted) return;
         if ((!profileQuery && !cursor && result.items.length > 5) || result.next_cursor || cursor) setSearchNeeded(true);
-        if (restored && !restoredChoicesHydrated.current) {
-          const restoredVersions = new Map<string, { id: string; version: number }>();
-          for (const choice of restored.profiles) {
-            const version = await api.getGlobalProfileVersion(choice.version_id, controller.signal);
-            if (controller.signal.aborted) return;
-            restoredVersions.set(version.workflow_profile_id, { id: version.id, version: version.version_number });
-            setSourceNames((names) => ({ ...names, [version.id]: version.name_snapshot }));
+        setFamilies(result);
+        if (!profileQuery && !cursor) setCompleteCount(result.next_cursor ? null : result.items.length);
+        if (!profileQuery && !cursor && !result.next_cursor) {
+          for (const familyId of knownFamilies.current.keys()) {
+            if (!result.items.some((family) => family.id === familyId)) knownFamilies.current.delete(familyId);
           }
-          // Publish only a complete hydration; explicit choices made in flight take precedence.
-          for (const [familyId, version] of restoredVersions) {
-            if (!exactChoices.current.has(familyId)) exactChoices.current.set(familyId, version);
-          }
-          restoredChoicesHydrated.current = true;
         }
-        const rows = result.items.map((item) => ({ id: item.latest_compatible_version_id ?? item.latest_active_version_id ?? "", familyId: item.id, name: item.name, version: item.latest_compatible_version?.version_number ?? 0, incompatible: !item.latest_compatible_version_id, ...exactChoices.current.get(item.id) }));
+        if (!defaultSettled.current) {
+          defaultSettled.current = true;
+          const eligible = result.items.filter((item) => eligibility(item) === true);
+          if (!profileQuery && !cursor && !result.next_cursor && eligible.length === 1 && result.items.every((item) => eligibility(item) !== null)) {
+            const item = eligible[0];
+            const version = item.latest_compatible_version!;
+            exactChoices.current.set(item.id, { id: version.id, version: version.version_number });
+            setChoices([{ version_id: version.id, name: item.name }]);
+            setSourceNames((names) => ({ ...names, [version.id]: item.name }));
+          }
+        }
+        const rows = result.items.map((item) => ({ id: item.latest_compatible_version_id ?? item.latest_active_version_id ?? "", familyId: item.id, name: item.name, version: item.latest_compatible_version?.version_number ?? 0, incompatible: eligibility(item) === false, ...exactChoices.current.get(item.id) }));
         setProfiles(rows); setNext(result.next_cursor);
       }
       setReady(true);
-    })().catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    })().catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); }).finally(() => { if (!controller.signal.aborted) { setLoading(false); refreshRead.current = false; } });
     return () => controller.abort();
   }, [api, review, cursor, refresh, restored, profileQuery]);
-  function fieldsChanged() { receiptRef.current = null; setError(null); setInvalidNames(new Set()); }
+  const selectedIds = JSON.stringify(choices.map((choice) => choice.version_id));
+  const [validatedFamilies, setValidatedFamilies] = useState(families);
+  const [validatedIds, setValidatedIds] = useState(selectedIds);
+  if (validatedFamilies !== families || validatedIds !== selectedIds) {
+    setValidatedFamilies(families); setValidatedIds(selectedIds); setValidation({});
+  }
+  const currentChoices = useEffectEvent(() => choices);
+  useEffect(() => {
+    if (review.direction !== "use" || !families || loading) return;
+    const controller = new AbortController();
+    const ids: string[] = JSON.parse(selectedIds);
+    for (const family of families.items) knownFamilies.current.set(family.id, family);
+    for (const familyId of knownFamilies.current.keys()) {
+      if (!families.items.some((family) => family.id === familyId) && !ids.includes(exactChoices.current.get(familyId)?.id ?? "")) knownFamilies.current.delete(familyId);
+    }
+    void (async () => {
+      for (const id of ids.slice(0, 50)) {
+        try {
+          const pinnedFamily = [...exactChoices.current].find(([, value]) => value.id === id)?.[0];
+          let family = [...knownFamilies.current.values()].find((item) => item.id === pinnedFamily || item.latest_compatible_version_id === id);
+          const metadata = family?.latest_compatible_version;
+          const version: GlobalProfileHistoryItem = metadata?.id === id && family?.latest_compatible_version_id === id ? metadata : await api.getGlobalProfileVersion(id, controller.signal);
+          if (controller.signal.aborted) return;
+          family ??= knownFamilies.current.get(version.workflow_profile_id);
+          if (!family) throw new Error("Profile family metadata is unavailable. Find its family in the list to validate ownership and archive status.");
+          if (version.id !== id || version.workflow_id !== review.version.workflow_id || (pinnedFamily && version.workflow_profile_id !== pinnedFamily) || family.id !== version.workflow_profile_id || family.workflow_id !== version.workflow_id || family.archived_at !== null || version.workflow_version_id !== review.version.id || version.archived_at !== null) throw new Error("Profile revision is incompatible, archived, or has an unexpected owner. Remove it or choose a valid revision.");
+          exactChoices.current.set(version.workflow_profile_id, { id, version: version.version_number });
+          setProfiles((rows) => rows.map((row) => row.familyId === version.workflow_profile_id ? { ...row, id, version: version.version_number, incompatible: false } : row));
+          setSourceNames((names) => ({ ...names, [id]: names[id] ?? version.name_snapshot }));
+          setValidation((values) => ({ ...values, [id]: null }));
+        } catch (caught) {
+          if (controller.signal.aborted) return;
+          const message = `Cannot validate ${currentChoices().find((choice) => choice.version_id === id)?.name ?? id}: ${errorMessage(caught)} Retry Profiles or remove this selection.`;
+          setValidation((values) => ({ ...values, [id]: message }));
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [api, families, loading, selectedIds, review.direction, review.version.id, review.version.workflow_id]);
+  const selectionUnresolved = choices.some((choice) => validation[choice.version_id] !== null);
+  function fieldsChanged() { defaultSettled.current = true; receiptRef.current = null; setReplay(false); setError(null); setInvalidNames(new Set()); }
   function revealNames() {
     setWorkflowRename(true); setRenaming(new Set(choices.map((item) => item.version_id)));
     if (choices.some((choice) => !profiles.some((row) => row.id === choice.version_id))) setSelectedReview(true);
   }
   async function submit() {
-    if (write.current || busy || !ready || loading || historyLoading || historyInvalid || choices.length > 50 || (review.direction === "use" && projectId !== review.projectId)) return;
+    if (write.current || busy || !ready || loading || historyLoading || historyInvalid || choices.length > 50 || (review.direction === "use" && (projectId !== review.projectId || (selectionUnresolved && !receiptRef.current)))) return;
     if (review.direction === "use") {
       const invalid = choices.filter((choice) => !choice.name.trim() || choice.name.length > 200 || choices.some((other) => other.version_id !== choice.version_id && other.name === choice.name));
       if (invalid.length || name.trim().length > 200) {
@@ -291,7 +354,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
     const request = receiptRef.current.request;
     const guard = receiptRef.current.guard;
     const controller = new AbortController(); write.current = controller;
-    setBusy(true); setError(null);
+    setBusy(true); setReplay(true); setError(null);
     try {
       if (review.direction === "import") {
         await api.importProjectSetup(request, controller.signal);
@@ -312,7 +375,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
     return <label className="field"><span className="field-label">Copy name for {label}</span><input autoFocus maxLength={200} required aria-invalid={invalidNames.has(choice.version_id)} value={choice.name} onChange={(event) => { fieldsChanged(); setChoices(choices.map((row) => row.version_id === choice.version_id ? { ...row, name: event.target.value } : row)); }} /></label>;
   }
   function toggleRename(id: string) { setRenaming((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
-  function refreshProfiles() { setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }
+  function refreshProfiles() { if (busy || loading || refreshRead.current) return; refreshRead.current = true; setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }
   function cancelRevisionRead() {
     // Only validated responses commit choices. Closing cancels an unresolved choice,
     // but a known invalid choice still requires explicit acceptance of the previous one.
@@ -331,7 +394,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         <fieldset disabled={busy}>
           <div className="project-add-workflow"><div><span className="field-label">Workflow</span>{!workflowRename && <p>{name.trim() || review.version.name_snapshot}</p>}</div><button type="button" className="button-link compact" aria-label={workflowRename ? "Hide Workflow rename" : "Rename Workflow"} aria-expanded={workflowRename} onClick={() => setWorkflowRename(!workflowRename)}>{workflowRename ? "Hide rename" : "Rename"}</button></div>
           {workflowRename && <label className="field"><span className="field-label">New Workflow name (optional)</span><input autoFocus maxLength={200} value={name} onChange={(event) => { fieldsChanged(); setName(event.target.value); }} /></label>}
-          <div className="project-add-profile-heading"><h3>Include Profiles</h3><span className="global-library-meta">{choices.length} {choices.length === 1 ? "Profile" : "Profiles"} selected</span><LibraryMenu label="Profile list actions" disabled={busy} items={[{ label: "Refresh Profiles", onSelect: refreshProfiles }]} /></div>
+          <div className="project-add-profile-heading"><h3>Include Profiles</h3>{completeCount !== 1 && <span className="global-library-meta">{choices.length} selected</span>}<button type="button" className="button-link compact project-add-refresh" disabled={busy || loading} onClick={refreshProfiles}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1" /></svg>Refresh</button></div>
           {choices.length >= 45 && <p className="field-help">Select up to 50 Profiles ({choices.length}/50 selected).</p>}
           {(searchNeeded || profileQuery) && <div><LibrarySearch label="Search compatible Profiles" query={profileQuery} scope={JSON.stringify([review.version.id, cursor, refresh])} onChange={(value) => { setProfileQuery(value); setCursor(undefined); setBookmarks([]); }} />{profileQuery && <button className="button-link compact" type="button" onClick={() => { setProfileQuery(""); setCursor(undefined); setBookmarks([]); }}>Clear search</button>}</div>}
           {loading && <p role="status">Loading compatible Profiles...</p>}
@@ -339,13 +402,13 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
           {profiles.map((item) => {
             const chosen = choices.find((choice) => choice.version_id === item.id);
             return <div className="project-add-profile" key={item.familyId}>
-              <label className="checkbox-row"><input type="checkbox" checked={Boolean(chosen)} disabled={busy || item.incompatible || (!chosen && choices.length >= 50)} onChange={(event) => { fieldsChanged(); const updated = event.target.checked ? [...choices, { version_id: item.id, name: item.name }] : choices.filter((choice) => choice.version_id !== item.id); setChoices(updated); setSourceNames(Object.fromEntries(updated.map((choice) => [choice.version_id, choice.version_id === item.id ? item.name : sourceNames[choice.version_id] ?? choice.name]))); }} /><span>{item.name}</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={Boolean(chosen)} disabled={busy || (!chosen && (item.incompatible || choices.length >= 50))} onChange={(event) => { fieldsChanged(); exactChoices.current.set(item.familyId, { id: item.id, version: item.version }); const updated = event.target.checked ? [...choices, { version_id: item.id, name: item.name }] : choices.filter((choice) => choice.version_id !== item.id); setChoices(updated); setSourceNames(Object.fromEntries(updated.map((choice) => [choice.version_id, choice.version_id === item.id ? item.name : sourceNames[choice.version_id] ?? choice.name]))); }} /><span>{item.name}</span></label>
               <LibraryMenu label={`Copy actions for ${item.name}`} disabled={busy} items={[
                 { label: "Inspect mappings", disabled: !item.id, onSelect: () => { cancelRevisionRead(); subviewOpener.current = document.activeElement as HTMLElement; setHistoryFamily(null); setInspection(null); if (!historyInvalid) setError(null); setInspectSelection({ id: item.id }); } },
                 { label: renaming.has(item.id) ? "Hide rename" : "Rename", disabled: !chosen, onSelect: () => toggleRename(item.id) },
-                { label: "Choose revision", onSelect: () => { cancelRevisionRead(); subviewOpener.current = document.activeElement as HTMLElement; setInspectSelection(null); setInspection(null); setHistoryFamily({ familyId: item.familyId, previousId: item.id }); } },
+                { label: "Choose revision", onSelect: () => { defaultSettled.current = true; cancelRevisionRead(); subviewOpener.current = document.activeElement as HTMLElement; setInspectSelection(null); setInspection(null); setHistoryFamily({ familyId: item.familyId, previousId: item.id }); } },
               ]} />
-              {item.incompatible && <p>Profile mappings need review</p>}
+              {!chosen && item.incompatible && <p>Profile mappings need review</p>}
               {chosen && renaming.has(item.id) && !(hiddenChoices && selectedReview) && renameInput(chosen, item.name)}
             </div>;
           })}
@@ -354,6 +417,7 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
             const label = sourceNames[choice.version_id] ?? choice.name;
             return <div className="project-add-selected-row" key={choice.version_id}><span>{choice.name}</span><div className="global-library-actions"><button type="button" className="button-link compact" aria-label={`Rename selected ${label}`} onClick={() => toggleRename(choice.version_id)}>{renaming.has(choice.version_id) ? "Hide rename" : "Rename"}</button><button type="button" className="button-link compact" aria-label={`Remove ${label}`} onClick={() => { fieldsChanged(); setChoices(choices.filter((row) => row.version_id !== choice.version_id)); }}>Remove</button></div>{renaming.has(choice.version_id) && renameInput(choice, label)}</div>;
           })}</section>}
+          {families && !choices.length && <p className="global-library-meta">Only the Workflow will be added</p>}
           {(historyFamily || inspectSelection) && <section className="project-add-subview" aria-label={historyFamily ? "Choose Profile revision" : "Inspect Profile mappings"}>
             <div className="project-add-profile-heading"><h3>{historyFamily ? "Choose revision" : "Inspect mappings"}</h3><button type="button" className="button-link compact" onClick={closeSubview}>Close {historyFamily ? "revision chooser" : "mappings"}</button></div>
             {historyFamily && <GlobalLibraryHistory api={api} id={historyFamily.familyId} kind="profile" active onSelect={(id) => { setHistoryLoading(true); setHistorySelection({ id, familyId: historyFamily.familyId, previousId: exactChoices.current.get(historyFamily.familyId)?.id ?? historyFamily.previousId }); }} />}
@@ -368,10 +432,12 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         {historyLoading && <p role="status">Loading exact Profile revision...</p>}
         {historyInvalid && <><button type="button" className="button-link" onClick={() => { cancelRevisionRead(); setHistoryInvalid(false); setInspection(null); setError(null); }}>Keep previous compatible selection</button>{historySelection && historyFamily && <button type="button" className="button-link" onClick={() => { setHistoryLoading(true); setError(null); setHistorySelection({ ...historySelection }); }}>Retry revision</button>}</>}
         {error && <p role="alert">{error}</p>}
-        {error && !ready && !loading && <button type="button" className="button-link" onClick={refreshProfiles}>Retry Profiles</button>}
+        {choices.map((choice) => validation[choice.version_id] && <p role="alert" key={choice.version_id}>{validation[choice.version_id]}</p>)}
+        {ready && !loading && choices.some((choice) => validation[choice.version_id] === undefined) && <p role="status">Validating selected Profile revisions...</p>}
+        {((error && !ready && !loading) || choices.some((choice) => validation[choice.version_id])) && <button type="button" className="button-link" disabled={busy || loading} onClick={refreshProfiles}>Retry Profiles</button>}
         {busy && <p>Closing stops waiting, not the server transaction. Reopen with the same fields to retry the receipt.</p>}
       </div>
-      <footer className="project-add-footer"><button ref={close} type="button" className="button-secondary" onClick={onClose}>{busy ? "Stop waiting" : "Cancel"}</button><button type="submit" className="button-primary" disabled={busy || loading || historyLoading || historyInvalid || !ready || choices.length > 50 || projectId !== review.projectId}>{busy ? "Adding..." : "Add to Project"}</button></footer>
+      <footer className="project-add-footer"><button ref={close} type="button" className="button-secondary" onClick={onClose}>{busy ? "Stop waiting" : "Cancel"}</button><button type="submit" className="button-primary" disabled={busy || loading || historyLoading || historyInvalid || !ready || (selectionUnresolved && !replay) || choices.length > 50 || projectId !== review.projectId}>{busy ? "Adding..." : "Add to Project"}</button></footer>
     </form>
   </dialog>;
   return <dialog ref={dialog} {...handlers} className="global-library-dialog" aria-label="Review library import">

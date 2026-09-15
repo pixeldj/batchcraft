@@ -119,8 +119,8 @@ domain models, durable formats and dependencies are unchanged.
 
 - Journey: choose a Workflow, inspect/select a Profile, then Add to Project. One primary Add action lives
   in the detail footer, not a browser-wide floating bar. It opens the existing review with editable names,
-  exact revision choices and 0-50 Profiles. A new Project-copy review prefills only the selected exact
-  Profile; no selection means no automatic Profile choices. Existing receipt restoration remains intact.
+  exact revision choices and 0-50 Profiles. Explicit opening choices and restored receipts take priority;
+  a pristine review may default one eligible exact Profile under the bounded rules below.
   This does not change Project-source Import to Library selection behavior.
 - Confirm copy persists independent Project resources. Apply to Batch remains a separate explicit action
   with replacement confirmation and Project/draft/execution guards. Browsing, search, inspection,
@@ -168,7 +168,7 @@ no threshold was relaxed. Owner acceptance of this cleanup and overall BC-026 co
 
 ## Add-to-Project dialog cleanup
 
-This presentation-only follow-up uses the current `SetupReview` rather than introducing another copy
+This frontend interaction follow-up uses the current `SetupReview` rather than introducing another copy
 flow. Only its global-to-Project branch changes; Project-source Import to Library keeps its direction
 and legacy dialog. No backend, API, SQLite, v1 format, architecture, dependency, synchronization, or
 Saved Batch/snapshot semantics change is included. BC-026 remains In Progress, targeting a future
@@ -181,9 +181,27 @@ this cleanup.
   the review and a Workflow name summary. Start from the original name, not an automatic copy suffix;
   never strip a legitimate `copy` from an existing name. Rename reveals and focuses the input; hiding
   it retains the current draft value and shows the proposed name in the summary.
-- Include Profiles shows the actual selection count, not an available total or a routine N/50 label.
-  Show up-to-50 guidance only at 45 or more selections; the existing maximum remains 50. New reviews
-  prefill only the exact selected Profile, or none when no Profile was selected.
+- Include Profiles hides the count only for a known-complete one-family collection; otherwise show
+  `N selected`, not an available total or routine N/50 label. Show up-to-50 guidance only at 45 or more
+  selections; the maximum remains 50. After the initial read, zero choices show the quiet note
+  `Only Workflow will be added`. Workflow-only eligibility is unchanged.
+- User-approved opening default: a restored receipt, including `profiles: []`, restores its exact choices.
+  Otherwise a caller-provided preferred exact Profile or explicit selection intent settles the decision;
+  parent Clear carries an explicit no-default boolean (`selectionSupplied`), not an inferred empty list.
+  Only a brand-new review with no prior choice may default once: the unfiltered first page must have
+  `next_cursor: null`, cover all families, and have resolved eligibility metadata for every family, with
+  exactly one active compatible eligible family. Select that metadata's exact version ID. Other known
+  incompatible families do not prevent this default. One filtered row, an incomplete page or unresolved
+  metadata is insufficient; do not fetch all pages or add an API to infer uniqueness.
+- Any explicit choice or draft interaction settles the default before a late response can overwrite it.
+  Once settled, Refresh, search and paging never default again. A failed initial discovery can be retried
+  while still pristine; it is not evidence of an empty collection. Project-source Import to Library's
+  direction and initial multiple-Profile selection remain unchanged.
+- Replace the upper menu whose only action was Refresh with a direct quiet Refresh SVG button using
+  existing styles and no icon library. Retain rows during refresh loading/error, disable repeated refresh
+  requests, and retain bounded page/selected metadata rather than accumulating the catalog.
+- Profile rows use a vertically centered checkbox/name label, with the menu outside that label and a
+  subtle border. Align Rename values with row content and keep its explanatory note quiet.
 - Show search when the unfiltered first page has more than five rows, pagination exists, or a query is
   active. Once needed, keep search available within the review. Use bounded page reads, never load the
   whole library or infer its available total. Pagers contain only Previous and Next controls; existing
@@ -196,6 +214,11 @@ this cleanup.
   actual Profile-family History and fetch the chosen exact ID, not copy lineage or an automatic latest
   replacement. Check the exact Workflow target and archive state before committing the choice. Workflow
   JSON remains secondary technical inspection.
+- Manual and default checkbox choices pin exact IDs just like revision choices. Validate the chosen
+  exact snapshots, not a different latest metadata revision. An unavailable or incompatible selection
+  blocks a new copy with Retry/Remove recovery; never substitute another revision. An unchanged existing
+  receipt can still be retried/recovered, including backend receipt replay after the source is gone,
+  with its original draft guard retained.
 
 ### Validation and operation identity
 
@@ -224,14 +247,16 @@ this cleanup.
   or switching a subview aborts pending revision reads; late responses cannot overwrite another
   inspection or selected IDs. A known invalid revision continues to block Add after closing its subview
   until explicitly resolved, including accepting the previous compatible selection.
-- Unsubmitted rename edits are not durable browser state. Closing the main dialog may discard them as
-  before; this cleanup adds no unsaved-change guard or general persistence guarantee. The new inline
-  Added/pending-apply panel is not persisted across reloads; completed copies remain in the Project
+- Unsubmitted rename edits and modal-local deselection are not durable browser state. Closing an unsent
+  modal does not persist that local deselection into the next opening. Explicit parent intent and restored
+  receipts, including `profiles: []`, remain authoritative exceptions; this adds no unsaved-change guard
+  or general persistence guarantee. The inline Added/pending-apply panel is not persisted across reloads;
+  completed copies remain in the Project
   library. Browser working-session Recovery v4 is unchanged.
 
 ### Verification checkpoint
 
-Final verification passed: **911 frontend unit tests**, typecheck, lint, build, and **42 desktop/mobile
+Prior cleanup verification passed: **911 frontend unit tests**, typecheck, lint, build, and **42 desktop/mobile
 browser tests in each of Vite and built modes** after the Escape and pending-read fixes. Twelve targeted
 desktop/mobile cases passed again with the final screenshots. No backend code changed.
 
@@ -247,6 +272,14 @@ The existing non-fatal Vite chunk warning remains at approximately 556 kB. Gener
 responses still cannot identify a naming field, so the UI exposes names without assigning false blame.
 Owner acceptance and overall BC-026 completion remain separate; no live ComfyUI or installation work
 was performed.
+
+Latest interaction follow-up verification:
+**938 frontend unit tests**, typecheck, lint and production build passed; **46 desktop/mobile E2E tests
+passed in each of Vite and built modes**. The approximately 560 kB chunk warning remains non-fatal. Visual
+inspection at 1440px, 1024px and 390px covered single/multiple Profiles, long names, deliberate unchecked
+selection, refresh failure, keyboard behavior and reachable footer actions. Main verification and
+representative screenshot review also passed; this is not new human owner acceptance. No backend,
+schema, format, release or installed-app changes are part of this pass.
 
 ## Remaining scope
 

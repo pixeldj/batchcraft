@@ -64,18 +64,18 @@
 .project-add-body fieldset { border: 0; padding: 0; margin: 0; }
 .project-add-body p { overflow-wrap: anywhere; }
 .project-add-destination { display: grid; gap: .35rem; margin: 0 0 1.25rem; }
-.project-add-workflow { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.project-add-workflow { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .project-add-workflow > div { min-width: 0; }
 .project-add-workflow p { margin: .35rem 0 0; }
 .project-add-profile-heading { display: flex; align-items: center; gap: .75rem; margin-block: .75rem; }
 .project-add-profile-heading h3 { margin: 0; font-size: .9rem; }
 .project-add-profile-heading > :last-child { margin-left: auto; }
-.project-add-profile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .5rem; padding-block: .5rem; }
+.project-add-refresh { display: inline-flex; align-items: center; gap: .35rem; }
+.project-add-profile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .5rem; padding: .5rem; border: 1px solid var(--line); border-radius: .35rem; margin-block: .5rem; }
 .project-add-profile > .field, .project-add-profile > p { grid-column: 1 / -1; }
-.project-add-profile .checkbox-row { align-items: start; overflow-wrap: anywhere; }
-.project-add-profile .checkbox-row input { margin-top: .15rem; }
+.project-add-profile .checkbox-row { align-items: center; overflow-wrap: anywhere; margin: 0; }
 .project-add-body .global-library-technical { margin-top: 1rem; font-size: .8rem; }
-.project-add-note { margin: .75rem 0 0; }
+.project-add-note { margin: .75rem 0 0; color: var(--muted); font-size: .75rem; }
 .project-add-selected, .project-add-subview { border-top: 1px solid var(--line); padding-top: .75rem; margin-top: .75rem; }
 .project-add-selected-row { display: grid; gap: .5rem; padding-block: .65rem; overflow-wrap: anywhere; }
 .project-add-selected-row .global-library-actions { justify-content: end; }

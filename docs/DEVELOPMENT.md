@@ -603,7 +603,9 @@ exact choices on reload/paging.
 The frontend-only layout follow-up uses `LibrarySearch`, `LibraryMenu` and `ReadonlyProfileSummary`.
 Add to Project opens the presentation-only Add workflow to Project branch of `SetupReview`; successful
 Add closes into one parent-owned result and Apply to Batch remains a separate guarded step. Import to
-Library retains its legacy dialog. New Project-copy reviews prefill only the selected Profile. Lists request 20 rows and retain 20
+Library retains its legacy dialog. Explicit opening choices and restored receipts (including empty
+selections) take priority; only a pristine unfiltered complete first page with resolved metadata and exactly
+one eligible active compatible family defaults its exact revision once. Lists request 20 rows and retain 20
 Previous bookmarks without limiting forward paging. Profile summaries use two workers, a 20-version
 positive cache and only the current page; manual Refresh retains exact selection and successful cached
 summaries, retries failed summaries once, and resets paging. Search uses 300ms debounce, immediate Enter,

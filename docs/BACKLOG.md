@@ -1572,8 +1572,9 @@ names, later name edits, and invalid-file drafts. No automatic save, backend, or
 
 Narrow frontend layout/interaction follow-up: choose a Workflow, inspect/select a Profile, then use the
 single detail-footer Add to Project action. The existing review retains editable names, exact revisions
-and 0-50 Profile choices; only the selected Profile is prefilled for a new Project-copy review, never all
-Profiles automatically. Apply to Batch remains separate and guarded. Left-aligned browsing, bounded
+and 0-50 Profile choices; explicit opening selections/receipts take priority, with a one-time pristine
+single-eligible-family default as specified below, never all Profiles automatically. Apply to Batch
+remains separate and guarded. Left-aligned browsing, bounded
 Workflow/Profile list scroll scopes, secondary Edit actions, keyboard popover menus, formatted read-only
 Profile summaries, debounced search and selection-preserving Refresh refine presentation only. Summary
 reads use two workers, a 20-version positive cache and the current 20-row page; pagers retain 20 Previous
@@ -1581,10 +1582,11 @@ bookmarks without a forward cap. Only the restored-draft message is hidden outsi
 clearing/dismissing its state; other warnings remain unchanged. No backend API, SQLite, durable-format,
 dependency or domain-semantics changes are part of this follow-up.
 
-Add-to-Project dialog cleanup is presentation-only in the current SetupReview: compact captured-destination
+Add-to-Project dialog cleanup stays in the current SetupReview: compact captured-destination
 and Workflow summaries, opt-in Rename retaining hidden draft values without automatic copy suffixes,
-actual Profile selection counts (50-limit guidance at 45+), conditional sticky search and Previous/Next
-paging. Hidden selections expose Review all selected Profiles; exact IDs/proposed names survive paging.
+Profile selection counts except for known-complete one-family collections (50-limit guidance at 45+),
+conditional sticky search and Previous/Next paging. Hidden selections expose Review all selected Profiles;
+exact IDs/proposed names survive paging.
 Row menus inspect mappings, rename selected Profiles and choose validated exact History revisions.
 Generic 409 library_conflict reveals all rename fields without identifying a culprit; local exact,
 case-sensitive selected-Profile validation identifies invalid fields. Existing payload normalization,
@@ -1594,6 +1596,23 @@ aborted, and known-invalid revisions remain blocked. Stop waiting detaches brows
 Unsubmitted names and the inline Added/pending-apply panel are not durable across close/reload; persisted
 copies remain in the Project library. Import to Library's legacy direction/dialog and Recovery v4 are
 unchanged. No backend, API, SQLite, v1, dependency or Saved Batch/snapshot semantics change is included.
+
+User-approved final Add interaction: replace the upper Refresh-only menu with a quiet direct SVG Refresh
+using existing styles, retaining rows through loading/error and disabling repeated refresh; metadata stays
+bounded. Center the row checkbox/name label, keep its menu outside the label with a subtle border, and align
+Rename values with a quiet note. Explicit caller choices, parent Clear's no-default boolean and restored
+receipts (including `profiles: []`) settle opening intent. Only a pristine unfiltered complete first page
+(`next_cursor: null`) with all family eligibility resolved and exactly one active compatible family may
+select that metadata's exact ID once, even alongside known incompatible families. Filtered singletons,
+incomplete pages and unresolved metadata imply nothing; no fetch-all or API addition. Explicit choices/draft
+interaction win over late reads; Refresh/search/paging never default again after settlement. Manual/default
+choices pin exact IDs and validate their exact snapshots, not replacement latest metadata. Unavailable or
+incompatible selections block new copies with Retry/Remove; unchanged receipt recovery/replay and its
+original guard remain intact even if the source is gone. After initial reading, zero choices quietly say
+`Only Workflow will be added`; Workflow-only eligibility, search thresholds and Import's initial multiple
+selection stay unchanged. Closing an unsent modal does not persist local deselection; explicit parent
+intent and receipts remain authoritative. Latest reported verification and agent visual inspection are
+recorded once in the plan's dialog verification checkpoint, not new owner acceptance.
 
 Prior authoring/layout evidence remains recorded in the plan. The
 [dialog cleanup checkpoint](plans/BC-026-global-workflow-library.md#add-to-project-dialog-cleanup) records

@@ -22,7 +22,7 @@ interface Props {
   onEdit(operation: GlobalAuthoringOperation): void;
   onBeginAuthoringRead(): AbortController;
   confirmation?: ReactNode;
-  onUse(root: GlobalCatalogItem, version: GlobalWorkflowVersion, profile?: { family: GlobalProfileFamily; version: GlobalProfileVersion }): void;
+  onUse(root: GlobalCatalogItem, version: GlobalWorkflowVersion, profile?: { family: GlobalProfileFamily; version: GlobalProfileVersion }, selectionSupplied?: boolean): void;
 }
 
 export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, updatedProfile, showArchived, disabled, projectId, projectName, onChooseProject, onEdit, onBeginAuthoringRead, onUse, confirmation }: Props) {
@@ -32,6 +32,7 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
   const [history, setHistory] = useState(false);
   const [profileHistory, setProfileHistory] = useState(false);
   const [selection, setSelection] = useState<{ family: GlobalProfileFamily; version: GlobalProfileVersion } | null>(null);
+  const [selectionSupplied, setSelectionSupplied] = useState(false);
   const [familyPage, setFamilyPage] = useState<LibraryPage<GlobalProfileFamily> | null>(null);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState<string>();
@@ -48,7 +49,7 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
   const [previousScope, setPreviousScope] = useState(scope);
   if (scope !== previousScope) {
     setPreviousScope(scope); setExactId(preserveExact ? workflow?.id ?? exactId : null);
-    if (!preserveExact) { setSelection(null); setProfileRequest(null); setWorkflow(null); }
+    if (!preserveExact) { setSelection(null); setSelectionSupplied(false); setProfileRequest(null); setWorkflow(null); }
     else if (updatedProfile) {
       if (selection?.family.id === updatedProfile.id) setSelection({ ...selection, family: { ...selection.family, ...updatedProfile } });
       if (profileRequest?.family.id === updatedProfile.id) setProfileRequest({ ...profileRequest, family: { ...profileRequest.family, ...updatedProfile } });
@@ -134,10 +135,11 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
 
   function selectWorkflow(versionId: string) {
     if (versionId === exactId && workflow) return;
-    setExactId(versionId); setWorkflow(null); setSelection(null); setProfileRequest(null);
+    setExactId(versionId); setWorkflow(null); setSelection(null); setSelectionSupplied(false); setProfileRequest(null);
     setFamilyPage(null); setCursor(undefined); setBookmarks([]); setProfileHistory(false); setError(null);
   }
   function inspect(family: GlobalProfileFamily, versionId: string) {
+    setSelectionSupplied(true);
     setSelection(null); setProfileHistory(false); setProfileRequest({ family, id: versionId, edit: false });
   }
   const selectedCompatible = selection?.version.workflow_version_id === workflow?.id && !selection?.version.archived_at && !selection?.family.archived_at;
@@ -222,8 +224,8 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
         <details className="global-library-technical"><summary>Workflow JSON</summary><pre>{JSON.stringify(workflow.workflow, null, 2)}</pre></details>
         <footer className="global-library-copy-footer">
           <div>{projectId ? <><span className="global-library-meta">Destination Project</span><p>Creates an independent copy in <strong>{projectName}</strong>. Your Batch stays unchanged.</p></> : <><p>Select and verify a Project in Batch to add this setup.</p>{onChooseProject && <button type="button" className="button-link" onClick={onChooseProject}>Choose Project</button>}</>}</div>
-          <div className="global-library-actions"><button className="button-primary" type="button" disabled={disabled || selectionLoading || !projectId || Boolean(root.archived_at || workflow.archived_at) || Boolean(selection && !selectedCompatible)} onClick={() => onUse(root, workflow, selection ?? undefined)}>Add to Project</button>
-          {(selection || profileRequest) && <button className="button-link" type="button" onClick={() => { setSelection(null); setProfileRequest(null); setProfileHistory(false); setError(null); }}>Clear Profile selection</button>}
+          <div className="global-library-actions"><button className="button-primary" type="button" disabled={disabled || selectionLoading || !projectId || Boolean(root.archived_at || workflow.archived_at) || Boolean(selection && !selectedCompatible)} onClick={() => onUse(root, workflow, selection ?? undefined, selectionSupplied)}>Add to Project</button>
+          {(selection || profileRequest) && <button className="button-link" type="button" onClick={() => { setSelection(null); setSelectionSupplied(true); setProfileRequest(null); setProfileHistory(false); setError(null); }}>Clear Profile selection</button>}
           </div>
         </footer>
         {confirmation}

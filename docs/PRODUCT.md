@@ -122,7 +122,9 @@ against the viewed exact Workflow; repairs use the same mapper rather than silen
 
 Choose a Workflow, inspect/select a Profile, then use Add to Project in the detail footer. Add workflow
 to Project shows the captured destination, name summaries and optional Rename fields, exact revisions
-and 0-50 Profiles; a new review prefills only the selected Profile, not every Profile. Add to Project
+and 0-50 Profiles. Explicit opening choices and restored receipts (including empty selections) take
+priority; only a pristine, unfiltered complete first page with resolved metadata and exactly one eligible
+active compatible Profile family defaults that exact revision once, never every Profile. Add to Project
 persists independent copies and closes the modal into an inline Added result. Apply to Batch and
 replacement confirmation separately apply the chosen copied Profile (or Workflow alone) to the Batch.
 Unsubmitted rename edits may be discarded on close; the inline result is not retained across reloads,
