@@ -5,6 +5,7 @@ import { useModalDialog } from "../../components/useModalDialog";
 import { errorMessage } from "../../utils/errors";
 import { GlobalWorkflowDetail, GlobalLibraryHistory } from "./GlobalWorkflowDetail";
 import { useGlobalWorkflowAuthoring } from "./useGlobalWorkflowAuthoring";
+import { LibrarySearch } from "./LibrarySearch";
 import "./globalWorkflowLibrary.css";
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
   onQueryChange(value: string): void;
   projectId: string | null;
   projectName: string;
+  onChooseProject?(): void;
   draftGuard: string;
   applyDisabled: boolean;
   onCopied(projectId: string): void;
@@ -37,12 +39,11 @@ export function GlobalWorkflowLibrary(props: Props) {
   const [importing, setImporting] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const receipt = useRef<Receipt | null>(null);
-  const [search, setSearch] = useState(query);
   const authoring = useGlobalWorkflowAuthoring(api, active, (root, preserve, profile) => { if (root) setSelected(root); setUpdatedProfile(profile); reload(preserve); });
   // Query changes from Back/Forward reset cursors before a new read can use them.
   const [previousQuery, setPreviousQuery] = useState(query);
   if (query !== previousQuery) {
-    setPreviousQuery(query); setSearch(query); setCursor(undefined); setBookmarks([]); setPage(null);
+    setPreviousQuery(query); setCursor(undefined); setBookmarks([]); setPage(null);
   }
   const requestKey = JSON.stringify([active, query, cursor, refresh, showArchived]);
   const [previousRequest, setPreviousRequest] = useState(requestKey);
@@ -65,28 +66,25 @@ export function GlobalWorkflowLibrary(props: Props) {
     setReview({ ...value, restored: previous?.request.project_id === value.projectId && previous.request.workflow_version_id === value.version.id ? previous.request : undefined });
   }
   return <section hidden={!active} className="global-library section-card" aria-label="Global Workflow Library">
-    <div className="action-row"><h2>Workflow Library</h2><button type="button" className="button-primary compact" disabled={authoring.occupied} onClick={() => authoring.open({ kind: "workflow", create: true })}>New Workflow</button><button type="button" className="button-secondary compact" disabled={authoring.occupied} onClick={() => setImporting(true)}>Import to Library</button></div>
-    <p className="field-help">Reusable setups across Projects. Copies are independent; browsing never changes your Batch.</p>
-    <form className="action-row" onSubmit={(event) => { event.preventDefault(); onQueryChange(search); }}>
-      <label className="field"><span className="field-label">Search Workflow Library</span><input maxLength={200} value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-      <button type="submit" className="button-secondary">Search library</button>
-      <button type="button" className="button-secondary" onClick={() => reload()}>Reload library</button>
-    </form>
-    <label><input type="checkbox" checked={showArchived} onChange={(event) => { setShowArchived(event.target.checked); setCursor(undefined); setBookmarks([]); }} />Show archived entries</label>
-    {error && <p role="alert">{error}</p>}
-    {loading && <p role="status">Loading library...</p>}
+    <header className="global-library-header"><div><h2>Workflow Library</h2><p className="field-help">Reusable setups across Projects. Browsing never changes your Batch.</p></div><div className="global-library-actions"><button type="button" className="button-secondary compact" disabled={authoring.occupied} onClick={() => setImporting(true)}>Import to Library</button><button type="button" className="button-primary compact" disabled={authoring.occupied} onClick={() => authoring.open({ kind: "workflow", create: true })}>New Workflow</button></div></header>
     <div className="global-library-grid">
-      <div>
+      <aside className="global-library-sidebar" aria-label="Workflows">
+        <LibrarySearch label="Search Workflow Library" query={query} scope={JSON.stringify([showArchived, cursor, refresh])} active={active} onChange={onQueryChange} />
+        <div className="global-library-actions"><label className="checkbox-row"><input type="checkbox" checked={showArchived} onChange={(event) => { setShowArchived(event.target.checked); setCursor(undefined); setBookmarks([]); }} />Show archived entries</label><button type="button" className="button-link compact" aria-label="Reload library" title="Refresh Workflows; return to the first page" onClick={() => { setUpdatedProfile(undefined); reload(true); }}>Refresh</button></div>
+        {error && <p role="alert">{error}</p>}
+        {loading && <p role="status">Loading library...</p>}
+        {page && <p className="global-library-meta">{page.items.length} Workflows on this page</p>}
         {page?.items.length === 0 && <p>No Workflows found. Create a Workflow or import a Project setup.</p>}
-        {page?.items.map((item) => <button key={item.id} type="button" className="global-library-item button-secondary" aria-pressed={selected?.id === item.id} disabled={authoring.occupied} onClick={() => setSelected({ ...item })}>{item.name}<small>{item.description}{item.archived_at ? " (archived)" : ""}</small></button>)}
-        <div className="action-row">
-          <button type="button" className="button-secondary compact" disabled={loading || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); }}>Previous Workflows</button>
-          <button type="button" className="button-secondary compact" disabled={loading || !page?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(page?.next_cursor ?? undefined); }}>Next Workflows</button>
+        <div className="global-library-workflow-list" role="group" aria-label="Workflow entries">
+          {page?.items.map((item) => <button key={item.id} type="button" className="global-library-item button-secondary" aria-label={item.name} title={item.name} aria-pressed={selected?.id === item.id} disabled={authoring.occupied} onClick={() => setSelected({ ...item })}><span>{item.name}</span>{selected?.id === item.id && <small className="global-library-selected">Selected</small>}<small>{item.description}{item.archived_at ? " (archived)" : ""}</small></button>)}
         </div>
-        <p>Previous keeps up to 20 pages. Reload library returns to the first page.</p>
-      </div>
+        <div className="global-library-pager">
+          <button type="button" className="button-secondary compact" aria-label="Previous Workflows" title="Previous Workflows (up to 20 previous pages)" disabled={loading || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); }}>Previous</button>
+          <button type="button" className="button-secondary compact" aria-label="Next Workflows" disabled={loading || !page?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(page?.next_cursor ?? undefined); }}>Next</button>
+        </div>
+      </aside>
       {selected ? <GlobalWorkflowDetail key={selected.id} api={api} id={selected.id} active={active} refresh={refresh} preserveExact={preserveExact} updatedProfile={updatedProfile} showArchived={showArchived} disabled={authoring.occupied}
-        projectId={projectId} projectName={projectName} onEdit={authoring.open} onBeginAuthoringRead={authoring.beginRead}
+        projectId={projectId} projectName={projectName} onChooseProject={props.onChooseProject} onEdit={authoring.open} onBeginAuthoringRead={authoring.beginRead}
         onUse={(root, version, profile) => openReview({ direction: "use", version, projectId: projectId ?? "", name: root.name, preferred: profile ? { version_id: profile.version.id, name: profile.family.name, familyId: profile.family.id, version: profile.version.version_number } : undefined })} /> : <p>Select a Workflow to inspect its exact catalog version.</p>}
     </div>
     {active && importing && <ProjectImport api={api} onClose={() => setImporting(false)} onReview={(value) => { setImporting(false); openReview(value); }} />}
@@ -137,7 +135,7 @@ function ProjectImport({ api, onClose, onReview }: { api: BatchcraftApi; onClose
     <label className="field"><span className="field-label">Source Workflow</span><select value={workflowId} onChange={(event) => { setWorkflowId(event.target.value); setVersions([]); setVersionId(""); setError(null); }}><option value="">Choose source Workflow</option>{workflows.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     <label className="field"><span className="field-label">Source Workflow revision</span><select value={versionId} onChange={(event) => setVersionId(event.target.value)}><option value="">Choose exact revision</option>{versions.map((item) => <option key={item.id} value={item.id}>v{item.version_number} / {item.name_snapshot}</option>)}</select></label>
     {error && <p role="alert">{error}</p>}
-    <div className="action-row"><button ref={close} type="button" className="button-secondary" onClick={onClose}>Cancel</button><button type="button" className="button-secondary" onClick={() => { setError(null); setWorkflows([]); setVersions([]); setVersionId(""); setRefresh((value) => value + 1); }}>Reload sources</button><button type="button" className="button-primary" disabled={!version} onClick={() => version && onReview({ direction: "import", version, projectId, name: workflows.find((item) => item.id === workflowId)?.name ?? version.name_snapshot })}>Review import</button></div>
+    <div className="global-library-actions"><button ref={close} type="button" className="button-secondary" onClick={onClose}>Cancel</button><button type="button" className="button-secondary" onClick={() => { setError(null); setWorkflows([]); setVersions([]); setVersionId(""); setRefresh((value) => value + 1); }}>Reload sources</button><button type="button" className="button-primary" disabled={!version} onClick={() => version && onReview({ direction: "import", version, projectId, name: workflows.find((item) => item.id === workflowId)?.name ?? version.name_snapshot })}>Review import</button></div>
   </dialog>;
 }
 
@@ -277,18 +275,18 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
       {copied.result.profiles.length > 0 ? <label className="field"><span className="field-label">Copied Profile to apply</span><select value={applyProfileId} onChange={(event) => setApplyProfileId(event.target.value)}><option value="">Choose one copied Profile</option>{copied.result.profiles.map((item) => <option key={item.version.id} value={item.version.id}>{item.workflow_profile.name}</option>)}</select></label> : <p>No Profiles copied. Apply the Workflow, then configure mappings in Batch.</p>}
       {stale && <p role="alert">The destination Project or Batch draft changed. Copies are saved; select them from Workflow Setup in Batch instead.</p>}
       {applyDisabled && <p>Finish or release the current Run before applying a copied setup.</p>}
-      <button type="button" className="button-primary" disabled={stale || applyDisabled || (copied.result.profiles.length > 0 && !applyProfileId)} onClick={() => { try { if (onApply(copied.result, applyProfileId || null, copied.guard)) onClose(); } catch (caught) { setError(errorMessage(caught)); } }}>Use copied setup</button>
+      <button type="button" className="button-primary" disabled={stale || applyDisabled || (copied.result.profiles.length > 0 && !applyProfileId)} onClick={() => { try { if (onApply(copied.result, applyProfileId || null, copied.guard)) onClose(); } catch (caught) { setError(errorMessage(caught)); } }}>Apply to Batch</button>
     </> : imported ? <p role="status">Imported into Workflow Library. Your Batch and Preview are unchanged.</p> : <>
       <fieldset disabled={busy}>
         <label className="field"><span className="field-label">New Workflow name (optional)</span><input maxLength={200} value={name} onChange={(event) => { fieldsChanged(); setName(event.target.value); }} /></label>
-        <p>Compatible Profiles: {choices.length}/50 selected. Each selection copies this exact revision into a new family.</p>
-        {review.direction === "use" && <label className="field"><span className="field-label">Search compatible Profiles</span><input maxLength={200} value={profileQuery} onChange={(event) => { setProfileQuery(event.target.value); setCursor(undefined); setBookmarks([]); }} /></label>}
+        <p>Compatible Profiles: {choices.length}/50 selected.</p>
+        {review.direction === "use" && <LibrarySearch label="Search compatible Profiles" query={profileQuery} scope={JSON.stringify([review.version.id, cursor, refresh])} onChange={(value) => { setProfileQuery(value); setCursor(undefined); setBookmarks([]); }} />}
         {loading && <p role="status">Loading compatible Profiles...</p>}
         {!loading && !profiles.length && <p>No compatible Profiles on this page. Workflow-only copies are allowed.</p>}
         {profiles.map((item) => {
           const chosen = choices.find((choice) => choice.version_id === item.id);
           return <div className="global-profile-choice" key={item.familyId}>
-            <label><input type="checkbox" checked={Boolean(chosen)} disabled={item.incompatible || (!chosen && choices.length >= 50)} onChange={(event) => { fieldsChanged(); setChoices(event.target.checked ? [...choices, { version_id: item.id, name: item.name }] : choices.filter((choice) => choice.version_id !== item.id)); }} /> {item.name}{review.direction === "import" ? ` / v${item.version}` : ""}</label>
+            <label className="checkbox-row"><input type="checkbox" checked={Boolean(chosen)} disabled={item.incompatible || (!chosen && choices.length >= 50)} onChange={(event) => { fieldsChanged(); setChoices(event.target.checked ? [...choices, { version_id: item.id, name: item.name }] : choices.filter((choice) => choice.version_id !== item.id)); }} /> {item.name}{review.direction === "import" ? ` / v${item.version}` : ""}</label>
             {item.incompatible && <p>Profile mappings need review</p>}
             <button type="button" className="button-link" disabled={!item.id} onClick={() => { setInspection(null); setInspectSelection({ id: item.id }); }}>Inspect {item.name}</button>
             {review.direction === "use" && <button type="button" className="button-link" onClick={() => setHistoryFamily(historyFamily === item.familyId ? null : item.familyId)}>Copy History for {item.name}</button>}
@@ -303,14 +301,13 @@ function SetupReview({ api, review, receiptRef, onClose, onImported, onCopied, p
         })}
         {inspection && <details open><summary>Selected Profile JSON (detached inspection)</summary><pre>{JSON.stringify(inspection, null, 2)}</pre></details>}
         {choices.length > 0 && <details><summary>Review all selected Profile copies ({choices.length})</summary><ul>{choices.map((choice) => <li key={choice.version_id}>{choice.name} <code>{choice.version_id}</code> <button type="button" className="button-link" onClick={() => { fieldsChanged(); setChoices(choices.filter((item) => item.version_id !== choice.version_id)); }}>Remove {choice.name}</button></li>)}</ul></details>}
-        {review.direction === "use" && <div className="action-row"><button type="button" className="button-secondary compact" disabled={loading || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); }}>Previous Profiles</button><button type="button" className="button-secondary compact" disabled={loading || !next} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(next ?? undefined); }}>Next Profiles</button></div>}
-        {review.direction === "use" && <p>Previous keeps up to 20 pages. Reload Profiles returns to the first page.</p>}
+        {review.direction === "use" && <div className="global-library-pager"><button type="button" className="button-secondary compact" aria-label="Previous Profiles" title="Previous Profiles (up to 20 previous pages)" disabled={loading || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); }}>Previous</button><button type="button" className="button-secondary compact" aria-label="Next Profiles" disabled={loading || !next} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(next ?? undefined); }}>Next</button></div>}
       </fieldset>
       {review.direction === "use" && projectId !== review.projectId && <p role="alert">Select and verify the destination Project in Batch before copying.</p>}
       {historyLoading && <p role="status">Loading exact Profile revision...</p>}
       {historyInvalid && <button type="button" className="button-link" onClick={() => { setHistorySelection(null); setHistoryInvalid(false); setHistoryLoading(false); setInspection(null); setError(null); }}>Keep previous compatible selection</button>}
-      <button type="button" className="button-primary" disabled={busy || loading || historyLoading || historyInvalid || !ready || choices.some((item) => !item.name.trim()) || (review.direction === "use" && projectId !== review.projectId)} onClick={() => void submit()}>{busy ? "Copying..." : "Confirm copy"}</button>
-      <button type="button" className="button-secondary" disabled={busy} onClick={() => { setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }}>Reload Profiles</button>
+      <div className="global-library-actions"><button type="button" className="button-primary" disabled={busy || loading || historyLoading || historyInvalid || !ready || choices.some((item) => !item.name.trim()) || (review.direction === "use" && projectId !== review.projectId)} onClick={() => void submit()}>{busy ? "Copying..." : "Confirm copy"}</button>
+      <button type="button" className="button-secondary" disabled={busy} onClick={() => { setCursor(undefined); setBookmarks([]); setRefresh((value) => value + 1); }}>Reload Profiles</button></div>
     </>}
     {error && <p role="alert">{error}</p>}
     {busy && <p>Closing stops waiting, not the server transaction. Reopen with the same fields to retry the receipt.</p>}

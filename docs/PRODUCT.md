@@ -114,17 +114,26 @@ the API format; batchcraft does not convert ComfyUI editor-format files.
 Project and global authoring share Workflow/Profile dialogs, with independently scrolling content,
 stable heading/actions, explicit initial field focus, and confirmation before discarding dirty drafts.
 Global Edit/Save creates immutable internal revisions without changing Project copies or Batch/Preview.
-Version numbers and technical revision details belong in History, not normal browsing. History supports
+Small exact revision indicators provide browsing context; technical revision details belong in History. History supports
 exact inspection and restoring old content as a new revision. Metadata names/descriptions can change
 without rewriting old snapshots or hashes. Archive/unarchive covers families and revisions; names remain
 reserved and nothing is hard-deleted. Profile families remain visible when their mappings need review
 against the viewed exact Workflow; repairs use the same mapper rather than silently retargeting them.
 
-Use in this Project first copies the reviewed setup
-into the selected, verified Project under independent identities. After copying, Use copied setup and
-replacement confirmation explicitly apply the chosen copied Profile (or Workflow alone) to the Batch.
+Choose a Workflow, inspect/select a Profile, then use Add to Project in the detail footer. The existing
+review supports editable names, exact revisions and 0-50 Profiles; a new Project-copy review prefills
+only the selected Profile, not every Profile. Confirm copy persists the reviewed setup into the selected,
+verified Project under independent identities. After copying, Apply to Batch and replacement
+confirmation explicitly apply the chosen copied Profile (or Workflow alone) to the Batch.
 Only application changes the draft and invalidates Preview; browsing/import/copy alone do not.
 Copies never follow source edits automatically, and changed Project/draft guards prevent stale apply.
+
+Workflow/Profile lists scroll independently within bounded areas. Edit remains visible; metadata,
+History and Archive actions use keyboard-operable menus. Selected Profiles show readable core mapping
+names, ordered Image Inputs and typed parameters, with technical targets/JSON in disclosures. Search is
+debounced with immediate Enter submission; Refresh resets paging without changing exact selections.
+Only the restored-draft notice is hidden outside Batch without clearing its state; other warnings remain
+unchanged. This frontend cleanup changes no backend or durable semantics, and owner acceptance is pending.
 
 Existing v1 Project archives still carry setups used by Runs, not unused global libraries. BC-026 remains
 In Progress pending historical Import to Library and final acceptance. Workflow images are deferred,

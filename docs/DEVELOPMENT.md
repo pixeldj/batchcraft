@@ -588,7 +588,7 @@ Metadata/archive edits do not rewrite old snapshots/hashes; History Restore appe
 Project/global dialogs share `WorkflowAuthoringDialog.tsx`, fields and the existing mapper. Global New
 Workflow uses only Save, then opens a Profile draft named `${name}-profile`. Cancel retains the saved
 Workflow; failed Profile saves retain the draft without repeating Workflow creation. Edit/Save appends
-internal revisions, with version numbers and technical details confined to History. Global operations
+internal revisions, with small exact revision indicators and technical details in History. Global operations
 leave Project Batch selections, Preview and independent copies unchanged.
 
 The file chooser accepts JSON objects up to 64 MiB; backend save validates API-format workflows, with no
@@ -600,7 +600,23 @@ Global pending writes retain draft/operation identity above the portal. Stale Pr
 cannot replace a newer draft. Restored copy-receipt selections hydrate once and never overwrite newer
 exact choices on reload/paging.
 
-Current verification evidence is recorded in the plan's [authoring checkpoint](plans/BC-026-global-workflow-library.md#current-authoring-checkpoint).
+The frontend-only layout follow-up uses `LibrarySearch`, `LibraryMenu` and `ReadonlyProfileSummary`.
+Add to Project opens existing exact naming/Profile review; Apply to Batch remains a separate guarded
+step. New Project-copy reviews prefill only the selected Profile. Lists request 20 rows and retain 20
+Previous bookmarks without limiting forward paging. Profile summaries use two workers, a 20-version
+positive cache and only the current page; manual Refresh retains exact selection and successful cached
+summaries, retries failed summaries once, and resets paging. Search uses 300ms debounce, immediate Enter,
+and cancellation on scope changes. These frontend bounds do not change legacy unpaginated source APIs.
+
+Library action/checkbox styles are scoped rather than changing shared `.action-row` or global inputs.
+Workflow entries scroll within `min(55dvh, 32rem)` (`min(40dvh, 32rem)` on mobile); Profile entries within
+`min(40dvh, 24rem)`. Controls/detail/footer remain outside list scroll scopes. Only
+`RESTORED_DRAFT_MESSAGE` is hidden outside Batch, with no navigation-driven clear/dismiss state change
+and no change to other warnings. Themes, application navigation/header, Batch and Prompt semantics,
+SQLite, backend APIs, durable formats and dependencies are unchanged by this follow-up.
+
+Prior authoring evidence remains in the plan; current verification and pending visual/owner acceptance
+are recorded in its [layout verification checkpoint](plans/BC-026-global-workflow-library.md#layout-verification-checkpoint).
 Historical Run Plan/Result Details Import to Library remains queued. BC-026 stays In Progress and the
 application version remains 1.1.0; no v1.2.0 tag or everyday-installation update is authorized. Workflow
 images are deferred optional upcoming work, not a v1.2.0 completion gate.

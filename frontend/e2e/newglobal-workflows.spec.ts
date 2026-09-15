@@ -97,7 +97,7 @@ test("real API: global catalog without a Project uses bounded metadata reads and
   const paths: string[] = [];
   page.on("request", (sent) => paths.push(new URL(sent.url()).pathname));
   const catalogResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/library/workflows");
-  await page.goto("/?view=workflows");
+  await page.goto(`/?view=workflows&library_q=${encodeURIComponent(imported.workflow.workflow.name)}`);
   const catalog = await catalogResponse;
   expect(catalog.ok()).toBe(true);
   expect(new URL(catalog.url()).searchParams.get("limit")).toBe("20");
@@ -112,11 +112,15 @@ test("real API: global catalog without a Project uses bounded metadata reads and
   expect(paths.filter((path) => path.startsWith("/api/library/workflow-versions/"))).toEqual([]);
   const library = page.getByRole("region", { name: "Global Workflow Library" });
   await library.getByRole("button", { name: imported.workflow.workflow.name, exact: true }).click();
-  await expect(library.getByRole("button", { name: "Use in this Project", exact: true })).toBeDisabled();
+  await expect(library.getByRole("button", { name: "Add to Project", exact: true })).toBeDisabled();
   await expect(library).toContainText("Select and verify a Project in Batch");
   await page.screenshot({ path: testInfo.outputPath("global-library.png"), fullPage: true });
+  await library.getByRole("button", { name: "Choose Project", exact: true }).click();
+  await expect(page.getByLabel("Active Project")).toHaveValue("");
+  await page.getByLabel("Active Project").selectOption(source.project.id);
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Workflow Library", exact: true }).click();
   const profilesResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/library/workflows/${imported.workflow.workflow.id}/profiles`);
-  await library.getByRole("button", { name: "Inspect compatible Profiles" }).click();
+  await library.getByRole("button", { name: "Add to Project", exact: true }).click();
   const received = await profilesResponse;
   expect(received.ok()).toBe(true);
   expect(new URL(received.url()).searchParams.get("limit")).toBe("20");
@@ -125,7 +129,7 @@ test("real API: global catalog without a Project uses bounded metadata reads and
   expect(profiles.items).toHaveLength(2);
   for (const item of profiles.items) expect(item).not.toHaveProperty("profile");
   const dialog = page.getByRole("dialog", { name: "Review Project copy" });
-  await expect(dialog.getByRole("button", { name: "Confirm copy" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Confirm copy" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Inspect CFG mapping", exact: true }).click();
   await expect(dialog.locator("pre").last()).toContainText('"input_name": "cfg"');
   await page.screenshot({ path: testInfo.outputPath("global-profile-inspection.png") });
@@ -147,7 +151,7 @@ test("real API: global catalog without a Project uses bounded metadata reads and
   }), "Import dialog must fit 320px without horizontal scrolling").toBe(true);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Batch", exact: true }).click();
-  await expect(page.getByLabel("Active Project")).toHaveValue("");
+  await expect(page.getByLabel("Active Project")).toHaveValue(source.project.id);
   expect(paths.filter((path) => /\/history(?:\/|$)|\/reindex$|\/projects\/[^/]+\/runs/.test(path))).toEqual([]);
 });
 
@@ -215,9 +219,9 @@ test("real API: Project A imports without invalidating Preview, Project B explic
   const emptyWorkflow = await page.getByLabel("Workflow JSON", { exact: true }).inputValue();
   await navigation.getByRole("button", { name: "Workflow Library", exact: true }).click();
   await library.getByLabel("Search Workflow Library").fill(globalName);
-  await library.getByRole("button", { name: "Search library", exact: true }).click();
+  await library.getByLabel("Search Workflow Library").press("Enter");
   await library.getByRole("button", { name: globalName, exact: true }).click();
-  await library.getByRole("button", { name: "Use in this Project", exact: true }).click();
+  await library.getByRole("button", { name: "Add to Project", exact: true }).click();
   const copyDialog = page.getByRole("dialog", { name: "Review Project copy" });
   await copyDialog.getByRole("checkbox", { name: "Catalog CFG", exact: true }).check();
   await copyDialog.getByRole("checkbox", { name: "Catalog Steps", exact: true }).check();
@@ -261,18 +265,18 @@ test("real API: Project A imports without invalidating Preview, Project B explic
   expect(await storedWorkflow.json()).toEqual(source.workflow!.version);
   await expect(copyDialog).toContainText("Your Batch has not changed");
   expect(await page.getByLabel("Workflow JSON", { exact: true }).inputValue()).toBe(emptyWorkflow);
-  await expect(copyDialog.getByRole("button", { name: "Use copied setup" })).toBeDisabled();
+  await expect(copyDialog.getByRole("button", { name: "Apply to Batch" })).toBeDisabled();
   const cfg = copied.profiles.find((item) => item.workflow_profile.name === "Destination CFG")!;
   await copyDialog.getByRole("combobox", { name: "Copied Profile to apply", exact: true }).selectOption(cfg.version.id);
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toContain("Replace the Batch Workflow Setup");
     await dialog.dismiss();
   });
-  await copyDialog.getByRole("button", { name: "Use copied setup" }).click();
+  await copyDialog.getByRole("button", { name: "Apply to Batch" }).click();
   await expect(copyDialog).toBeVisible();
   expect(await page.getByLabel("Workflow JSON", { exact: true }).inputValue()).toBe(emptyWorkflow);
   page.once("dialog", async (dialog) => { await dialog.accept(); });
-  await copyDialog.getByRole("button", { name: "Use copied setup" }).click();
+  await copyDialog.getByRole("button", { name: "Apply to Batch" }).click();
   await expect(copyDialog).not.toBeVisible();
   await expect(page.getByLabel("Active Project")).toHaveValue(destination.project.id);
   await setup.getByRole("button", { name: "Change", exact: true }).click();
@@ -411,8 +415,10 @@ test("real UI: Project-free authoring, repair, immutable history and independent
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(destination.batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await navigation.getByRole("button", { name: "Workflow Library", exact: true }).click();
+  await library.getByLabel("Search Workflow Library").fill(name);
+  await library.getByLabel("Search Workflow Library").press("Enter");
   await library.getByRole("button", { name, exact: true }).click();
-  await library.getByRole("button", { name: "Use in this Project", exact: true }).click();
+  await library.getByRole("button", { name: "Add to Project", exact: true }).click();
   const copyDialog = page.getByRole("dialog", { name: "Review Project copy" });
   await copyDialog.getByRole("checkbox", { name: "Steps mapping", exact: true }).check();
   await copyDialog.getByRole("checkbox", { name: "CFG mapping", exact: true }).check();
@@ -438,7 +444,7 @@ test("real UI: Project-free authoring, repair, immutable history and independent
     expect(confirmation.message()).toContain("Replace the Batch Workflow Setup");
     await confirmation.accept();
   });
-  await copyDialog.getByRole("button", { name: "Use copied setup", exact: true }).click();
+  await copyDialog.getByRole("button", { name: "Apply to Batch", exact: true }).click();
   await expect(copyDialog).not.toBeVisible();
   await navigation.getByRole("button", { name: "Workflow Library", exact: true }).click();
   await library.getByRole("button", { name: "Steps mapping", exact: true }).click();
@@ -471,7 +477,8 @@ test("real UI: Project-free authoring, repair, immutable history and independent
   await expect(library.getByRole("button", { name: "Review mappings for CFG mapping", exact: true })).toBeVisible();
   await expect(library.getByRole("button", { name: "Edit Steps mapping", exact: true })).toBeVisible();
 
-  await library.getByRole("button", { name: "Workflow History", exact: true }).click();
+  await library.getByRole("button", { name: `Actions for Workflow ${name}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Workflow History", exact: true }).click();
   const history = library.getByRole("region", { name: "Workflow History", exact: true });
   await history.getByRole("button", { name: /^Revision 1 \// }).click();
   await expect(history).toContainText("Viewing revision 1.");
@@ -493,7 +500,8 @@ test("real UI: Project-free authoring, repair, immutable history and independent
   expect(restoredVersion.content_sha256).toBe(source.version.content_sha256);
   await expect(history).toContainText("Viewing revision 3.");
 
-  await library.getByRole("button", { name: "Edit Workflow metadata", exact: true }).click();
+  await library.getByRole("button", { name: `Actions for Workflow ${name}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Edit Workflow metadata", exact: true }).click();
   const metadata = page.getByRole("dialog", { name: `Edit metadata: ${name}`, exact: true });
   const renamed = `${name} renamed`;
   await metadata.getByLabel("Name", { exact: true }).fill(renamed);
@@ -505,14 +513,18 @@ test("real UI: Project-free authoring, repair, immutable history and independent
     ["CFG mapping", "CFG mapping", `/api/library/workflow-profiles/${profiles[1].workflow_profile.id}/archive`],
     ["Workflow", renamed, `/api/library/workflows/${source.workflow.id}/archive`],
   ]) {
-    await library.getByRole("button", { name: `Archive ${button}`, exact: true }).click();
+    const menuLabel = button === "Workflow" ? `Actions for Workflow ${renamed}` : `Actions for Profile ${entryName}`;
+    await library.getByRole("button", { name: menuLabel, exact: true }).click();
+    await page.getByRole("menuitem", { name: `Archive ${button}`, exact: true }).click();
     const archivedResponse = responseFor(page, path);
     await page.getByRole("dialog", { name: `Archive ${entryName}`, exact: true }).getByRole("button", { name: "Archive", exact: true }).click();
     expect((await archivedResponse).ok()).toBe(true);
     await expect(library.getByRole("button", { name: entryName, exact: true })).toHaveCount(0);
     await library.getByRole("checkbox", { name: "Show archived entries", exact: true }).check();
-    await expect(library.getByRole("button", { name: button === "Workflow" ? `${entryName} (archived)` : entryName, exact: true })).toBeVisible();
-    await library.getByRole("button", { name: `Unarchive ${button}`, exact: true }).click();
+    await expect(library.getByRole("button", { name: entryName, exact: true })).toBeVisible();
+    await expect(library.getByText(button === "Workflow" ? "Archived Workflow" : "Archived Profile", { exact: true })).toBeVisible();
+    await library.getByRole("button", { name: menuLabel, exact: true }).click();
+    await page.getByRole("menuitem", { name: `Unarchive ${button}`, exact: true }).click();
     const unarchivedResponse = responseFor(page, path);
     await page.getByRole("dialog", { name: `Unarchive ${entryName}`, exact: true }).getByRole("button", { name: "Unarchive", exact: true }).click();
     expect((await unarchivedResponse).ok()).toBe(true);

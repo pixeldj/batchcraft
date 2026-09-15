@@ -12,8 +12,8 @@ This is the complete acceptance target, not a claim that every step is implement
 
 1. Open Workflow Library without first choosing a Project.
 2. Find a reusable Workflow and inspect its exact versions and compatible Profiles.
-3. Use in this Project copies the chosen setup into a selected, verified Project, then explicitly
-   applies it to the draft with normal Preview invalidation.
+3. Add to Project opens naming and exact-Profile review, then copies the chosen setup into a selected,
+   verified Project. Apply to Batch is a separate guarded action with normal Preview invalidation.
 4. Import to Library copies a Project setup or an exact historical Run setup into the catalog.
 5. Edit copies independently. Existing Batches and Runs never follow source updates automatically.
 
@@ -96,7 +96,7 @@ The application version stays 1.1.0.
   reload/paging or late hydration. Cancelled/stale asynchronous Profile authoring callbacks cannot
   replace a newer draft. Authoring and copy receipt namespaces remain separate.
 
-### Verification checkpoint
+### Prior authoring verification
 
 Final authoring checkpoint verification passed: **861 frontend tests**, **1466 backend tests**, and
 **26 desktop/mobile browser tests in each of Vite and built modes**, against temporary fake-backed data.
@@ -105,6 +105,62 @@ creation and Profile handoff, validation repair, immutable history, independent 
 native focus, dirty Escape, and independently scrolling forms at 320px. Applied migration bytes remain
 unchanged. Vite reports a non-fatal approximately 539 kB minified chunk warning. The historical
 782/1433/22 results above remain first-slice evidence; no live-GPU or owner acceptance is claimed here.
+
+## Frontend layout and interaction follow-up
+
+This narrow follow-up builds on implemented authoring, not a new backend feature or completion of BC-026.
+`LibrarySearch.tsx`, `LibraryMenu.tsx`, and `ReadonlyProfileSummary.tsx` support the existing
+`GlobalWorkflowLibrary.tsx` and `GlobalWorkflowDetail.tsx` surfaces. Backend APIs, SQLite, architecture,
+domain models, durable formats and dependencies are unchanged.
+
+- Journey: choose a Workflow, inspect/select a Profile, then Add to Project. One primary Add action lives
+  in the detail footer, not a browser-wide floating bar. It opens the existing review with editable names,
+  exact revision choices and 0-50 Profiles. A new Project-copy review prefills only the selected exact
+  Profile; no selection means no automatic Profile choices. Existing receipt restoration remains intact.
+  This does not change Project-source Import to Library selection behavior.
+- Confirm copy persists independent Project resources. Apply to Batch remains a separate explicit action
+  with replacement confirmation and Project/draft/execution guards. Browsing, search, inspection,
+  authoring, copying and cancelled apply do not change Batch intent or invalidate Preview.
+- The library header and row text are left-aligned. The desktop sidebar is 272px (`17rem`) with a vertical
+  divider. Workflow entries own a bounded `min(55dvh, 32rem)` scroll scope, reduced to
+  `min(40dvh, 32rem)` on mobile; Profile entries own `min(40dvh, 24rem)`. Search, paging, selected Profile
+  detail and the Add footer are outside those list scroll scopes. Mobile stacks the sidebar above detail.
+- Edit stays visible as a secondary row action. Rename / description, History and Archive/Unarchive live
+  in keyboard-operable popover menus. Exact revision indicators are small context rather than primary
+  actions. The selected Profile shows formatted core mapping node names, ordered named Image Inputs and
+  typed parameter definitions; technical target IDs and raw JSON remain available through disclosures.
+- Workflow, Profile and History search use a 300ms debounce with immediate Enter submission. Committed
+  query changes reset paging; scope/query/navigation changes cancel pending search work and stale reads.
+  Manual Refresh returns lists to their first page while retaining exact Workflow/Profile selection,
+  rather than silently adopting latest revisions.
+- Summary reads use two workers over at most the current 20-row Profile-family page and retain a positive
+  cache of at most 20 exact ProfileVersions. Failed summaries display unavailable state; manual Refresh
+  retries each failed summary once for the refreshed page while retaining successful cache entries.
+  Lists request 20 rows, pagers retain at most 20 Previous bookmarks, and Next has no 20-page forward cap.
+  These are frontend bounds, not new API contracts; legacy Project-source lists remain unpaginated.
+- Only `RESTORED_DRAFT_MESSAGE` is hidden outside Batch. Navigation does not clear or dismiss its state;
+  other recovery/storage warnings remain unchanged. Existing themes, application navigation/header,
+  Batch and Prompt behavior are preserved. Library actions use scoped classes rather than the shared
+  `.action-row` styling that caused the layout conflict; checkbox `width: auto` is scoped to the library
+  and its dialogs, not a global form reset.
+
+### Layout verification checkpoint
+
+Verification passed: **884 frontend tests**, typecheck, lint, build, and **30 desktop/mobile browser
+tests in each of Vite and built modes**. After the final narrow-row action-alignment rule, four focused
+layout/browser cases per mode passed again. No backend code or data formats changed.
+
+Dark Synthwave before/after screenshots were captured and visually inspected at 1440px, 1024px and
+390px. Checked empty/one-entry/paginated libraries, long names, multiple/no/incompatible Profiles,
+archived entries, actual ordered mapping summaries, simulated loading/error states, historical selection
+through Refresh, destination selection, 0/1/multiple copies and the 50-selection limit, explicit Batch
+application, recovery-notice scoping, keyboard menus, and existing authoring dialogs. Final list-scroll
+checks confirm bounded internal scrolling, stationary list controls, an unclipped last-row menu, and
+no sidebar-driven blank gap above Add to Project. Theme sources, fonts and palette tokens are unchanged.
+
+Summary request accounting verifies two concurrent workers, cached successful summaries, and only one
+retry for a failed summary on Refresh. The approximately 547 kB minified chunk warning remains non-fatal;
+no threshold was relaxed. Owner acceptance of this cleanup and overall BC-026 completion remain separate.
 
 ### Remaining scope
 

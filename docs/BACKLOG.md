@@ -1516,7 +1516,7 @@ Acceptance scope:
 
 - A global Workflow Library is accessible without selecting a Project, with bounded search/browsing and
   explicit selection of exact Workflow versions and compatible Profile versions.
-- Use in this Project copies the chosen setup into the selected, verified Project under new identities;
+- Add to Project copies the chosen setup into the selected, verified Project under new identities;
   applying the copied setup is an explicit draft edit requiring a fresh Preview.
 - Import to Library copies a Project setup or exact frozen Run setup into the global catalog, with naming
   review and explicit conflict handling. Historical import must work without original mutable rows.
@@ -1566,7 +1566,21 @@ initial focus and dirty-close confirmation; navigation guards retain draft/pendi
 callbacks and repeated receipt hydration cannot overwrite newer drafts/exact choices. Global authoring
 does not change Project Batch/Preview or independent copies; revision numbers stay in History.
 
-Latest authoring verification is tracked in the plan's [current checkpoint](plans/BC-026-global-workflow-library.md#current-authoring-checkpoint).
+Narrow frontend layout/interaction follow-up: choose a Workflow, inspect/select a Profile, then use the
+single detail-footer Add to Project action. The existing review retains editable names, exact revisions
+and 0-50 Profile choices; only the selected Profile is prefilled for a new Project-copy review, never all
+Profiles automatically. Apply to Batch remains separate and guarded. Left-aligned browsing, bounded
+Workflow/Profile list scroll scopes, secondary Edit actions, keyboard popover menus, formatted read-only
+Profile summaries, debounced search and selection-preserving Refresh refine presentation only. Summary
+reads use two workers, a 20-version positive cache and the current 20-row page; pagers retain 20 Previous
+bookmarks without a forward cap. Only the restored-draft message is hidden outside Batch, without
+clearing/dismissing its state; other warnings remain unchanged. No backend API, SQLite, durable-format,
+dependency or domain-semantics changes are part of this follow-up.
+
+Prior authoring verification remains recorded in the plan. Current cleanup verification is recorded in
+its [layout verification checkpoint](plans/BC-026-global-workflow-library.md#layout-verification-checkpoint).
+The owner reports that the development layout looks great after restarting the stale backend; testing
+the refreshed candidate remains the next step, not acceptance of all remaining BC-026 functionality.
 BC-026 remains **In Progress**: frozen Run Plan/Result Details Import to Library remains queued, and final
 acceptance is outstanding. Version stays **1.1.0**, with no v1.2.0 tag/release. Workflow images are deferred
 optional upcoming work, not a v1.2.0 completion gate.

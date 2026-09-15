@@ -20,6 +20,11 @@ authoring checkpoint adds the family, History, save, metadata, and archive contr
 need no selected Project and perform no ComfyUI generation or historical projection generation/reindex.
 The GET routes use the application read-capacity boundary.
 
+The frontend layout follow-up labels the copy entry point Add to Project and the separate guarded draft
+action Apply to Batch. Add to Project opens the existing naming/exact-Profile review before calling
+`use-in-project`; only the selected Profile is prefilled in a new review. These UI labels, summary
+caching, search debounce and Refresh behavior change none of the routes or request/response contracts.
+
 | Method | Path | Contract |
 | --- | --- | --- |
 | GET | `/api/library/workflows` | Global Workflow metadata with `latest_version_id` and `source`; active families by default, optional `include_archived`; no Workflow JSON. |

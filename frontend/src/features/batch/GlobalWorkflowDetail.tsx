@@ -1,8 +1,11 @@
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { LibraryApi } from "../../api/client";
 import type { GlobalCatalogItem, GlobalProfile, GlobalProfileFamily, GlobalProfileVersion, GlobalWorkflowVersion, LibraryPage, GlobalWorkflowHistoryItem, GlobalProfileHistoryItem } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
 import type { GlobalAuthoringOperation } from "./useGlobalWorkflowAuthoring";
+import { LibraryMenu } from "./LibraryMenu";
+import { LibrarySearch } from "./LibrarySearch";
+import { profileMappingCount, ReadonlyProfileSummary } from "./ReadonlyProfileSummary";
 
 interface Props {
   api: LibraryApi;
@@ -15,12 +18,13 @@ interface Props {
   disabled: boolean;
   projectId: string | null;
   projectName: string;
+  onChooseProject?(): void;
   onEdit(operation: GlobalAuthoringOperation): void;
   onBeginAuthoringRead(): AbortController;
   onUse(root: GlobalCatalogItem, version: GlobalWorkflowVersion, profile?: { family: GlobalProfileFamily; version: GlobalProfileVersion }): void;
 }
 
-export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, updatedProfile, showArchived, disabled, projectId, projectName, onEdit, onBeginAuthoringRead, onUse }: Props) {
+export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, updatedProfile, showArchived, disabled, projectId, projectName, onChooseProject, onEdit, onBeginAuthoringRead, onUse }: Props) {
   const [root, setRoot] = useState<GlobalCatalogItem | null>(null);
   const [workflow, setWorkflow] = useState<GlobalWorkflowVersion | null>(null);
   const [exactId, setExactId] = useState<string | null>(null);
@@ -33,6 +37,8 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [profileRequest, setProfileRequest] = useState<{ family: GlobalProfileFamily; id: string; edit: AbortController | false } | null>(null);
+  const summaryCache = useRef(new Map<string, GlobalProfileVersion>());
+  const [summaries, setSummaries] = useState<Record<string, GlobalProfileVersion | null>>({});
   if (profileRequest?.edit && (!active || profileRequest.edit.signal.aborted)) setProfileRequest(null);
   const editLoadedProfile = useEffectEvent((family: GlobalProfileFamily, profile: GlobalProfileVersion) => {
     if (root && workflow) onEdit({ kind: "profile", root, workflow, family, profile });
@@ -61,10 +67,11 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
     })().catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); });
     return () => controller.abort();
   }, [api, active, id, exactId, refresh, showArchived]);
+  const targetId = workflow?.id;
   useEffect(() => {
-    if (!active || !workflow) return;
+    if (!active || !targetId) return;
     const controller = new AbortController();
-    void api.listGlobalProfileFamilies(id, { workflow_version_id: workflow.id, q: query, cursor, limit: 20, include_archived: showArchived }, controller.signal)
+    void api.listGlobalProfileFamilies(id, { workflow_version_id: targetId, q: query, cursor, limit: 20, include_archived: showArchived }, controller.signal)
       .then((page) => {
         if (!controller.signal.aborted) {
           setFamilyPage(page);
@@ -76,7 +83,37 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
       })
       .catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); });
     return () => controller.abort();
-  }, [api, active, id, workflow, query, cursor, showArchived, refresh]);
+  }, [api, active, id, targetId, query, cursor, showArchived, refresh]);
+  useEffect(() => {
+    if (!active || !familyPage) return;
+    const controller = new AbortController();
+    const candidates = familyPage.items.slice(0, 20).flatMap((family) => {
+      const versionId = family.latest_compatible_version_id ?? family.latest_active_version_id;
+      return versionId ? [{ family, versionId }] : [];
+    });
+    let index = 0;
+    async function read() {
+      while (index < candidates.length && !controller.signal.aborted) {
+        const { family, versionId } = candidates[index++];
+        try {
+          const version = summaryCache.current.get(versionId) ?? await api.getGlobalProfileVersion(versionId, controller.signal);
+          if (controller.signal.aborted) return;
+          if (version.id !== versionId || version.workflow_id !== id || version.workflow_profile_id !== family.id) throw new Error("Unexpected Profile owner");
+          summaryCache.current.delete(versionId);
+          summaryCache.current.set(versionId, version);
+          while (summaryCache.current.size > 20) summaryCache.current.delete(summaryCache.current.keys().next().value!);
+          setSummaries((rows) => ({ ...rows, [versionId]: version }));
+        } catch {
+          if (!controller.signal.aborted) setSummaries((rows) => ({ ...rows, [versionId]: null }));
+        }
+      }
+    }
+    void read(); void read();
+    return () => controller.abort();
+  }, [api, active, familyPage, id]);
+  const summaryScope = JSON.stringify([active, workflow?.id, query, cursor, refresh, showArchived]);
+  const [previousSummaryScope, setPreviousSummaryScope] = useState(summaryScope);
+  if (summaryScope !== previousSummaryScope) { setPreviousSummaryScope(summaryScope); setSummaries({}); }
   useEffect(() => {
     if (!active || !profileRequest?.id) return;
     const controller = new AbortController();
@@ -107,15 +144,18 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
   return <div className="global-workflow-detail">
     {error && <p role="alert">{error}</p>}
     {!root ? <p role="status">Loading Workflow...</p> : <>
-      <h3>{root.name}</h3>
+      <header className="global-library-detail-header"><div className="global-library-detail-title"><h3>{root.name}</h3>{workflow && <small className="global-library-meta">Revision {workflow.version_number}</small>}</div>
+        <div className="global-library-actions">
+          <button type="button" className="button-secondary compact" disabled={disabled || selectionLoading || !workflow || Boolean(root.archived_at)} onClick={() => onEdit({ kind: "workflow", root, workflow: workflow!, family: selection?.family, profile: selection?.version })}>Edit Workflow</button>
+          <LibraryMenu key={String(active)} label={`Actions for Workflow ${root.name}`} disabled={disabled} items={[
+            { label: "Rename / description", accessibleLabel: "Edit Workflow metadata", onSelect: () => onEdit({ kind: "metadata", root }) },
+            { label: "History", accessibleLabel: "Workflow History", onSelect: () => setHistory(!history) },
+            { label: root.archived_at ? "Unarchive" : "Archive", accessibleLabel: root.archived_at ? "Unarchive Workflow" : "Archive Workflow", onSelect: () => onEdit({ kind: "archive", root, archive: { kind: "workflows", id: root.id, archived: !root.archived_at } }) },
+          ]} />
+        </div>
+      </header>
       {root.description && <p>{root.description}</p>}
       {root.archived_at && <p>Archived Workflow</p>}
-      <div className="action-row">
-        <button type="button" className="button-secondary" disabled={disabled || selectionLoading || !workflow || Boolean(root.archived_at)} onClick={() => onEdit({ kind: "workflow", root, workflow: workflow!, family: selection?.family, profile: selection?.version })}>Edit Workflow</button>
-        <button type="button" className="button-secondary" disabled={disabled} onClick={() => onEdit({ kind: "metadata", root })}>Edit Workflow metadata</button>
-        <button type="button" className="button-link" disabled={disabled} onClick={() => onEdit({ kind: "archive", root, archive: { kind: "workflows", id: root.id, archived: !root.archived_at } })}>{root.archived_at ? "Unarchive Workflow" : "Archive Workflow"}</button>
-        <button type="button" className="button-link" onClick={() => setHistory(!history)}>Workflow History</button>
-      </div>
       {history && <section aria-label="Workflow History">
         <GlobalLibraryHistory key={`workflow:${id}:${refresh}`} api={api} id={id} kind="workflow" active={active} onSelect={selectWorkflow} />
         {workflow && <>
@@ -126,36 +166,46 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
         </>}
       </section>}
       {workflow ? <>
-        <details><summary>Workflow JSON</summary><pre>{JSON.stringify(workflow.workflow, null, 2)}</pre></details>
-        <h4>Profiles</h4>
-        <button type="button" className="button-secondary" disabled={disabled || Boolean(root.archived_at || workflow.archived_at)} onClick={() => onEdit({ kind: "profile", create: true, root, workflow })}>New Profile</button>
-        <label className="field"><span className="field-label">Search Profiles</span><input maxLength={200} value={query} onChange={(event) => { setQuery(event.target.value); setCursor(undefined); setBookmarks([]); setFamilyPage(null); }} /></label>
+        <div className="global-library-detail-header"><h4>Profiles</h4><button type="button" className="button-secondary compact" disabled={disabled || Boolean(root.archived_at || workflow.archived_at)} onClick={() => onEdit({ kind: "profile", create: true, root, workflow })}>New Profile</button></div>
+        <LibrarySearch label="Search Profiles" query={query} scope={JSON.stringify([workflow.id, cursor, refresh, showArchived])} active={active} onChange={(value) => { setQuery(value); setCursor(undefined); setBookmarks([]); setFamilyPage(null); }} />
         {!familyPage && <p role="status">Loading Profiles...</p>}
         {familyPage?.items.length === 0 && <p>No Profiles found.</p>}
+        <div className="global-library-profile-list" role="group" aria-label="Profile entries">
         {familyPage?.items.map((family) => {
           const versionId = family.latest_compatible_version_id ?? family.latest_active_version_id;
-          return <div className="global-profile-choice" key={family.id}>
-            <button type="button" className="button-link" disabled={!versionId} aria-pressed={selection?.family.id === family.id} onClick={() => versionId && inspect(family, versionId)}>{family.name}</button>
-            {family.description && <p>{family.description}</p>}
-            {!family.latest_compatible_version_id && <p>Profile mappings need review</p>}
-            {family.archived_at && <p>Archived Profile</p>}
-            <button type="button" className="button-secondary compact" disabled={disabled || !versionId || Boolean(root.archived_at || family.archived_at || workflow.archived_at)} onClick={() => {
+          const selected = selection?.family.id === family.id;
+          const summary = selected ? selection.version : versionId ? summaries[versionId] : null;
+          const revision = summary?.version_number ?? family.latest_compatible_version?.version_number;
+          return <div className="global-profile-row" key={family.id}>
+            <button type="button" className="button-secondary global-profile-select" aria-label={family.name} title={family.name} disabled={!versionId} aria-pressed={selected} onClick={() => { if (versionId && !selected) inspect(family, versionId); }}><span>{family.name}</span><small className="global-library-meta">{selected ? "Selected" : "Inspect"}{revision !== undefined ? ` / revision ${revision}` : ""}</small><small>{summary ? profileMappingCount(summary.profile) : summary === null ? "Summary unavailable" : "Loading mappings..."}</small></button>
+            <div className="global-library-actions">
+            <button type="button" className="button-secondary compact" aria-label={family.latest_compatible_version_id ? `Edit ${family.name}` : `Review mappings for ${family.name}`} disabled={disabled || !versionId || Boolean(root.archived_at || family.archived_at || workflow.archived_at)} onClick={() => {
               if (selection?.family.id === family.id) onEdit({ kind: "profile", root, workflow, family, profile: selection.version });
               else if (versionId) { inspect(family, versionId); setProfileRequest({ family, id: versionId, edit: onBeginAuthoringRead() }); }
-            }}>{family.latest_compatible_version_id ? `Edit ${family.name}` : `Review mappings for ${family.name}`}</button>
-            <button type="button" className="button-link" disabled={disabled} onClick={() => onEdit({ kind: "metadata", root, family })}>Metadata for {family.name}</button>
-            <button type="button" className="button-link" onClick={() => { if (versionId) inspect(family, versionId); else setSelection(null); setProfileRequest({ family, id: versionId ?? "", edit: false }); setProfileHistory(true); }}>History for {family.name}</button>
-            <button type="button" className="button-link" disabled={disabled} onClick={() => onEdit({ kind: "archive", root, family, archive: { kind: "workflow-profiles", id: family.id, archived: !family.archived_at } })}>{family.archived_at ? "Unarchive" : "Archive"} {family.name}</button>
+            }}>{family.latest_compatible_version_id ? "Edit" : "Review mappings"}</button>
+            <LibraryMenu key={String(active)} label={`Actions for Profile ${family.name}`} disabled={disabled} items={[
+              { label: "Rename / description", accessibleLabel: `Metadata for ${family.name}`, onSelect: () => onEdit({ kind: "metadata", root, family }) },
+              { label: "History", accessibleLabel: `History for ${family.name}`, onSelect: () => { const target = selected ? selection.version.id : versionId; if (target && !selected) inspect(family, target); else if (!target) setSelection(null); setProfileRequest({ family, id: target ?? "", edit: false }); setProfileHistory(true); } },
+              { label: family.archived_at ? "Unarchive" : "Archive", accessibleLabel: `${family.archived_at ? "Unarchive" : "Archive"} ${family.name}`, onSelect: () => onEdit({ kind: "archive", root, family, archive: { kind: "workflow-profiles", id: family.id, archived: !family.archived_at } }) },
+            ]} />
+            </div>
+            {family.description && <p className="global-profile-row-note">{family.description}</p>}
+            {!family.latest_compatible_version_id && <p className="global-profile-row-note">Profile mappings need review</p>}
+            {family.archived_at && <p className="global-profile-row-note">Archived Profile</p>}
           </div>;
         })}
-        <div className="action-row">
-          <button type="button" className="button-secondary compact" disabled={!familyPage || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); setFamilyPage(null); }}>Previous Profile families</button>
-          <button type="button" className="button-secondary compact" disabled={!familyPage?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(familyPage?.next_cursor ?? undefined); setFamilyPage(null); }}>Next Profile families</button>
+        </div>
+        {familyPage && <p className="global-library-meta">{familyPage.items.length} Profile families on this page</p>}
+        <div className="global-library-pager">
+          <button type="button" className="button-secondary compact" aria-label="Previous Profile families" title="Previous Profile families (up to 20 previous pages)" disabled={!familyPage || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); setFamilyPage(null); }}>Previous</button>
+          <button type="button" className="button-secondary compact" aria-label="Next Profile families" disabled={!familyPage?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(familyPage?.next_cursor ?? undefined); setFamilyPage(null); }}>Next</button>
         </div>
         {selection && <section aria-label="Selected Profile">
           <h4>{selection.family.name}</h4>
-          {!selectedCompatible && <p>Profile mappings need review</p>}
+          <p className="global-library-meta">Selected revision {selection.version.version_number}</p>
+          {!selectedCompatible && <p>{selection.version.workflow_version_id !== workflow.id ? "This Profile targets a different Workflow revision. Review its mappings for this Workflow, or clear the selection to add only the Workflow." : "This Profile or its revision is archived. Review History to unarchive it, or clear the selection to add only the Workflow."}</p>}
           <button type="button" className="button-secondary" disabled={disabled || Boolean(selection.family.archived_at || root.archived_at || workflow.archived_at)} onClick={() => onEdit({ kind: "profile", root, workflow, family: selection.family, profile: selection.version })}>{selectedCompatible ? "Edit selected Profile" : "Review selected mappings"}</button>
+          <ReadonlyProfileSummary profile={selection.version.profile} workflow={selection.version.workflow_version_id === workflow.id ? workflow.workflow : {}} />
           <details><summary>Selected Profile JSON</summary><pre>{JSON.stringify(selection.version.profile, null, 2)}</pre></details>
         </section>}
         {selectionLoading && !error && <p role="status">Loading selected Profile...</p>}
@@ -168,12 +218,13 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
             <details><summary>Exact Profile revision metadata</summary><pre>{JSON.stringify(selection.version, null, 2)}</pre></details>
           </>}
         </section>}
-        <div className="action-row">
-          <button className="button-secondary" type="button" disabled={disabled || selectionLoading || Boolean(root.archived_at || workflow.archived_at) || Boolean(selection && !selectedCompatible)} onClick={() => onUse(root, workflow, selection ?? undefined)}>Inspect compatible Profiles</button>
-          <button className="button-primary" type="button" disabled={disabled || selectionLoading || !projectId || Boolean(root.archived_at || workflow.archived_at) || Boolean(selection && !selectedCompatible)} onClick={() => onUse(root, workflow, selection ?? undefined)}>Use in this Project</button>
+        <details className="global-library-technical"><summary>Workflow JSON</summary><pre>{JSON.stringify(workflow.workflow, null, 2)}</pre></details>
+        <footer className="global-library-copy-footer">
+          <div>{projectId ? <><span className="global-library-meta">Destination Project</span><p>Creates an independent copy in <strong>{projectName}</strong>. Your Batch stays unchanged.</p></> : <><p>Select and verify a Project in Batch to add this setup.</p>{onChooseProject && <button type="button" className="button-link" onClick={onChooseProject}>Choose Project</button>}</>}</div>
+          <div className="global-library-actions"><button className="button-primary" type="button" disabled={disabled || selectionLoading || !projectId || Boolean(root.archived_at || workflow.archived_at) || Boolean(selection && !selectedCompatible)} onClick={() => onUse(root, workflow, selection ?? undefined)}>Add to Project</button>
           {(selection || profileRequest) && <button className="button-link" type="button" onClick={() => { setSelection(null); setProfileRequest(null); setProfileHistory(false); setError(null); }}>Clear Profile selection</button>}
-        </div>
-        <p className="field-help">{projectId ? `Copy into ${projectName}, then explicitly apply to Batch.` : "Select and verify a Project in Batch to use this setup."}</p>
+          </div>
+        </footer>
       </> : <p>No active Workflow content. Explore History to inspect or unarchive previous content.</p>}
     </>}
   </div>;
@@ -187,6 +238,12 @@ export function GlobalLibraryHistory({ api, id, kind, active, onSelect }: { api:
   const [page, setPage] = useState<LibraryPage<GlobalWorkflowHistoryItem | GlobalProfileHistoryItem> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const scope = `${kind}:${id}`;
+  const [previousScope, setPreviousScope] = useState(scope);
+  if (scope !== previousScope) { setPreviousScope(scope); setQuery(""); setCursor(undefined); setBookmarks([]); }
+  const requestKey = JSON.stringify([scope, active, query, archived, cursor, refresh]);
+  const [previousRequest, setPreviousRequest] = useState(requestKey);
+  if (previousRequest !== requestKey) { setPreviousRequest(requestKey); setPage(null); setError(null); }
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -198,15 +255,16 @@ export function GlobalLibraryHistory({ api, id, kind, active, onSelect }: { api:
   }, [api, id, kind, active, query, archived, cursor, refresh]);
   function reset() { setCursor(undefined); setBookmarks([]); setPage(null); setError(null); }
   return <>
-    <label className="field"><span className="field-label">Search {kind} history</span><input maxLength={200} value={query} onChange={(event) => { setQuery(event.target.value); reset(); }} /></label>
-    <label><input type="checkbox" checked={archived} onChange={(event) => { setArchived(event.target.checked); reset(); }} />Show archived {kind} revisions</label>
+    <LibrarySearch label={`Search ${kind} history`} query={query} scope={JSON.stringify([scope, archived, cursor, refresh])} active={active} onChange={(value) => { setQuery(value); reset(); }} />
+    <label className="checkbox-row"><input type="checkbox" checked={archived} onChange={(event) => { setArchived(event.target.checked); reset(); }} />Show archived {kind} revisions</label>
     {error && <p role="alert">{error}</p>}
     {!page && !error && <p role="status">Loading history...</p>}
     {page?.items.length === 0 && <p>No revisions found.</p>}
     {page?.items.map((item) => <button key={item.id} type="button" className="global-library-item button-secondary" onClick={() => onSelect(item.id)}>Revision {item.version_number} / {item.name_snapshot}{item.archived_at ? " (archived)" : ""}<small>{item.note} {new Date(item.created_at).toLocaleString()}</small></button>)}
-    <div className="action-row">
-      <button className="button-secondary compact" type="button" disabled={!page || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); setPage(null); }}>Previous {kind} revisions</button>
-      <button className="button-secondary compact" type="button" disabled={!page?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(page?.next_cursor ?? undefined); setPage(null); }}>Next {kind} revisions</button>
+    {page && <p className="global-library-meta">{page.items.length} {kind} revisions on this page</p>}
+    <div className="global-library-pager">
+      <button className="button-secondary compact" type="button" aria-label={`Previous ${kind} revisions`} title="Up to 20 previous pages" disabled={!page || !bookmarks.length} onClick={() => { setCursor(bookmarks.at(-1) || undefined); setBookmarks(bookmarks.slice(0, -1)); setPage(null); }}>Previous</button>
+      <button className="button-secondary compact" type="button" aria-label={`Next ${kind} revisions`} disabled={!page?.next_cursor} onClick={() => { setBookmarks([...bookmarks, cursor ?? ""].slice(-20)); setCursor(page?.next_cursor ?? undefined); setPage(null); }}>Next</button>
       <button className="button-link" type="button" onClick={() => { reset(); setRefresh((n) => n + 1); }}>Reload {kind} history</button>
     </div>
   </>;

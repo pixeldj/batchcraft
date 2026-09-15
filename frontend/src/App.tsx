@@ -1068,7 +1068,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         {import.meta.env.VITE_BATCHCRAFT_INSTANCE ? (
           <p className="session-note" role="status">{import.meta.env.VITE_BATCHCRAFT_INSTANCE}</p>
         ) : null}
-        {sessionMessage ? (
+        {sessionMessage && (sessionMessage !== RESTORED_DRAFT_MESSAGE || navigation.view === "batch") ? (
           <div className="session-note dismissible-note">
             <span role="status">{sessionMessage}</span>
             <button
@@ -1195,6 +1195,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           onQueryChange={navigation.changeLibraryQuery}
           projectId={projectVerified && selectedProjectId === form.projectId ? selectedProjectId : null}
           projectName={form.projectName}
+          onChooseProject={() => navigation.navigate("batch")}
           draftGuard={`${workflowApplyRevision}:${currentBatchIdentity}:${currentIntent}`}
           applyDisabled={projectSwitchingBlocked}
           onCopied={(projectId) => setWorkflowLibraryRefresh((current) => ({ ...current, [projectId]: (current[projectId] ?? 0) + 1 }))}

@@ -14,6 +14,10 @@ async function selectWorkflow() {
   fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
   await screen.findByRole("button", { name: "New Profile" });
 }
+async function menuAction(name: string, profile = false) {
+  fireEvent.click(await screen.findByRole("button", { name: profile ? "Actions for Profile Portrait mapping" : /^Actions for Workflow / }));
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
 function save() { fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" })); }
 function mapCore() {
   for (const [label, input] of [["Prompt", "text"], ["Seed", "seed"], ["Output Prefix", "filename_prefix"]]) {
@@ -39,9 +43,10 @@ describe("Global Workflow authoring", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<GlobalWorkflowLibrary {...props} />); await selectWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Portrait mapping" }));
-    await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenCalledOnce());
-    const signal = vi.mocked(api.getGlobalProfileVersion).mock.calls[0][1];
-    fireEvent.click(screen.getByRole("button", { name: nextAction }));
+    await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenCalledTimes(2));
+    const signal = vi.mocked(api.getGlobalProfileVersion).mock.calls[1][1];
+    if (nextAction === "Edit Workflow metadata") await menuAction(nextAction);
+    else fireEvent.click(screen.getByRole("button", { name: nextAction }));
     const dialog = screen.getByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Keep this newer draft" } });
     expect(signal?.aborted).toBe(true);
@@ -67,19 +72,21 @@ describe("Global Workflow authoring", () => {
     });
     const view = render(<GlobalWorkflowLibrary {...props} />); await selectWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Portrait mapping" }));
-    await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenCalledOnce());
+    await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenCalledTimes(2));
+    const resolveEdit = resolve;
     if (change === "view") {
       view.rerender(<GlobalWorkflowLibrary {...props} active={false} />);
       view.rerender(<GlobalWorkflowLibrary {...props} />);
     } else {
-      fireEvent.click(screen.getByRole("button", { name: "Workflow History" }));
+      await menuAction("Workflow History");
       fireEvent.click(await screen.findByRole("button", { name: /Revision 0/ }));
       await screen.findByText(/Viewing revision 0/);
     }
-    expect(vi.mocked(api.getGlobalProfileVersion).mock.calls[0][1]?.aborted).toBe(true);
-    await act(async () => resolve(profileVersion));
+    expect(vi.mocked(api.getGlobalProfileVersion).mock.calls[1][1]?.aborted).toBe(true);
+    await act(async () => resolveEdit(profileVersion));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(api.getGlobalProfileVersion).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("region", { name: "Selected Profile" })).not.toBeInTheDocument();
+    expect(api.appendGlobalProfile).not.toHaveBeenCalled();
   });
 
   it.each(["Workflow", "Profile", "metadata", "archive", "restore"] as const)("retains the same %s mutation payload and request ID after an ambiguous response", async (kind) => {
@@ -87,11 +94,12 @@ describe("Global Workflow authoring", () => {
     const { api, props } = setup({ [method]: vi.fn().mockRejectedValue(new Error("Ambiguous response")) });
     render(<GlobalWorkflowLibrary {...props} />); await selectWorkflow();
     if (kind === "restore") {
-      fireEvent.click(screen.getByRole("button", { name: "Workflow History" }));
+      await menuAction("Workflow History");
       fireEvent.click(screen.getByRole("button", { name: "Restore Workflow content" }));
     } else {
       const name = kind === "Profile" ? "Edit Portrait mapping" : kind === "metadata" ? "Edit Workflow metadata" : kind === "archive" ? "Archive Workflow" : "Edit Workflow";
-      fireEvent.click(await screen.findByRole("button", { name }));
+      if (kind === "metadata" || kind === "archive") await menuAction(name);
+      else fireEvent.click(await screen.findByRole("button", { name }));
     }
     const dialog = await screen.findByRole("dialog");
     const saveLabel = kind === "archive" ? "Archive" : kind === "restore" ? "Restore" : "Save";
@@ -275,7 +283,8 @@ describe("Global Workflow authoring", () => {
     await screen.findByRole("button", { name: "Sibling" });
     fireEvent.click(screen.getByRole("button", { name: "Edit Workflow" })); save();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(api.appendGlobalProfile).not.toHaveBeenCalled(); expect(api.getGlobalProfileVersion).not.toHaveBeenCalled();
+    expect(api.appendGlobalProfile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region", { name: "Selected Profile" })).not.toBeInTheDocument();
   });
 
   it("selects old Workflow content explicitly, restores by append after confirmation, and reloads the authoritative latest root", async () => {
@@ -284,7 +293,7 @@ describe("Global Workflow authoring", () => {
     const { api, props } = setup({ getGlobalWorkflow: vi.fn(async () => ({ ...globalWorkflow, latest_version_id: "latest" })), getGlobalWorkflowVersion: vi.fn(async (id) => id === "old" ? older : latest), listGlobalWorkflowVersions: vi.fn(async () => ({ items: [latest, older], next_cursor: null })) });
     render(<GlobalWorkflowLibrary {...props} />); await selectWorkflow();
     expect(screen.queryByText(/Viewing revision/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Workflow History" }));
+    await menuAction("Workflow History");
     fireEvent.click(await screen.findByRole("button", { name: /Revision 1 \/ Reusable portrait/ }));
     await screen.findByText(/Viewing revision 1/);
     fireEvent.click(screen.getByRole("button", { name: "Restore Workflow content" }));
@@ -302,14 +311,14 @@ describe("Global Workflow authoring", () => {
     const latest = { ...profileVersion, version_number: 2 };
     const { api, props } = setup({ listGlobalProfileVersions: vi.fn(async () => ({ items: [latest, old], next_cursor: null })), getGlobalProfileVersion: vi.fn(async (id) => id === "old-p" ? old : latest) });
     render(<GlobalWorkflowLibrary {...props} projectId="project-1" />); await selectWorkflow();
-    fireEvent.click(await screen.findByRole("button", { name: "History for Portrait mapping" }));
+    await menuAction("History for Portrait mapping", true);
     fireEvent.click(await screen.findByRole("button", { name: /Revision 1 \/ Portrait mapping/ }));
     await screen.findByText(/Viewing Profile revision 1/);
-    expect(screen.getByRole("button", { name: "Use in this Project" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add to Project" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Review selected mappings" })); save();
     await waitFor(() => expect(api.appendGlobalProfile).toHaveBeenCalledWith("global-p", expect.objectContaining({ workflow_version_id: "global-w-v1", mappings: old.profile.mappings })));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    fireEvent.click(await screen.findByRole("button", { name: "History for Portrait mapping" }));
+    await menuAction("History for Portrait mapping", true);
     fireEvent.click(await screen.findByRole("button", { name: /Revision 1 \/ Portrait mapping/ }));
     await screen.findByText(/Viewing Profile revision 1/);
     fireEvent.click(screen.getByRole("button", { name: "Restore Profile content" }));
@@ -320,7 +329,7 @@ describe("Global Workflow authoring", () => {
 
   it("renames current metadata without changing the selected immutable Workflow JSON", async () => {
     const { api, props } = setup(); render(<GlobalWorkflowLibrary {...props} />); await selectWorkflow();
-    fireEvent.click(screen.getByRole("button", { name: "Edit Workflow metadata" }));
+    await menuAction("Edit Workflow metadata");
     expect(screen.queryByLabelText("Workflow JSON")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Current friendly name" } });
     fireEvent.change(screen.getByLabelText("Description (optional)"), { target: { value: "Current description" } });
@@ -338,7 +347,7 @@ describe("Global Workflow authoring", () => {
     fireEvent.change(screen.getByLabelText("Search Profiles"), { target: { value: "Portrait" } });
     fireEvent.click(await screen.findByRole("button", { name: "Portrait mapping" }));
     await screen.findByRole("region", { name: "Selected Profile" });
-    fireEvent.click(screen.getByRole("button", { name: "Metadata for Portrait mapping" }));
+    await menuAction("Metadata for Portrait mapping", true);
     expect(screen.queryByLabelText("Prompt node")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed mapping" } });
     vi.mocked(api.listGlobalProfileFamilies).mockResolvedValue({ items: [], next_cursor: null });
@@ -358,12 +367,12 @@ describe("Global Workflow authoring", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
     await screen.findByText(/No active Workflow content/);
     expect(api.getGlobalWorkflowVersion).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Workflow History" }));
+    await menuAction("Workflow History");
     await screen.findByText("No revisions found.");
     fireEvent.click(screen.getByRole("checkbox", { name: "Show archived workflow revisions" }));
     fireEvent.click(await screen.findByRole("button", { name: /Revision 1.*archived/ }));
     await screen.findByRole("button", { name: "Unarchive Workflow revision" });
-    expect(screen.getByRole("button", { name: "Use in this Project" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add to Project" })).toBeDisabled();
     expect(api.getGlobalWorkflowVersion).toHaveBeenCalledWith("global-w-v1", expect.any(AbortSignal));
   });
 
@@ -374,10 +383,11 @@ describe("Global Workflow authoring", () => {
     const archiveKind = isProfile ? (isRevision ? "workflow-profile-versions" : "workflow-profiles") : (isRevision ? "workflow-versions" : "workflows");
     const id = isProfile ? (isRevision ? "global-p-v1" : "global-p") : (isRevision ? "global-w-v1" : "global-w");
     if (isRevision) {
-      fireEvent.click(await screen.findByRole("button", { name: isProfile ? "History for Portrait mapping" : "Workflow History" }));
+      await menuAction(isProfile ? "History for Portrait mapping" : "Workflow History", isProfile);
       await screen.findByText(isProfile ? /Viewing Profile revision/ : /Viewing revision/);
     }
-    fireEvent.click(await screen.findByRole("button", { name: kind === "Profile" ? "Archive Portrait mapping" : `Archive ${kind}` }));
+    if (!isRevision) await menuAction(kind === "Profile" ? "Archive Portrait mapping" : `Archive ${kind}`, isProfile);
+    else fireEvent.click(await screen.findByRole("button", { name: `Archive ${kind}` }));
     expect(api.archiveGlobalEntry).not.toHaveBeenCalled();
     expect(screen.getByText(/names remain reserved/)).toBeVisible();
     const archived_at = "2026-09-09T12:00:00Z";
@@ -390,10 +400,11 @@ describe("Global Workflow authoring", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("checkbox", { name: "Show archived entries" }));
     if (isProfile && isRevision) {
-      fireEvent.click(await screen.findByRole("button", { name: "History for Portrait mapping" }));
+      await menuAction("History for Portrait mapping", true);
       await screen.findByText(/Viewing Profile revision/);
     }
-    fireEvent.click(await screen.findByRole("button", { name: kind === "Profile" ? "Unarchive Portrait mapping" : `Unarchive ${kind}` }));
+    if (!isRevision) await menuAction(kind === "Profile" ? "Unarchive Portrait mapping" : `Unarchive ${kind}`, isProfile);
+    else fireEvent.click(await screen.findByRole("button", { name: `Unarchive ${kind}` }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Unarchive" }));
     await waitFor(() => expect(api.archiveGlobalEntry).toHaveBeenCalledTimes(2));
     expect(api.archiveGlobalEntry).toHaveBeenNthCalledWith(1, archiveKind, id, { request_id: expect.any(String), archived: true });
