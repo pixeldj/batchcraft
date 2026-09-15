@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { BatchcraftApiClient, type BatchcraftApi } from "../../api/client";
+import { ApiError, BatchcraftApiClient, type BatchcraftApi } from "../../api/client";
 import { copiedSetup, globalProfile, globalProfileFamily, globalVersion, globalWorkflow, workflowLibraryApi } from "../../test/workflowLibraryFixtures";
 import { GlobalWorkflowLibrary } from "./GlobalWorkflowLibrary";
 
@@ -14,8 +14,339 @@ async function openCopy() {
   fireEvent.click(await screen.findByRole("button", { name: "Add to Project" }));
   await screen.findByRole("checkbox", { name: "Portrait mapping" });
 }
+function addButton() { return within(screen.getByRole("dialog", { name: "Add workflow to Project" })).getByRole("button", { name: "Add to Project" }); }
+function profileAction(action: string, name = "Portrait mapping") {
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: `Copy actions for ${name}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: action }));
+}
+function refreshProfiles() {
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Profile list actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Refresh Profiles" }));
+}
 
 describe("Global Workflow Library", () => {
+  it.each(["keyboard", "native"])("closes only the active subview on %s Escape, retaining unsent names, choices, and operation identity", async (kind) => {
+    const uuid = vi.spyOn(crypto, "randomUUID");
+    const { api, props } = setup(); render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    const dialog = screen.getByRole("dialog", { name: "Add workflow to Project" });
+    const escape = () => kind === "keyboard" ? fireEvent.keyDown(dialog, { key: "Escape" }) : fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
+    profileAction("Rename"); fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "Unsent Profile name" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
+    fireEvent.change(screen.getByLabelText("New Workflow name (optional)"), { target: { value: "Unsent Workflow name" } });
+    const count = uuid.mock.calls.length;
+    for (const [action, region] of [["Inspect mappings", "Inspect Profile mappings"], ["Choose revision", "Choose Profile revision"]]) {
+      profileAction(action);
+      expect(screen.getByRole("region", { name: region })).toBeVisible();
+      const trigger = screen.getByRole("button", { name: "Copy actions for Portrait mapping" });
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      expect(screen.getByRole("region", { name: region })).toBeVisible();
+      expect(trigger).toHaveFocus();
+      escape();
+      expect(screen.queryByRole("region", { name: region })).not.toBeInTheDocument();
+      expect(dialog).toBeVisible(); expect(trigger).toHaveFocus();
+      expect(within(dialog).getByRole("heading", { name: "Add workflow to Project" })).toBeVisible();
+      expect(screen.getByLabelText("New Workflow name (optional)")).toHaveValue("Unsent Workflow name");
+      expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Unsent Profile name");
+      expect(screen.getByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
+      expect(screen.getByText("1 Profile selected")).toBeVisible();
+      expect(api.useGlobalSetup).not.toHaveBeenCalled(); expect(uuid).toHaveBeenCalledTimes(count);
+    }
+    escape(); expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["Cancel", "Close Add workflow to Project"])("keeps %s an explicit main-dialog close with an open subview", async (label) => {
+    const { props } = setup(); render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    profileAction("Inspect mappings"); fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["Inspect mappings", "Choose revision", "Escape"])("cancels a pending revision before %s and ignores its late response without changing names or exact choices", async (action) => {
+    const profile = { ...globalProfile, archived_at: null, note: null, profile: copiedSetup.profiles[0].version.profile };
+    const late = { ...profile, id: "late-a", profile: { ...profile.profile, parameters: [{ key: "late", label: "Late A mapping", value_type: "float", node_id: "1", input_name: "strength" }] } };
+    const b = { ...profile, id: "version-b", workflow_profile_id: "family-b", profile: { ...profile.profile, parameters: [{ key: "b", label: "B mapping", value_type: "float", node_id: "1", input_name: "strength" }] } };
+    let resolve!: (value: typeof late) => void;
+    const { api, props } = setup({
+      listGlobalProfileFamilies: vi.fn(async () => ({ items: [globalProfileFamily, { ...globalProfileFamily, id: b.workflow_profile_id, name: "Profile B", latest_compatible_version_id: b.id }], next_cursor: null })),
+      listGlobalProfileVersions: vi.fn(async () => ({ items: [late], next_cursor: null })),
+      getGlobalProfileVersion: vi.fn(async (id) => id === late.id ? new Promise<typeof late>((done) => { resolve = done; }) : id === b.id ? b : profile),
+    });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" })); profileAction("Rename");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "Proposed A name" } });
+    profileAction("Choose revision"); fireEvent.click(await within(screen.getByRole("dialog")).findByRole("button", { name: /Revision 1/ }));
+    await waitFor(() => expect(resolve).toBeDefined()); expect(addButton()).toBeDisabled();
+    const signal = vi.mocked(api.getGlobalProfileVersion).mock.calls.find(([id]) => id === late.id)![1];
+    if (action === "Escape") fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    else profileAction(action, "Profile B");
+    expect(signal?.aborted).toBe(true);
+    expect(screen.queryByText("Loading exact Profile revision...")).not.toBeInTheDocument();
+    expect(addButton()).toBeEnabled();
+    if (action === "Inspect mappings") await within(screen.getByRole("region", { name: "Inspect Profile mappings" })).findByText("B mapping");
+    await act(async () => resolve(late));
+    expect(within(screen.getByRole("dialog")).queryByText("Late A mapping")).not.toBeInTheDocument();
+    if (action === "Inspect mappings") expect(within(screen.getByRole("region", { name: "Inspect Profile mappings" })).getByText("B mapping")).toBeVisible();
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Proposed A name");
+    expect(screen.getByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
+    expect(screen.getByText("1 Profile selected")).toBeVisible();
+    expect(api.useGlobalSetup).not.toHaveBeenCalled();
+    fireEvent.click(addButton());
+    await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ profiles: [{ version_id: profile.id, name: "Proposed A name" }] }), expect.any(AbortSignal)));
+  });
+
+  it("retains a completed explicit revision after Escape and requires Keep previous for a known invalid choice after closing", async () => {
+    const valid = { ...globalProfile, id: "valid-old", archived_at: null, note: null, profile: copiedSetup.profiles[0].version.profile };
+    const invalid = { ...valid, id: "invalid-old", workflow_version_id: "other-workflow", version_number: 2 };
+    const { api, props } = setup({ listGlobalProfileVersions: vi.fn(async () => ({ items: [valid, invalid], next_cursor: null })), getGlobalProfileVersion: vi.fn(async (id) => id === invalid.id ? invalid : { ...valid, id }) });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
+    profileAction("Choose revision"); fireEvent.click(await within(screen.getByRole("dialog")).findByRole("button", { name: /Revision 1/ }));
+    await waitFor(() => expect(addButton()).toBeEnabled());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    profileAction("Choose revision"); fireEvent.click(await within(screen.getByRole("dialog")).findByRole("button", { name: /Revision 2/ }));
+    await screen.findByText(/before this revision can be copied/);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(addButton()).toBeDisabled(); expect(screen.queryByRole("button", { name: "Retry revision" })).not.toBeInTheDocument();
+    profileAction("Inspect mappings");
+    expect(addButton()).toBeDisabled(); expect(screen.getByText(/before this revision can be copied/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Keep previous compatible selection" }));
+    fireEvent.click(addButton());
+    await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ profiles: [{ version_id: valid.id, name: "Portrait mapping" }] }), expect.any(AbortSignal)));
+  });
+
+  it("keeps the common review compact and focuses renames without selecting unchecked Profiles", async () => {
+    const { props } = setup(); render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    const dialog = screen.getByRole("dialog", { name: "Add workflow to Project" });
+    expect(dialog).toHaveClass("project-add-dialog");
+    expect(within(dialog).getByText("Destination")).toBeVisible();
+    expect(within(dialog).getByText("Reusable portrait")).toBeVisible();
+    expect(within(dialog).getByText("0 Profiles selected")).toBeVisible();
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Previous Profiles" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Review all selected/)).not.toBeInTheDocument();
+    expect(within(dialog).getByText("Inspect Workflow").closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy actions for Portrait mapping" }));
+    expect(screen.getByRole("menu").parentElement).toBe(dialog);
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.getByRole("checkbox", { name: "Portrait mapping" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
+    profileAction("Rename");
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveFocus();
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Portrait mapping");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "Portrait copy" } });
+    profileAction("Hide rename"); profileAction("Rename");
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Portrait copy");
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
+    expect(screen.getByLabelText("New Workflow name (optional)")).toHaveFocus();
+    fireEvent.change(screen.getByLabelText("New Workflow name (optional)"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Hide Workflow rename" }));
+    expect(within(dialog).getByText(globalVersion.name_snapshot)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Cancel" }).closest("footer")).toContainElement(addButton());
+  });
+
+  it("keeps the identical receipt bytes through naming disclosures, inspection, and reopening", async () => {
+    const uuid = vi.spyOn(crypto, "randomUUID");
+    const { api, props } = setup({ useGlobalSetup: vi.fn().mockRejectedValue(new Error("Lost response")) });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
+    profileAction("Rename");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "  exact copy  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
+    fireEvent.change(screen.getByLabelText("New Workflow name (optional)"), { target: { value: " copy Workflow " } });
+    fireEvent.click(addButton()); await screen.findByText(/copy may have completed/);
+    const first = JSON.stringify(vi.mocked(api.useGlobalSetup).mock.calls[0][0]);
+    const count = uuid.mock.calls.length;
+    profileAction("Hide rename"); profileAction("Rename");
+    fireEvent.click(screen.getByRole("button", { name: "Hide Workflow rename" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
+    profileAction("Inspect mappings");
+    await within(screen.getByRole("dialog")).findByText("Source image");
+    fireEvent.click(screen.getByRole("button", { name: "Close mappings" }));
+    expect(screen.getByRole("button", { name: "Copy actions for Portrait mapping" })).toHaveFocus();
+    fireEvent.click(addButton()); await screen.findByText(/copy may have completed/);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
+    await screen.findByRole("checkbox", { name: "Portrait mapping" });
+    fireEvent.click(addButton()); await screen.findByText(/copy may have completed/);
+    expect(vi.mocked(api.useGlobalSetup).mock.calls.map(([request]) => JSON.stringify(request))).toEqual([first, first, first]);
+    expect(uuid).toHaveBeenCalledTimes(count);
+    expect(JSON.parse(first)).toMatchObject({ name: "copy Workflow", profiles: [{ name: "  exact copy  ", version_id: globalProfile.id }] });
+  });
+
+  it.each(["Workflow", "Profile", "request ID"])("reveals all selected naming controls for an unattributed %s conflict, including off-page choices", async () => {
+    const second = { ...globalProfileFamily, id: "second", name: "Second mapping", latest_compatible_version_id: "second-v" };
+    const message = "Library identity or name already exists; choose a different name or reload";
+    const { api, props } = setup({
+      listGlobalProfileFamilies: vi.fn(async (_id, query) => ({ items: query?.cursor ? [second] : [globalProfileFamily], next_cursor: query?.cursor ? null : "next" })),
+      useGlobalSetup: vi.fn().mockRejectedValue(new ApiError(message, "library_conflict", 409)),
+    });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
+    profileAction("Rename");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "First proposed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next Profiles" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Second mapping" }));
+    fireEvent.click(addButton()); await screen.findByText(new RegExp(message));
+    expect(screen.getByRole("button", { name: "Review all selected Profiles (2)" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByLabelText("New Workflow name (optional)")).toHaveValue("Reusable portrait");
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("First proposed");
+    expect(screen.getByLabelText("Copy name for Second mapping")).toHaveValue("Second mapping");
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveAttribute("aria-invalid", "false");
+    fireEvent.click(addButton()); await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.useGlobalSetup).mock.calls[1][0]).toEqual(vi.mocked(api.useGlobalSetup).mock.calls[0][0]);
+    expect(api.listWorkflows).not.toHaveBeenCalled();
+    expect(api.listWorkflowProfiles).not.toHaveBeenCalled();
+  });
+
+  it.each(["duplicate", "blank", "long"])("blocks %s selected names across pages before POST and shares corrections with the visible choices", async (kind) => {
+    const second = { ...globalProfileFamily, id: "second", name: "Second mapping", latest_compatible_version_id: "second-v" };
+    const { api, props } = setup({ listGlobalProfileFamilies: vi.fn(async (_id, query) => ({ items: query?.cursor ? [second] : [globalProfileFamily], next_cursor: query?.cursor ? null : "next" })) });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" })); profileAction("Rename");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: kind === "duplicate" ? "Second mapping" : kind === "blank" ? " " : "x".repeat(201) } });
+    profileAction("Hide rename");
+    fireEvent.click(screen.getByRole("button", { name: "Next Profiles" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Second mapping" }));
+    fireEvent.click(addButton());
+    expect(api.useGlobalSetup).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveAttribute("aria-invalid", "true");
+    if (kind === "duplicate") expect(screen.getByLabelText("Copy name for Second mapping")).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "second mapping" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review all selected Profiles (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous Profiles" }));
+    await screen.findByRole("checkbox", { name: "Portrait mapping" });
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("second mapping");
+    fireEvent.click(addButton());
+    await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ profiles: [{ version_id: globalProfile.id, name: "second mapping" }, { version_id: "second-v", name: "Second mapping" }] }), expect.any(AbortSignal)));
+  });
+
+  it.each([new ApiError("Invalid mapping", "invalid_profile", 422), new Error("Unknown failure")])("does not attribute non-conflict failures to naming: %s", async (error) => {
+    const { props } = setup({ useGlobalSetup: vi.fn().mockRejectedValue(error) });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(addButton()); await screen.findByText(/copy may have completed/);
+    expect(screen.queryByLabelText("New Workflow name (optional)")).not.toBeInTheDocument();
+  });
+
+  it.each([5, 6])("shows search only when the first unfiltered page has more than five Profiles (%s)", async (count) => {
+    const { props } = setup({ listGlobalProfileFamilies: vi.fn(async () => ({ items: Array.from({ length: count }, (_, i) => ({ ...globalProfileFamily, id: `f${i}`, name: `Profile ${i}`, latest_compatible_version_id: `v${i}` })), next_cursor: null })) });
+    render(<GlobalWorkflowLibrary {...props} />); fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" })); fireEvent.click(await screen.findByRole("button", { name: "Add to Project" }));
+    await screen.findByRole("checkbox", { name: "Profile 0" });
+    expect(Boolean(screen.queryByRole("searchbox", { name: "Search compatible Profiles" }))).toBe(count > 5);
+    expect(screen.queryByRole("button", { name: "Next Profiles" })).not.toBeInTheDocument();
+  });
+
+  it("retains search through loading and zero matches, clears it explicitly, and preserves selected rename drafts", async () => {
+    let resolve!: (value: { items: typeof globalProfileFamily[]; next_cursor: null }) => void;
+    const { api, props } = setup({ listGlobalProfileFamilies: vi.fn(async (_id, query) => query?.q ? new Promise<{ items: typeof globalProfileFamily[]; next_cursor: null }>((done) => { resolve = done; }) : { items: [globalProfileFamily], next_cursor: "next" }) });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" })); profileAction("Rename");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "Preserved copy" } });
+    const search = screen.getByLabelText("Search compatible Profiles");
+    fireEvent.change(search, { target: { value: "missing" } }); fireEvent.keyDown(search, { key: "Enter" });
+    expect(search).toBeVisible(); expect(addButton()).toBeDisabled();
+    await act(async () => resolve({ items: [], next_cursor: null }));
+    expect(search).toBeVisible(); expect(screen.getByText("No Profiles match this search.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Review all selected Profiles (1)" }));
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Preserved copy");
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
+    expect(screen.queryByRole("button", { name: /Review all selected/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Preserved copy");
+    expect(api.listGlobalProfileFamilies).toHaveBeenLastCalledWith(globalWorkflow.id, expect.objectContaining({ q: "", cursor: undefined }), expect.any(AbortSignal));
+  });
+
+  it("keeps the captured destination read-only and refuses a stale destination without POST", async () => {
+    const { api, props } = setup(); const view = render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    view.rerender(<GlobalWorkflowLibrary {...props} projectId="project-2" projectName="Other destination" />);
+    expect(within(screen.getByRole("dialog")).getByText("Destination")).toBeVisible();
+    expect(within(screen.getByRole("dialog")).queryByText("Other destination")).not.toBeInTheDocument();
+    expect(addButton()).toBeDisabled();
+    fireEvent.submit(addButton().closest("form")!);
+    expect(api.useGlobalSetup).not.toHaveBeenCalled(); expect(props.onApply).not.toHaveBeenCalled();
+  });
+
+  it("retains the original guard after Stop waiting and recovery, and disables stale Apply without another POST", async () => {
+    const { api, props } = setup({ useGlobalSetup: vi.fn().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue(copiedSetup) });
+    const view = render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    const form = addButton().closest("form")!;
+    act(() => { fireEvent.submit(form); fireEvent.submit(form); });
+    expect(api.useGlobalSetup).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Adding..." })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    view.rerender(<GlobalWorkflowLibrary {...props} draftGuard="new-draft" />);
+    fireEvent.click(screen.getByRole("button", { name: "Add to Project" })); await screen.findByRole("checkbox", { name: "Portrait mapping" }); fireEvent.click(addButton());
+    await screen.findByRole("region", { name: "Added to Project" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply to Batch" })).toBeDisabled();
+    expect(vi.mocked(api.useGlobalSetup).mock.calls[1][0]).toEqual(vi.mocked(api.useGlobalSetup).mock.calls[0][0]);
+    expect(props.onCopied).toHaveBeenCalledWith("project-1");
+    expect(props.onApply).not.toHaveBeenCalled();
+  });
+
+  it("shows returned names and captured destination inline, retaining a cancelled Apply and one result across Workflow navigation", async () => {
+    const result = { ...copiedSetup, workflow: { ...copiedSetup.workflow, workflow: { ...copiedSetup.workflow.workflow, name: "Saved Workflow" } }, profiles: [{ ...copiedSetup.profiles[0], workflow_profile: { ...copiedSetup.profiles[0].workflow_profile, name: "Saved Profile" } }] };
+    const { api, props } = setup({ useGlobalSetup: vi.fn(async () => result), browseGlobalWorkflows: vi.fn(async () => ({ items: [globalWorkflow, { ...globalWorkflow, id: "other", name: "Other Workflow" }], next_cursor: null })) });
+    props.onApply.mockReturnValueOnce(false);
+    const view = render(<GlobalWorkflowLibrary {...props} />); await openCopy(); fireEvent.click(addButton());
+    const panel = await screen.findByRole("region", { name: "Added to Project" });
+    expect(within(panel).getByText("Saved Workflow")).toBeVisible(); expect(within(panel).getByText("Saved Profile")).toBeVisible();
+    expect(within(panel).queryByRole("combobox")).not.toBeInTheDocument();
+    view.rerender(<GlobalWorkflowLibrary {...props} projectName="Renamed destination" />);
+    expect(within(panel).getByText("Destination")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Apply to Batch" })); expect(panel).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Other Workflow" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Added to Project" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Reusable portrait" }));
+    await screen.findByRole("region", { name: "Added to Project" });
+    fireEvent.click(screen.getByRole("button", { name: "Apply to Batch" }));
+    expect(props.onApply).toHaveBeenLastCalledWith(result, result.profiles[0].version.id, "draft-1");
+    expect(screen.queryByRole("region", { name: "Added to Project" })).not.toBeInTheDocument();
+    expect(api.useGlobalSetup).toHaveBeenCalledOnce();
+  });
+
+  it("returns Cancel focus to the surviving parent Add button", async () => {
+    const { props } = setup(); render(<GlobalWorkflowLibrary {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
+    const opener = await screen.findByRole("button", { name: "Add to Project" }); opener.focus(); fireEvent.click(opener);
+    await screen.findByRole("checkbox", { name: "Portrait mapping" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" })); expect(opener).toHaveFocus(); expect(opener).toBeInTheDocument();
+  });
+
+  it("carries a renamed exact choice through off-page revision selection, refresh, and selected-name removal", async () => {
+    const old = { ...globalProfile, id: "older-profile", version_number: 0, archived_at: null, note: null, profile: copiedSetup.profiles[0].version.profile };
+    const { api, props } = setup({
+      listGlobalProfileFamilies: vi.fn(async (_id, query) => ({ items: query?.cursor ? [] : [globalProfileFamily], next_cursor: query?.cursor ? null : "next" })),
+      listGlobalProfileVersions: vi.fn(async () => ({ items: [old], next_cursor: null })),
+      getGlobalProfileVersion: vi.fn(async (id) => ({ ...old, id })),
+    });
+    render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" })); profileAction("Rename");
+    fireEvent.change(screen.getByLabelText("Copy name for Portrait mapping"), { target: { value: "Exact proposed copy" } });
+    profileAction("Choose revision");
+    await screen.findByRole("button", { name: /Revision 0/ });
+    fireEvent.click(screen.getByRole("button", { name: "Next Profiles" }));
+    await screen.findByText(/No compatible Profiles on this page/);
+    fireEvent.click(screen.getByRole("button", { name: /Revision 0/ }));
+    await waitFor(() => expect(addButton()).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Review all selected Profiles (1)" }));
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Exact proposed copy");
+    refreshProfiles(); await screen.findByRole("checkbox", { name: "Portrait mapping" });
+    expect(screen.getByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
+    expect(screen.getByLabelText("Copy name for Portrait mapping")).toHaveValue("Exact proposed copy");
+    fireEvent.click(addButton()); await screen.findByRole("region", { name: "Added to Project" });
+    expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ profiles: [{ version_id: old.id, name: "Exact proposed copy" }] }), expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", { name: "Add to Project" })); await screen.findByRole("checkbox", { name: "Portrait mapping" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next Profiles" })); await screen.findByText(/No compatible Profiles on this page/);
+    fireEvent.click(screen.getByRole("button", { name: "Review all selected Profiles (1)" })); fireEvent.click(screen.getByRole("button", { name: "Remove Portrait mapping" }));
+    expect(screen.getByText("0 Profiles selected")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Previous Profiles" }));
+    expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).not.toBeChecked();
+  });
+
   it("isolates scrolling to entry lists while keeping controls, inspection, and copy actions outside", async () => {
     const { props } = setup({
       browseGlobalWorkflows: vi.fn(async () => ({ items: Array.from({ length: 20 }, (_, index) => ({ ...globalWorkflow, id: `workflow-${index}`, name: `Workflow ${index}` })), next_cursor: "next-workflows" })),
@@ -145,7 +476,7 @@ describe("Global Workflow Library", () => {
     expect(screen.getByText("Historical strength")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ workflow_version_id: "old-workflow", profiles: [{ version_id: "old-profile", name: "Portrait mapping" }] }), expect.any(AbortSignal)));
     expect(props.onApply).not.toHaveBeenCalled();
   });
@@ -221,33 +552,32 @@ describe("Global Workflow Library", () => {
     });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/copy may have completed/);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Copy History for Portrait mapping" }));
+    profileAction("Choose revision");
     fireEvent.click(await within(screen.getByRole("dialog")).findByRole("button", { name: /Revision 2/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Confirm copy" })).toBeEnabled());
+    await waitFor(() => expect(addButton()).toBeEnabled());
     for (const action of ["reload", "search", "page"] as const) {
-      if (action === "reload") fireEvent.click(screen.getByRole("button", { name: "Reload Profiles" }));
+      if (action === "reload") refreshProfiles();
       else if (action === "search") fireEvent.change(screen.getByLabelText("Search compatible Profiles"), { target: { value: "Portrait" } });
       else fireEvent.click(screen.getByRole("button", { name: "Next Profiles" }));
       expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
       expect(within(screen.getByRole("dialog")).getAllByRole("checkbox", { name: "Portrait mapping" })).toHaveLength(1);
-      expect(screen.getByText(/Compatible Profiles: 1\/50 selected/)).toBeVisible();
-      fireEvent.click(screen.getByRole("button", { name: "Inspect Portrait mapping" }));
+      expect(screen.getByText("1 Profile selected")).toBeVisible();
+      profileAction("Inspect mappings");
       await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenLastCalledWith(b.id, expect.any(AbortSignal)));
     }
     expect(vi.mocked(api.getGlobalProfileVersion).mock.calls.filter(([id]) => id === a.id)).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/Copied to Project/);
     expect(vi.mocked(api.useGlobalSetup).mock.calls[1][0].profiles).toEqual([{ version_id: b.id, name: "Portrait mapping" }]);
     expect(vi.mocked(api.useGlobalSetup).mock.calls[1][0].request_id).not.toBe(vi.mocked(api.useGlobalSetup).mock.calls[0][0].request_id);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Inspect Portrait mapping" }));
+    profileAction("Inspect mappings");
     await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenLastCalledWith(a.id, expect.any(AbortSignal)));
   });
 
@@ -257,15 +587,15 @@ describe("Global Workflow Library", () => {
     let resolve!: (value: typeof second) => void;
     const { api, props } = setup({
       useGlobalSetup: vi.fn().mockRejectedValue(new Error("Lost response")),
-      listGlobalProfileFamilies: vi.fn(async () => ({ items: [globalProfileFamily, { ...globalProfileFamily, id: second.workflow_profile_id, name: "Second Profile", latest_compatible_version_id: second.id }], next_cursor: null })),
+      listGlobalProfileFamilies: vi.fn(async () => ({ items: [globalProfileFamily, { ...globalProfileFamily, id: second.workflow_profile_id, name: "Second Profile", latest_compatible_version_id: second.id }], next_cursor: "next" })),
       getGlobalProfileVersion: vi.fn().mockResolvedValueOnce(a).mockResolvedValueOnce(second).mockResolvedValueOnce(a).mockImplementationOnce(() => new Promise<typeof second>((done) => { resolve = done; })).mockImplementation(async (id) => id === a.id ? a : second),
     });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Second Profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/copy may have completed/);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenCalledTimes(4));
     expect(screen.queryByRole("checkbox", { name: "Portrait mapping" })).not.toBeInTheDocument();
@@ -275,10 +605,10 @@ describe("Global Workflow Library", () => {
     expect(vi.mocked(api.getGlobalProfileVersion).mock.calls[3][1]?.aborted).toBe(true);
     expect(vi.mocked(api.getGlobalProfileVersion).mock.calls.map(([id]) => id)).toEqual([a.id, second.id, a.id, second.id, a.id, second.id]);
     await act(async () => resolve(second));
-    fireEvent.click(screen.getByRole("button", { name: "Reload Profiles" }));
+    refreshProfiles();
     expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
     expect(api.getGlobalProfileVersion).toHaveBeenCalledTimes(6);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.useGlobalSetup).mock.calls[1][0]).toEqual(vi.mocked(api.useGlobalSetup).mock.calls[0][0]);
   });
@@ -295,23 +625,23 @@ describe("Global Workflow Library", () => {
     await screen.findByText(/Viewing Profile revision 1/);
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ workflow_version_id: "global-w-v1", profiles: [{ version_id: "old-profile", name: "Portrait mapping" }] }), expect.any(AbortSignal)));
     expect(props.onApply).not.toHaveBeenCalled();
   });
 
-  it("blocks copy while an incompatible exact Profile history selection is under review", async () => {
-    const old = { ...globalProfile, id: "old-profile", workflow_version_id: "old-workflow", profile: copiedSetup.profiles[0].version.profile, archived_at: null, note: null };
+  it.each(["incompatible", "archived"])("blocks copy while an %s exact Profile history selection is under review", async (kind) => {
+    const old = { ...globalProfile, id: "old-profile", workflow_version_id: kind === "incompatible" ? "old-workflow" : globalVersion.id, profile: copiedSetup.profiles[0].version.profile, archived_at: kind === "archived" ? "2026-09-01T00:00:00Z" : null, note: null };
     const { api, props } = setup({ listGlobalProfileVersions: vi.fn(async () => ({ items: [old], next_cursor: null })), getGlobalProfileVersion: vi.fn(async () => old) });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
-    fireEvent.click(screen.getByRole("button", { name: "Copy History for Portrait mapping" }));
+    profileAction("Choose revision");
     fireEvent.click(await within(screen.getByRole("dialog")).findByRole("button", { name: /Revision 1 \/ Portrait mapping/ }));
     await screen.findByText(/before this revision can be copied/);
-    expect(screen.getByRole("button", { name: "Confirm copy" })).toBeDisabled();
+    expect(addButton()).toBeDisabled();
     expect(api.useGlobalSetup).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Keep previous compatible selection" }));
-    expect(screen.getByRole("button", { name: "Confirm copy" })).toBeEnabled();
+    expect(addButton()).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
   });
 
@@ -382,7 +712,8 @@ describe("Global Workflow Library", () => {
     expect(screen.getByRole("button", { name: `Next ${kind}` })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: `Next ${kind}` }));
     await expectPage(4);
-    fireEvent.click(screen.getByRole("button", { name: kind === "Workflows" ? "Reload library" : "Reload Profiles" }));
+    if (kind === "Workflows") fireEvent.click(screen.getByRole("button", { name: "Reload library" }));
+    else refreshProfiles();
     await expectPage(0);
     expect(screen.getByRole("button", { name: `Previous ${kind}` })).toBeDisabled();
     expect(screen.getByRole("button", { name: `Next ${kind}` })).toBeEnabled();
@@ -392,14 +723,15 @@ describe("Global Workflow Library", () => {
     const { api, props } = setup({ useGlobalSetup: vi.fn().mockRejectedValue(new Error("Connection lost")) });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/copy may have completed/);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.useGlobalSetup).mock.calls[0][0]).toEqual(vi.mocked(api.useGlobalSetup).mock.calls[1][0]);
     await screen.findByText(/copy may have completed/);
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
     fireEvent.change(screen.getByLabelText("New Workflow name (optional)"), { target: { value: "A new family" } });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledTimes(3));
     const calls = vi.mocked(api.useGlobalSetup).mock.calls;
     expect(calls[2][0].request_id).not.toBe(calls[0][0].request_id);
@@ -410,7 +742,7 @@ describe("Global Workflow Library", () => {
     let resolve!: (value: typeof copiedSetup) => void;
     const { api, props } = setup({ useGlobalSetup: vi.fn(() => new Promise<typeof copiedSetup>((done) => { resolve = done; })) });
     const view = render(<GlobalWorkflowLibrary {...props} />); await openCopy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledOnce());
     view.rerender(<GlobalWorkflowLibrary {...props} projectId={change === "Project" ? "project-2" : "project-1"} draftGuard={change === "draft" ? "draft-2" : "draft-1"} />);
     await act(async () => resolve({ ...copiedSetup, profiles: [] }));
@@ -422,7 +754,7 @@ describe("Global Workflow Library", () => {
     const second = { ...copiedSetup.profiles[0], version: { ...copiedSetup.profiles[0].version, id: "copied-p-v2" } };
     const { props } = setup({ useGlobalSetup: vi.fn(async () => ({ ...copiedSetup, profiles: [...copiedSetup.profiles, second] })) });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     expect(await screen.findByRole("button", { name: "Apply to Batch" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Copied Profile to apply"), { target: { value: "copied-p-v2" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply to Batch" }));
@@ -432,7 +764,7 @@ describe("Global Workflow Library", () => {
   it("allows a Workflow-only copy and applies only on explicit action", async () => {
     const { api, props } = setup({ useGlobalSetup: vi.fn(async () => ({ ...copiedSetup, profiles: [] })) });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/No Profiles copied/);
     expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ profiles: [] }), expect.any(AbortSignal));
     expect(props.onApply).not.toHaveBeenCalled();
@@ -444,9 +776,10 @@ describe("Global Workflow Library", () => {
     let resolve!: (value: typeof copiedSetup) => void;
     const { api, props } = setup({ useGlobalSetup: vi.fn().mockImplementationOnce(() => new Promise<typeof copiedSetup>((done) => { resolve = done; })).mockResolvedValue(copiedSetup) });
     render(<GlobalWorkflowLibrary {...props} />); await openCopy();
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
     fireEvent.change(screen.getByLabelText("New Workflow name (optional)"), { target: { value: name } });
     fireEvent.click(screen.getByRole("checkbox", { name: "Portrait mapping" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledOnce());
     const first = vi.mocked(api.useGlobalSetup).mock.calls[0];
     fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
@@ -455,9 +788,10 @@ describe("Global Workflow Library", () => {
     expect(screen.queryByText(/Copied to Project/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     await screen.findByRole("checkbox", { name: "Portrait mapping" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Workflow" }));
     expect(screen.getByLabelText("New Workflow name (optional)")).toHaveValue(name);
     expect(screen.getByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/Copied to Project/);
     expect(vi.mocked(api.useGlobalSetup).mock.calls[1][0]).toEqual(first[0]);
     expect(props.onApply).not.toHaveBeenCalled();
@@ -465,19 +799,18 @@ describe("Global Workflow Library", () => {
 
   it("uses a fresh operation ID for a new submission after a successful copy", async () => {
     const { api, props } = setup(); render(<GlobalWorkflowLibrary {...props} />); await openCopy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/Copied to Project/);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     await screen.findByRole("checkbox", { name: "Portrait mapping" });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     await screen.findByText(/Copied to Project/);
     expect(vi.mocked(api.useGlobalSetup).mock.calls[0][0].request_id).not.toBe(vi.mocked(api.useGlobalSetup).mock.calls[1][0].request_id);
   });
 
   it("keeps Apply disabled while Run control blocks setup changes", async () => {
     const { props } = setup(); render(<GlobalWorkflowLibrary {...props} applyDisabled />); await openCopy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    fireEvent.click(addButton());
     expect(await screen.findByRole("button", { name: "Apply to Batch" })).toBeDisabled();
     expect(props.onApply).not.toHaveBeenCalled();
   });
@@ -488,10 +821,10 @@ describe("Global Workflow Library", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add to Project" }));
     await within(screen.getByRole("dialog")).findByText("Unavailable");
-    expect(screen.getByRole("button", { name: "Confirm copy" })).toBeDisabled();
+    expect(addButton()).toBeDisabled();
     vi.mocked(api.listGlobalProfileFamilies).mockResolvedValue({ items: [], next_cursor: null });
-    fireEvent.click(screen.getByRole("button", { name: "Reload Profiles" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Confirm copy" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Retry Profiles" }));
+    await waitFor(() => expect(addButton()).toBeEnabled());
     expect(api.useGlobalSetup).not.toHaveBeenCalled();
   });
 
@@ -541,7 +874,11 @@ describe("Global Workflow Library", () => {
     for (let page = 0; page < 3; page++) {
       await screen.findByRole("checkbox", { name: `Profile ${page === 0 ? "first" : page === 1 ? "second" : "third"}-0` });
       const boxes = within(screen.getByRole("dialog")).getAllByRole("checkbox");
-      boxes.slice(0, page === 2 ? 10 : 20).forEach((box) => fireEvent.click(box));
+      boxes.slice(0, page === 2 ? 10 : 20).forEach((box, index) => {
+        fireEvent.click(box);
+        if (page === 2 && index === 3) expect(screen.queryByText(/Select up to 50 Profiles/)).not.toBeInTheDocument();
+        if (page === 2 && index === 4) expect(screen.getByText(/Select up to 50 Profiles/)).toBeVisible();
+      });
       if (page < 2) fireEvent.click(screen.getByRole("button", { name: "Next Profiles" }));
     }
     expect(screen.getByText(/50\/50 selected/)).toBeVisible();

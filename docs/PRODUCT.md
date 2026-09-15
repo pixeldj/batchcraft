@@ -120,11 +120,14 @@ without rewriting old snapshots or hashes. Archive/unarchive covers families and
 reserved and nothing is hard-deleted. Profile families remain visible when their mappings need review
 against the viewed exact Workflow; repairs use the same mapper rather than silently retargeting them.
 
-Choose a Workflow, inspect/select a Profile, then use Add to Project in the detail footer. The existing
-review supports editable names, exact revisions and 0-50 Profiles; a new Project-copy review prefills
-only the selected Profile, not every Profile. Confirm copy persists the reviewed setup into the selected,
-verified Project under independent identities. After copying, Apply to Batch and replacement
-confirmation explicitly apply the chosen copied Profile (or Workflow alone) to the Batch.
+Choose a Workflow, inspect/select a Profile, then use Add to Project in the detail footer. Add workflow
+to Project shows the captured destination, name summaries and optional Rename fields, exact revisions
+and 0-50 Profiles; a new review prefills only the selected Profile, not every Profile. Add to Project
+persists independent copies and closes the modal into an inline Added result. Apply to Batch and
+replacement confirmation separately apply the chosen copied Profile (or Workflow alone) to the Batch.
+Unsubmitted rename edits may be discarded on close; the inline result is not retained across reloads,
+but completed copies remain in the Project library. No new unsaved-change guard or Recovery v4 change
+is introduced. Project-source Import to Library retains its legacy dialog and direction.
 Only application changes the draft and invalidates Preview; browsing/import/copy alone do not.
 Copies never follow source edits automatically, and changed Project/draft guards prevent stale apply.
 

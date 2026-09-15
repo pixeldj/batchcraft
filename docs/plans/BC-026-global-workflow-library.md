@@ -76,6 +76,10 @@ The application version stays 1.1.0.
 - Workflow files must be JSON objects no larger than 64 MiB; paste is also supported. Saving invokes
   backend API-format validation, not ComfyUI editor-format conversion. The API request-body limit is a
   separate boundary.
+- Cancelling the JSON file picker leaves the authoring dialog and draft intact. Only cancel events
+  targeted at the dialog itself dismiss it. A successfully loaded file prefills a blank visible Name
+  from its filename without the trailing `.json` (case-insensitive); existing names and names updated
+  during the read are retained. Invalid files do not alter the name or JSON draft.
 - Normal actions are Edit/Save; saves append immutable internal revisions. Version numbers and technical
   revision metadata are exposed in History rather than normal catalog browsing. History can inspect
   exact content and Restore it by appending a new revision, never overwriting the selected old version.
@@ -162,7 +166,89 @@ Summary request accounting verifies two concurrent workers, cached successful su
 retry for a failed summary on Refresh. The approximately 547 kB minified chunk warning remains non-fatal;
 no threshold was relaxed. Owner acceptance of this cleanup and overall BC-026 completion remain separate.
 
-### Remaining scope
+## Add-to-Project dialog cleanup
+
+This presentation-only follow-up uses the current `SetupReview` rather than introducing another copy
+flow. Only its global-to-Project branch changes; Project-source Import to Library keeps its direction
+and legacy dialog. No backend, API, SQLite, v1 format, architecture, dependency, synchronization, or
+Saved Batch/snapshot semantics change is included. BC-026 remains In Progress, targeting a future
+v1.2.0; the application version remains 1.1.0. Workflow images and historical Run import are outside
+this cleanup.
+
+### Presentation and selection
+
+- The compact title is Add workflow to Project. Show the destination Project name captured when opening
+  the review and a Workflow name summary. Start from the original name, not an automatic copy suffix;
+  never strip a legitimate `copy` from an existing name. Rename reveals and focuses the input; hiding
+  it retains the current draft value and shows the proposed name in the summary.
+- Include Profiles shows the actual selection count, not an available total or a routine N/50 label.
+  Show up-to-50 guidance only at 45 or more selections; the existing maximum remains 50. New reviews
+  prefill only the exact selected Profile, or none when no Profile was selected.
+- Show search when the unfiltered first page has more than five rows, pagination exists, or a query is
+  active. Once needed, keep search available within the review. Use bounded page reads, never load the
+  whole library or infer its available total. Pagers contain only Previous and Next controls; existing
+  20-row reads and sliding Previous bookmarks remain unchanged.
+- Show Review all selected Profiles only when selected exact IDs are absent from the current page/query
+  rows. Its expanded view shows all selected proposed names. Keep all selections and proposed names in
+  the choice array, keyed by exact version IDs, independently of visible rows, paging, search and rename
+  visibility.
+- Row menus expose Inspect mappings, Rename (disabled for unselected rows), and Choose revision. Use
+  actual Profile-family History and fetch the chosen exact ID, not copy lineage or an automatic latest
+  replacement. Check the exact Workflow target and archive state before committing the choice. Workflow
+  JSON remains secondary technical inspection.
+
+### Validation and operation identity
+
+- Backend 409 `library_conflict` is generic: Workflow and Profile identity/name conflicts share the same
+  error identity and provide no field target. Reveal the Workflow rename and every selected Profile
+  rename, expanding selected review when choices are hidden. Do not claim to identify the culprit.
+- Local selected-Profile validation can identify blank, over-200-character and duplicate fields. Compare
+  duplicate proposed names exactly and case-sensitively; this is not a new backend naming policy.
+- Preserve the existing payload: Workflow `name.trim() || null`, with raw Profile names untouched.
+  Rename visibility is presentation state, not `fieldsChanged`; hiding/reopening fields must not reset
+  the request ID. Unchanged retries reuse the receipt/request identity, and the synchronous write-ref
+  guard prevents duplicate-click submissions before a render updates the pending state.
+
+### Completion and closing
+
+- Success closes the modal and leaves one parent-owned Added result, retaining the response, source
+  Workflow family ID, captured destination Project name, returned names and original draft guard.
+  Apply to Batch is explicit and uses the existing App callback and replacement confirmation, honoring
+  Project, draft and execution flags. One returned Profile is automatically chosen for that later action;
+  multiple Profiles require selection, and zero permits Workflow-only application. Copy never applies
+  to Batch automatically or changes synchronization/backend Saved Batch/snapshot semantics.
+- The body scrolls between a stable header and footer. Cancel and Add to Project are the footer actions,
+  with only one primary button. Pending labels are Stop waiting and Adding...; closing stops browser
+  waiting only, not the server transaction, and retains the receipt for an unchanged retry.
+- Escape closes the open menu first, then the inspection/revision subview, then the main dialog. Closing
+  or switching a subview aborts pending revision reads; late responses cannot overwrite another
+  inspection or selected IDs. A known invalid revision continues to block Add after closing its subview
+  until explicitly resolved, including accepting the previous compatible selection.
+- Unsubmitted rename edits are not durable browser state. Closing the main dialog may discard them as
+  before; this cleanup adds no unsaved-change guard or general persistence guarantee. The new inline
+  Added/pending-apply panel is not persisted across reloads; completed copies remain in the Project
+  library. Browser working-session Recovery v4 is unchanged.
+
+### Verification checkpoint
+
+Final verification passed: **911 frontend unit tests**, typecheck, lint, build, and **42 desktop/mobile
+browser tests in each of Vite and built modes** after the Escape and pending-read fixes. Twelve targeted
+desktop/mobile cases passed again with the final screenshots. No backend code changed.
+
+The preserved baseline has 30 before screenshots. Final-after captures include 108 screenshots at
+1440px, 1024px and 390px across both browser projects. Actual visual review covered the common
+one-Profile state (approximately 459px tall on desktop), many Profiles and hidden selections, long names
+and Rename fields, a real naming conflict, simulated loading failure, pending/recovered copy, and
+Workflow-only eligibility. Header/footer remain reachable while the body scrolls. Theme sources and
+fonts are unchanged. Keyboard checks cover menus, nested Escape, focus restoration and stale revision
+reads without lost rename drafts or changed selections.
+
+The existing non-fatal Vite chunk warning remains at approximately 556 kB. Generic backend conflict
+responses still cannot identify a naming field, so the UI exposes names without assigning false blame.
+Owner acceptance and overall BC-026 completion remain separate; no live ComfyUI or installation work
+was performed.
+
+## Remaining scope
 
 Import to Library from frozen Run Plan/Result Details must read backend-owned snapshots and work
 without the original mutable Project/global rows. Complete that slice and final acceptance before

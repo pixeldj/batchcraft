@@ -39,6 +39,8 @@ export function useModalDialog(
   }, [initialFocusRef, dialogRef, enabled]);
 
   function onCancel(event: SyntheticEvent<HTMLDialogElement>) {
+    // File pickers also emit a bubbling cancel event; it does not dismiss their dialog.
+    if (event.target !== event.currentTarget) return;
     event.preventDefault();
     event.stopPropagation();
     onClose();

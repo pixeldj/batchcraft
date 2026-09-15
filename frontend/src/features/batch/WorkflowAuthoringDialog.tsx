@@ -82,8 +82,10 @@ export function WorkflowAuthoringDialog({
   const formId = useId();
   const firstField = useRef<HTMLElement>(null);
   const initialFocus = useRef<HTMLElement>(null);
+  const latestFields = useRef(fields);
   // Select after refs/disabled fieldsets commit; the modal hook focuses after showModal().
   useLayoutEffect(() => {
+    latestFields.current = fields;
     const preferred = firstField.current;
     initialFocus.current = preferred && !preferred.matches(":disabled")
       ? preferred
@@ -122,7 +124,12 @@ export function WorkflowAuthoringDialog({
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error("Workflow JSON file must contain an object.");
       }
-      fields.onChange({ workflowJson: text });
+      const current = latestFields.current;
+      const filename = file.name.replace(/\.json$/i, "") || file.name;
+      current.onChange({
+        workflowJson: text,
+        ...(current.showName !== false && !current.draft.name.trim() ? { name: filename } : {}),
+      });
     } catch (caught) {
       if (request === fileRequest.current) setFileError(caught instanceof Error ? caught.message : "Could not read the Workflow JSON file.");
     } finally {

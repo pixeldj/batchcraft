@@ -42,13 +42,78 @@ function chooseFile(file: File) {
   fireEvent.change(screen.getByLabelText("Choose JSON file"), { target: { files: [file] } });
 }
 
-function jsonFile(text: string) {
-  const file = new File([text], "workflow.json", { type: "application/json" });
+function jsonFile(text: string, name = "workflow.json") {
+  const file = new File([text], name, { type: "application/json" });
   Object.defineProperty(file, "text", { value: vi.fn(async () => text) });
   return file;
 }
 
 describe("WorkflowAuthoringDialog", () => {
+  it.each([false, true])("keeps the editor open when the file picker is cancelled (dirty: %s)", (dirty) => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onChange = vi.fn();
+    render(<Editor onChange={onChange} />);
+    if (dirty) fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My draft" } });
+    onChange.mockClear();
+    const dialog = screen.getByRole("dialog");
+    const picker = screen.getByLabelText("Choose JSON file");
+    fireEvent(picker, new Event("cancel", { bubbles: true }));
+    fireEvent.change(picker, { target: { files: [] } });
+    expect(dialog).toHaveAttribute("open");
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(screen.getByLabelText("Name")).toHaveValue(dirty ? "My draft" : draft.name);
+    expect(screen.getByLabelText("Workflow JSON")).toHaveValue(draft.workflowJson);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledTimes(dirty ? 1 : 0);
+  });
+
+  it.each([
+    ["", "portrait.json", "portrait"],
+    [" \t", "wide.scene.JSON", "wide.scene"],
+    ["", "copy-workflow.json", "copy-workflow"],
+    ["Chosen name", "different.json", "Chosen name"],
+  ])("uses filename %s / %s only for a blank name", async (name, filename, expected) => {
+    const onSave = vi.fn();
+    render(<Editor draft={{ ...draft, name }} onSave={onSave} />);
+    chooseFile(jsonFile("{}", filename));
+    await waitFor(() => expect(screen.getByLabelText("Workflow JSON")).toHaveValue("{}"));
+    expect(screen.getByLabelText("Name")).toHaveValue(expected);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("does not assign a name while editing content with no name field", async () => {
+    const onChange = vi.fn();
+    render(<Editor draft={{ ...draft, name: "" }} showName={false} onChange={onChange} />);
+    chooseFile(jsonFile("{}"));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ workflowJson: "{}" }));
+  });
+
+  it("uses the latest name and callback when a file read completes", async () => {
+    let resolve!: (text: string) => void;
+    const file = jsonFile("{}");
+    vi.mocked(file.text).mockReturnValue(new Promise((done) => { resolve = done; }));
+    const before = vi.fn();
+    const after = vi.fn();
+    const props = { title: "New Workflow", kind: "workflow" as const, workflow, onCancel: vi.fn(), onSave: vi.fn() };
+    const view = render(<WorkflowAuthoringDialog {...props} draft={{ ...draft, name: "" }} onChange={before} />);
+    chooseFile(file);
+    view.rerender(<WorkflowAuthoringDialog {...props} draft={{ ...draft, name: "Keep this name" }} onChange={after} />);
+    await act(async () => resolve("{}"));
+    expect(before).not.toHaveBeenCalled();
+    expect(after).toHaveBeenCalledWith({ workflowJson: "{}" });
+  });
+
+  it("does not prefill a name from an invalid JSON file", async () => {
+    render(<Editor draft={{ ...draft, name: "" }} />);
+    chooseFile(jsonFile("not JSON", "invalid.json"));
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("Name")).toHaveValue("");
+    expect(screen.getByLabelText("Workflow JSON")).toHaveValue(draft.workflowJson);
+  });
+
   it.each([
     ["workflow", true, "Name"],
     ["profile", true, "Name"],

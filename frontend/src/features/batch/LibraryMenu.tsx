@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 
 export function LibraryMenu({ label, disabled, items }: { label: string; disabled?: boolean; items: { label: string; accessibleLabel?: string; onSelect(): void; disabled?: boolean }[] }) {
   const [open, setOpen] = useState(false);
+  // A body portal is inert while a native modal is open; stay inside that dialog.
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const last = useRef(false);
@@ -36,8 +38,8 @@ export function LibraryMenu({ label, disabled, items }: { label: string; disable
     return () => document.removeEventListener("pointerdown", outside);
   }, [open]);
   return <>
-    <button ref={trigger} type="button" className="button-secondary compact global-library-menu-trigger" aria-label={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} disabled={disabled} onClick={() => { last.current = false; setOpen(!open); }} onKeyDown={(event) => {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); last.current = event.key === "ArrowUp"; setOpen(true); }
+    <button ref={trigger} type="button" className="button-secondary compact global-library-menu-trigger" aria-label={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} disabled={disabled} onClick={(event) => { setPortalTarget(event.currentTarget.closest("dialog")); last.current = false; setOpen(!open); }} onKeyDown={(event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setPortalTarget(event.currentTarget.closest("dialog")); last.current = event.key === "ArrowUp"; setOpen(true); }
     }}>...</button>
     {open && createPortal(<div ref={menu} id={id} popover="manual" role="menu" aria-label={label} className="global-library-menu" onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); }
@@ -49,6 +51,6 @@ export function LibraryMenu({ label, disabled, items }: { label: string; disable
         const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
         buttons[next]?.focus();
       }
-    }}>{items.map((item) => <button key={item.label} type="button" role="menuitem" aria-label={item.accessibleLabel} disabled={item.disabled} onClick={() => { close(true); item.onSelect(); }}>{item.label}</button>)}</div>, document.body)}
+    }}>{items.map((item) => <button key={item.label} type="button" role="menuitem" aria-label={item.accessibleLabel} disabled={item.disabled} onClick={() => { close(true); item.onSelect(); }}>{item.label}</button>)}</div>, portalTarget ?? document.body)}
   </>;
 }

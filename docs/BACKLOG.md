@@ -1566,6 +1566,10 @@ initial focus and dirty-close confirmation; navigation guards retain draft/pendi
 callbacks and repeated receipt hydration cannot overwrite newer drafts/exact choices. Global authoring
 does not change Project Batch/Preview or independent copies; revision numbers stay in History.
 
+JSON-picker follow-up: bubbling file-input cancellation no longer dismisses the authoring modal.
+Successful JSON loads prefill a blank visible Workflow name from the filename stem, preserving existing
+names, later name edits, and invalid-file drafts. No automatic save, backend, or format change is involved.
+
 Narrow frontend layout/interaction follow-up: choose a Workflow, inspect/select a Profile, then use the
 single detail-footer Add to Project action. The existing review retains editable names, exact revisions
 and 0-50 Profile choices; only the selected Profile is prefilled for a new Project-copy review, never all
@@ -1577,8 +1581,26 @@ bookmarks without a forward cap. Only the restored-draft message is hidden outsi
 clearing/dismissing its state; other warnings remain unchanged. No backend API, SQLite, durable-format,
 dependency or domain-semantics changes are part of this follow-up.
 
-Prior authoring verification remains recorded in the plan. Current cleanup verification is recorded in
-its [layout verification checkpoint](plans/BC-026-global-workflow-library.md#layout-verification-checkpoint).
+Add-to-Project dialog cleanup is presentation-only in the current SetupReview: compact captured-destination
+and Workflow summaries, opt-in Rename retaining hidden draft values without automatic copy suffixes,
+actual Profile selection counts (50-limit guidance at 45+), conditional sticky search and Previous/Next
+paging. Hidden selections expose Review all selected Profiles; exact IDs/proposed names survive paging.
+Row menus inspect mappings, rename selected Profiles and choose validated exact History revisions.
+Generic 409 library_conflict reveals all rename fields without identifying a culprit; local exact,
+case-sensitive selected-Profile validation identifies invalid fields. Existing payload normalization,
+receipt reuse and duplicate-write guards remain intact. Success closes into one parent-owned Added result;
+Apply to Batch stays explicit and guarded. Escape unwinds menu/subview/dialog, stale revision reads are
+aborted, and known-invalid revisions remain blocked. Stop waiting detaches browser waiting only.
+Unsubmitted names and the inline Added/pending-apply panel are not durable across close/reload; persisted
+copies remain in the Project library. Import to Library's legacy direction/dialog and Recovery v4 are
+unchanged. No backend, API, SQLite, v1, dependency or Saved Batch/snapshot semantics change is included.
+
+Prior authoring/layout evidence remains recorded in the plan. The
+[dialog cleanup checkpoint](plans/BC-026-global-workflow-library.md#add-to-project-dialog-cleanup) records
+911 unit tests and 42-test full browser passes in both modes after the Escape fixes, with final dark-theme
+screenshots reviewed at 1440/1024/390px. The JSON-picker follow-up passes 920 frontend tests,
+lint/typecheck/build, and two focused desktop/mobile browser cases per mode. File-input cancellation
+was exercised through browser cancel events and empty file selection, not manual OS-picker interaction.
 The owner reports that the development layout looks great after restarting the stale backend; testing
 the refreshed candidate remains the next step, not acceptance of all remaining BC-026 functionality.
 BC-026 remains **In Progress**: frozen Run Plan/Result Details Import to Library remains queued, and final

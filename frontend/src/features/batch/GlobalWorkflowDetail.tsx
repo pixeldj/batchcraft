@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import type { LibraryApi } from "../../api/client";
 import type { GlobalCatalogItem, GlobalProfile, GlobalProfileFamily, GlobalProfileVersion, GlobalWorkflowVersion, LibraryPage, GlobalWorkflowHistoryItem, GlobalProfileHistoryItem } from "../../api/types";
 import { errorMessage } from "../../utils/errors";
@@ -21,10 +21,11 @@ interface Props {
   onChooseProject?(): void;
   onEdit(operation: GlobalAuthoringOperation): void;
   onBeginAuthoringRead(): AbortController;
+  confirmation?: ReactNode;
   onUse(root: GlobalCatalogItem, version: GlobalWorkflowVersion, profile?: { family: GlobalProfileFamily; version: GlobalProfileVersion }): void;
 }
 
-export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, updatedProfile, showArchived, disabled, projectId, projectName, onChooseProject, onEdit, onBeginAuthoringRead, onUse }: Props) {
+export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, updatedProfile, showArchived, disabled, projectId, projectName, onChooseProject, onEdit, onBeginAuthoringRead, onUse, confirmation }: Props) {
   const [root, setRoot] = useState<GlobalCatalogItem | null>(null);
   const [workflow, setWorkflow] = useState<GlobalWorkflowVersion | null>(null);
   const [exactId, setExactId] = useState<string | null>(null);
@@ -225,6 +226,7 @@ export function GlobalWorkflowDetail({ api, id, active, refresh, preserveExact, 
           {(selection || profileRequest) && <button className="button-link" type="button" onClick={() => { setSelection(null); setProfileRequest(null); setProfileHistory(false); setError(null); }}>Clear Profile selection</button>}
           </div>
         </footer>
+        {confirmation}
       </> : <p>No active Workflow content. Explore History to inspect or unarchive previous content.</p>}
     </>}
   </div>;

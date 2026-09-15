@@ -323,30 +323,31 @@ test("BC-026 Workflow Library layout, exact selections and copy review", async (
   await expect(selected).toContainText("Selected revision 1");
   await expect(history).toContainText("Viewing revision 1.");
   await library.getByRole("button", { name: "Add to Project", exact: true }).click();
-  const review = page.getByRole("dialog", { name: "Review Project copy" });
+  const review = page.getByRole("dialog", { name: "Add workflow to Project" });
   await expect(review.getByRole("checkbox", { name: profileName, exact: true })).toBeChecked();
-  await expect(review).toContainText("1/50 selected");
+  await expect(review).toContainText("1 Profile selected");
   await capture(page, testInfo, "07-copy-one-historical");
   await review.getByRole("checkbox", { name: profileName, exact: true }).uncheck();
-  await expect(review).toContainText("0/50 selected");
-  await expect(review.getByRole("button", { name: "Confirm copy", exact: true })).toBeEnabled();
+  await expect(review).toContainText("0 Profiles selected");
+  await expect(review.getByRole("button", { name: "Add to Project", exact: true })).toBeEnabled();
   await capture(page, testInfo, "08-copy-workflow-only");
   await review.getByRole("checkbox", { name: profileName, exact: true }).check();
   await review.getByRole("checkbox", { name: "Boolean and string controls", exact: true }).check();
-  await expect(review).toContainText("2/50 selected");
+  await expect(review).toContainText("2 Profiles selected");
   await capture(page, testInfo, "09-copy-multiple");
   const copiedResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/library/workflows/use-in-project");
-  await review.getByRole("button", { name: "Confirm copy", exact: true }).click();
+  await review.getByRole("button", { name: "Add to Project", exact: true }).click();
   const received = await copiedResponse;
   expect(received.ok()).toBe(true);
   expect(received.request().postDataJSON()).toMatchObject({ workflow_version_id: source.version.id, profiles: expect.arrayContaining([{ version_id: primary.version.id, name: profileName }]) });
   const copy = await received.json() as ProjectCopyResponse;
   expect(copy.profiles).toHaveLength(2);
-  await expect(review).toContainText("Your Batch has not changed");
-  await expect(review.getByRole("button", { name: "Apply to Batch", exact: true })).toBeDisabled();
-  await review.getByRole("combobox", { name: "Copied Profile to apply" }).selectOption(copy.profiles[0].version.id);
-  await expect(review.getByRole("button", { name: "Apply to Batch", exact: true })).toBeEnabled();
-  await review.getByRole("button", { name: "Close", exact: true }).click();
+  const confirmation = library.getByRole("region", { name: "Added to Project", exact: true });
+  await expect(review).not.toBeVisible();
+  await expect(confirmation).toContainText("Your Batch has not changed");
+  await expect(confirmation.getByRole("button", { name: "Apply to Batch", exact: true })).toBeDisabled();
+  await confirmation.getByRole("combobox", { name: "Copied Profile to apply" }).selectOption(copy.profiles[0].version.id);
+  await expect(confirmation.getByRole("button", { name: "Apply to Batch", exact: true })).toBeEnabled();
 
   await post(request, `/api/library/workflow-profiles/${alternate.workflow_profile.id}/archive`, { archived: true });
   await library.getByRole("checkbox", { name: "Show archived entries", exact: true }).check();
@@ -500,7 +501,7 @@ test("BC-026 bounded summary loading, errors, search and 50-Profile copy cap", a
   await page.getByLabel("Active Project").selectOption(project.id);
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Workflow Library", exact: true }).click();
   await library.getByRole("button", { name: "Add to Project", exact: true }).click();
-  const review = page.getByRole("dialog", { name: "Review Project copy", exact: true });
+  const review = page.getByRole("dialog", { name: "Add workflow to Project", exact: true });
   for (let index = 0; index < 50; index++) {
     if (index > 0 && index % 20 === 0) {
       await review.getByRole("button", { name: "Next Profiles", exact: true }).click();
@@ -509,11 +510,11 @@ test("BC-026 bounded summary loading, errors, search and 50-Profile copy cap", a
   }
   await expect(review).toContainText("50/50 selected");
   await expect(review.getByRole("checkbox", { name: profiles[50].workflow_profile.name, exact: true })).toBeDisabled();
-  await expect(review.getByRole("button", { name: "Confirm copy", exact: true })).toBeEnabled();
+  await expect(review.getByRole("button", { name: "Add to Project", exact: true })).toBeEnabled();
   await capture(page, testInfo, "17-copy-cap-50");
   await review.getByRole("button", { name: "Previous Profiles", exact: true }).click();
   await expect(review.getByRole("checkbox", { name: profiles[20].workflow_profile.name, exact: true })).toBeChecked();
   await expect(review).toContainText("50/50 selected");
-  await review.getByRole("button", { name: "Close", exact: true }).click();
+  await review.getByRole("button", { name: "Cancel", exact: true }).click();
   await writeFile(testInfo.outputPath("summary-read-accounting.json"), JSON.stringify({ reads, maximum, readIds, abortedReads, profileCount: 51, copiesPerformed: 0, simulation: "Summary reads held, one 503; catalog search held then 503; routes removed afterward." }, null, 2));
 });

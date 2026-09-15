@@ -601,8 +601,9 @@ cannot replace a newer draft. Restored copy-receipt selections hydrate once and 
 exact choices on reload/paging.
 
 The frontend-only layout follow-up uses `LibrarySearch`, `LibraryMenu` and `ReadonlyProfileSummary`.
-Add to Project opens existing exact naming/Profile review; Apply to Batch remains a separate guarded
-step. New Project-copy reviews prefill only the selected Profile. Lists request 20 rows and retain 20
+Add to Project opens the presentation-only Add workflow to Project branch of `SetupReview`; successful
+Add closes into one parent-owned result and Apply to Batch remains a separate guarded step. Import to
+Library retains its legacy dialog. New Project-copy reviews prefill only the selected Profile. Lists request 20 rows and retain 20
 Previous bookmarks without limiting forward paging. Profile summaries use two workers, a 20-version
 positive cache and only the current page; manual Refresh retains exact selection and successful cached
 summaries, retries failed summaries once, and resets paging. Search uses 300ms debounce, immediate Enter,
@@ -615,8 +616,12 @@ Workflow entries scroll within `min(55dvh, 32rem)` (`min(40dvh, 32rem)` on mobil
 and no change to other warnings. Themes, application navigation/header, Batch and Prompt semantics,
 SQLite, backend APIs, durable formats and dependencies are unchanged by this follow-up.
 
-Prior authoring evidence remains in the plan; current verification and pending visual/owner acceptance
-are recorded in its [layout verification checkpoint](plans/BC-026-global-workflow-library.md#layout-verification-checkpoint).
+Prior authoring/layout evidence remains in the plan; the
+[dialog cleanup checkpoint](plans/BC-026-global-workflow-library.md#add-to-project-dialog-cleanup) records
+current presentation, exact-selection, receipt and cancellation constraints, checkpoint evidence and one
+pending final-verification section. Hidden Rename fields retain the current draft without resetting
+request identity, not durable unsent edits. The inline Added/pending-apply panel does not survive reload;
+persisted copies remain in the Project library, with no Recovery v4 or backend contract change.
 Historical Run Plan/Result Details Import to Library remains queued. BC-026 stays In Progress and the
 application version remains 1.1.0; no v1.2.0 tag or everyday-installation update is authorized. Workflow
 images are deferred optional upcoming work, not a v1.2.0 completion gate.
