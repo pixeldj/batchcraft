@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+# Decodes to {"binding": ["", 25, null], "after": ["\ud800", ""]}.
+# Noncredential cursor fixture tests rejection of invalid UTF-8 without state changes.
+description = "Exact malformed pagination cursor regression fixture"
+condition = "AND"
+paths = ['''^backend/tests/api/test_global_library_api\.py$''']
+regexTarget = "secret"
+regexes = ['''^eyJiaW5kaW5nIjogWyIiLCAyNSwgbnVsbF0sICJhZnRlciI6IFsiXHVkODAwIiwgIiJdfQ==$''']

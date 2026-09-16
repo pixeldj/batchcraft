@@ -71,3 +71,9 @@ as credentials, and it is not a complete privacy or dependency audit. Review sou
 Git metadata, and release artifacts before publishing. If a credential is exposed,
 revoke or rotate it first; removing it from the current tree does not remove it
 from history. Coordinate any history rewrite explicitly with repository owners.
+
+Gitleaks exceptions must identify a reviewed noncredential fixture by an exact
+rule, file path, and anchored value, with both path and value required to match.
+All default rules remain enabled; do not exclude whole files or commits. The
+malformed pagination cursor exception in `.gitleaks.toml` preserves the unchanged
+API regression test for invalid UTF-8 rejection without database state changes.
