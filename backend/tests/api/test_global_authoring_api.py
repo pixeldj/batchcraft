@@ -338,6 +338,8 @@ def test_new_metadata_reads_hold_capacity_until_cancelled_worker_finishes(
 ) -> None:
     from fastapi import FastAPI
 
+    from batchcraft.api.app import _library, _service
+
     database_path = tmp_path / "reads.sqlite3"
     with closing(open_connection(database_path)) as c:
         apply_migrations(c)
@@ -354,7 +356,7 @@ def test_new_metadata_reads_hold_capacity_until_cancelled_worker_finishes(
     )
     reads = ReadCapacity(1)
     app = FastAPI()
-    app.include_router(global_library_router(database_path, reads))
+    app.include_router(global_library_router(database_path, reads, _service, _library))
     entered, release = threading.Event(), threading.Event()
     original = getattr(GlobalWorkflowStore, method)
 

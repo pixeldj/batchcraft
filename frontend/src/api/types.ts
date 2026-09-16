@@ -637,6 +637,36 @@ export interface SetupCopyRequest {
   name?: string | null;
   description?: string | null;
 }
+export interface GlobalRunSetup {
+  run_id: string;
+  project_id: string;
+  batch_id: string;
+  project_name: string;
+  batch_name: string;
+  run_name: string | null;
+  run_number: string;
+  workflow_name: string | null;
+  profile_name: string | null;
+  workflow: JsonObject;
+  profile: JsonObject;
+  source: {
+    scope: "historical_run";
+    run_id: string;
+    project_id: string;
+    batch_id: string;
+    workflow: JsonObject & { content_sha256: string };
+    profiles: Array<JsonObject & { content_sha256: string }>;
+  };
+}
+export interface GlobalRunSetupImportRequest {
+  request_id: string;
+  run_id: string;
+  name: string;
+  profile_name: string;
+  description?: string | null;
+  expected_workflow_sha256?: string;
+  expected_profile_sha256?: string;
+}
 export interface GlobalCopyResponse {
   request_id: string;
   workflow: { workflow: GlobalWorkflow; version: GlobalWorkflowVersion };

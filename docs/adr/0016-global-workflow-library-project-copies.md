@@ -68,7 +68,20 @@ remain reserved through archival, and no hard delete is exposed. Profile familie
 discoverable; exact target relationships are never silently reassigned. Global operations do not alter
 Project Batch/Preview state, independent copies, or frozen Runs.
 
-Frozen Run Plan/Result Details Import to Library remains queued. BC-026 remains In Progress; this
+Frozen Run Plan/Result Details Import to Library is implemented. A separate immutable setup GET verifies
+registered Project ownership and frozen file/hash integrity without requiring Assets, outputs or reading
+execution state. The import POST accepts Run identity, reviewed names and optional raw-source hash
+preconditions, never authoritative client JSON or paths. It creates exactly one new global Workflow and
+Profile at local version 1, preserving the base setup rather than Job overrides. Recorded ancestry and
+raw source hashes remain separate from destination canonical identity/name envelopes and hashes;
+unknown optional ancestry is not invented. There are no intermediate Project resources.
+
+Historical import reuses migration 0005 copy receipts: lookup before source I/O permits replay after
+source loss, and recheck under `BEGIN IMMEDIATE` prevents concurrent duplication. Pair and receipt
+commit atomically; migration 0006 authoring receipts remain independent. No migration, dependency or
+v1 format change is introduced. An App-owned single-operation cache supports dialog retry without
+becoming Recovery v4 state or a general catalog cache. Import never applies to Batch; opening Workflow
+Library after success is explicit navigation. BC-026 remains In Progress; this
 incremental implementation does not change Accepted status or the v1 portability contract. Application
 version remains 1.1.0 with no v1.2.0 tag; final acceptance is still required. Workflow images are deferred
 optional upcoming work, not a v1.2.0 completion gate.

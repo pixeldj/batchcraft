@@ -27,7 +27,7 @@ versions, reviewed names, up to 50 Profiles, and an application-wide request ID/
 includes direction. Retries return the original copies; conflicts do not merge families or leave orphans.
 
 Workflow Library is accessible with no selected Project through `view=workflows`, with `library_q`
-separate from history. Import to Library currently means choosing a registered source Project without
+separate from history. At that checkpoint, Import to Library meant choosing a registered source Project without
 switching the draft. Global Workflow inspection selects the most recent active exact version, and
 compatible Profile details are read on selection. This slice did not yet include a global History editor.
 Global lists use 20-row metadata pages (REST maximum 50), each retaining 20 sliding Previous bookmarks;
@@ -41,8 +41,8 @@ application without discarding persisted copies. Import, browsing, copying and c
 the current Batch and valid Preview.
 
 At that checkpoint, historical frozen Run import, direct global JSON authoring, revision-management
-UI/API and archive endpoints were queued. The authoring scope is now implemented as described below;
-historical import is still queued. Existing v1 formats and historical Run bytes remain unchanged.
+UI/API and archive endpoints were queued. Authoring and historical import are now implemented as
+described below. Existing v1 formats and historical Run bytes remain unchanged.
 
 ### Historical verification
 
@@ -60,8 +60,8 @@ authorization to bump version 1.1.0, publish v1.2.0, or update an everyday insta
 
 ## Current authoring checkpoint
 
-Backend and UI authoring are implemented. BC-026 remains In Progress: Import to Library from frozen
-Run Plan/Result Details is still queued, and this checkpoint is not final acceptance or a v1.2.0 tag.
+Backend and UI authoring are implemented. BC-026 remains In Progress: historical Import to Library is
+also implemented below, but this checkpoint is not final acceptance or a v1.2.0 tag.
 The application version stays 1.1.0.
 
 - Global New Workflow has one Save action. Success saves the Workflow, then opens the shared Profile
@@ -281,12 +281,86 @@ selection, refresh failure, keyboard behavior and reachable footer actions. Main
 representative screenshot review also passed; this is not new human owner acceptance. No backend,
 schema, format, release or installed-app changes are part of this pass.
 
+## Historical Import to Library
+
+Implemented in `api/global_library.py`, `application/service.py`, `db/global_workflows.py`, and the
+App-owned `useHistoricalSetupImport.tsx` / `HistoricalSetupImportDialog.tsx`. It reads the Run's frozen
+base Workflow and single Profile, not a Job-mutated submission, and needs no original mutable library
+rows. It creates one valid global Workflow/Profile pair with independent IDs at local version 1, without
+intermediate Project rows, a 0-50 Profile picker or automatic Builder handoff. Base Workflow JSON stays
+semantically unchanged; Job prompts, seeds and parameters are not baked in. This is not Recreate Result.
+
+### Review and navigation
+
+- Current and historical Run Plan/Result Details, including Details from image viewers, use one compact
+  Import to Library dialog. Source Run shows the frozen label and Project / Batch; names are plain text
+  with Rename, and Inspect frozen setup is optional. The one routine line is "Copies the base setup,
+  not Job overrides." Only invalid names show the 200-character field hint; no debug/screenshot text.
+- Success offers Close and Open Workflow Library. Only explicit navigation clears library search,
+  using one history entry, without changing Project, Batch, Preview or current Run.
+- Failed full Run inspection exposes Import frozen setup using the independent setup GET. App records
+  the full-Run read failure separately; existing `RunResponse` values/contracts remain unchanged.
+
+### Source and transaction boundaries
+
+- `GET /api/library/run-setup?run_id=...` validates registered Project ownership and the immutable
+  file/hash chain. Historical loading uses `validate_assets=False`, `require_outputs=False`, and never
+  reads execution metadata. Missing Assets/outputs or missing/corrupt execution do not block valid setup
+  reads; tampered immutable content fails. Valid older parameter shapes remain supported.
+- `POST /api/library/workflows/import-run` accepts Run ID, request ID, reviewed Workflow/Profile names
+  (nonblank, at most 200 characters), optional description (at most 2000), and optional raw-source hash
+  preconditions. The UI always supplies both hashes. Historical Run IDs do not inherit authoring's
+  200-character ID bound. HTTP JSON and paths are never authoritative setup sources.
+- Existing `source_json` records `scope: historical_run`, Project/Batch/Run IDs, recorded original
+  Workflow/Profile IDs and nullable decimal-string revision numbers. Missing optional ancestry remains
+  null, not inferred. Raw frozen-file SHA-256 hashes remain separate from new canonical destination
+  hashes; the destination Profile envelope has its new ID and reviewed name.
+- Receipt lookup occurs before source files, then is rechecked under `BEGIN IMMEDIATE` after source
+  validation to prevent concurrent duplication. The whole pair and receipt commit atomically. Exact
+  retries replay after source loss; changed request reuse, names/identity collisions and stale hash
+  preconditions conflict. This uses migration 0005's existing copy receipts and a historical-source
+  fingerprint, independently of migration 0006 authoring receipts. No migration is added.
+
+### Retry ownership
+
+- App retains one bounded operation above portals, not a general global catalog cache/query pin or
+  Recovery v4 persistence. Setup validation cross-checks exact Run/Project identity, the historical
+  source tag, provenance IDs, one Profile and hash shapes before accepting the response.
+- Closing stops browser waiting, not server commit, and retains operation identity for receipt recovery.
+  Reopening the same operation requires no GET and works after source loss. Changed names start a new
+  UUID, even if later reverted. Navigation/owner unmount hides the dialog; stale callbacks cannot reopen
+  it or navigate on success.
+- Reload setup preserves reviewed names, including edits during the read, and unchanged hashes retain
+  the operation ID. Explicitly accepting fresh hashes produces a new fingerprint on submission. Failed
+  reload keeps the last validated setup for receipt resubmission; the backend still validates source
+  files for a new write, so this cannot forge authority or bypass immutable checks.
+
+### Final verification
+
+Final implementation checks passed: **1497 backend tests**, **983 frontend tests**, and **52 full
+desktop/mobile browser tests in each of Vite and built modes**, including the reload and invalid-name
+guidance changes. Ruff lint/format, mypy, frontend lint/typecheck, builds, and diff checks passed.
+An existing copy test now waits for the enabled Add action after exact-revision validation instead of
+clicking as soon as its checkbox appears; its payload assertions remain intact. Reviewed 1440px/390px
+screenshots cover the compact initial review, naming conflict, renaming, nested dialogs, and success.
+The existing non-fatal Vite warning is approximately 569 kB minified; no threshold was relaxed.
+Owner acceptance remains pending before BC-026 closure and v1.2.0 release preparation.
+
+Backend coverage includes a v1 Project fixture imported into an empty database without source
+Workflow/Profile rows or a copied global catalog, then frozen setup -> global -> new Project ->
+Preview/Run. It also covers immutable tampering, missing external/execution data, unbounded historical
+metadata and raw hashes, source-loss/restart replay, concurrent retries, rollback and request validation.
+Browser evidence covers archived mutable source rows and API transport fault injection losing responses
+from real backend receipt-backed writes. It is not an empty-database browser portability claim.
+
+Applied migration bytes 0001-0006, v1 formats, dependencies and Recovery v4 are unchanged. Unused global
+libraries do not become portable Project data. No live ComfyUI or installed-app data was used.
+
 ## Remaining scope
 
-Import to Library from frozen Run Plan/Result Details must read backend-owned snapshots and work
-without the original mutable Project/global rows. Complete that slice and final acceptance before
-marking BC-026 Done or preparing v1.2.0. Workflow images are deferred optional upcoming work, not a
-v1.2.0 completion gate. No everyday installation update is authorized.
+Complete final verification and owner acceptance before marking BC-026 Done or preparing v1.2.0.
+The application version remains 1.1.0; no release/tag or everyday installation update is authorized.
+Workflow images are deferred optional upcoming work, not a v1.2.0 completion gate.
 
 ## Implementation checkpoints
 
@@ -317,7 +391,7 @@ v1.2.0 completion gate. No everyday installation update is authorized.
   target selections. Global edits never change Project copies, Batch selections, or frozen Runs.
 - Direct create/append operations are retry-safe through migration 0006 authoring receipts;
   migration 0005 remains byte-stable.
-- Still queued: Import to Library from Run Plan/Result Details reads frozen snapshots on the backend,
+- Implemented: Import to Library from Run Plan/Result Details reads frozen snapshots on the backend,
   even if current Project/global library rows are absent. Missing ancestry stays explicit rather than guessed.
 - Implemented reviewed global Workflow/Profile revision management, archive behavior, and explicit duplicate
   handling without conflating family identity with payload equality.

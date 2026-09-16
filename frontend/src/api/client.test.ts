@@ -4,6 +4,22 @@ import { ApiError, BatchcraftApiClient } from "./client";
 import type { HistoryQuery, HistoryResultPageResponse, HistoryRunPageResponse, HistoryRunSummaryResponse } from "./types";
 
 describe("BatchcraftApiClient", () => {
+  it("reads historical setup with an unbounded encoded Run ID and preserves decimal strings and JSON scalars", async () => {
+    const response = { run_id: "歷史 /?&+#".repeat(50), run_number: "123456789012345678901234567890", workflow: { node: { inputs: { scale: 1.25, enabled: false } } }, profile: {} };
+    const fetcher = successfulFetch(response); vi.stubGlobal("fetch", fetcher);
+    const signal = new AbortController().signal;
+    await expect(new BatchcraftApiClient("").getGlobalRunSetup(response.run_id, signal)).resolves.toEqual(response);
+    expect(fetcher).toHaveBeenCalledWith(`/api/library/run-setup?run_id=${encodeURIComponent(response.run_id)}`, { signal });
+  });
+
+  it("imports one server-sourced historical pair with hashes, never client JSON or Job overrides", async () => {
+    const response = { request_id: "stable", workflow: {}, profiles: [{}], source: {} };
+    const fetcher = successfulFetch(response); vi.stubGlobal("fetch", fetcher);
+    const body = { request_id: "stable", run_id: "run /?", name: "Workflow", profile_name: "Profile", expected_workflow_sha256: "a".repeat(64), expected_profile_sha256: "b".repeat(64) };
+    const signal = new AbortController().signal;
+    await expect(new BatchcraftApiClient("").importRunSetup(body, signal)).resolves.toEqual(response);
+    expect(fetcher).toHaveBeenCalledWith("/api/library/workflows/import-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  });
   it("reads bounded global roots, families, and histories with exact target and archive scope", async () => {
     const fetcher = repeatedSuccessfulFetch({ items: [], next_cursor: null }); vi.stubGlobal("fetch", fetcher);
     const api = new BatchcraftApiClient("");

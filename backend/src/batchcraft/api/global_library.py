@@ -1,14 +1,18 @@
 """Additive BC-026 HTTP contracts; Project copy results retain existing DTOs."""
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import Field
 
 from batchcraft.api.artifacts import ReadCapacity, file_operation
 from batchcraft.api.schemas import ApiModel, WorkflowCreatedResponse, WorkflowProfileCreatedResponse
-from batchcraft.db.global_workflows import GlobalWorkflowStore
+from batchcraft.application import BatchcraftService
+from batchcraft.application.library import LibraryService
+from batchcraft.db.global_workflows import GlobalWorkflowStore, HistoricalSetupImport
 
 
 class ProfileCopySelection(ApiModel):
@@ -27,6 +31,30 @@ class SetupCopyRequest(ApiModel):
 
 class AuthoringRequest(ApiModel):
     request_id: str = Field(min_length=1, max_length=200)
+
+
+class RunSetupImportRequest(AuthoringRequest):
+    run_id: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=200)
+    profile_name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+    expected_workflow_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_profile_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class RunSetupResponse(ApiModel):
+    run_id: str
+    project_id: str
+    batch_id: str
+    project_name: str
+    batch_name: str
+    run_name: str | None
+    run_number: str
+    workflow_name: str | None
+    profile_name: str | None
+    workflow: dict[str, object]
+    profile: dict[str, object]
+    source: dict[str, object]
 
 
 class WorkflowSaveRequest(AuthoringRequest):
@@ -195,9 +223,46 @@ class ProfileFamiliesResponse(ApiModel):
     next_cursor: str | None
 
 
-def global_library_router(database_path: Path, reads: ReadCapacity) -> APIRouter:
+def global_library_router(
+    database_path: Path,
+    reads: ReadCapacity,
+    service_dependency: Callable[[Request], Awaitable[BatchcraftService]],
+    library_dependency: Callable[[Request], Awaitable[LibraryService]],
+) -> APIRouter:
     router = APIRouter(prefix="/api/library")
     store = GlobalWorkflowStore(database_path)
+
+    @router.get("/run-setup", response_model=RunSetupResponse)
+    async def run_setup(
+        service: Annotated[BatchcraftService, Depends(service_dependency)],
+        library: Annotated[LibraryService, Depends(library_dependency)],
+        run_id: str = Query(min_length=1),
+    ) -> Response:
+        def read() -> Response:
+            model = RunSetupResponse.model_validate(
+                service.get_historical_setup(run_id, library=library)
+            )
+            return Response(model.model_dump_json(), media_type="application/json")
+
+        async with reads.claim():
+            return await file_operation(read)
+
+    @router.post("/workflows/import-run", response_model=GlobalCopyResponse)
+    async def import_run(
+        request: RunSetupImportRequest,
+        service: Annotated[BatchcraftService, Depends(service_dependency)],
+        library: Annotated[LibraryService, Depends(library_dependency)],
+    ) -> Response:
+        def write() -> Response:
+            model = GlobalCopyResponse.model_validate(
+                service.import_historical_setup(
+                    HistoricalSetupImport(**request.model_dump()), library=library
+                )
+            )
+            return Response(model.model_dump_json(), media_type="application/json")
+
+        async with reads.claim():
+            return await file_operation(write)
 
     @router.get("/workflows", response_model=GlobalCatalogResponse)
     async def browse(

@@ -834,6 +834,8 @@ describe("Global Workflow Library", () => {
     await screen.findByText(/Viewing Profile revision 1/);
     fireEvent.click(screen.getByRole("button", { name: "Add to Project" }));
     expect(await screen.findByRole("checkbox", { name: "Portrait mapping" })).toBeChecked();
+    // The checkbox appears before validation of its pinned historical revision completes.
+    await waitFor(() => expect(addButton()).toBeEnabled());
     fireEvent.click(addButton());
     await waitFor(() => expect(api.useGlobalSetup).toHaveBeenCalledWith(expect.objectContaining({ workflow_version_id: "global-w-v1", profiles: [{ version_id: "old-profile", name: "Portrait mapping" }] }), expect.any(AbortSignal)));
     expect(props.onApply).not.toHaveBeenCalled();

@@ -1,10 +1,13 @@
 import { useState } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { ExecutionResponse, RunCreatedResponse, RunResponse } from "../../api/types";
 import { RunPlanDialog } from "./RunPlanDialog";
 import { runDisplayName, runNumberLabel } from "./runDisplay";
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
+  frozenPlanError?: string | null;
   run: RunCreatedResponse | RunResponse | null;
   execution: ExecutionResponse | null;
   starting: boolean;
@@ -42,6 +45,8 @@ export function RunPanel({
   onDiscard,
   onStopAfterCurrentJob,
   onDetachFromCurrentJob,
+  onImportSetup,
+  frozenPlanError,
 }: Props) {
   const [planOpen, setPlanOpen] = useState(false);
   const [planRestoreTarget, setPlanRestoreTarget] = useState<HTMLElement | null>(null);
@@ -115,7 +120,8 @@ export function RunPanel({
       <div className="run-summary">
         <strong>{completedJobs} / {run.job_count} Jobs</strong>
         {run.run_description ? <p className="run-description">{run.run_description}</p> : null}
-        {dimensions ? <p>{dimensions}</p> : <p>Loading frozen Run Plan...</p>}
+        {dimensions ? <p>{dimensions}</p> : frozenPlanError ? <p role="alert">{frozenPlanError}</p> : <p>Loading frozen Run Plan...</p>}
+        {!frozenRun && frozenPlanError && onImportSetup ? <button type="button" className="button-secondary compact" onClick={(event) => onImportSetup({ runId: run.run_id, projectId: run.project_id }, event.currentTarget)}>Import frozen setup</button> : null}
         {workflow?.workflow_name ? (
           <p>Workflow: <strong>{workflow.workflow_name}</strong>{formatVersion(workflow.workflow_version_number)}</p>
         ) : null}
@@ -336,6 +342,7 @@ export function RunPanel({
       {polling ? <p className="polling-note" aria-live="polite">Watching execution state...</p> : null}
       {frozenRun && planOpen ? (
         <RunPlanDialog
+          onImportSetup={onImportSetup}
           run={frozenRun}
           restoreTarget={planRestoreTarget}
           onClose={() => setPlanOpen(false)}

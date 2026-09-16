@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { EditableBatchSnapshot, RunPlanJobResponse, RunResponse } from "../../api/types";
 import { OverlayPortal } from "../../components/OverlayPortal";
@@ -8,12 +9,13 @@ import { parameterRangeCount, profileImageInputs, profileParameters } from "../b
 import { runDisplayLabel, runDisplayName, runNumberLabel } from "./runDisplay";
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
   run: RunResponse;
   restoreTarget: HTMLElement | null;
   onClose(): void;
 }
 
-export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
+export function RunPlanDialog({ run, restoreTarget, onClose, onImportSetup }: Props) {
   const snapshot = run.batch_snapshot;
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -34,7 +36,10 @@ export function RunPlanDialog({ run, restoreTarget, onClose }: Props) {
           <p className="run-plan-kicker">Frozen experiment specification · {runNumberLabel(run)}</p>
           <h2 id="run-plan-title">{runDisplayName(run)} Plan</h2>
         </div>
-        <button className="button-link" type="button" onClick={onClose} ref={closeRef}>Close</button>
+        <div className="global-library-actions">
+          {onImportSetup ? <button className="button-secondary compact" type="button" onClick={(event) => onImportSetup({ runId: run.run_id, projectId: run.project_id }, event.currentTarget)}>Import to Library</button> : null}
+          <button className="button-link" type="button" onClick={onClose} ref={closeRef}>Close</button>
+        </div>
       </div>
 
       <div className="run-plan-content">

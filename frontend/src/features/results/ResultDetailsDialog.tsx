@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type {
   ExecutionResponse,
@@ -26,6 +27,8 @@ export type ResultDetailsFilter =
   | { asset_id: string };
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
+  sourceProjectId?: string;
   runId: string;
   result: ResultResponse;
   execution: ExecutionResponse | null;
@@ -45,6 +48,8 @@ export function ResultDetailsDialog({
   loadRun,
   onClose,
   onFilter,
+  onImportSetup,
+  sourceProjectId,
 }: Props) {
   const cachedRun = getCachedRun(runId);
   const [run, setRun] = useState<RunResponse | null>(cachedRun?.run_id === runId ? cachedRun : null);
@@ -103,9 +108,12 @@ export function ResultDetailsDialog({
               Job {String(result.job_ordinal).padStart(3, "0")} · Artifact {result.artifact_ordinal}
             </h2>
           </div>
+          <div className="global-library-actions">
+          {onImportSetup ? <button className="button-secondary compact" type="button" onClick={(event) => onImportSetup({ runId, projectId: sourceProjectId ?? run?.project_id }, event.currentTarget)}>Import to Library</button> : null}
           <button className="button-link" type="button" onClick={onClose} ref={closeRef}>
             Close
           </button>
+          </div>
         </div>
 
         {loading ? <p className="result-details-loading" role="status">Loading frozen Run provenance...</p> : null}

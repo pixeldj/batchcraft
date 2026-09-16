@@ -5,6 +5,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -24,9 +25,103 @@ from batchcraft.db.workflows import (
 )
 
 
+@dataclass(frozen=True)
+class HistoricalSetupImport:
+    request_id: str
+    run_id: str
+    name: str
+    profile_name: str
+    description: str | None = None
+    expected_workflow_sha256: str | None = None
+    expected_profile_sha256: str | None = None
+
+    def fingerprint(self) -> str:
+        _text(self.request_id, "request_id", 200)
+        _text(self.name, "name", 200)
+        _text(self.profile_name, "profile_name", 200)
+        _text(self.description, "description", 2000, optional=True)
+        _validate_utf8(self.run_id)
+        if not self.run_id:
+            raise WorkflowValidationError("run_id must not be empty")
+        for digest in (self.expected_workflow_sha256, self.expected_profile_sha256):
+            if digest is not None and (
+                len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)
+            ):
+                raise WorkflowValidationError("Source preconditions must be lowercase SHA-256")
+        return _canonical(
+            dict(
+                kind="historical_run",
+                run_id=self.run_id,
+                name=self.name,
+                profile_name=self.profile_name,
+                description=self.description,
+                expected_workflow_sha256=self.expected_workflow_sha256,
+                expected_profile_sha256=self.expected_profile_sha256,
+            )
+        )[0]
+
+
 class GlobalWorkflowStore:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
+
+    def historical_import_receipt(self, request: HistoricalSetupImport) -> dict[str, Any] | None:
+        fingerprint = request.fingerprint()
+        with closing(open_connection(self.database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            return _copy_receipt(connection, request.request_id, fingerprint)
+
+    def import_historical_setup(
+        self,
+        request: HistoricalSetupImport,
+        *,
+        workflow: dict[str, object],
+        profile: dict[str, object],
+        source: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Write an already trusted snapshot; filesystem discovery belongs to the service."""
+        fingerprint = request.fingerprint()
+        with closing(open_connection(self.database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                replay = _copy_receipt(connection, request.request_id, fingerprint)
+                if replay is not None:
+                    connection.rollback()
+                    return replay
+                for expected, actual in (
+                    (request.expected_workflow_sha256, source["workflow"]["content_sha256"]),
+                    (request.expected_profile_sha256, source["profiles"][0]["content_sha256"]),
+                ):
+                    if expected is not None and expected != actual:
+                        raise WorkflowConflictError(
+                            "Historical setup changed; review the source again"
+                        )
+                try:
+                    validate_workflow_profile(workflow, profile)
+                except WorkflowPreparationError as error:
+                    raise WorkflowValidationError(str(error)) from error
+                response = _write_copy(
+                    connection,
+                    request_id=request.request_id,
+                    request_json=fingerprint,
+                    workflow=workflow,
+                    name=request.name,
+                    description=request.description,
+                    profiles=[(request.profile_name, profile)],
+                    ancestry=source,
+                )
+                connection.commit()
+                return response
+            except sqlite3.IntegrityError as error:
+                connection.rollback()
+                raise WorkflowConflictError(
+                    "Copy conflicts with an existing name or identity; review Workflow and Profile names "
+                    "(including archived entries) and retry with a new request_id"
+                ) from error
+            except BaseException:
+                connection.rollback()
+                raise
 
     def browse(
         self,
@@ -497,15 +592,8 @@ class GlobalWorkflowStore:
             connection.row_factory = sqlite3.Row
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                receipt = connection.execute(
-                    "SELECT * FROM global_workflow_copy_receipt WHERE request_id=?", (request_id,)
-                ).fetchone()
-                if receipt is not None:
-                    if receipt["request_json"] != request_json:
-                        raise WorkflowConflictError(
-                            "request_id already used with a different copy request"
-                        )
-                    response = cast(dict[str, Any], json.loads(receipt["response_json"]))
+                response = _copy_receipt(connection, request_id, request_json)
+                if response is not None:
                     connection.rollback()
                     return response
                 project = connection.execute(
@@ -514,7 +602,6 @@ class GlobalWorkflowStore:
                 if project is None or (direction == "use" and project["archived_at"] is not None):
                     raise WorkflowValidationError("Choose a registered, active destination Project")
                 source_prefix = "" if direction == "import" else "global_"
-                target_prefix = "global_" if direction == "import" else ""
                 source = _version(connection, source_prefix, workflow_version_id)
                 if direction == "import" and source["project_id"] != project_id:
                     raise WorkflowValidationError(
@@ -544,110 +631,30 @@ class GlobalWorkflowStore:
                     except WorkflowPreparationError as error:
                         raise WorkflowValidationError(str(error)) from error
                     source_profiles.append(p)
-                timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                workflow_id, version_id = str(uuid4()), str(uuid4())
-                workflow_name = source["name_snapshot"] if name is None else name
-                if not workflow_name.strip() or len(workflow_name) > 200:
-                    raise WorkflowValidationError(
-                        "Review Workflow name: use 1..200 nonblank characters"
-                    )
-                if description is not None and (not description.strip() or len(description) > 2000):
-                    raise WorkflowValidationError(
-                        "Description must use 1..2000 nonblank characters"
-                    )
-                scope = {} if direction == "import" else {"project_id": project_id}
-                root: dict[str, Any] = dict(
-                    id=workflow_id,
-                    **scope,
-                    name=workflow_name,
-                    description=description,
-                    created_at=timestamp,
-                    updated_at=timestamp,
-                    archived_at=None,
-                )
                 ancestry = {
                     "scope": "project" if direction == "import" else "global",
                     "project_id": project_id if direction == "import" else None,
                     "workflow": _provenance(source),
                     "profiles": [_provenance(p) for p in source_profiles],
                 }
-                if direction == "import":
-                    root["source_json"] = _canonical(ancestry)[0]
-                _insert(connection, target_prefix + "workflow", root)
-                if direction == "import":
-                    root["source"] = json.loads(root.pop("source_json"))
-                canonical, digest = _canonical_workflow(source["workflow"])
-                version: dict[str, Any] = dict(
-                    id=version_id,
-                    workflow_id=workflow_id,
-                    **scope,
-                    version_number=1,
-                    name_snapshot=workflow_name,
-                    workflow_json=canonical,
-                    content_sha256=digest,
-                    note=None,
-                    created_at=timestamp,
-                    archived_at=None,
-                )
-                _insert(connection, target_prefix + "workflow_version", version)
-                copied_profiles = []
-                for selection, p in zip(profiles, source_profiles, strict=True):
-                    profile_id, profile_version_id = str(uuid4()), str(uuid4())
-                    profile_name = (
-                        p["name_snapshot"] if selection.get("name") is None else selection["name"]
-                    )
-                    if not profile_name.strip() or len(profile_name) > 200:
-                        raise WorkflowValidationError(
-                            "Review Profile name: use 1..200 nonblank characters"
+                response = _write_copy(
+                    connection,
+                    request_id=request_id,
+                    request_json=request_json,
+                    workflow=source["workflow"],
+                    name=source["name_snapshot"] if name is None else name,
+                    description=description,
+                    profiles=[
+                        (
+                            p["name_snapshot"]
+                            if selection.get("name") is None
+                            else selection["name"],
+                            p["profile"],
                         )
-                    payload = p["profile"]
-                    canonical, digest = _canonical_profile(
-                        profile_id,
-                        profile_name,
-                        payload["mappings"],
-                        payload["image_inputs"],
-                        payload["parameters"],
-                        source["workflow"],
-                    )
-                    profile_root = dict(
-                        id=profile_id,
-                        workflow_id=workflow_id,
-                        **scope,
-                        name=profile_name,
-                        description=None,
-                        created_at=timestamp,
-                        updated_at=timestamp,
-                        archived_at=None,
-                    )
-                    _insert(connection, target_prefix + "workflow_profile", profile_root)
-                    pv: dict[str, Any] = dict(
-                        id=profile_version_id,
-                        workflow_profile_id=profile_id,
-                        workflow_id=workflow_id,
-                        **scope,
-                        workflow_version_id=version_id,
-                        version_number=1,
-                        name_snapshot=profile_name,
-                        profile_json=canonical,
-                        content_sha256=digest,
-                        note=None,
-                        created_at=timestamp,
-                        archived_at=None,
-                    )
-                    _insert(connection, target_prefix + "workflow_profile_version", pv)
-                    pv["profile"] = json.loads(pv.pop("profile_json"))
-                    copied_profiles.append({"workflow_profile": profile_root, "version": pv})
-                version["workflow"] = json.loads(version.pop("workflow_json"))
-                response = {
-                    "request_id": request_id,
-                    "workflow": {"workflow": root, "version": version},
-                    "profiles": copied_profiles,
-                    "source": ancestry,
-                }
-                response_json, _ = _canonical(response)
-                connection.execute(
-                    "INSERT INTO global_workflow_copy_receipt VALUES (?,?,?,?)",
-                    (request_id, request_json, response_json, timestamp),
+                        for selection, p in zip(profiles, source_profiles, strict=True)
+                    ],
+                    ancestry=ancestry,
+                    project_id=project_id if direction == "use" else None,
                 )
                 connection.commit()
                 return response
@@ -660,6 +667,126 @@ class GlobalWorkflowStore:
             except BaseException:
                 connection.rollback()
                 raise
+
+
+def _copy_receipt(
+    connection: sqlite3.Connection, request_id: str, request_json: str
+) -> dict[str, Any] | None:
+    receipt = connection.execute(
+        "SELECT * FROM global_workflow_copy_receipt WHERE request_id=?", (request_id,)
+    ).fetchone()
+    if receipt is None:
+        return None
+    if receipt["request_json"] != request_json:
+        raise WorkflowConflictError("request_id already used with a different copy request")
+    return cast(dict[str, Any], json.loads(receipt["response_json"]))
+
+
+def _write_copy(
+    connection: sqlite3.Connection,
+    *,
+    request_id: str,
+    request_json: str,
+    workflow: dict[str, object],
+    name: str,
+    description: str | None,
+    profiles: list[tuple[str, dict[str, Any]]],
+    ancestry: dict[str, Any],
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Insert destination identities and receipt in the caller's single transaction."""
+    _text(name, "Review Workflow name", 200)
+    _text(description, "Description", 2000, optional=True)
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    prefix = "global_" if project_id is None else ""
+    scope = {} if project_id is None else {"project_id": project_id}
+    workflow_id, version_id = str(uuid4()), str(uuid4())
+    root: dict[str, Any] = dict(
+        id=workflow_id,
+        **scope,
+        name=name,
+        description=description,
+        created_at=timestamp,
+        updated_at=timestamp,
+        archived_at=None,
+    )
+    if project_id is None:
+        root["source_json"] = _canonical(ancestry)[0]
+    _insert(connection, prefix + "workflow", root)
+    if project_id is None:
+        root["source"] = json.loads(root.pop("source_json"))
+    canonical, digest = _canonical_workflow(workflow)
+    version: dict[str, Any] = dict(
+        id=version_id,
+        workflow_id=workflow_id,
+        **scope,
+        version_number=1,
+        name_snapshot=name,
+        workflow_json=canonical,
+        content_sha256=digest,
+        note=None,
+        created_at=timestamp,
+        archived_at=None,
+    )
+    _insert(connection, prefix + "workflow_version", version)
+    copied_profiles = []
+    for profile_name, payload in profiles:
+        _text(profile_name, "Review Profile name", 200)
+        profile_id, profile_version_id = str(uuid4()), str(uuid4())
+        canonical, digest = _canonical_profile(
+            profile_id,
+            profile_name,
+            payload["mappings"],
+            payload["image_inputs"],
+            payload["parameters"],
+            workflow,
+        )
+        profile_root = dict(
+            id=profile_id,
+            workflow_id=workflow_id,
+            **scope,
+            name=profile_name,
+            description=None,
+            created_at=timestamp,
+            updated_at=timestamp,
+            archived_at=None,
+        )
+        _insert(connection, prefix + "workflow_profile", profile_root)
+        pv: dict[str, Any] = dict(
+            id=profile_version_id,
+            workflow_profile_id=profile_id,
+            workflow_id=workflow_id,
+            **scope,
+            workflow_version_id=version_id,
+            version_number=1,
+            name_snapshot=profile_name,
+            profile_json=canonical,
+            content_sha256=digest,
+            note=None,
+            created_at=timestamp,
+            archived_at=None,
+        )
+        _insert(connection, prefix + "workflow_profile_version", pv)
+        pv["profile"] = json.loads(pv.pop("profile_json"))
+        copied_profiles.append({"workflow_profile": profile_root, "version": pv})
+    version["workflow"] = json.loads(version.pop("workflow_json"))
+    response = dict(
+        request_id=request_id,
+        workflow={"workflow": root, "version": version},
+        profiles=copied_profiles,
+        source=ancestry,
+    )
+    _insert(
+        connection,
+        "global_workflow_copy_receipt",
+        dict(
+            request_id=request_id,
+            request_json=request_json,
+            response_json=_canonical(response)[0],
+            created_at=timestamp,
+        ),
+    )
+    return response
 
 
 def _family(c: sqlite3.Connection, row_id: str, *, profile: bool = False) -> dict[str, Any]:

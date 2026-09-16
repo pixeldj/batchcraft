@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { BatchcraftApi } from "../../api/client";
 import type {
@@ -11,6 +12,7 @@ import { ResultGallery } from "./ResultGallery";
 import type { ResultDetailsFilter } from "./ResultDetailsDialog";
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
   api: BatchcraftApi;
   run: RunCreatedResponse | null;
   execution: ExecutionResponse | null;
@@ -34,6 +36,7 @@ export function ResultsPanel({
   getCachedRun,
   loadRun,
   onFilter,
+  onImportSetup,
 }: Props) {
   const [expanded, setExpanded] = useState(true);
 
@@ -80,6 +83,8 @@ export function ResultsPanel({
           {results.length === 0 ? <p>No Results have been ingested yet.</p> : null}
           {error ? <p className="operation-error" role="alert">Results: {error}</p> : null}
           <ResultGallery
+            onImportSetup={onImportSetup}
+            sourceProjectId={run.project_id}
             api={api}
             runId={run.run_id}
             execution={execution}

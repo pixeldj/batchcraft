@@ -640,6 +640,8 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
     browseGlobalProfiles: vi.fn(async () => ({ items: [], next_cursor: null })),
     getGlobalProfileVersion: vi.fn(async () => { throw new Error("No global Profile fixture"); }),
     importProjectSetup: vi.fn(async () => { throw new Error("No import fixture"); }),
+    getGlobalRunSetup: vi.fn(async () => { throw new Error("No historical setup fixture"); }),
+    importRunSetup: vi.fn(async () => { throw new Error("No historical import fixture"); }),
     useGlobalSetup: vi.fn(async () => { throw new Error("No copy fixture"); }),
     listProjects: vi.fn(async () => ({ projects: [] })), createProject: vi.fn(), getProject: vi.fn(), updateProject: vi.fn(), adoptProject: vi.fn(), importProject: vi.fn(), reindexProject: vi.fn(), listProjectRuns: vi.fn(async () => ({ project_id: "", runs: [], diagnostics: [] })), listAdoptableProjects: vi.fn(async () => ({ projects: [] })),
     listSavedBatches: vi.fn(async () => ({ batches: [] })), createSavedBatch: vi.fn(), getSavedBatch: vi.fn(), updateSavedBatch: vi.fn(), archiveSavedBatch: vi.fn(), listAdoptableSavedBatches: vi.fn(async () => ({ batches: [] })), adoptSavedBatch: vi.fn(),

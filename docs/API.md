@@ -32,6 +32,8 @@ caching, search debounce and Refresh behavior change none of the routes or reque
 | GET | `/api/library/workflow-profile-versions/{version_id}` | Exact global ProfileVersion, including full `profile` JSON and version metadata. |
 | GET | `/api/library/workflow-versions/{version_id}/profiles` | Active compatible ProfileVersion metadata targeting exactly this WorkflowVersion; no Profile JSON or incompatible logical-Profile placeholder rows. |
 | POST | `/api/library/workflows/import-project` | Copy an exact Project-owned setup into new global records. |
+| GET | `/api/library/run-setup?run_id=...` | Execution-independent frozen base Workflow/Profile and recorded source provenance for one Run. |
+| POST | `/api/library/workflows/import-run` | Import that server-loaded frozen setup as one new global Workflow and one Profile; receipt-backed 200 response. |
 | POST | `/api/library/workflows/use-in-project` | Copy an exact global setup into new ordinary Project-owned records. |
 | GET | `/api/library/workflows/{workflow_id}` | Logical Workflow metadata and latest active `latest_version_id` (nullable). |
 | GET | `/api/library/workflows/{workflow_id}/versions` | Bounded Workflow revision metadata, including archive state; no Workflow JSON. |
@@ -63,7 +65,7 @@ compatibility means an active ProfileVersion targeting that exact WorkflowVersio
 families without one remain listed for review. Without a target, latest compatible means latest active.
 The optional target on family/Profile History reads must belong to the owning Workflow family.
 
-Both copy routes accept this shape (optional names default to source version name snapshots):
+The Project/global copy routes accept this shape (optional names default to source version name snapshots):
 
 ```json
 {
@@ -98,6 +100,41 @@ response even after source changes/loss. Changed request reuse, including the ot
 destination name/identity collision returns 409. Name uniqueness includes archived entries. Validation
 failures return 422; missing exact versions return 404. Corrected copy requests should use a new
 operation ID. Closing a browser dialog stops waiting, not the server transaction.
+
+### Historical setup import
+
+`GET /api/library/run-setup` accepts a nonempty UTF-8 `run_id`, without the authoring IDs' 200-character
+bound. It returns `run_id`, `project_id`, `batch_id`, frozen `project_name`/`batch_name`, nullable
+`run_name`, decimal-string `run_number`, nullable recorded `workflow_name`/`profile_name`, full base
+`workflow` and `profile` objects, and `source`. It verifies registered Project ownership and the immutable
+Run file/hash chain. Historical loading uses `validate_assets=False` and `require_outputs=False` and
+does not read execution metadata. Missing Assets/outputs or missing/corrupt execution therefore do not
+block a valid setup; tampered immutable content still fails. Valid older parameter shapes remain readable.
+This adds no fields to, or changed semantics for, the existing `RunResponse`.
+
+`POST /api/library/workflows/import-run` requires `request_id` (nonblank, at most 200 characters),
+historical `run_id` as above, and reviewed `name` and `profile_name` (nonblank, at most 200 characters).
+Optional `description` is nonblank and at most 2000 characters. Optional `expected_workflow_sha256` and
+`expected_profile_sha256` are 64 lowercase hexadecimal characters; the UI always supplies both from
+the validated setup read. Unknown fields are rejected. No client Workflow/Profile JSON or filesystem
+path is accepted as authority.
+
+The 200 response uses the copy response shape above, with exactly one Profile. `source.scope` is
+`historical_run`; `source` carries Project/Batch/Run IDs, `workflow` ancestry and a one-element `profiles`
+array. Recorded original family/version IDs remain nullable when absent; recorded revision numbers are
+nullable decimal strings, not destination revision numbers. Source `content_sha256` values hash the raw
+frozen files, separately from destination canonical hashes. Nothing infers missing optional ancestry.
+The destination has new independent IDs and local version 1; its Profile envelope receives the new ID
+and reviewed name and is canonically hashed. Base Workflow JSON is preserved semantically, not replaced
+by Job-resolved prompts, seeds or parameter overrides. This is not Recreate Result.
+
+Historical import shares migration 0005's copy-receipt namespace. Its fingerprint includes
+`kind: historical_run`, Run ID, reviewed names, description and both optional hash preconditions.
+Receipt lookup precedes source file loading; after source validation it is repeated under
+`BEGIN IMMEDIATE`, preventing concurrent duplicate copies. The complete pair and receipt commit
+atomically. Exact retries replay even after source loss; changed request reuse, stale preconditions or
+name/identity collisions return 409. There are no intermediate Project resource writes, Profile picker
+or automatic Builder handoff. Migration 0006 authoring receipts remain independent.
 
 ### Authoring requests
 
@@ -137,7 +174,7 @@ return 409; validation returns 422 and missing records return 404. Failed transa
 partial mutations nor receipts. Create/append receipt retries still return 201. Applied 0005 bytes
 remain unchanged.
 
-Frozen Run Plan/Result Details Import to Library remains queued. Global authoring and copying alone do
+Frozen Run Plan/Result Details Import to Library is implemented. Global authoring and copying alone do
 not select a Project Batch setup or invalidate Preview; Project copies and frozen Run snapshots do not
 follow global edits.
 

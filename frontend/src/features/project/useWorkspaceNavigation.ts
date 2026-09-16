@@ -92,9 +92,10 @@ export function useWorkspaceNavigation() {
     };
   }, [location.view]);
 
-  function navigate(view: WorkspaceView, query?: HistoryQuery) {
+  function navigate(view: WorkspaceView, query?: HistoryQuery, clearLibraryQuery = false) {
     if (previousView.current !== view) scrollPositions.current[previousView.current] = window.scrollY;
     const url = new URL(window.location.href);
+    if (clearLibraryQuery) url.searchParams.delete("library_q");
     if (query) writeQuery(url, query);
     if (view === "batch") url.searchParams.delete("view");
     else url.searchParams.set("view", view);

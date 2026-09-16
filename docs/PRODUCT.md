@@ -103,7 +103,25 @@ lowercase readable snake case, start with a letter, and do not change when label
 BC-026 adds Workflow Library above Projects. The first slice established Project-independent browsing
 and Project-source copies. Import to Library opens a source Project chooser, then an exact Workflow
 revision and compatible Profile selections. Choosing another registered source Project does not switch
-the current Batch draft. Import from frozen Run Plan/Result Details remains queued.
+the current Batch draft. Import from frozen Run Plan/Result Details is also implemented.
+
+Current and historical Run Plan and Result Details, including Details reached from the image viewer,
+offer Import to Library. If full Run inspection fails, Import frozen setup uses an independent immutable
+setup read, so unavailable execution does not prevent importing a valid frozen setup. The compact
+Import to Library dialog shows the frozen Source Run label and Project / Batch, plain Workflow/Profile
+names with Rename, and optional Inspect frozen setup. Its routine guidance is only: "Copies the base
+setup, not Job overrides." Invalid names reveal a 200-character limit hint.
+
+Import creates one independent global Workflow and exactly one Profile, with no 0-50 Profile picker,
+intermediate Project copies or automatic Profile Builder. Success offers Close or explicit Open Workflow
+Library; navigation clears library search in one browser-history entry. Import and navigation leave
+the selected Project, Batch, Preview and current Run unchanged. Closing while pending stops browser
+waiting, not the server transaction. One in-memory operation can resume an unchanged retry after source
+loss without another setup read; it is not persisted in working-session Recovery v4. Reload setup keeps
+reviewed names and reuses the operation ID for unchanged hashes; changed names or hashes start a new
+operation. A failed reload retains the last validated setup for receipt retry, not authority to bypass
+backend validation. Navigation or closing the owning inspection hides the dialog; late success cannot
+reopen it.
 
 The current authoring checkpoint adds New Workflow directly in the global library. Its single Save
 action saves the Workflow, then opens the shared Profile mapper with `${name}-profile` prefilled.
@@ -141,8 +159,8 @@ Only the restored-draft notice is hidden outside Batch without clearing its stat
 unchanged. This frontend cleanup changes no backend or durable semantics, and owner acceptance is pending.
 
 Existing v1 Project archives still carry setups used by Runs, not unused global libraries. BC-026 remains
-In Progress pending historical Import to Library and final acceptance. Workflow images are deferred,
-optional upcoming work, not a v1.2.0 completion gate. The target is v1.2.0 after agreed work and
+In Progress pending owner acceptance before v1.2.0 version preparation; implementation checks have passed. Workflow
+images are deferred optional upcoming work, not a v1.2.0 completion gate. The target is v1.2.0 after agreed work and
 verification; the actual application version remains 1.1.0. This checkpoint does not publish a tag or release.
 
 ### Prompt Template

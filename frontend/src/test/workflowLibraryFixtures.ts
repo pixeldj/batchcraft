@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { BatchcraftApi, LibraryApi } from "../api/client";
-import type { GlobalCatalogItem, GlobalCopyResponse, GlobalProfileFamily, GlobalProfileMetadata, GlobalWorkflowVersion, ProjectCopyResponse } from "../api/types";
+import type { GlobalCatalogItem, GlobalCopyResponse, GlobalProfileFamily, GlobalProfileMetadata, GlobalRunSetup, GlobalWorkflowVersion, ProjectCopyResponse } from "../api/types";
 
 const metadata = { created_at: "2026-09-09T10:00:00Z", updated_at: "2026-09-09T10:00:00Z", archived_at: null, description: null };
 export const globalWorkflow: GlobalCatalogItem = { ...metadata, id: "global-w", name: "Reusable portrait", source: {}, latest_version_id: "global-w-v1" };
@@ -20,10 +20,18 @@ export const copiedSetup: ProjectCopyResponse = {
   } }],
 };
 export const importedSetup: GlobalCopyResponse = { request_id: "receipt", source: {}, workflow: { workflow: globalWorkflow, version: globalVersion }, profiles: [] };
+export const historicalSetup: GlobalRunSetup = {
+  run_id: "run-1", project_id: "source-project", batch_id: "batch-1", project_name: "Source Project", batch_name: "Source Batch",
+  run_name: "Original experiment", run_number: "123456789012345678901234567890", workflow_name: "Frozen Workflow", profile_name: "Frozen Profile",
+  workflow: globalVersion.workflow, profile: copiedSetup.profiles[0].version.profile,
+  source: { scope: "historical_run", run_id: "run-1", project_id: "source-project", batch_id: "batch-1", workflow: { content_sha256: "a".repeat(64) }, profiles: [{ content_sha256: "b".repeat(64) }] },
+};
 export const globalProfileFamily: GlobalProfileFamily = { ...metadata, id: "global-p", workflow_id: "global-w", name: "Portrait mapping", latest_active_version_id: globalProfile.id, latest_compatible_version_id: globalProfile.id, latest_compatible_version: { ...globalProfile, note: null, archived_at: null } };
 
 export function workflowLibraryApi(): LibraryApi & Partial<BatchcraftApi> {
   return {
+    getGlobalRunSetup: vi.fn(async () => historicalSetup),
+    importRunSetup: vi.fn(async (body) => ({ ...importedSetup, request_id: body.request_id, profiles: [{ workflow_profile: { ...globalProfileFamily, name: body.profile_name }, version: { ...globalProfile, profile: historicalSetup.profile, note: null, archived_at: null } }] })),
     getGlobalWorkflow: vi.fn(async () => globalWorkflow),
     listGlobalWorkflowVersions: vi.fn(async () => ({ items: [globalVersion], next_cursor: null })),
     listGlobalProfileFamilies: vi.fn(async () => ({ items: [globalProfileFamily], next_cursor: null })),

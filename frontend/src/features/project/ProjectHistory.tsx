@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { BatchcraftApi } from "../../api/client";
 import type {
@@ -12,6 +13,7 @@ import { ResultGallery } from "../results/ResultGallery";
 import { RunPlanDialog } from "../run/RunPlanDialog";
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
   api: BatchcraftApi;
   projectId: string | null;
   historyRevision?: number;
@@ -42,6 +44,7 @@ export function ProjectHistory({
   loadRun,
   loadRunAsBatch,
   loadRunAsBatchDisabled,
+  onImportSetup,
 }: Props) {
   if (!projectId) {
     return (
@@ -53,6 +56,7 @@ export function ProjectHistory({
   }
   return (
     <VerifiedProjectHistory
+      onImportSetup={onImportSetup}
       key={projectId}
       api={api}
       projectId={projectId}
@@ -73,6 +77,7 @@ function VerifiedProjectHistory({
   loadRun,
   loadRunAsBatch,
   loadRunAsBatchDisabled = false,
+  onImportSetup,
 }: Omit<Props, "projectId"> & { projectId: string }) {
   const [history, setHistory] = useState<(ProjectRunsResponse & { generation: number }) | null>(null);
   const [loading, setLoading] = useState(true);
@@ -406,6 +411,8 @@ function VerifiedProjectHistory({
                           </ul>
                         ) : (
                           <ResultGallery
+                            onImportSetup={onImportSetup}
+                            sourceProjectId={projectId}
                             api={api}
                             runId={historicalRun.run_id}
                             execution={detailState?.run?.execution ?? null}
@@ -427,6 +434,7 @@ function VerifiedProjectHistory({
 
       {planTarget ? (
         <RunPlanDialog
+          onImportSetup={onImportSetup}
           run={planTarget.run}
           restoreTarget={planTarget.restoreTarget}
           onClose={() => setPlanTarget(null)}

@@ -1622,8 +1622,18 @@ lint/typecheck/build, and two focused desktop/mobile browser cases per mode. Fil
 was exercised through browser cancel events and empty file selection, not manual OS-picker interaction.
 The owner reports that the development layout looks great after restarting the stale backend; testing
 the refreshed candidate remains the next step, not acceptance of all remaining BC-026 functionality.
-BC-026 remains **In Progress**: frozen Run Plan/Result Details Import to Library remains queued, and final
-acceptance is outstanding. Version stays **1.1.0**, with no v1.2.0 tag/release. Workflow images are deferred
+Frozen Run Plan/Result Details Import to Library is implemented, including current/historical Result
+Details reached from image viewers and execution-independent Import frozen setup fallback. The backend
+reads authoritative immutable setup files and registered Project ownership, then atomically creates one
+global Workflow/Profile pair with existing copy receipts; replay works after source loss. The compact
+review preserves Batch/Preview/current Run state and offers explicit library navigation after success.
+The plan's [Final verification](plans/BC-026-global-workflow-library.md#final-verification) section records
+the passing final implementation checks, distinguishing backend empty-database portability from
+browser archived-source and lost-response coverage.
+Verification: 1497 backend tests, 983 frontend tests, and 52 browser tests in each serving mode passed,
+alongside lint, formatting, type checks, builds, and reviewed desktop/mobile screenshots.
+BC-026 remains **In Progress** pending owner acceptance before v1.2.0 version
+preparation. Version stays **1.1.0**, with no v1.2.0 tag/release. Workflow images are deferred
 optional upcoming work, not a v1.2.0 completion gate.
 
 ## Maintenance rules

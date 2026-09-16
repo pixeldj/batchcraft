@@ -21,6 +21,7 @@ import type {
 } from "./api/types";
 import { BatchEditor } from "./features/batch/BatchEditor";
 import { GlobalWorkflowLibrary } from "./features/batch/GlobalWorkflowLibrary";
+import { useHistoricalSetupImport } from "./features/batch/useHistoricalSetupImport";
 import { applyProfile, applyWorkflow } from "./features/batch/workflowSelection";
 import { PreviewPanel } from "./features/batch/PreviewPanel";
 import {
@@ -117,6 +118,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [currentRunId, setCurrentRunId] = useState<string | null>(initialSession.currentRunId);
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
+  const [frozenPlanFailure, setFrozenPlanFailure] = useState<{ runId: string; message: string } | null>(null);
+  const historicalImport = useHistoricalSetupImport(api,
+    JSON.stringify([navigation.view, navigation.query, navigation.libraryQuery, selectedProjectId, run?.run_id]),
+    () => navigation.navigate("workflows", undefined, true));
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [historyRevisions, setHistoryRevisions] = useState<Record<string, number>>({});
   function onHistoryChange(projectId: string) {
@@ -962,6 +967,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           setRunSnapshotIdentity({ runId: frozenRun.run_id, snapshot: frozenRun.batch_snapshot });
         }
       } catch (caught) {
+        setFrozenPlanFailure({ runId: nextRun.run_id, message: errorMessage(caught) });
         setCreateError(
           `Run ${nextRun.run_number} was created, but its frozen plan could not be loaded. ${errorMessage(caught)}`,
         );
@@ -1159,6 +1165,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         ) : null}
         </div>
         <RunWorkspace
+          frozenPlanError={frozenPlanFailure?.runId === run?.run_id ? frozenPlanFailure?.message : null}
+          onImportSetup={historicalImport.open}
           key={run?.run_id ?? "no-run"}
           api={api}
           run={run}
@@ -1221,6 +1229,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           </div>
         ) : null}
         <ProjectBrowser
+          onImportSetup={historicalImport.open}
           api={api}
           projectId={projectVerified ? selectedProjectId : null}
           projectName={form.projectName}
@@ -1237,6 +1246,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           loadRunAsBatchDisabled={projectSwitchingBlocked}
           hasUnsavedChanges={hasUnsavedChanges}
         />
+        {historicalImport.dialog}
       </main>
     </>
   );

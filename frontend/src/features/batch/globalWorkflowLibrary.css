@@ -83,6 +83,9 @@
 .project-add-footer { display: flex; justify-content: flex-end; gap: .5rem; padding: 1rem 1.25rem; border-top: 1px solid var(--line); }
 .project-add-confirmation { display: grid; gap: .75rem; }
 .project-add-confirmation > button { justify-self: end; }
+.historical-setup-dialog { width: min(36rem, calc(100vw - 2rem)); }
+.historical-setup-dialog .project-add-footer { flex-wrap: wrap; }
+.historical-setup-dialog .project-add-workflow > .field { flex: 1; }
 @media (max-width: 900px) {
   .global-library-header { flex-wrap: wrap; }
   .global-profile-row { grid-template-columns: minmax(0, 1fr); }

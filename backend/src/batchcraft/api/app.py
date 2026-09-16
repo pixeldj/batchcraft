@@ -295,7 +295,9 @@ def create_app(
         allow_headers=["Content-Type"],
     )
     _register_error_handlers(app)
-    app.include_router(global_library_router(configured.database_path, bulk_reads))
+    app.include_router(
+        global_library_router(configured.database_path, bulk_reads, _service, _library)
+    )
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

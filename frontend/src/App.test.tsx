@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import { copiedSetup, workflowLibraryApi } from "./test/workflowLibraryFixtures";
+import { copiedSetup, historicalSetup, importedSetup, workflowLibraryApi } from "./test/workflowLibraryFixtures";
 import {
   ApiError,
   type BatchcraftApi,
@@ -13,6 +13,7 @@ import type {
   AssetResponse,
   BatchReconstructionResponse,
   ExecutionResponse,
+  GlobalCopyResponse,
   HistoryResultPageResponse,
   HistoryProvenanceFilters,
   HistoryRunPageResponse,
@@ -132,6 +133,97 @@ describe("Explicit seed ranges", () => {
 });
 
 describe("Global Workflow Library navigation", () => {
+  it.each([false, true])("imports a monitored foreign Run without selecting its Project (no draft Project: %s)", async (noProject) => {
+    if (noProject) localStorage.clear();
+    window.history.replaceState(null, "", "/?library_q=old-search");
+    const frozen = runLookupResponse("succeeded", "foreign-run", 7);
+    frozen.project_id = "foreign-project";
+    frozen.batch_snapshot.project.id = "foreign-project";
+    const api = makeApi({
+      getActiveExecution: vi.fn(async () => ({ run_id: frozen.run_id })),
+      getRun: vi.fn(async () => frozen), getExecution: vi.fn(async () => execution("succeeded", frozen.run_id)),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: frozen.run_id, project_id: frozen.project_id,
+        source: { ...historicalSetup.source, run_id: frozen.run_id, project_id: frozen.project_id } })),
+      importRunSetup: vi.fn(async () => importedSetup),
+    });
+    render(<App api={api} />);
+    await screen.findByRole("button", { name: "View Run Plan" });
+    if (!noProject) {
+      await enterAsset();
+      fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+      await screen.findByRole("button", { name: "Create Another Run" });
+    }
+    const baseline = canonicalBatchIntent(loadWorkingSession().form);
+    const owner = loadWorkingSession().selectedProjectId;
+    const pointer = loadWorkingSession().currentRunId;
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Copies the base setup, not Job overrides.");
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Import to Library" })).getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Imported to Library.");
+    expect(new URLSearchParams(window.location.search).get("view")).toBeNull();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toBe(baseline);
+    expect(loadWorkingSession().selectedProjectId).toBe(owner);
+    expect(loadWorkingSession().currentRunId).toBe(pointer);
+    const push = vi.spyOn(window.history, "pushState"); push.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Open Workflow Library" }));
+    expect(push).toHaveBeenCalledOnce();
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("workflows");
+    expect(new URLSearchParams(window.location.search).has("library_q")).toBe(false);
+    await waitFor(() => expect(api.browseGlobalWorkflows).toHaveBeenCalled());
+    navigateWorkspace("Batch");
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toBe(baseline);
+    expect(api.previewBatch).toHaveBeenCalledTimes(noProject ? 0 : 1);
+    if (!noProject) expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
+    expect(api.createWorkflow).not.toHaveBeenCalled();
+    expect(api.createWorkflowProfile).not.toHaveBeenCalled();
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.createRun).not.toHaveBeenCalled();
+  });
+
+  it("imports a newly created Run's frozen setup when full Run lookup fails", async () => {
+    const api = makeApi({
+      getRun: vi.fn(async () => { throw new Error("Invalid execution metadata"); }),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: "run-123", project_id: "project-1", source: { ...historicalSetup.source, run_id: "run-123", project_id: "project-1" } })),
+      importRunSetup: vi.fn(async () => importedSetup),
+    });
+    render(<App api={api} />); await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import frozen setup" }));
+    await screen.findByText("Frozen Workflow");
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Imported to Library.");
+    expect(api.getRun).toHaveBeenCalledOnce();
+    expect(api.getGlobalRunSetup).toHaveBeenCalledExactlyOnceWith("run-123", expect.any(AbortSignal));
+    expect(api.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("hides pending historical imports through Back/Forward and reopens only on explicit inspection", async () => {
+    const pending = deferred<GlobalCopyResponse>();
+    const frozen = runLookupResponse("succeeded", "run-123", 7);
+    const api = makeApi({ getActiveExecution: vi.fn(async () => ({ run_id: frozen.run_id })), getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded", frozen.run_id)),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: frozen.run_id, project_id: frozen.project_id, source: { ...historicalSetup.source, run_id: frozen.run_id, project_id: frozen.project_id } })),
+      importRunSetup: vi.fn(() => pending.promise),
+    });
+    render(<App api={api} />); await screen.findByRole("button", { name: "View Run Plan" });
+    navigateWorkspace("Workflow Library"); navigateWorkspace("Batch");
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Frozen Workflow");
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Import to Library" })).getByRole("button", { name: "Import to Library" }));
+    act(() => window.history.back());
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("view")).toBe("workflows"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => pending.resolve(importedSetup));
+    act(() => window.history.forward());
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("view")).toBeNull());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    expect(await screen.findByText("Imported to Library.")).toBeVisible();
+    expect(api.getGlobalRunSetup).toHaveBeenCalledOnce();
+  });
   const showPopover = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "showPopover");
   beforeAll(() => {
     // jsdom has popover hiding styles but no native method to open the top layer.
@@ -4989,6 +5081,8 @@ function makeApi(
     browseGlobalProfiles: vi.fn(async () => ({ items: [], next_cursor: null })),
     getGlobalProfileVersion: vi.fn(async () => { throw new Error("No global Profile fixture"); }),
     importProjectSetup: vi.fn(async () => { throw new Error("No import fixture"); }),
+    getGlobalRunSetup: vi.fn(async () => { throw new Error("No historical setup fixture"); }),
+    importRunSetup: vi.fn(async () => { throw new Error("No historical import fixture"); }),
     useGlobalSetup: vi.fn(async () => { throw new Error("No copy fixture"); }),
     getComfyUIStatus: vi.fn(async () => ({
       reachable: true,

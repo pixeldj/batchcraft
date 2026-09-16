@@ -286,8 +286,30 @@ receipt selections hydrate once; later exact user selections win across reload/p
 Migration 0006 adds a separate authoring receipt namespace, leaving applied 0005 unchanged. The store
 atomically commits each mutation and canonical operation/target/payload plus response; retries replay
 the response and conflicting reuse returns 409. Metadata/archive writes never rewrite immutable version
-content, and History Restore uses append rather than an overwrite. Frozen Run Plan/Result Details
-Import to Library remains queued under [BC-026](plans/BC-026-global-workflow-library.md) and ADR 0016.
+content, and History Restore uses append rather than an overwrite.
+
+Frozen Run Plan/Result Details Import to Library is implemented under
+[BC-026](plans/BC-026-global-workflow-library.md) and ADR 0016. `BatchcraftService.get_historical_setup`
+loads the immutable Run and verifies registered Project ownership without reading execution metadata
+or requiring Assets/outputs. Immutable file/hash validation remains strict. The additive
+`GET /api/library/run-setup` supports review independently of full Run inspection; the existing
+`RunResponse` contract is unchanged. `import_historical_setup` checks the existing copy receipt before
+source I/O, then passes server-validated base snapshots to `GlobalWorkflowStore`. The store rechecks the
+receipt under `BEGIN IMMEDIATE` and atomically writes one new global Workflow/Profile pair and receipt.
+It never trusts HTTP JSON or paths as historical authority, bakes Job overrides into the base setup, or
+creates intermediate Project rows. Source raw-file hashes and recorded ancestry remain separate from
+the new destination canonical envelopes/hashes. No migration or v1 format change is required.
+
+App owns `useHistoricalSetupImport.tsx` above inspection portals, with one bounded retained operation,
+not a global catalog cache or query pin. `HistoricalSetupImportDialog.tsx` is shared by current/historical
+Plan and Result Details; failed full inspection exposes Import frozen setup. Setup reads cross-check
+the exact Run/Project, `historical_run` source tag, provenance IDs and hash shapes before use. Resume
+uses the retained request without GET; explicit reload preserves names and unchanged-hash operation
+identity, while changed names/hashes produce a new fingerprint/UUID. Failed reload retains the last
+validated setup for receipt resubmission, still subject to backend validation. Closing/navigation/owner
+unmount hides the portal and ignores stale callbacks without rolling back a server write or reopening
+on success. Explicit Open Workflow Library clears only library search in the same navigation entry;
+Project, Batch, Preview and current Run remain unchanged. This cache is not part of Recovery v4.
 
 Logical Profiles remain discoverable when the selected WorkflowVersion has no compatible
 ProfileVersion. The frontend derives a visual node/input catalog from the selected immutable API-format

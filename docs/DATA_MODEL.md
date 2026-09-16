@@ -197,16 +197,30 @@ preserve immutable snapshots independently of archive state.
 
 Global Workflow names are unique across the catalog, and Profile names within their Workflow, including
 archived rows. Copies do not merge by equal names or payloads. Each successful copy creates a new
-Workflow family/version and zero to 50 selected Profile families/versions, all starting at destination
+Workflow family/version and zero to 50 selected Profile families/versions for Project/global copies,
+or exactly one Profile for historical Run import, all starting at destination
 version 1. Profile payload IDs/names are rewritten to their destination identities and revalidated;
 copied Profiles target the new WorkflowVersion. Project copies retain ordinary Project ownership.
 
 For copied global Workflows, `source_json` records source scope and exact version identities/hashes.
 Directly authored Workflows use `{"scope":"library"}` rather than inventing copy ancestry.
 `global_workflow_copy_receipt` stores an immutable request ID, canonical request, full response, and
-creation timestamp in the same transaction as all copies. Copy request IDs are application-wide across both
-directions; changed request reuse conflicts. Receipts have no source foreign keys, so retries can return
-the original copies after source loss. Failure rolls back the whole setup without orphan copy rows.
+creation timestamp in the same transaction as all copies. Copy request IDs are application-wide across
+Project/global directions and historical import; changed request reuse conflicts. Receipts have no source
+foreign keys, so retries can return the original copies after source loss. Failure rolls back the whole
+setup without orphan copy rows.
+
+Historical import uses the existing `source_json` and copy-receipt table, with no new migration.
+Its `source.scope` is `historical_run`, with source Project/Batch/Run IDs and the original recorded
+Workflow/Profile family and version IDs. Optional ancestry remains null when unrecorded; recorded
+revision numbers are nullable decimal strings. Historical IDs do not use the authoring 200-character bound.
+Source `content_sha256` values retain raw frozen-file hashes. Destination Workflow JSON is canonicalized
+without Job overrides; the new Profile envelope has its own ID, reviewed name and canonical hash.
+Both new families begin at version 1, independently of source history. The request fingerprint includes
+the historical source kind, Run ID, reviewed names/description and optional hash preconditions.
+Replay is checked before source files and again under `BEGIN IMMEDIATE` after source validation;
+pair and receipt are atomic even under concurrent retries. Migration 0006 authoring receipts remain
+independent. Applied migrations 0001-0006 and v1 filesystem bytes are unchanged.
 
 This catalog is durable mutable application state covered by whole-data backups, not a historical
 filesystem index. It does not travel as unused library data in v1 Project archives. Existing Run

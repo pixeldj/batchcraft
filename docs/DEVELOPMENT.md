@@ -603,7 +603,7 @@ exact choices on reload/paging.
 The frontend-only layout follow-up uses `LibrarySearch`, `LibraryMenu` and `ReadonlyProfileSummary`.
 Add to Project opens the presentation-only Add workflow to Project branch of `SetupReview`; successful
 Add closes into one parent-owned result and Apply to Batch remains a separate guarded step. Import to
-Library retains its legacy dialog. Explicit opening choices and restored receipts (including empty
+Library from a Project retains its legacy dialog. Explicit opening choices and restored receipts (including empty
 selections) take priority; only a pristine unfiltered complete first page with resolved metadata and exactly
 one eligible active compatible family defaults its exact revision once. Lists request 20 rows and retain 20
 Previous bookmarks without limiting forward paging. Profile summaries use two workers, a 20-version
@@ -620,13 +620,36 @@ SQLite, backend APIs, durable formats and dependencies are unchanged by this fol
 
 Prior authoring/layout evidence remains in the plan; the
 [dialog cleanup checkpoint](plans/BC-026-global-workflow-library.md#add-to-project-dialog-cleanup) records
-current presentation, exact-selection, receipt and cancellation constraints, checkpoint evidence and one
-pending final-verification section. Hidden Rename fields retain the current draft without resetting
+presentation, exact-selection, receipt and cancellation constraints and prior checkpoint evidence.
+Hidden Rename fields retain the current draft without resetting
 request identity, not durable unsent edits. The inline Added/pending-apply panel does not survive reload;
 persisted copies remain in the Project library, with no Recovery v4 or backend contract change.
-Historical Run Plan/Result Details Import to Library remains queued. BC-026 stays In Progress and the
+Historical Run Plan/Result Details Import to Library is implemented. BC-026 stays In Progress and the
 application version remains 1.1.0; no v1.2.0 tag or everyday-installation update is authorized. Workflow
 images are deferred optional upcoming work, not a v1.2.0 completion gate.
+
+### BC-026 historical setup import
+
+`GET /api/library/run-setup?run_id=...` and `POST /api/library/workflows/import-run` are additive routes;
+see `API.md` for exact request/provenance shapes. The service owns immutable filesystem validation and
+registered Project ownership; the DB helper owns atomic pair/receipt writes. Execution metadata is not
+read, Assets/outputs are not required, and immutable tampering still fails. Receipt replay precedes source
+loading and is rechecked under the write lock. Existing migrations 0001-0006, v1 bytes, dependencies and
+working-session Recovery v4 remain unchanged.
+
+App owns the single-operation historical-import controller above portals. Review validates source
+identity/provenance; closing stops waiting, and navigation/owner removal suppresses stale callbacks.
+Unchanged resume uses no GET. Reload retains reviewed names and same-hash request identity; failed
+reload retains the last validated setup for receipt retry. New names/hashes require a new operation.
+Backend validation remains authoritative, including when no receipt exists.
+
+Backend acceptance covers importing a v1 Project fixture into an empty database with no original
+Workflow/Profile or global catalog, then frozen setup -> global -> new Project -> Preview/Run. Browser
+coverage uses archived mutable source rows, not empty-database portability, and API transport fault
+injection drops responses from real backend receipt-backed writes. Keep these evidence scopes distinct.
+The plan's [Final verification](plans/BC-026-global-workflow-library.md#final-verification) section is the
+single record of prior historical-import counts and pending final reruns/owner acceptance. No new
+full-pass claim follows from this documentation update.
 
 Cancellation changes require tests for durable and idempotent intent, both request/admission race
 orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and

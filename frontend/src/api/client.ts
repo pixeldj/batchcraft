@@ -1,4 +1,5 @@
 import type {
+  GlobalRunSetup, GlobalRunSetupImportRequest,
   GlobalWorkflow, GlobalProfile, GlobalProfileFamily, GlobalWorkflowHistoryItem, GlobalProfileHistoryItem,
   GlobalWorkflowSaveRequest, GlobalWorkflowNewRequest, GlobalProfileSaveRequest, GlobalProfileNewRequest,
   GlobalMetadataRequest, GlobalArchiveKind, GlobalArchiveRequest,
@@ -81,6 +82,8 @@ export class ApiError extends Error {
 }
 
 export interface LibraryApi {
+  getGlobalRunSetup(runId: string, signal?: AbortSignal): Promise<GlobalRunSetup>;
+  importRunSetup(body: GlobalRunSetupImportRequest, signal?: AbortSignal): Promise<GlobalCopyResponse>;
   getGlobalWorkflow(workflowId: string, signal?: AbortSignal): Promise<GlobalCatalogItem>;
   listGlobalWorkflowVersions(workflowId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalWorkflowHistoryItem>>;
   listGlobalProfileFamilies(workflowId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileFamily>>;
@@ -232,6 +235,12 @@ export class BatchcraftApiClient implements BatchcraftApi {
   }
   importProjectSetup(body: SetupCopyRequest, signal?: AbortSignal): Promise<GlobalCopyResponse> {
     return this.request("/api/library/workflows/import-project", { ...this.jsonRequest(body, "POST"), signal });
+  }
+  getGlobalRunSetup(runId: string, signal?: AbortSignal): Promise<GlobalRunSetup> {
+    return this.request(`/api/library/run-setup?run_id=${encodeURIComponent(runId)}`, { signal });
+  }
+  importRunSetup(body: GlobalRunSetupImportRequest, signal?: AbortSignal): Promise<GlobalCopyResponse> {
+    return this.request("/api/library/workflows/import-run", { ...this.jsonRequest(body, "POST"), signal });
   }
   useGlobalSetup(body: SetupCopyRequest, signal?: AbortSignal): Promise<ProjectCopyResponse> {
     return this.request("/api/library/workflows/use-in-project", { ...this.jsonRequest(body, "POST"), signal });
