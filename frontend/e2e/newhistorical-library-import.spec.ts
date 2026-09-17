@@ -73,6 +73,9 @@ async function seedRun(page: Page, request: APIRequestContext) {
   await page.getByLabel("Active Project").selectOption(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  // Switching loads the Saved Batch asynchronously; Preview must use the loaded draft.
+  await expect(page.getByRole("dialog", { name: "Switch Batch?", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
   await page.getByLabel(/^Run Name/).fill(`Frozen experiment ${suffix}`);
   const created = responseFor(page, "/api/runs");
