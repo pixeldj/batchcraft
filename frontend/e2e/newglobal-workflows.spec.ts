@@ -157,6 +157,45 @@ test("real API: global catalog without a Project uses bounded metadata reads and
   expect(paths.filter((path) => /\/history(?:\/|$)|\/reindex$|\/projects\/[^/]+\/runs/.test(path))).toEqual([]);
 });
 
+test("real API: Preview uses the loaded Saved Batch after a pending switch", async ({ page, request }) => {
+  const source = await seed(request);
+  let releaseBatch!: () => void;
+  const batchGate = new Promise<void>((resolve) => { releaseBatch = resolve; });
+  await page.route(`**/api/batches/${source.batch.id}`, async (route) => {
+    const response = await route.fetch();
+    await batchGate;
+    await route.fulfill({ response });
+  });
+  const previewRequests: string[] = [];
+  page.on("request", (sent) => {
+    if (new URL(sent.url()).pathname === "/api/batches/preview") previewRequests.push(sent.url());
+  });
+  await page.goto("/");
+  await page.getByLabel("Active Project").selectOption(source.project.id);
+  await page.getByLabel("Saved Batch", { exact: true }).selectOption(source.batch.id);
+  await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  try {
+    await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue("");
+    await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveText("Add at least one PromptVersion.");
+    expect(previewRequests).toEqual([]);
+  } finally {
+    releaseBatch();
+  }
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(source.batch.id);
+  const previewResponse = responseFor(page, "/api/batches/preview");
+  await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  const response = await previewResponse;
+  expect(response.ok()).toBe(true);
+  expect((response.request().postDataJSON() as BatchRequest).batch_snapshot.source_saved_batch).toEqual({
+    id: source.batch.id, revision: source.batch.revision,
+  });
+  expect((await response.json() as PreviewResponse).jobs).toMatchObject([
+    { resolved_prompt: source.prompt.version.text, seed: 42 },
+  ]);
+  expect(previewRequests).toHaveLength(1);
+});
+
 test("real API: Project A imports without invalidating Preview, Project B explicitly applies independent copies and executes", async ({ page, request }, testInfo) => {
   const source = await seed(request);
   const destination = await seed(request, false);
@@ -168,10 +207,15 @@ test("real API: Project A imports without invalidating Preview, Project B explic
   await page.getByLabel("Active Project").selectOption(source.project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(source.batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  // The confirmation click starts an async load; Preview can still target the empty draft.
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(source.batch.id);
   const baselineResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/batches/preview");
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
   const baseline = await baselineResponse;
   expect(baseline.ok()).toBe(true);
+  expect((baseline.request().postDataJSON() as BatchRequest).batch_snapshot.source_saved_batch).toEqual({
+    id: source.batch.id, revision: source.batch.revision,
+  });
   expect((await baseline.json() as PreviewResponse).job_count).toBe(1);
   const setup = page.getByRole("group", { name: "Workflow Setup", exact: true });
   const baselineSetup = await setup.textContent();
