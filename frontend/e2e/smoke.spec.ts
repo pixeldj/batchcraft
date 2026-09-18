@@ -85,6 +85,8 @@ test("real API: Explicit seed ranges preserve order through Preview, Saved Batch
   const { project, batch } = await seed(request);
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
+  // Project selection reloads its selector; wait before opening a dialog below it.
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
@@ -122,6 +124,7 @@ test("real API: Explicit seed ranges preserve order through Preview, Saved Batch
   await page.addInitScript(() => localStorage.removeItem("batchcraft.working-session-recovery.v4"));
   await page.reload();
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
@@ -170,6 +173,7 @@ test("real API: Explicit range validation and ordering leave Fixed and Random ge
   });
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
@@ -255,6 +259,7 @@ test("real API: typed HistoryFilters distinguish Base and override on the same J
   });
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
@@ -558,6 +563,7 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
   await expect(page.getByText("Browser test - simulated ComfyUI")).toBeVisible();
   await expect(page.getByRole("region", { name: "Batch Results", exact: true })).toHaveCount(0);
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
@@ -630,8 +636,24 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
 test("closed-tab active Run recovery and Stop preserve the completed prefix", async ({ page, context, request }) => {
   const { project, batch } = await seed(request, "[sandbox:slow] mountain");
   await page.goto("/");
-  await page.getByLabel("Active Project").selectOption(project.id);
-  await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
+  await expect(page.getByLabel("Active Project")).toBeEnabled();
+  let releaseProjects!: () => void;
+  const projectsGate = new Promise<void>((resolve) => { releaseProjects = resolve; });
+  await page.route("**/api/projects", async (route) => {
+    const response = await route.fetch();
+    await projectsGate;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByLabel("Active Project").selectOption(project.id);
+    // The Batch list can be ready while the Project reload still shifts the dialog.
+    await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
+    await expect(page.getByRole("dialog", { name: "Switch Batch?", exact: true })).toBeVisible();
+    await expect(page.getByText("Loading active Projects...", { exact: true })).toBeVisible();
+  } finally {
+    releaseProjects();
+  }
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
@@ -663,6 +685,7 @@ test("Project browser preserves Preview, browses across Runs, and keeps filters 
   page.on("request", (sent) => requests.push(new URL(sent.url()).pathname));
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);

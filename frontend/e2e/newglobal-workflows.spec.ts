@@ -172,6 +172,7 @@ test("real API: Preview uses the loaded Saved Batch after a pending switch", asy
   });
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(source.project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(source.project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(source.batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   try {
@@ -205,6 +206,7 @@ test("real API: Project A imports without invalidating Preview, Project B explic
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(source.project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(source.project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(source.batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   // The confirmation click starts an async load; Preview can still target the empty draft.
@@ -466,8 +468,10 @@ test("real UI: Project-free authoring, repair, immutable history and independent
   await navigation.getByRole("button", { name: "Batch", exact: true }).click();
   await expect(page.getByLabel("Active Project")).toHaveValue("");
   await page.getByLabel("Active Project").selectOption(destination.project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(destination.project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(destination.batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
+  await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(destination.batch.id);
   await navigation.getByRole("button", { name: "Workflow Library", exact: true }).click();
   await library.getByLabel("Search Workflow Library").fill(name);
   await library.getByLabel("Search Workflow Library").press("Enter");

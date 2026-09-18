@@ -71,6 +71,7 @@ async function seedRun(page: Page, request: APIRequestContext) {
   });
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   // Switching loads the Saved Batch asynchronously; Preview must use the loaded draft.

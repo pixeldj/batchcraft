@@ -751,7 +751,7 @@ describe("Workspace navigation", () => {
     expect(screen.getByRole("region", { name: "Preview" })).toHaveTextContent("Preview required");
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
-    expect(loadWorkingSession().sourceRunId).toBe("historical-run");
+    await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
     expect(api.previewBatch).toHaveBeenCalledOnce();
     expect(api.getBatchReconstruction).toHaveBeenCalledExactlyOnceWith("historical-run", expect.any(AbortSignal));
     expect(api.startRun).not.toHaveBeenCalled();
