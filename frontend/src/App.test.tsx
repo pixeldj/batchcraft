@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import { copiedSetup, historicalSetup, importedSetup, workflowLibraryApi } from "./test/workflowLibraryFixtures";
 import {
   ApiError,
   type BatchcraftApi,
@@ -12,6 +13,7 @@ import type {
   AssetResponse,
   BatchReconstructionResponse,
   ExecutionResponse,
+  GlobalCopyResponse,
   HistoryResultPageResponse,
   HistoryProvenanceFilters,
   HistoryRunPageResponse,
@@ -25,7 +27,7 @@ import type {
   SavedBatchDetail,
 } from "./api/types";
 import { editableBatchSnapshotToForm, initialBatchForm, newPrompt } from "./features/batch/form";
-import { savedBatchToForm } from "./features/batch/savedBatch";
+import { canonicalBatchIntent, savedBatchToForm } from "./features/batch/savedBatch";
 import {
   WORKING_SESSION_RECOVERY_KEY,
   loadWorkingSessionRecovery as loadWorkingSession,
@@ -130,7 +132,355 @@ describe("Explicit seed ranges", () => {
   });
 });
 
+describe("Global Workflow Library navigation", () => {
+  it.each([false, true])("imports a monitored foreign Run without selecting its Project (no draft Project: %s)", async (noProject) => {
+    if (noProject) localStorage.clear();
+    window.history.replaceState(null, "", "/?library_q=old-search");
+    const frozen = runLookupResponse("succeeded", "foreign-run", 7);
+    frozen.project_id = "foreign-project";
+    frozen.batch_snapshot.project.id = "foreign-project";
+    const api = makeApi({
+      getActiveExecution: vi.fn(async () => ({ run_id: frozen.run_id })),
+      getRun: vi.fn(async () => frozen), getExecution: vi.fn(async () => execution("succeeded", frozen.run_id)),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: frozen.run_id, project_id: frozen.project_id,
+        source: { ...historicalSetup.source, run_id: frozen.run_id, project_id: frozen.project_id } })),
+      importRunSetup: vi.fn(async () => importedSetup),
+    });
+    render(<App api={api} />);
+    await screen.findByRole("button", { name: "View Run Plan" });
+    if (!noProject) {
+      await enterAsset();
+      fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+      await screen.findByRole("button", { name: "Create Another Run" });
+    }
+    const baseline = canonicalBatchIntent(loadWorkingSession().form);
+    const owner = loadWorkingSession().selectedProjectId;
+    const pointer = loadWorkingSession().currentRunId;
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Copies the base setup, not Job overrides.");
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Import to Library" })).getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Imported to Library.");
+    expect(new URLSearchParams(window.location.search).get("view")).toBeNull();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toBe(baseline);
+    expect(loadWorkingSession().selectedProjectId).toBe(owner);
+    expect(loadWorkingSession().currentRunId).toBe(pointer);
+    const push = vi.spyOn(window.history, "pushState"); push.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Open Workflow Library" }));
+    expect(push).toHaveBeenCalledOnce();
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("workflows");
+    expect(new URLSearchParams(window.location.search).has("library_q")).toBe(false);
+    await waitFor(() => expect(api.browseGlobalWorkflows).toHaveBeenCalled());
+    navigateWorkspace("Batch");
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toBe(baseline);
+    expect(api.previewBatch).toHaveBeenCalledTimes(noProject ? 0 : 1);
+    if (!noProject) expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
+    expect(api.createWorkflow).not.toHaveBeenCalled();
+    expect(api.createWorkflowProfile).not.toHaveBeenCalled();
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.createRun).not.toHaveBeenCalled();
+  });
+
+  it("imports a newly created Run's frozen setup when full Run lookup fails", async () => {
+    const api = makeApi({
+      getRun: vi.fn(async () => { throw new Error("Invalid execution metadata"); }),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: "run-123", project_id: "project-1", source: { ...historicalSetup.source, run_id: "run-123", project_id: "project-1" } })),
+      importRunSetup: vi.fn(async () => importedSetup),
+    });
+    render(<App api={api} />); await reachPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Create Run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import frozen setup" }));
+    await screen.findByText("Frozen Workflow");
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Imported to Library.");
+    expect(api.getRun).toHaveBeenCalledOnce();
+    expect(api.getGlobalRunSetup).toHaveBeenCalledExactlyOnceWith("run-123", expect.any(AbortSignal));
+    expect(api.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("hides pending historical imports through Back/Forward and reopens only on explicit inspection", async () => {
+    const pending = deferred<GlobalCopyResponse>();
+    const frozen = runLookupResponse("succeeded", "run-123", 7);
+    const api = makeApi({ getActiveExecution: vi.fn(async () => ({ run_id: frozen.run_id })), getRun: vi.fn(async () => frozen),
+      getExecution: vi.fn(async () => execution("succeeded", frozen.run_id)),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: frozen.run_id, project_id: frozen.project_id, source: { ...historicalSetup.source, run_id: frozen.run_id, project_id: frozen.project_id } })),
+      importRunSetup: vi.fn(() => pending.promise),
+    });
+    render(<App api={api} />); await screen.findByRole("button", { name: "View Run Plan" });
+    navigateWorkspace("Workflow Library"); navigateWorkspace("Batch");
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Frozen Workflow");
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Import to Library" })).getByRole("button", { name: "Import to Library" }));
+    act(() => window.history.back());
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("view")).toBe("workflows"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => pending.resolve(importedSetup));
+    act(() => window.history.forward());
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("view")).toBeNull());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View Run Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    expect(await screen.findByText("Imported to Library.")).toBeVisible();
+    expect(api.getGlobalRunSetup).toHaveBeenCalledOnce();
+  });
+  const showPopover = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "showPopover");
+  beforeAll(() => {
+    // jsdom has popover hiding styles but no native method to open the top layer.
+    Object.defineProperty(HTMLElement.prototype, "showPopover", {
+      configurable: true,
+      value(this: HTMLElement) { this.style.display = "block"; },
+    });
+  });
+  afterAll(() => {
+    if (showPopover) Object.defineProperty(HTMLElement.prototype, "showPopover", showPopover);
+    else Reflect.deleteProperty(HTMLElement.prototype, "showPopover");
+  });
+
+  it("opens the normal Batch Project selector from the library without selecting or replacing a Project", async () => {
+    localStorage.clear();
+    window.history.replaceState(null, "", "/?view=workflows");
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
+    expect(await screen.findByRole("button", { name: "Add to Project" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Choose Project" }));
+    expect(screen.getByLabelText("Active Project")).toBeVisible();
+    expect(screen.getByLabelText("Active Project")).toHaveValue("");
+    expect(new URLSearchParams(window.location.search).has("view")).toBe(false);
+    expect(loadWorkingSession().selectedProjectId).toBeNull();
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.useGlobalSetup).not.toHaveBeenCalled();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+  });
+
+  it("creates and edits global content without a Project, retaining an unfinished dialog across workspace navigation", async () => {
+    localStorage.clear();
+    window.history.replaceState(null, "", "/?view=workflows");
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Independent setup" } });
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Workflow JSON"), { target: { value: JSON.stringify(copiedSetup.workflow.version.workflow) } });
+    act(() => {
+      window.history.pushState(null, "", "/?view=batch");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    expect(await screen.findByLabelText("Name")).toHaveValue("Independent setup");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    const dialog = await screen.findByRole("dialog", { name: "New Profile" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Independent setup-profile");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.appendGlobalWorkflow).toHaveBeenCalledOnce());
+    expect(api.createGlobalWorkflow).toHaveBeenCalledOnce();
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.createWorkflow).not.toHaveBeenCalled();
+    expect(api.createWorkflowProfile).not.toHaveBeenCalled();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+  });
+
+  it("preserves the current Batch and valid Preview through global creation, metadata editing, and archive", async () => {
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    await reachPreview();
+    const baseline = canonicalBatchIntent(loadWorkingSession().form);
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Workflow" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Global only" } });
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Workflow JSON"), { target: { value: JSON.stringify(copiedSetup.workflow.version.workflow) } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    const profile = await screen.findByRole("dialog", { name: "New Profile" });
+    fireEvent.click(within(profile).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Workflow Reusable portrait" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit Workflow metadata" }));
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Description (optional)"), { target: { value: "Catalog description" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Workflow Reusable portrait" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Batch" }));
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toEqual(baseline);
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+    expect(api.useGlobalSetup).not.toHaveBeenCalled();
+    expect(api.reindexProject).not.toHaveBeenCalled();
+  });
+
+  it("opens without a Project and ignores invalid history filters without scanning history", async () => {
+    localStorage.clear();
+    window.history.replaceState(null, "", "/?view=workflows&q=history&library_q=portrait&filters=invalid");
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    await screen.findByRole("heading", { name: "Workflow Library" });
+    await waitFor(() => expect(api.browseGlobalWorkflows).toHaveBeenCalledWith({ q: "portrait", limit: 20, cursor: undefined }, expect.any(AbortSignal)));
+    expect(screen.queryByText(/history filters in this link are invalid/)).not.toBeInTheDocument();
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Search Workflow Library"), { target: { value: "global search" } });
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("library_q")).toBe("global search"));
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("q")).toBe("history");
+    expect(params.get("library_q")).toBe("global search");
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByLabelText("Search Workflow Library")).toHaveValue("portrait"));
+    act(() => window.history.forward());
+    await waitFor(() => expect(screen.getByLabelText("Search Workflow Library")).toHaveValue("global search"));
+    fireEvent.click(screen.getByRole("button", { name: "Gallery" }));
+    expect(screen.getByText(/history filters in this link are invalid/)).toBeVisible();
+  });
+
+  it("keeps Preview when browsing and importing from another source Project without switching the draft", async () => {
+    const api = makeApi(workflowLibraryApi());
+    render(<App api={api} />);
+    await reachPreview();
+    const baseline = canonicalBatchIntent(loadWorkingSession().form);
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Library" }));
+    await screen.findByRole("option", { name: "Other Project" });
+    fireEvent.change(screen.getByLabelText("Source Project"), { target: { value: "project-2" } });
+    await screen.findByRole("option", { name: "Reusable portrait" });
+    fireEvent.change(screen.getByLabelText("Source Workflow"), { target: { value: "copied-w" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review import" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Review import" }));
+    await screen.findByRole("checkbox", { name: "Portrait mapping / v1" });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm copy" }));
+    await screen.findByText(/Imported into Workflow Library/);
+    expect(api.importProjectSetup).toHaveBeenCalledWith(expect.objectContaining({ project_id: "project-2" }), expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Batch" }));
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toEqual(baseline);
+    expect(api.reindexProject).not.toHaveBeenCalled();
+  });
+
+  it("copies before applying ordinary Project identities and then previews the selected pair", async () => {
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    const api = makeApi(workflowLibraryApi());
+    vi.mocked(api.listWorkflows).mockResolvedValueOnce({ workflows: [] });
+    render(<App api={api} />);
+    await reachPreview();
+    const before = vi.mocked(api.previewBatch).mock.calls[0][0];
+    const beforeCopy = canonicalBatchIntent(loadWorkingSession().form);
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add to Project" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Portrait mapping" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Add workflow to Project" })).getByRole("button", { name: "Add to Project" }));
+    await screen.findByText(/Copied to Project/);
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toEqual(beforeCopy);
+    expect(loadWorkingSession().form.workflowVersionId).not.toBe("copied-w-v1");
+    fireEvent.click(screen.getByRole("button", { name: "Apply to Batch" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Added to Project" })).toBeVisible();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toEqual(beforeCopy);
+    expect(api.useGlobalSetup).toHaveBeenCalledOnce();
+    expect(loadWorkingSession().form.workflowVersionId).not.toBe("copied-w-v1");
+    fireEvent.click(screen.getByRole("button", { name: "Apply to Batch" }));
+    await waitFor(() => expect(loadWorkingSession().form.workflowVersionId).toBe("copied-w-v1"));
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    await screen.findByRole("option", { name: "Reusable portrait" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    await waitFor(() => expect(api.previewBatch).toHaveBeenCalledTimes(2));
+    const request = vi.mocked(api.previewBatch).mock.calls.at(-1)![0];
+    expect(request.workflow).toEqual(copiedSetup.workflow.version.workflow);
+    expect(request.workflow_profile).toEqual(copiedSetup.profiles[0].version.profile);
+    expect(request.prompt_versions).toEqual(before.prompt_versions);
+    expect(request.seeds).toEqual(before.seeds);
+    expect(request.variable_bindings).toEqual(before.variable_bindings);
+    expect(request.image_bindings).toEqual(before.image_bindings);
+    expect(loadWorkingSession().form.workflowProfileVersionId).toBe("copied-p-v1");
+  });
+});
+
 describe("Session notices", () => {
+  it.each(["gallery", "runs", "workflows"])("keeps the restored draft but hides its notice when cold-loading %s", async (destination) => {
+    window.history.replaceState(null, "", `/?view=${destination}`);
+    const api = makeApi({ ...workflowLibraryApi(), listPrompts: vi.fn(async () => ({ prompts: [] })) });
+    const draft = canonicalBatchIntent(loadWorkingSession().form);
+    render(<App api={api} />);
+    await waitFor(() => expect(screen.getByLabelText("Active Project")).toHaveValue("project-1"));
+    expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss session notification" })).not.toBeInTheDocument();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toBe(draft);
+    if (destination === "workflows") {
+      await waitFor(() => expect(api.browseGlobalWorkflows).toHaveBeenCalled());
+      expect(api.reindexProject).not.toHaveBeenCalled();
+      expect(api.browseProjectResults).not.toHaveBeenCalled();
+      expect(api.browseProjectRuns).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(destination === "gallery" ? api.browseProjectResults : api.browseProjectRuns).toHaveBeenCalled());
+    }
+    navigateWorkspace("Batch");
+    expect(screen.getByText(/Draft restored from this browser/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+    expect(canonicalBatchIntent(loadWorkingSession().form)).toBe(draft);
+  });
+
+  it("retains raw draft sources and invalid Preview through navigation and Back/Forward popstate", async () => {
+    const form = populatedBatchForm();
+    form.seedMode = "explicit";
+    form.seedValues = " 5-7, 9\n";
+    form.workflowJson = `\n  ${form.workflowJson}\n`;
+    form.workflowProfileJson = `\n  ${form.workflowProfileJson}\n`;
+    saveWorkingSession(form, null, "project-1");
+    const api = makeApi({ ...workflowLibraryApi(), listPrompts: vi.fn(async () => ({ prompts: [] })) });
+    render(<App api={api} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
+    await expandConfiguration("Seeds");
+    const draft = JSON.parse(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)!);
+    for (const [label, destination] of [["Workflow Library", "workflows"], ["Gallery", "gallery"], ["Runs", "runs"]] as const) {
+      navigateWorkspace(label);
+      expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+      // Simulate the URLs delivered by Back and Forward without jsdom history timing.
+      for (const view of ["batch", destination, "batch"]) {
+        act(() => {
+          window.history.replaceState(null, "", `/?view=${view}`);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        });
+        if (view === "batch") {
+          expect(screen.getByText(/Draft restored from this browser/)).toBeVisible();
+          expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue(form.seedValues);
+        } else {
+          expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+        }
+        expect(JSON.parse(localStorage.getItem(WORKING_SESSION_RECOVERY_KEY)!)).toEqual({ ...draft, updated_at: expect.any(String) });
+        expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+      }
+    }
+    expect(loadWorkingSession().form.workflowJson).toBe(form.workflowJson);
+    expect(loadWorkingSession().form.workflowProfileJson).toBe(form.workflowProfileJson);
+    expect(api.previewBatch).not.toHaveBeenCalled();
+    expect(api.createRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps genuine Run-recovery session warnings visible in Workflow Library, including after Preview", async () => {
+    seedWorkingSession("run-missing");
+    const api = makeApi({
+      ...workflowLibraryApi(),
+      getRun: vi.fn().mockRejectedValue(new ApiError("Run was not found", "run_not_found", 404)),
+    });
+    render(<App api={api} />);
+    const warning = await screen.findByText(/The Run monitor could not be restored/);
+    navigateWorkspace("Workflow Library");
+    expect(warning).toBeVisible();
+    expect(screen.getByRole("button", { name: "Dismiss session notification" })).toBeVisible();
+    navigateWorkspace("Batch");
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    expect(await screen.findByRole("button", { name: "Create Run" })).toBeEnabled();
+    navigateWorkspace("Workflow Library");
+    expect(warning).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss session notification" }));
+    expect(warning).not.toBeInTheDocument();
+  });
+
   it.each(["", "Development - simulated ComfyUI"])("only shows an explicit instance label: %s", async (label) => {
     vi.stubEnv("VITE_BATCHCRAFT_INSTANCE", label);
     render(<App api={makeApi()} />);
@@ -151,6 +501,10 @@ describe("Session notices", () => {
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
     expect(api.previewBatch).not.toHaveBeenCalled();
 
+    navigateWorkspace("Workflow Library");
+    navigateWorkspace("Batch");
+    expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+
     view.unmount();
     render(<App api={api} />);
     expect(await screen.findByText(/Draft restored from this browser/)).toBeInTheDocument();
@@ -161,6 +515,10 @@ describe("Session notices", () => {
     await screen.findByText(/Draft restored from this browser/);
     await reachPreview();
     expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+    navigateWorkspace("Workflow Library");
+    navigateWorkspace("Batch");
+    expect(screen.queryByText(/Draft restored from this browser/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
   });
 
   it("keeps the restored-draft reminder when Preview fails", async () => {
@@ -188,7 +546,85 @@ describe("Session notices", () => {
 });
 
 describe("Workspace navigation", () => {
-  it("retains the raw dirty Batch, Preview, Run metadata draft, and polling monitor across Gallery and Runs", async () => {
+  it("suspends the dirty Project Workflow portal on Back/Forward despite declined cancellation", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const api = makeApi({ createWorkflow: vi.fn(async () => copiedSetup.workflow) });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "New Workflow" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Unfinished Project Workflow" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    for (const destination of ["gallery", "runs"]) {
+      act(() => {
+        window.history.pushState(null, "", `/?view=${destination}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(dialog).not.toHaveAttribute("open");
+      expect(document.body.style.overflow).not.toBe("hidden");
+      expect(window.location.search).toBe(`?view=${destination}`);
+      act(() => {
+        window.history.pushState(null, "", "/");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      expect(await screen.findByRole("dialog", { name: "New Workflow" })).toBe(dialog);
+      expect(within(dialog).getByLabelText("Name")).toHaveValue("Unfinished Project Workflow");
+    }
+    expect(confirm).toHaveBeenCalledOnce();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Workflow" }));
+    await waitFor(() => expect(api.createWorkflow).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    confirm.mockRestore();
+  });
+
+  it.each(["succeeded", "failed"])("suspends a pending Project save and returns to its latest %s state", async (outcome) => {
+    const pending = deferred<void>();
+    const api = makeApi({ createWorkflow: vi.fn(async () => {
+      await pending.promise;
+      if (outcome === "failed") throw new Error("Workflow save failed");
+      return copiedSetup.workflow;
+    }) });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "New Workflow" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Pending Workflow" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Workflow" }));
+    await waitFor(() => expect(api.createWorkflow).toHaveBeenCalledOnce());
+    act(() => {
+      window.history.pushState(null, "", "/?view=workflows");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    // Returning before completion must not remount an unlocked editor or start another save.
+    navigateWorkspace("Batch");
+    expect(await screen.findByRole("dialog", { name: "New Workflow" })).toBe(dialog);
+    expect(within(dialog).getByRole("button", { name: "Saving..." })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    act(() => {
+      window.history.pushState(null, "", "/?view=workflows");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await act(async () => pending.resolve());
+    expect(window.location.search).toBe("?view=workflows");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    navigateWorkspace("Batch");
+    if (outcome === "succeeded") {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(loadWorkingSession().form.workflowVersionId).toBe(copiedSetup.workflow.version.id);
+    } else {
+      const reopened = await screen.findByRole("dialog", { name: "New Workflow" });
+      expect(reopened).toBe(dialog);
+      expect(within(reopened).getByLabelText("Name")).toHaveValue("Pending Workflow");
+      expect(within(reopened).getByRole("alert")).toHaveTextContent("Workflow save failed");
+      expect(within(reopened).getByRole("button", { name: "Create Workflow" })).toBeEnabled();
+    }
+    expect(api.createWorkflow).toHaveBeenCalledOnce();
+  });
+
+  it("retains the raw dirty Batch, Preview, Run metadata draft, and polling monitor across Workflow Library, Gallery and Runs", async () => {
     const form = populatedBatchForm();
     form.batchId = "batch-1";
     form.batchFilesystemKey = "batch_1";
@@ -214,6 +650,16 @@ describe("Workspace navigation", () => {
     const preview = screen.getByRole("region", { name: "Preview" });
     const monitor = currentRunSection();
     const draft = localStorage.getItem(WORKING_SESSION_RECOVERY_KEY);
+    expect(api.reindexProject).not.toHaveBeenCalled();
+    expect(api.browseProjectResults).not.toHaveBeenCalled();
+    expect(api.browseProjectRuns).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Library" }));
+    expect(preview).not.toBeVisible();
+    expect(monitor).not.toBeVisible();
+    const libraryPolls = vi.mocked(api.getExecution).mock.calls.length;
+    await waitFor(() => expect(vi.mocked(api.getExecution).mock.calls.length).toBeGreaterThan(libraryPolls));
+    expect(screen.getByRole("region", { name: "Current Run" })).toHaveTextContent("Run 7");
     expect(api.reindexProject).not.toHaveBeenCalled();
     expect(api.browseProjectResults).not.toHaveBeenCalled();
     expect(api.browseProjectRuns).not.toHaveBeenCalled();
@@ -305,7 +751,7 @@ describe("Workspace navigation", () => {
     expect(screen.getByRole("region", { name: "Preview" })).toHaveTextContent("Preview required");
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
-    expect(loadWorkingSession().sourceRunId).toBe("historical-run");
+    await waitFor(() => expect(loadWorkingSession().sourceRunId).toBe("historical-run"));
     expect(api.previewBatch).toHaveBeenCalledOnce();
     expect(api.getBatchReconstruction).toHaveBeenCalledExactlyOnceWith("historical-run", expect.any(AbortSignal));
     expect(api.startRun).not.toHaveBeenCalled();
@@ -882,7 +1328,7 @@ describe("Batch preview", () => {
     expect(screen.getByRole("heading", { name: "Run" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Results" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Project browser" })).not.toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Batch", "Gallery", "Runs"]);
+    expect(within(screen.getByRole("navigation", { name: "Workspace" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Batch", "Gallery", "Runs", "Workflow Library"]);
     expect(screen.queryByRole("heading", { name: "Batch Results" })).not.toBeInTheDocument();
     expect(screen.queryByText("One Batch. An explicit Job plan. A durable Run.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Working draft/)).not.toBeInTheDocument();
@@ -4629,6 +5075,15 @@ function makeApi(
     placeholders: ["subject"],
   };
   return {
+    ...workflowLibraryApi(),
+    browseGlobalWorkflows: vi.fn(async () => ({ items: [], next_cursor: null })),
+    getGlobalWorkflowVersion: vi.fn(async () => { throw new Error("No global Workflow fixture"); }),
+    browseGlobalProfiles: vi.fn(async () => ({ items: [], next_cursor: null })),
+    getGlobalProfileVersion: vi.fn(async () => { throw new Error("No global Profile fixture"); }),
+    importProjectSetup: vi.fn(async () => { throw new Error("No import fixture"); }),
+    getGlobalRunSetup: vi.fn(async () => { throw new Error("No historical setup fixture"); }),
+    importRunSetup: vi.fn(async () => { throw new Error("No historical import fixture"); }),
+    useGlobalSetup: vi.fn(async () => { throw new Error("No copy fixture"); }),
     getComfyUIStatus: vi.fn(async () => ({
       reachable: true,
       version: "0.31.0",
@@ -4897,7 +5352,7 @@ function reconstructionFor(run: RunResponse): BatchReconstructionResponse {
   };
 }
 
-function navigateWorkspace(view: "Batch" | "Gallery" | "Runs") {
+function navigateWorkspace(view: "Batch" | "Gallery" | "Runs" | "Workflow Library") {
   fireEvent.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: view }));
 }
 

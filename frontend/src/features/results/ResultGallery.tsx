@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { BatchcraftApi } from "../../api/client";
 import type { ExecutionResponse, ResultResponse, RunResponse } from "../../api/types";
@@ -6,6 +7,8 @@ import { ResultDetailsDialog, type ResultDetailsFilter } from "./ResultDetailsDi
 import { ResultLightbox, type LightboxItem } from "./ResultLightbox";
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
+  sourceProjectId?: string;
   api: BatchcraftApi;
   runId: string | null;
   execution?: ExecutionResponse | null;
@@ -31,6 +34,8 @@ export function ResultGallery({
   getCachedRun,
   loadRun,
   onFilter,
+  onImportSetup,
+  sourceProjectId,
 }: Props) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [failedKeys, setFailedKeys] = useState<Set<string>>(new Set());
@@ -174,6 +179,8 @@ export function ResultGallery({
       ) : null}
       {runId && detailsTarget ? (
         <ResultDetailsDialog
+          onImportSetup={onImportSetup}
+          sourceProjectId={sourceProjectId}
           key={`${runId}-${itemKey(detailsTarget.result)}`}
           runId={runId}
           result={detailsTarget.result}

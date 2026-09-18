@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.types import Message, Receive, Scope, Send
 
+from batchcraft.api.global_library import global_library_router
 from batchcraft.application import (
     ApplicationComfyUIClient,
     AssetDataError,
@@ -294,6 +295,9 @@ def create_app(
         allow_headers=["Content-Type"],
     )
     _register_error_handlers(app)
+    app.include_router(
+        global_library_router(configured.database_path, bulk_reads, _service, _library)
+    )
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

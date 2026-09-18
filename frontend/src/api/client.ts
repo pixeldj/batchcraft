@@ -1,4 +1,10 @@
 import type {
+  GlobalRunSetup, GlobalRunSetupImportRequest,
+  GlobalWorkflow, GlobalProfile, GlobalProfileFamily, GlobalWorkflowHistoryItem, GlobalProfileHistoryItem,
+  GlobalWorkflowSaveRequest, GlobalWorkflowNewRequest, GlobalProfileSaveRequest, GlobalProfileNewRequest,
+  GlobalMetadataRequest, GlobalArchiveKind, GlobalArchiveRequest,
+  LibraryPageQuery, LibraryPage, GlobalCatalogItem, GlobalWorkflowVersion,
+  GlobalProfileMetadata, GlobalProfileVersion, SetupCopyRequest, GlobalCopyResponse, ProjectCopyResponse,
   AdoptableProjectsResponse,
   AdoptableBatchesResponse,
   ActiveExecutionResponse,
@@ -75,7 +81,29 @@ export class ApiError extends Error {
   }
 }
 
-export interface BatchcraftApi {
+export interface LibraryApi {
+  getGlobalRunSetup(runId: string, signal?: AbortSignal): Promise<GlobalRunSetup>;
+  importRunSetup(body: GlobalRunSetupImportRequest, signal?: AbortSignal): Promise<GlobalCopyResponse>;
+  getGlobalWorkflow(workflowId: string, signal?: AbortSignal): Promise<GlobalCatalogItem>;
+  listGlobalWorkflowVersions(workflowId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalWorkflowHistoryItem>>;
+  listGlobalProfileFamilies(workflowId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileFamily>>;
+  listGlobalProfileVersions(profileId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileHistoryItem>>;
+  createGlobalWorkflow(body: GlobalWorkflowNewRequest): Promise<GlobalCopyResponse["workflow"]>;
+  appendGlobalWorkflow(workflowId: string, body: GlobalWorkflowSaveRequest): Promise<GlobalWorkflowVersion>;
+  createGlobalProfile(workflowId: string, body: GlobalProfileNewRequest): Promise<GlobalCopyResponse["profiles"][number]>;
+  appendGlobalProfile(profileId: string, body: GlobalProfileSaveRequest): Promise<GlobalProfileVersion>;
+  updateGlobalWorkflow(workflowId: string, body: GlobalMetadataRequest): Promise<GlobalWorkflow>;
+  updateGlobalProfile(profileId: string, body: GlobalMetadataRequest): Promise<GlobalProfile>;
+  archiveGlobalEntry(kind: GlobalArchiveKind, id: string, body: GlobalArchiveRequest): Promise<GlobalWorkflow | GlobalProfile | GlobalWorkflowVersion | GlobalProfileVersion>;
+  browseGlobalWorkflows(query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalCatalogItem>>;
+  getGlobalWorkflowVersion(versionId: string, signal?: AbortSignal): Promise<GlobalWorkflowVersion>;
+  browseGlobalProfiles(versionId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileMetadata>>;
+  getGlobalProfileVersion(versionId: string, signal?: AbortSignal): Promise<GlobalProfileVersion>;
+  importProjectSetup(body: SetupCopyRequest, signal?: AbortSignal): Promise<GlobalCopyResponse>;
+  useGlobalSetup(body: SetupCopyRequest, signal?: AbortSignal): Promise<ProjectCopyResponse>;
+}
+
+export interface BatchcraftApi extends LibraryApi {
   getComfyUIStatus(signal?: AbortSignal): Promise<ComfyUIStatusResponse>;
   listProjects(includeArchived?: boolean, signal?: AbortSignal): Promise<ProjectsResponse>;
   createProject(body: ProjectCreateRequest): Promise<ProjectResponse>;
@@ -160,6 +188,63 @@ export interface RunCancellationApi {
 }
 
 export class BatchcraftApiClient implements BatchcraftApi {
+  getGlobalWorkflow(id: string, signal?: AbortSignal): Promise<GlobalCatalogItem> {
+    return this.request(`/api/library/workflows/${encodeURIComponent(id)}`, { signal });
+  }
+  listGlobalWorkflowVersions(id: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalWorkflowHistoryItem>> {
+    return this.request(`/api/library/workflows/${encodeURIComponent(id)}/versions${historyQueryString(query)}`, { signal });
+  }
+  listGlobalProfileFamilies(id: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileFamily>> {
+    return this.request(`/api/library/workflows/${encodeURIComponent(id)}/profiles${historyQueryString(query)}`, { signal });
+  }
+  listGlobalProfileVersions(id: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileHistoryItem>> {
+    return this.request(`/api/library/workflow-profiles/${encodeURIComponent(id)}/versions${historyQueryString(query)}`, { signal });
+  }
+  createGlobalWorkflow(body: GlobalWorkflowNewRequest): Promise<GlobalCopyResponse["workflow"]> {
+    return this.request("/api/library/workflows", this.jsonRequest(body, "POST"));
+  }
+  appendGlobalWorkflow(id: string, body: GlobalWorkflowSaveRequest): Promise<GlobalWorkflowVersion> {
+    return this.request(`/api/library/workflows/${encodeURIComponent(id)}/versions`, this.jsonRequest(body, "POST"));
+  }
+  createGlobalProfile(id: string, body: GlobalProfileNewRequest): Promise<GlobalCopyResponse["profiles"][number]> {
+    return this.request(`/api/library/workflows/${encodeURIComponent(id)}/profiles`, this.jsonRequest(body, "POST"));
+  }
+  appendGlobalProfile(id: string, body: GlobalProfileSaveRequest): Promise<GlobalProfileVersion> {
+    return this.request(`/api/library/workflow-profiles/${encodeURIComponent(id)}/versions`, this.jsonRequest(body, "POST"));
+  }
+  updateGlobalWorkflow(id: string, body: GlobalMetadataRequest): Promise<GlobalWorkflow> {
+    return this.request(`/api/library/workflows/${encodeURIComponent(id)}`, this.jsonRequest(body, "PATCH"));
+  }
+  updateGlobalProfile(id: string, body: GlobalMetadataRequest): Promise<GlobalProfile> {
+    return this.request(`/api/library/workflow-profiles/${encodeURIComponent(id)}`, this.jsonRequest(body, "PATCH"));
+  }
+  archiveGlobalEntry(kind: GlobalArchiveKind, id: string, body: GlobalArchiveRequest): Promise<GlobalWorkflow | GlobalProfile | GlobalWorkflowVersion | GlobalProfileVersion> {
+    return this.request(`/api/library/${kind}/${encodeURIComponent(id)}/archive`, this.jsonRequest(body, "POST"));
+  }
+  browseGlobalWorkflows(query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalCatalogItem>> {
+    return this.request(`/api/library/workflows${historyQueryString(query)}`, { signal });
+  }
+  getGlobalWorkflowVersion(versionId: string, signal?: AbortSignal): Promise<GlobalWorkflowVersion> {
+    return this.request(`/api/library/workflow-versions/${encodeURIComponent(versionId)}`, { signal });
+  }
+  browseGlobalProfiles(versionId: string, query?: LibraryPageQuery, signal?: AbortSignal): Promise<LibraryPage<GlobalProfileMetadata>> {
+    return this.request(`/api/library/workflow-versions/${encodeURIComponent(versionId)}/profiles${historyQueryString(query)}`, { signal });
+  }
+  getGlobalProfileVersion(versionId: string, signal?: AbortSignal): Promise<GlobalProfileVersion> {
+    return this.request(`/api/library/workflow-profile-versions/${encodeURIComponent(versionId)}`, { signal });
+  }
+  importProjectSetup(body: SetupCopyRequest, signal?: AbortSignal): Promise<GlobalCopyResponse> {
+    return this.request("/api/library/workflows/import-project", { ...this.jsonRequest(body, "POST"), signal });
+  }
+  getGlobalRunSetup(runId: string, signal?: AbortSignal): Promise<GlobalRunSetup> {
+    return this.request(`/api/library/run-setup?run_id=${encodeURIComponent(runId)}`, { signal });
+  }
+  importRunSetup(body: GlobalRunSetupImportRequest, signal?: AbortSignal): Promise<GlobalCopyResponse> {
+    return this.request("/api/library/workflows/import-run", { ...this.jsonRequest(body, "POST"), signal });
+  }
+  useGlobalSetup(body: SetupCopyRequest, signal?: AbortSignal): Promise<ProjectCopyResponse> {
+    return this.request("/api/library/workflows/use-in-project", { ...this.jsonRequest(body, "POST"), signal });
+  }
   readonly baseUrl: string;
 
   constructor(baseUrl = import.meta.env.VITE_BATCHCRAFT_API_URL || "") {

@@ -20,6 +20,9 @@ import type {
   SavedBatchDetail,
 } from "./api/types";
 import { BatchEditor } from "./features/batch/BatchEditor";
+import { GlobalWorkflowLibrary } from "./features/batch/GlobalWorkflowLibrary";
+import { useHistoricalSetupImport } from "./features/batch/useHistoricalSetupImport";
+import { applyProfile, applyWorkflow } from "./features/batch/workflowSelection";
 import { PreviewPanel } from "./features/batch/PreviewPanel";
 import {
   buildBatchRequest,
@@ -115,6 +118,10 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [currentRunId, setCurrentRunId] = useState<string | null>(initialSession.currentRunId);
   const [previewSnapshot, setPreviewSnapshot] = useState<PreviewSnapshot | null>(null);
   const [run, setRun] = useState<RunCreatedResponse | RunResponse | null>(null);
+  const [frozenPlanFailure, setFrozenPlanFailure] = useState<{ runId: string; message: string } | null>(null);
+  const historicalImport = useHistoricalSetupImport(api,
+    JSON.stringify([navigation.view, navigation.query, navigation.libraryQuery, selectedProjectId, run?.run_id]),
+    () => navigation.navigate("workflows", undefined, true));
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [historyRevisions, setHistoryRevisions] = useState<Record<string, number>>({});
   function onHistoryChange(projectId: string) {
@@ -154,6 +161,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   const [savedBatchConflict, setSavedBatchConflict] = useState<SavedBatchConflict | null>(null);
   const [savingBatch, setSavingBatch] = useState(false);
   const [savedBatchListRefresh, setSavedBatchListRefresh] = useState(0);
+  const [workflowLibraryRefresh, setWorkflowLibraryRefresh] = useState<Record<string, number>>({});
   const [saveAsRequest, setSaveAsRequest] = useState(false);
   const [savedBatchRestorePending, setSavedBatchRestorePending] = useState(
     initialSession.selectedSavedBatchId !== null,
@@ -163,6 +171,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       initialSession.profileSnapshotRecoveryRequired,
   );
   const formRevision = useRef(0);
+  const [workflowApplyRevision, setWorkflowApplyRevision] = useState(0);
   const batchReplacementGeneration = useRef(0);
   const runRevision = useRef(0);
   const frozenRunCache = useRef(new Map<string, RunResponse>());
@@ -539,6 +548,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }, [api, cacheFrozenRun]);
 
   function changeForm(next: BatchFormState) {
+    setWorkflowApplyRevision((value) => value + 1);
     batchReplacementGeneration.current += 1;
     formRevision.current += 1;
     setForm(next);
@@ -549,6 +559,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }
 
   function changeHistoricalResourceForm(next: BatchFormState) {
+    setWorkflowApplyRevision((value) => value + 1);
     batchReplacementGeneration.current += 1;
     formRevision.current += 1;
     setForm(next);
@@ -956,6 +967,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           setRunSnapshotIdentity({ runId: frozenRun.run_id, snapshot: frozenRun.batch_snapshot });
         }
       } catch (caught) {
+        setFrozenPlanFailure({ runId: nextRun.run_id, message: errorMessage(caught) });
         setCreateError(
           `Run ${nextRun.run_number} was created, but its frozen plan could not be loaded. ${errorMessage(caught)}`,
         );
@@ -1042,14 +1054,14 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
       <main>
         <div className="workspace-navigation">
           <nav aria-label="Workspace">
-            {(["batch", "gallery", "runs"] as const).map((view) => (
+            {(["batch", "gallery", "runs", "workflows"] as const).map((view) => (
               <button
                 key={view}
                 type="button"
                 aria-current={navigation.view === view ? "page" : undefined}
                 onClick={() => navigation.navigate(view)}
               >
-                {view === "batch" ? "Batch" : view === "gallery" ? "Gallery" : "Runs"}
+                {view === "batch" ? "Batch" : view === "gallery" ? "Gallery" : view === "runs" ? "Runs" : "Workflow Library"}
               </button>
             ))}
           </nav>
@@ -1062,7 +1074,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         {import.meta.env.VITE_BATCHCRAFT_INSTANCE ? (
           <p className="session-note" role="status">{import.meta.env.VITE_BATCHCRAFT_INSTANCE}</p>
         ) : null}
-        {sessionMessage ? (
+        {sessionMessage && (sessionMessage !== RESTORED_DRAFT_MESSAGE || navigation.view === "batch") ? (
           <div className="session-note dismissible-note">
             <span role="status">{sessionMessage}</span>
             <button
@@ -1100,6 +1112,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           </div>
         ) : null}
         <BatchEditor
+          active={navigation.view === "batch"}
           api={api}
           form={form}
           historicalSourceRunId={historicalSourceRunId}
@@ -1111,6 +1124,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           savedBatchId={savedBatchLink?.id ?? null}
           savedBatchRevision={savedBatchLink?.revision ?? null}
           savedBatchListRefresh={savedBatchListRefresh}
+          workflowLibraryRefresh={selectedProjectId ? workflowLibraryRefresh[selectedProjectId] ?? 0 : 0}
           savingBatch={savingBatch}
           saveAsRequest={saveAsRequest}
           error={batchError}
@@ -1151,6 +1165,8 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
         ) : null}
         </div>
         <RunWorkspace
+          frozenPlanError={frozenPlanFailure?.runId === run?.run_id ? frozenPlanFailure?.message : null}
+          onImportSetup={historicalImport.open}
           key={run?.run_id ?? "no-run"}
           api={api}
           run={run}
@@ -1180,17 +1196,44 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
             requestAnimationFrame(() => document.getElementById("current-run-workspace")?.scrollIntoView({ block: "start" }));
           }}
         />
-        {navigation.filterError && navigation.view !== "batch" ? (
+        <GlobalWorkflowLibrary
+          api={api}
+          active={navigation.view === "workflows"}
+          query={navigation.libraryQuery}
+          onQueryChange={navigation.changeLibraryQuery}
+          projectId={projectVerified && selectedProjectId === form.projectId ? selectedProjectId : null}
+          projectName={form.projectName}
+          onChooseProject={() => navigation.navigate("batch")}
+          draftGuard={`${workflowApplyRevision}:${currentBatchIdentity}:${currentIntent}`}
+          applyDisabled={projectSwitchingBlocked}
+          onCopied={(projectId) => setWorkflowLibraryRefresh((current) => ({ ...current, [projectId]: (current[projectId] ?? 0) + 1 }))}
+          onApply={(copy, profileId, guard) => {
+            if (projectSwitchingBlocked || !projectVerified || selectedProjectId !== copy.workflow.workflow.project_id || guard !== `${workflowApplyRevision}:${currentBatchIdentity}:${currentIntent}`)
+              throw new Error("The Project or Batch changed. Select the saved copies in Batch instead.");
+            const profile = copy.profiles.find((item) => item.version.id === profileId);
+            if (copy.profiles.length > 0 && !profile) throw new Error("Choose one of the copied Profiles.");
+            if (copy.workflow.version.project_id !== selectedProjectId || copy.workflow.version.workflow_id !== copy.workflow.workflow.id || (profile && (profile.version.project_id !== selectedProjectId || profile.version.workflow_version_id !== copy.workflow.version.id || profile.version.workflow_id !== copy.workflow.workflow.id || profile.version.workflow_profile_id !== profile.workflow_profile.id)))
+              throw new Error("The copied records do not match the destination Workflow and Profile. Reload before applying.");
+            if (!window.confirm("Replace the Batch Workflow Setup with this copied setup? Unsaved Workflow/Profile changes will be replaced. Prompts, Variables and seeds stay unchanged.")) return false;
+            let next = applyWorkflow(form, form.projectId, copy.workflow.workflow, copy.workflow.version);
+            if (profile) next = applyProfile({ ...next, imageBindings: form.imageBindings, parameterBindings: form.parameterBindings, linkedParameterSets: form.linkedParameterSets }, profile.workflow_profile, profile.version);
+            changeForm(next);
+            navigation.navigate("batch");
+            return true;
+          }}
+        />
+        {navigation.filterError && (navigation.view === "gallery" || navigation.view === "runs") ? (
           <div className="operation-error" role="alert">
             <p>{navigation.filterError}</p>
             <button type="button" className="button-secondary" onClick={() => navigation.changeQuery({ ...navigation.query, filters: null }, true)}>Clear invalid filters</button>
           </div>
         ) : null}
         <ProjectBrowser
+          onImportSetup={historicalImport.open}
           api={api}
           projectId={projectVerified ? selectedProjectId : null}
           projectName={form.projectName}
-          active={navigation.view !== "batch" && !navigation.filterError}
+          active={(navigation.view === "gallery" || navigation.view === "runs") && !navigation.filterError}
           view={navigation.view === "runs" ? "runs" : "gallery"}
           query={navigation.query}
           onQueryChange={navigation.changeQuery}
@@ -1203,6 +1246,7 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
           loadRunAsBatchDisabled={projectSwitchingBlocked}
           hasUnsavedChanges={hasUnsavedChanges}
         />
+        {historicalImport.dialog}
       </main>
     </>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { BatchcraftApi } from "../../api/client";
 import type {
@@ -14,14 +14,17 @@ import type {
 import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
 import { reconcileFormBindings, type BatchFormState } from "./form";
-import { WorkflowProfileMapper } from "./WorkflowProfileMapper";
+import { WorkflowAuthoringDialog } from "./WorkflowAuthoringDialog";
+import { applyProfile, applyWorkflow, clearProfileSelectionAndSnapshot, detach } from "./workflowSelection";
 
 interface Props {
+  active?: boolean;
   api: BatchcraftApi;
   projectId: string;
   form: BatchFormState;
   sourceRunId?: string | null;
   profileEditorRequest?: number;
+  refreshToken?: number;
   onChange(form: BatchFormState): void;
   onHistoricalImport?(form: BatchFormState): void;
   onMetadataChange(form: BatchFormState): void;
@@ -74,11 +77,12 @@ const EMPTY_DETAIL: DetailState = {
   error: null,
 };
 
-export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null, profileEditorRequest = 0, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
+export function WorkflowLibraryEditor({ active = true, api, projectId, form, sourceRunId = null, profileEditorRequest = 0, refreshToken = 0, onChange, onHistoricalImport = onChange, onMetadataChange }: Props) {
   const [library, setLibrary] = useState<LibraryState>({ projectId: "", workflows: [], loading: false, error: null });
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL);
   const [profileHistory, setProfileHistory] = useState<ProfileHistoryState>({ profileId: "", loading: false });
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  const dialogRestoreTarget = useRef<HTMLElement | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [linkStatus, setLinkStatus] = useState<LinkStatus>(linkedStatus(form));
   const [expanded, setExpanded] = useState(false);
@@ -195,7 +199,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
       },
     );
     return () => controller.abort();
-  }, [api, loadAttempt, normalizedProjectId]);
+  }, [api, loadAttempt, normalizedProjectId, refreshToken]);
 
   useEffect(() => {
     setHistoricalImport({ sourceRunId, workflow: null, saving: false, error: null });
@@ -602,6 +606,8 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
   }
 
   function openDialog(kind: DialogKind) {
+    dialogRestoreTarget.current = document.activeElement as HTMLElement | null;
+    setExpanded(true);
     const copiedProfileJson = kind === "duplicate-workflow"
       ? selectedProfileVersion?.profile
       : kind === "profile-version" && !form.workflowProfileVersionId
@@ -628,7 +634,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
       kind,
       name,
       profileName: `${duplicateName}-profile`,
-      workflowJson: kind === "duplicate-workflow" && selectedVersion
+      workflowJson: (kind === "duplicate-workflow" || kind === "profile" || kind === "profile-version") && selectedVersion
         ? pretty(selectedVersion.workflow)
         : form.workflowJson,
       profileJson: kind === "profile" ? ensureProfileArrays(baseProfileJson) : baseProfileJson,
@@ -640,8 +646,7 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
     });
   }
 
-  async function submitDialog(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitDialog() {
     if (!dialog || dialog.saving) return;
     setDialog({ ...dialog, saving: true, error: null });
     const requestedProjectId = normalizedProjectId;
@@ -904,13 +909,18 @@ export function WorkflowLibraryEditor({ api, projectId, form, sourceRunId = null
       <details className="inline-details workflow-advanced"><summary>Advanced</summary><button className="button-link" type="button" onClick={() => openDialog("raw")}>Edit raw snapshots</button></details>
       {dialog ? (
         <WorkflowDialog
+          active={active}
+          key={dialog.kind}
           state={dialog}
-          workflow={selectedVersion?.workflow ?? parseObjectOrNull(form.workflowJson) ?? {}}
+          restoreTarget={dialogRestoreTarget.current}
+          workflow={dialog.kind === "profile" || dialog.kind === "profile-version"
+            ? parseObjectOrNull(dialog.workflowJson) ?? {}
+            : {}}
           canCopyProfile={canCopyCurrentProfile}
           sourceWorkflowVersion={form.workflowVersionNumber}
           sourceProfileName={form.workflowProfileName}
           setState={setDialog}
-          onSubmit={submitDialog}
+          onSubmit={() => void submitDialog()}
           onCancel={() => setDialog(null)}
         />
       ) : null}
@@ -937,59 +947,51 @@ function workflowSummary(form: BatchFormState) {
   );
 }
 
-function WorkflowDialog({ state, workflow, canCopyProfile, sourceWorkflowVersion, sourceProfileName, setState, onSubmit, onCancel }: { state: DialogState; workflow: JsonObject; canCopyProfile: boolean; sourceWorkflowVersion: number | null; sourceProfileName: string; setState(value: DialogState): void; onSubmit(event: FormEvent<HTMLFormElement>): void; onCancel(): void }) {
+function WorkflowDialog({ active, state, workflow, canCopyProfile, sourceWorkflowVersion, sourceProfileName, restoreTarget, setState, onSubmit, onCancel }: { active: boolean; state: DialogState; workflow: JsonObject; canCopyProfile: boolean; sourceWorkflowVersion: number | null; sourceProfileName: string; restoreTarget: HTMLElement | null; setState(value: DialogState): void; onSubmit(): void; onCancel(): void }) {
+  const [initial] = useState(state);
   const title = ({ import: "New Workflow", "duplicate-workflow": "Duplicate Workflow", "workflow-version": "Edit Workflow", profile: "New Profile", "profile-version": "Edit Profile", "rename-workflow": "Rename Workflow", "rename-profile": "Rename Profile", raw: "Edit raw snapshots" } satisfies Record<DialogKind, string>)[state.kind];
-  const submitLabel = ({ import: "Create Workflow", "duplicate-workflow": "Duplicate Workflow", "workflow-version": "Save Workflow", profile: "Create Profile", "profile-version": "Save Profile", "rename-workflow": "Rename Workflow", "rename-profile": "Rename Profile", raw: "Apply snapshots" } satisfies Record<DialogKind, string>)[state.kind];
+  const submitLabel = ({ import: "Create Workflow", "duplicate-workflow": "Duplicate Workflow", "workflow-version": "Save", profile: "Create Profile", "profile-version": "Save", "rename-workflow": "Rename Workflow", "rename-profile": "Rename Profile", raw: "Apply snapshots" } satisfies Record<DialogKind, string>)[state.kind];
   const showsWorkflow = state.kind === "import" || state.kind === "duplicate-workflow" || state.kind === "workflow-version" || state.kind === "raw";
   const showsProfileMapper = state.kind === "profile" || state.kind === "profile-version";
   const showsName = state.kind === "import" || state.kind === "duplicate-workflow" || state.kind === "profile" || state.kind.startsWith("rename-");
-  return <dialog className={`prompt-dialog${showsProfileMapper ? " workflow-profile-dialog" : ""}`} open aria-label={title}><h2>{title}</h2><form onSubmit={onSubmit}>
-    {state.message ? <p className="workflow-dialog-message" role="status">{state.message}</p> : null}
+  return <WorkflowAuthoringDialog
+    active={active}
+    title={title}
+    kind={showsProfileMapper ? "profile" : showsWorkflow ? "workflow" : "metadata"}
+    draft={{ name: state.name, workflowJson: state.workflowJson, profileJson: state.profileJson, note: state.note }}
+    workflow={workflow}
+    showName={showsName}
+    showNote={state.kind !== "raw" && !state.kind.startsWith("rename-")}
+    allowFileImport={state.kind === "import" || state.kind === "workflow-version"}
+    saving={state.saving}
+    error={state.error}
+    message={state.message}
+    saveLabel={submitLabel}
+    restoreTarget={restoreTarget}
+    dirty={state.profileName !== initial.profileName || state.copyProfileMappings !== initial.copyProfileMappings}
+    onChange={(patch) => {
+      const profileName = patch.name !== undefined && state.kind === "duplicate-workflow" && state.profileName === `${state.name}-profile`
+        ? `${patch.name}-profile`
+        : state.profileName;
+      setState({ ...state, ...patch, profileName });
+    }}
+    onSave={onSubmit}
+    onCancel={onCancel}
+    intro={<>
     {state.kind === "workflow-version" ? <p className="mapping-intro">Saving creates a new Workflow revision and preserves v{sourceWorkflowVersion}.</p> : null}
     {state.kind === "profile-version" ? <p className="mapping-intro">Saving creates a new Profile revision for Workflow v{sourceWorkflowVersion} and preserves the previous revision.</p> : null}
     {state.kind === "duplicate-workflow" ? <p className="mapping-intro">The selected Workflow v{sourceWorkflowVersion} becomes v1 of a new Workflow. Source history remains unchanged.</p> : null}
-    {showsName ? <label className="field"><span className="field-label">Name</span><input autoFocus required value={state.name} onChange={(event) => {
-      const name = event.target.value;
-      const profileName = state.kind === "duplicate-workflow" && state.profileName === `${state.name}-profile`
-        ? `${name}-profile`
-        : state.profileName;
-      setState({ ...state, name, profileName });
-    }} /></label> : null}
+    </>}
+    nameExtras={<>
     {state.kind === "duplicate-workflow" && canCopyProfile ? <>
       <label className="checkbox-row"><input type="checkbox" checked={state.copyProfileMappings} onChange={(event) => setState({ ...state, copyProfileMappings: event.target.checked })} />Copy current Profile mappings</label>
       {state.copyProfileMappings ? <label className="field"><span className="field-label">Copied Profile name</span><input aria-label="Copied Profile name" required value={state.profileName} onChange={(event) => setState({ ...state, profileName: event.target.value })} /><span className="field-hint">Copies {sourceProfileName || "the selected Profile"} mappings into Profile v1.</span></label> : null}
     </> : null}
     {state.kind === "duplicate-workflow" && !canCopyProfile ? <p className="mapping-intro">No compatible selected Profile is available to copy.</p> : null}
-    {showsWorkflow ? <label className="field"><span className="field-label">Workflow JSON</span><textarea className="json-editor" spellCheck={false} value={state.workflowJson} onChange={(event) => setState({ ...state, workflowJson: event.target.value })} /></label> : null}
-    {showsProfileMapper ? <WorkflowProfileMapper workflow={workflow} profileJson={state.profileJson} onChange={(profileJson) => setState({ ...state, profileJson })} /> : null}
+    </>}
+  >
     {state.kind === "raw" ? <details className="raw-profile-json"><summary>Raw profile JSON</summary><textarea aria-label="Raw profile JSON" className="json-editor" readOnly spellCheck={false} value={state.profileJson} /></details> : null}
-    {state.kind !== "raw" && !state.kind.startsWith("rename-") ? <label className="field"><span className="field-label">Version note (optional)</span><textarea value={state.note} onChange={(event) => setState({ ...state, note: event.target.value })} /></label> : null}
-    {state.error ? <p className="operation-error" role="alert">{state.error}</p> : null}
-    <button className="button-primary" type="submit" disabled={state.saving}>{state.saving ? "Saving..." : submitLabel}</button>
-  </form><button className="button-link" type="button" onClick={onCancel}>Cancel</button></dialog>;
-}
-
-function applyProfile(form: BatchFormState, profile: ProjectWorkflowProfile, version: LibraryWorkflowProfileVersion): BatchFormState {
-  const profileJson = pretty(version.profile);
-  return reconcileFormBindings({ ...form, workflowProfileId: profile.id, workflowProfileName: profile.name, workflowProfileVersionId: version.id, workflowProfileVersionNumber: version.version_number, workflowProfileWorkflowVersionId: version.workflow_version_id, workflowProfileContentSha256: version.content_sha256, workflowProfileJson: profileJson, historicalProfileVersionId: null, historicalProfileResourceStatus: null, historicalProfileResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowProfileVersion: null } }, profileJson);
-}
-
-function applyWorkflow(
-  form: BatchFormState,
-  projectId: string,
-  workflow: ProjectWorkflow,
-  version: LibraryWorkflowVersion,
-): BatchFormState {
-  return {
-    ...clearProfileSelectionAndSnapshot(detach(form)),
-    workflowLibraryProjectId: projectId,
-    workflowId: workflow.id,
-    workflowName: workflow.name,
-    workflowVersionId: version.id,
-    workflowVersionNumber: version.version_number,
-    workflowContentSha256: version.content_sha256,
-    workflowJson: pretty(version.workflow),
-  };
+  </WorkflowAuthoringDialog>;
 }
 
 function selectProfileWithoutVersion(
@@ -1013,18 +1015,6 @@ function selectProfileWithoutVersion(
       workflowProfileVersion: null,
     },
   };
-}
-
-function clearProfileLink(form: BatchFormState): BatchFormState {
-  return { ...form, workflowProfileId: null, workflowProfileName: "", workflowProfileVersionId: null, workflowProfileVersionNumber: null, workflowProfileWorkflowVersionId: null, workflowProfileContentSha256: null, historicalProfileVersionId: null, historicalProfileResourceStatus: null, historicalProfileResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowProfileVersion: null } };
-}
-
-function clearProfileSelectionAndSnapshot(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowProfileJson: "{}", imageBindings: [], parameterBindings: [], linkedParameterSets: [] };
-}
-
-function detach(form: BatchFormState): BatchFormState {
-  return { ...clearProfileLink(form), workflowLibraryProjectId: null, workflowId: null, workflowName: "", workflowVersionId: null, workflowVersionNumber: null, workflowContentSha256: null, historicalWorkflowVersionId: null, historicalWorkflowResourceStatus: null, historicalWorkflowResourceReason: null, historicalImportCopyResolutions: { ...form.historicalImportCopyResolutions, workflowVersion: null, workflowProfileVersion: null } };
 }
 
 function linkedStatus(form: BatchFormState): LinkStatus {

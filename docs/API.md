@@ -12,6 +12,172 @@ execution outcomes, Assets, and Results.
 Authentication, a global scheduler, executor restart recovery, and remote ComfyUI interruption remain
 deferred. Stop-after-current cancellation and local `Stop waiting` detach are supported.
 
+## Global Workflow Library
+
+BC-026 provides catalog, copy, and authoring routes through `api/global_library.py` and
+`db/global_workflows.py`. The historical first slice supplied six catalog/copy routes; the current
+authoring checkpoint adds the family, History, save, metadata, and archive contracts below. Global reads
+need no selected Project and perform no ComfyUI generation or historical projection generation/reindex.
+The GET routes use the application read-capacity boundary.
+
+The frontend layout follow-up labels the copy entry point Add to Project and the separate guarded draft
+action Apply to Batch. Add to Project opens the existing naming/exact-Profile review before calling
+`use-in-project`; only the selected Profile is prefilled in a new review. These UI labels, summary
+caching, search debounce and Refresh behavior change none of the routes or request/response contracts.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/library/workflows` | Global Workflow metadata with `latest_version_id` and `source`; active families by default, optional `include_archived`; no Workflow JSON. |
+| GET | `/api/library/workflow-versions/{version_id}` | Exact global WorkflowVersion, including full `workflow` JSON and version metadata. |
+| GET | `/api/library/workflow-profile-versions/{version_id}` | Exact global ProfileVersion, including full `profile` JSON and version metadata. |
+| GET | `/api/library/workflow-versions/{version_id}/profiles` | Active compatible ProfileVersion metadata targeting exactly this WorkflowVersion; no Profile JSON or incompatible logical-Profile placeholder rows. |
+| POST | `/api/library/workflows/import-project` | Copy an exact Project-owned setup into new global records. |
+| GET | `/api/library/run-setup?run_id=...` | Execution-independent frozen base Workflow/Profile and recorded source provenance for one Run. |
+| POST | `/api/library/workflows/import-run` | Import that server-loaded frozen setup as one new global Workflow and one Profile; receipt-backed 200 response. |
+| POST | `/api/library/workflows/use-in-project` | Copy an exact global setup into new ordinary Project-owned records. |
+| GET | `/api/library/workflows/{workflow_id}` | Logical Workflow metadata and latest active `latest_version_id` (nullable). |
+| GET | `/api/library/workflows/{workflow_id}/versions` | Bounded Workflow revision metadata, including archive state; no Workflow JSON. |
+| GET | `/api/library/workflows/{workflow_id}/profiles` | Bounded logical Profile families, including those needing review; optional exact `workflow_version_id`. |
+| GET | `/api/library/workflow-profiles/{profile_id}/versions` | Bounded Profile revision metadata; optional exact `workflow_version_id`; no Profile JSON. |
+| POST | `/api/library/workflows` | `WorkflowNewRequest`; 201 `{workflow, version}`. |
+| POST | `/api/library/workflows/{workflow_id}/versions` | `WorkflowSaveRequest`; 201 exact WorkflowVersion. |
+| POST | `/api/library/workflows/{workflow_id}/profiles` | `ProfileNewRequest`; 201 `{workflow_profile, version}`. |
+| POST | `/api/library/workflow-profiles/{profile_id}/versions` | `ProfileSaveRequest`; 201 exact ProfileVersion. |
+| PATCH | `/api/library/workflows/{workflow_id}` | `MetadataRequest`; 200 logical Workflow. |
+| PATCH | `/api/library/workflow-profiles/{profile_id}` | `MetadataRequest`; 200 logical Profile. |
+| POST | `/api/library/workflows/{workflow_id}/archive` | `ArchiveRequest`; 200 logical Workflow. |
+| POST | `/api/library/workflow-profiles/{profile_id}/archive` | `ArchiveRequest`; 200 logical Profile. |
+| POST | `/api/library/workflow-versions/{version_id}/archive` | `ArchiveRequest`; 200 exact WorkflowVersion. |
+| POST | `/api/library/workflow-profile-versions/{version_id}/archive` | `ArchiveRequest`; 200 exact ProfileVersion. |
+
+All five list routes return `{items, next_cursor}` and accept `q` (default empty, maximum 200 characters),
+`limit` (default 25, range 1..50), and optional `cursor` (maximum 2048 characters). Search is literal,
+case-insensitive substring matching: Workflow name/description or Profile name. Ordering is ascending
+`created_at, id`. Profile-family search matches logical name/description; revision History search matches
+name snapshot/note. The catalog, family list, and both History lists accept `include_archived=false`;
+the exact-compatible ProfileVersion list remains active-only. Opaque keyset cursors bind list scope,
+query, limit, archive inclusion, and optional target WorkflowVersion;
+malformed cursors or changed bindings return 422. Global Profile metadata includes IDs, target IDs,
+version number, name snapshot, hash, creation time, logical name and description. Fetch the selected
+exact detail to inspect the full payload. Family rows include logical metadata, `latest_active_version_id`,
+`latest_compatible_version_id`, and nullable `latest_compatible_version` metadata. With a supplied target,
+compatibility means an active ProfileVersion targeting that exact WorkflowVersion in the same family;
+families without one remain listed for review. Without a target, latest compatible means latest active.
+The optional target on family/Profile History reads must belong to the owning Workflow family.
+
+The Project/global copy routes accept this shape (optional names default to source version name snapshots):
+
+```json
+{
+  "request_id": "unique-operation-id",
+  "project_id": "registered-project-id",
+  "workflow_version_id": "exact-source-version-id",
+  "profiles": [{"version_id": "exact-source-profile-version-id", "name": "Optional copy name"}],
+  "name": "Optional Workflow copy name",
+  "description": "Optional destination Workflow description"
+}
+```
+
+`request_id`, `project_id`, and version IDs are required nonempty strings of at most 200 characters.
+`profiles` defaults to `[]` and permits at most 50 unique exact ProfileVersion selections; each optional
+copy name is nonblank and at most 200 characters. Optional `description` is nonblank and at most 2000
+characters. Names/description may be omitted or null. Import reads a registered source Project,
+including an archived Project; use requires a registered, active destination. In import, all source
+versions must belong to the supplied Project. In both directions every selected Profile must belong to
+the source Workflow family and target the exact source WorkflowVersion. The server reads and validates
+source payloads; clients do not submit Workflow/Profile JSON for these copy operations.
+
+Both writes return **200**, including receipt retries, with
+`{request_id, workflow: {workflow, version}, profiles: [{workflow_profile, version}], source}`.
+`profiles` is always an array, including Workflow-only copies. `source` identifies the source scope,
+Project ID (null for global), and exact Workflow/Profile version IDs, revision numbers, and hashes.
+Destination versions start at 1 with new identities. Use returns existing Project resource DTOs.
+
+The transaction persists the complete setup and receipt atomically. `request_id` is unique across the
+copy namespace, not per Project or copy endpoint; its fingerprint includes direction, Project, source version,
+ordered Profile selections, and optional names/description. An identical retry returns the stored
+response even after source changes/loss. Changed request reuse, including the other direction, or a
+destination name/identity collision returns 409. Name uniqueness includes archived entries. Validation
+failures return 422; missing exact versions return 404. Corrected copy requests should use a new
+operation ID. Closing a browser dialog stops waiting, not the server transaction.
+
+### Historical setup import
+
+`GET /api/library/run-setup` accepts a nonempty UTF-8 `run_id`, without the authoring IDs' 200-character
+bound. It returns `run_id`, `project_id`, `batch_id`, frozen `project_name`/`batch_name`, nullable
+`run_name`, decimal-string `run_number`, nullable recorded `workflow_name`/`profile_name`, full base
+`workflow` and `profile` objects, and `source`. It verifies registered Project ownership and the immutable
+Run file/hash chain. Historical loading uses `validate_assets=False` and `require_outputs=False` and
+does not read execution metadata. Missing Assets/outputs or missing/corrupt execution therefore do not
+block a valid setup; tampered immutable content still fails. Valid older parameter shapes remain readable.
+This adds no fields to, or changed semantics for, the existing `RunResponse`.
+
+`POST /api/library/workflows/import-run` requires `request_id` (nonblank, at most 200 characters),
+historical `run_id` as above, and reviewed `name` and `profile_name` (nonblank, at most 200 characters).
+Optional `description` is nonblank and at most 2000 characters. Optional `expected_workflow_sha256` and
+`expected_profile_sha256` are 64 lowercase hexadecimal characters; the UI always supplies both from
+the validated setup read. Unknown fields are rejected. No client Workflow/Profile JSON or filesystem
+path is accepted as authority.
+
+The 200 response uses the copy response shape above, with exactly one Profile. `source.scope` is
+`historical_run`; `source` carries Project/Batch/Run IDs, `workflow` ancestry and a one-element `profiles`
+array. Recorded original family/version IDs remain nullable when absent; recorded revision numbers are
+nullable decimal strings, not destination revision numbers. Source `content_sha256` values hash the raw
+frozen files, separately from destination canonical hashes. Nothing infers missing optional ancestry.
+The destination has new independent IDs and local version 1; its Profile envelope receives the new ID
+and reviewed name and is canonically hashed. Base Workflow JSON is preserved semantically, not replaced
+by Job-resolved prompts, seeds or parameter overrides. This is not Recreate Result.
+
+Historical import shares migration 0005's copy-receipt namespace. Its fingerprint includes
+`kind: historical_run`, Run ID, reviewed names, description and both optional hash preconditions.
+Receipt lookup precedes source file loading; after source validation it is repeated under
+`BEGIN IMMEDIATE`, preventing concurrent duplicate copies. The complete pair and receipt commit
+atomically. Exact retries replay even after source loss; changed request reuse, stale preconditions or
+name/identity collisions return 409. There are no intermediate Project resource writes, Profile picker
+or automatic Builder handoff. Migration 0006 authoring receipts remain independent.
+
+### Authoring requests
+
+Every authoring model requires `request_id` (nonblank, at most 200 characters). Unknown fields are
+rejected. Optional text may be omitted or null; non-null names use 1..200 nonblank characters, and
+descriptions/notes use 1..2000 nonblank characters.
+
+| Request model | Required fields besides `request_id` | Optional fields |
+| --- | --- | --- |
+| `WorkflowSaveRequest` | `workflow`: JSON object | `note` |
+| `WorkflowNewRequest` | `workflow`: JSON object, `name` | `description`, `note` |
+| `ProfileSaveRequest` | `workflow_version_id`, `mappings`: object, `parameters`: array of objects | `image_inputs`: array of objects, defaults to `[]`; `note` |
+| `ProfileNewRequest` | `workflow_version_id`, `mappings`: object, `parameters`: array of objects, `name` | `image_inputs`: array of objects, defaults to `[]`; `description`, `note` |
+| `MetadataRequest` | At least one of `name`, `description` | Omitted fields unchanged; null description clears it; null name rejected |
+| `ArchiveRequest` | `archived`: strict boolean | None; `false` unarchives |
+
+`workflow_version_id` is a nonblank string of at most 200 characters. Profile saves validate mappings,
+ordered Image Inputs, and typed parameters against the exact active target in their own Workflow
+family. The Profile and parent Workflow must be active. Workflow saves append to active families.
+The backend validates ComfyUI API-format Workflow JSON, not ComfyUI editor-format conversion. The
+shared UI file chooser accepts JSON objects up to 64 MiB; this is a browser file limit, not a guarantee
+that the encoded save request fits the separately configured API request-body limit.
+
+Saving content appends immutable revisions; metadata updates only change logical name/description,
+never old name snapshots, Profile payload names, or hashes. Archive/unarchive changes logical or
+revision archive state without hard deletion; archived names remain reserved. History's Restore action
+submits old content to the normal append endpoint, creating a new revision rather than overwriting the
+old one. Profile restore retains its exact target and must satisfy the same active-target validation.
+There is no separate restore endpoint.
+
+Migration `0006_global_workflow_authoring.sql` adds `global_workflow_authoring_receipt`, separate from
+the existing 0005 copy-receipt namespace. Each authoring transaction atomically persists the mutation
+and immutable receipt: request ID, canonical operation/target/payload, full response, and timestamp.
+Identical retries return the original response, including after restart or subsequent edits/archival;
+changed operation, target, or payload under the same ID returns 409. Name/identity collisions also
+return 409; validation returns 422 and missing records return 404. Failed transactions leave neither
+partial mutations nor receipts. Create/append receipt retries still return 201. Applied 0005 bytes
+remain unchanged.
+
+Frozen Run Plan/Result Details Import to Library is implemented. Global authoring and copying alone do
+not select a Project Batch setup or invalidate Preview; Project copies and frozen Run snapshots do not
+follow global edits.
+
 ## Local Startup
 
 These manual commands start only the API with a real ComfyUI client. They do not launch Vite or isolate

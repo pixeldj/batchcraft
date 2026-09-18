@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { BatchcraftApi, RunCancellationApi, RunDiscardApi } from "../../api/client";
 import type {
@@ -15,6 +16,8 @@ import { useRunExecution } from "./useRunExecution";
 import { runDisplayLabel } from "./runDisplay";
 
 interface Props {
+  onImportSetup?: ImportHistoricalSetup;
+  frozenPlanError?: string | null;
   api: BatchcraftApi & RunDiscardApi & RunCancellationApi;
   run: RunCreatedResponse | RunResponse | null;
   pollIntervalMs: number;
@@ -47,6 +50,8 @@ export function RunWorkspace({
   getCachedRun,
   loadRun,
   onFilter,
+  onImportSetup,
+  frozenPlanError,
   batchDiverged,
   visible,
   onOpenRun,
@@ -98,6 +103,8 @@ export function RunWorkspace({
       ) : null}
       <div hidden={!visible} id="current-run-workspace">
       <RunPanel
+        onImportSetup={onImportSetup}
+        frozenPlanError={frozenPlanError}
         run={run}
         execution={execution.execution}
         starting={execution.starting}
@@ -117,6 +124,7 @@ export function RunWorkspace({
         onDetachFromCurrentJob={execution.detachFromCurrentJob}
       />
       <ResultsPanel
+        onImportSetup={onImportSetup}
         api={api}
         run={run}
         execution={execution.execution}

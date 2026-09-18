@@ -7,6 +7,82 @@ import { initialBatchForm, type BatchFormState } from "./form";
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
 
 describe("WorkflowLibraryEditor", () => {
+  it("defers a saved Workflow's Profile handoff until Batch is active again", async () => {
+    const first = workflowVersion({ workflow: visualWorkflow() });
+    const next = workflowVersion({ id: "workflow-v2", version_number: 2, workflow: visualWorkflow("35") });
+    const source = profileVersion({ profile: visualProfileSnapshot() });
+    const pending = deferred<LibraryWorkflowVersion>();
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: [workflow("workflow-1", "Portrait", first)] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [first, next] })),
+      listWorkflowProfiles: vi.fn(async (_id, versionId) => ({ workflow_profiles: [workflowProfile("profile-1", "Mapping", versionId === first.id ? source : null)] })),
+      listWorkflowProfileVersions: vi.fn(async () => ({ workflow_profile_versions: [source] })),
+      getWorkflowVersion: vi.fn(async () => first),
+      getWorkflowProfileVersion: vi.fn(async () => source),
+      createWorkflowVersion: vi.fn(() => pending.promise),
+    });
+    let current = linkedForm(first, source);
+    let active = true;
+    const view = render(rendered());
+    function rendered() {
+      return <WorkflowLibraryEditor active={active} api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
+    }
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    active = false;
+    view.rerender(rendered());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    await act(async () => pending.resolve(next));
+    expect(current.workflowVersionId).toBe(next.id);
+    expect(current.workflowProfileVersionId).toBeNull();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    active = true;
+    view.rerender(rendered());
+    const repair = await screen.findByRole("dialog", { name: "Edit Profile" });
+    expect(repair).toHaveTextContent("Workflow v2 was saved");
+    expect(within(repair).getByLabelText("Prompt node")).toHaveValue("34");
+    expect(within(repair).getByRole("alert")).toHaveTextContent("Node 34 is missing");
+    fireEvent.click(within(repair).getByRole("button", { name: "Cancel" }));
+    expect(current.workflowVersionId).toBe(next.id);
+    expect(api.createWorkflowVersion).toHaveBeenCalledOnce();
+  });
+
+  it("preserves Project creation semantics and keeps the Workflow when a later Profile builder is cancelled", async () => {
+    const version = workflowVersion({ workflow: visualWorkflow() });
+    const logical = workflow("workflow-1", "Portrait", version);
+    let created = false;
+    const api = makeApi({
+      listWorkflows: vi.fn(async () => ({ workflows: created ? [logical] : [] })),
+      listWorkflowVersions: vi.fn(async () => ({ workflow_versions: [version] })),
+      createWorkflow: vi.fn(async () => {
+        created = true;
+        return { workflow: withoutLatest(logical), version };
+      }),
+      createWorkflowProfile: vi.fn(),
+    });
+    let current = initialBatchForm();
+    const view = render(rendered());
+    function rendered() {
+      return <WorkflowLibraryEditor api={api} projectId="project-a" form={current} onChange={(form) => { current = form; view.rerender(rendered()); }} onMetadataChange={() => undefined} />;
+    }
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    const dialog = screen.getByRole("dialog", { name: "New Workflow" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Portrait" } });
+    fireEvent.change(within(dialog).getByLabelText("Workflow JSON"), { target: { value: JSON.stringify(visualWorkflow()) } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create Workflow" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.createWorkflow).toHaveBeenCalledOnce();
+    expect(current.workflowVersionId).toBe(version.id);
+    fireEvent.click(screen.getByRole("button", { name: "New Profile" }));
+    expect(within(screen.getByRole("dialog")).getByLabelText("Name")).toHaveValue("Portrait-profile");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(current.workflowVersionId).toBe(version.id);
+    expect(api.createWorkflowProfile).not.toHaveBeenCalled();
+  });
+
   it("ignores an A-B-A stale Workflow response", async () => {
     const stale = deferred<WorkflowsResponse>();
     let firstProjectLoads = 0;
@@ -131,7 +207,7 @@ describe("WorkflowLibraryEditor", () => {
     fireEvent.click(change);
     fireEvent.click(screen.getByRole("button", { name: "Edit Workflow" }));
     fireEvent.change(screen.getByLabelText("Workflow JSON", { selector: "textarea.json-editor" }), { target: { value: '{"node":"changed"}' } });
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Edit Workflow" })).getByRole("button", { name: "Save Workflow" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Edit Workflow" })).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(api.createWorkflowVersion).toHaveBeenCalled());
     expect(current.workflowVersionId).toBe("workflow-v2");
@@ -147,7 +223,7 @@ describe("WorkflowLibraryEditor", () => {
     expect(screen.getByTestId("no-compatible-profile-version")).toHaveTextContent(
       "This Profile needs a compatible revision for Workflow v2.",
     );
-    const repair = screen.getByRole("dialog", { name: "Edit Profile" });
+    const repair = await screen.findByRole("dialog", { name: "Edit Profile" });
     expect(repair).toHaveTextContent(
       "Workflow v2 was saved. Review the copied mappings before saving the next Profile revision.",
     );
@@ -225,7 +301,7 @@ describe("WorkflowLibraryEditor", () => {
     expect(within(dialog).getByLabelText("Image Input 1 label")).toHaveValue("Style image");
     expect(within(dialog).getByLabelText("Image Input 2 label")).toHaveValue("Pose image");
     expect(api.createWorkflowProfileVersion).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save Profile" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.createWorkflowProfileVersion).toHaveBeenCalledWith(
       logicalProfile.id,
       {
@@ -273,7 +349,7 @@ describe("WorkflowLibraryEditor", () => {
     expect(within(dialog).getByLabelText("Seed node")).toHaveValue("7");
     fireEvent.change(within(dialog).getByLabelText("Prompt node"), { target: { value: "35" } });
     fireEvent.change(within(dialog).getByLabelText("Prompt input"), { target: { value: "text" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save Profile" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(createVersion).toHaveBeenLastCalledWith(
       logicalProfile.id,

@@ -23,6 +23,13 @@ import type {
 import { ProjectBrowser, type ProjectBrowserProps } from "./ProjectBrowser";
 import { ResultDetailsDialog } from "../results/ResultDetailsDialog";
 import { ResultGallery } from "../results/ResultGallery";
+import { historicalSetup, workflowLibraryApi } from "../../test/workflowLibraryFixtures";
+import { useHistoricalSetupImport } from "../batch/useHistoricalSetupImport";
+
+function ImportBrowser(props: ProjectBrowserProps) {
+  const importer = useHistoricalSetupImport(props.api, JSON.stringify([props.active, props.query, props.projectId, props.view]), () => {});
+  return <><ProjectBrowser {...props} onImportSetup={importer.open} />{importer.dialog}</>;
+}
 
 beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -40,6 +47,66 @@ beforeEach(() => {
 });
 
 describe("ProjectBrowser", () => {
+  it.each(["plan", "details", "lightbox"])("imports the same historical Run through %s without Job overrides", async (entry) => {
+    const api = makeApi({ ...workflowLibraryApi(), getRun: vi.fn(async () => frozenRun("original")), getResults: vi.fn(async () => resultResponse("original")),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: "original", project_id: "project", source: { ...historicalSetup.source, run_id: "original", project_id: "project" } })),
+    });
+    const p = props(api); if (entry === "plan") p.view = "runs";
+    render(<ImportBrowser {...p} />);
+    if (entry === "plan") fireEvent.click(await screen.findByRole("button", { name: "View Run Plan" }));
+    else if (entry === "lightbox") {
+      fireEvent.click(await screen.findByRole("button", { name: /^View original/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Image Details" }));
+    } else fireEvent.click(await screen.findByRole("button", { name: /^Details for/ }));
+    const trigger = await screen.findByRole("button", { name: "Import to Library" });
+    trigger.focus(); fireEvent.click(trigger);
+    await screen.findByText("Copies the base setup, not Job overrides.");
+    const dialog = screen.getByRole("dialog", { name: "Import to Library" });
+    fireEvent.click(within(dialog).getByText("Inspect frozen setup"));
+    expect(screen.getAllByRole("dialog")).toHaveLength(entry === "lightbox" ? 3 : 2);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Imported to Library.");
+    expect(api.importRunSetup).toHaveBeenCalledWith({ request_id: expect.any(String), run_id: "original", name: "Frozen Workflow", profile_name: "Frozen Profile", expected_workflow_sha256: "a".repeat(64), expected_profile_sha256: "b".repeat(64) }, expect.any(AbortSignal));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(trigger).toHaveFocus();
+    expect(p.loadRunAsBatch).not.toHaveBeenCalled();
+    expect(p.onViewChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["runs", "gallery"] as const)("offers an execution-independent frozen setup after %s inspection fails", async (view) => {
+    const api = makeApi({ ...workflowLibraryApi(), getRun: vi.fn(async () => { throw new Error("Invalid execution metadata"); }),
+      getGlobalRunSetup: vi.fn(async () => ({ ...historicalSetup, run_id: "original", project_id: "project", source: { ...historicalSetup.source, run_id: "original", project_id: "project" } })),
+    });
+    render(<ImportBrowser {...props(api)} view={view} />);
+    fireEvent.click(await screen.findByRole("button", { name: view === "runs" ? "View Run Plan" : /^Details for/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import frozen setup" }));
+    await screen.findByText("Frozen Workflow");
+    expect(api.getGlobalRunSetup).toHaveBeenCalledExactlyOnceWith("original", expect.any(AbortSignal));
+    expect(api.getRun).toHaveBeenCalledOnce();
+    expect(api.getResults).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Import to Library" })).getByRole("button", { name: "Import to Library" }));
+    await screen.findByText("Imported to Library.");
+  });
+
+  it("offers Result Details import when full provenance fails, passing the requested Run and known Project", async () => {
+    const onImport = vi.fn();
+    render(<ResultDetailsDialog runId="original" sourceProjectId="project" result={resultResponse("original").results[0]} execution={null} restoreTarget={null}
+      getCachedRun={() => null} loadRun={async () => { throw new Error("Invalid execution"); }} onClose={() => {}} onImportSetup={onImport} />);
+    await screen.findByRole("alert");
+    const trigger = screen.getByRole("button", { name: "Import to Library" }); fireEvent.click(trigger);
+    expect(onImport).toHaveBeenCalledExactlyOnceWith({ runId: "original", projectId: "project" }, trigger);
+  });
+
+  it.each([false, true])("wires current Results import through direct and lightbox Details (nested: %s)", async (nested) => {
+    const onImport = vi.fn();
+    render(<ResultGallery api={makeApi()} runId="original" sourceProjectId="project" results={resultResponse("original").results}
+      getCachedRun={() => frozenRun("original")} loadRun={async () => frozenRun("original")} onImportSetup={onImport} />);
+    if (nested) { fireEvent.click(screen.getByRole("img")); fireEvent.click(screen.getByRole("button", { name: /Details$/ })); }
+    else fireEvent.click(screen.getByRole("button", { name: "Details for Job 1, artifact 1" }));
+    const trigger = screen.getByRole("button", { name: "Import to Library" }); fireEvent.click(trigger);
+    expect(onImport).toHaveBeenCalledExactlyOnceWith({ runId: "original", projectId: "project" }, trigger);
+  });
+
   it.each(["cached", "loaded"])("does not offer actions from a mismatched %s frozen Run in current Results", async (source) => {
     const run = frozenRun("wrong-run");
     const onFilter = vi.fn();

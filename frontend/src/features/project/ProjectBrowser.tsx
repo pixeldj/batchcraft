@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ImportHistoricalSetup } from "../batch/useHistoricalSetupImport";
 
 import type { BatchcraftApi } from "../../api/client";
 import type {
@@ -22,6 +23,7 @@ import {
 } from "./useProjectBrowserHistory";
 
 export interface ProjectBrowserProps {
+  onImportSetup?: ImportHistoricalSetup;
   api: BatchcraftApi;
   projectId: string | null;
   projectName: string;
@@ -81,6 +83,7 @@ function Browser({
   loadRunAsBatch,
   loadRunAsBatchDisabled,
   hasUnsavedChanges,
+  onImportSetup,
 }: ProjectBrowserProps & { projectId: string }) {
   const history = useProjectBrowserHistory(
     api,
@@ -100,7 +103,7 @@ function Browser({
   const [inspection, setInspection] = useState<
     | { kind: "diagnostics" }
     | { kind: "loading"; label: string }
-    | { kind: "error"; message: string }
+    | { kind: "error"; message: string; runId?: string }
     | { kind: "plan"; run: RunResponse }
     | { kind: "details"; run: RunResponse; result: ResultResponse }
     | { kind: "confirm"; run: HistoryRunSummaryResponse }
@@ -224,7 +227,7 @@ function Browser({
       setInspection({ kind: "details", run, result });
     } catch (caught) {
       if (tag === request.current)
-        setInspection({ kind: "error", message: errorMessage(caught) });
+        setInspection({ kind: "error", message: errorMessage(caught), runId });
     }
   }
   async function restoreBatch(run: HistoryRunSummaryResponse) {
@@ -843,6 +846,7 @@ function Browser({
       ) : null}
       {active && inspection?.kind === "plan" ? (
         <RunPlanDialog
+          onImportSetup={onImportSetup}
           run={inspection.run}
           restoreTarget={restoreTarget}
           onClose={close}
@@ -850,6 +854,8 @@ function Browser({
       ) : null}
       {active && inspection?.kind === "details" ? (
         <ResultDetailsDialog
+          onImportSetup={onImportSetup}
+          sourceProjectId={projectId}
           runId={inspection.run.run_id}
           result={inspection.result}
           execution={inspection.run.execution}
@@ -881,6 +887,7 @@ function Browser({
             <div role="alert">
               <h3>Inspection unavailable</h3>
               <p>{inspection.message}</p>
+              {inspection.runId && onImportSetup ? <button type="button" className="button-secondary compact" onClick={(event) => onImportSetup({ runId: inspection.runId!, projectId }, event.currentTarget)}>Import frozen setup</button> : null}
               <p>
                 Close this dialog and retry the selected record, or Refresh
                 history.

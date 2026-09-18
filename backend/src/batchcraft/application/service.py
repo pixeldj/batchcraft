@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from threading import Lock
-from typing import BinaryIO, Literal, Protocol, cast
+from typing import Any, BinaryIO, Literal, Protocol, cast
 from uuid import UUID, uuid5
 from weakref import WeakValueDictionary
 
@@ -55,6 +55,7 @@ from batchcraft.db import (
 from batchcraft.db import (
     RunCancellationStoreError as DatabaseRunCancellationStoreError,
 )
+from batchcraft.db.global_workflows import GlobalWorkflowStore, HistoricalSetupImport
 from batchcraft.db.history_choices import ChoiceKind, HistoryChoices, query_choices
 from batchcraft.db.history_diagnostics import HistoryDiagnosticItem, query_diagnostics
 from batchcraft.db.history_query import (
@@ -65,6 +66,7 @@ from batchcraft.db.history_query import (
     query_results,
     query_runs,
 )
+from batchcraft.db.workflows import WorkflowValidationError
 from batchcraft.diagnostics import safe_exception
 from batchcraft.domain import BatchDefinition, CompiledRunPlan, SeedInput, compile_batch
 from batchcraft.execution import (
@@ -463,6 +465,72 @@ class BatchcraftService:
 
     def get_historical_run(self, run_id: str) -> PublishedRun:
         return self._get_run(run_id, historical=True)
+
+    def get_historical_setup(self, run_id: str, *, library: LibraryService) -> dict[str, Any]:
+        try:
+            run_id.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise WorkflowValidationError("run_id must be valid UTF-8") from error
+        if not run_id:
+            raise WorkflowValidationError("run_id must not be empty")
+        run, snapshot = self._historical_copy_source(run_id, library)
+        selection = snapshot.workflow_selection
+        source = {
+            "scope": "historical_run",
+            "run_id": run.run_id,
+            "project_id": run.project.id,
+            "batch_id": run.batch.id,
+            "workflow": {
+                "id": selection.workflow_version_id,
+                "workflow_id": selection.workflow_id,
+                "version_number": (
+                    None
+                    if selection.workflow_version_number is None
+                    else str(selection.workflow_version_number)
+                ),
+                "content_sha256": run.workflow_sha256,
+            },
+            "profiles": [
+                {
+                    "id": selection.workflow_profile_version_id,
+                    "workflow_profile_id": selection.workflow_profile_id,
+                    "workflow_id": selection.workflow_id,
+                    "workflow_version_id": selection.workflow_version_id,
+                    "version_number": (
+                        None
+                        if selection.workflow_profile_version_number is None
+                        else str(selection.workflow_profile_version_number)
+                    ),
+                    "content_sha256": run.workflow_profile_sha256,
+                }
+            ],
+        }
+        return dict(
+            run_id=run.run_id,
+            project_id=run.project.id,
+            batch_id=run.batch.id,
+            project_name=run.project.name,
+            batch_name=run.batch.name,
+            run_name=run.name,
+            run_number=str(run.run_number),
+            workflow_name=selection.workflow_name,
+            profile_name=selection.workflow_profile_name,
+            workflow=run.workflow,
+            profile=run.workflow_profile,
+            source=source,
+        )
+
+    def import_historical_setup(
+        self, request: HistoricalSetupImport, *, library: LibraryService
+    ) -> dict[str, Any]:
+        store = GlobalWorkflowStore(self.cancellation_store.database_path)
+        replay = store.historical_import_receipt(request)
+        if replay is not None:
+            return replay
+        source = self.get_historical_setup(request.run_id, library=library)
+        return store.import_historical_setup(
+            request, workflow=source["workflow"], profile=source["profile"], source=source["source"]
+        )
 
     def get_batch_reconstruction(self, run_id: str) -> BatchReconstruction:
         run = self.get_historical_run(run_id)

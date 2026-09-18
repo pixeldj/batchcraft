@@ -537,6 +537,120 @@ checksums, and transactional application reject gaps, changed history, and newer
 Test migration behavior and preservation of existing rows against file-backed temporary databases rather
 than only `:memory:`. Those test databases may be recreated; user databases may not.
 
+BC-026 added `0005_global_workflow_library.sql` for application-owned catalog records and atomic copy
+receipts. The authoring checkpoint adds `0006_global_workflow_authoring.sql`, with a separate immutable
+authoring receipt table and bounded family/History indexes. Preserve applied migrations 0001-0005
+byte-for-byte; neither migration is a replacement baseline. Existing Project rows, Saved Batch ownership
+and valid v1 filesystem formats remain unchanged.
+
+### BC-026 historical first slice
+
+The first slice used `api/global_library.py` (then six routes) and `db/global_workflows.py`;
+the frontend is `features/batch/GlobalWorkflowLibrary.tsx`. Global Workflow and compatible Profile
+lists each request 20 metadata rows, with exact JSON details fetched on selection. REST permits at most
+50 rows per page. Each pager keeps a sliding window of 20 Previous bookmarks, not a 20-page forward
+limit; Next continues while the server returns a cursor, and Reload returns to the first page. Profile
+copy selections are separately capped at 50. Project-source pickers still use existing unpaginated
+Project/Workflow/Profile and revision list contracts, including full version payloads where those legacy
+contracts return them. Do not describe all library-related reads as bounded metadata reads.
+
+Navigation uses `view=workflows` and independent `library_q`. Only Gallery/Runs activate Project history;
+opening Workflow Library must not trigger history reads or reindex. Browsing and Import to Library need
+no selected Batch Project. The import source chooser can select another registered Project without
+switching the current Project/draft. In this first slice, global inspection opened the most recent
+active WorkflowVersion, without a full global History editor; exact Profile details were inspectable.
+
+Use in this Project reviews names and selected Profiles, then Confirm copy persists independent copies.
+Only the later Use copied setup action, followed by replacement confirmation, applies them and
+invalidates Preview. One copied Profile is preselected; multiple copies require choosing one, while a
+Workflow-only copy can be applied for subsequent mapping. Apply guards reject changed Project/draft
+identity or intent and execution locks; already-persisted copies remain available in Project Workflow
+Setup. Browsing, import, copy, and cancelled application preserve the draft and valid Preview.
+
+Verification passed: 782 frontend tests and 1433 backend tests; full fake-backed browser suites passed
+22 tests in each serving mode after the pager fix. Lint, formatting, type checks, builds, and diff checks
+passed. Vite reports a non-fatal approximately 515 kB minified chunk warning. Malformed-cursor rejection and forward
+paging beyond 20 pages have regression coverage. This first-pass evidence is not release acceptance.
+Coverage includes Project A -> global -> Project B -> Preview -> two fake Jobs, persisted independent
+copies, idempotent receipts, rollback without orphan rows, exact Profile metadata/detail, and name
+collisions. At that checkpoint, historical-source import, direct JSON authoring and revision/archive
+management were queued. These counts remain historical evidence, not current authoring acceptance.
+
+### BC-026 authoring checkpoint
+
+Global create/append, metadata, archive/unarchive, bounded Profile-family and revision History routes
+are implemented; exact paths and request models are in `API.md`. Migration 0006 authoring receipts
+persist request ID, canonical operation/target/payload and response atomically with the mutation.
+Unchanged retries replay across restart; changed reuse conflicts with 409. Copy receipts remain separate.
+Metadata/archive edits do not rewrite old snapshots/hashes; History Restore appends a new revision.
+
+`GlobalWorkflowDetail.tsx` and `useGlobalWorkflowAuthoring.tsx` separate inspection from authoring state.
+Project/global dialogs share `WorkflowAuthoringDialog.tsx`, fields and the existing mapper. Global New
+Workflow uses only Save, then opens a Profile draft named `${name}-profile`. Cancel retains the saved
+Workflow; failed Profile saves retain the draft without repeating Workflow creation. Edit/Save appends
+internal revisions, with small exact revision indicators and technical details in History. Global operations
+leave Project Batch selections, Preview and independent copies unchanged.
+
+The file chooser accepts JSON objects up to 64 MiB; backend save validates API-format workflows, with no
+ComfyUI editor conversion. The HTTP request-body limit still applies separately. Dialog content scrolls
+independently of its `h2` and footer actions. Initial focus selects Name, Workflow JSON or the first
+enabled mapper select. Dirty close confirms discard. Inactive Project portals are hidden on navigation
+without losing draft, pending file reads/writes or handoff stage; inactive handlers cannot submit/close.
+Global pending writes retain draft/operation identity above the portal. Stale Profile edit callbacks
+cannot replace a newer draft. Restored copy-receipt selections hydrate once and never overwrite newer
+exact choices on reload/paging.
+
+The frontend-only layout follow-up uses `LibrarySearch`, `LibraryMenu` and `ReadonlyProfileSummary`.
+Add to Project opens the presentation-only Add workflow to Project branch of `SetupReview`; successful
+Add closes into one parent-owned result and Apply to Batch remains a separate guarded step. Import to
+Library from a Project retains its legacy dialog. Explicit opening choices and restored receipts (including empty
+selections) take priority; only a pristine unfiltered complete first page with resolved metadata and exactly
+one eligible active compatible family defaults its exact revision once. Lists request 20 rows and retain 20
+Previous bookmarks without limiting forward paging. Profile summaries use two workers, a 20-version
+positive cache and only the current page; manual Refresh retains exact selection and successful cached
+summaries, retries failed summaries once, and resets paging. Search uses 300ms debounce, immediate Enter,
+and cancellation on scope changes. These frontend bounds do not change legacy unpaginated source APIs.
+
+Library action/checkbox styles are scoped rather than changing shared `.action-row` or global inputs.
+Workflow entries scroll within `min(55dvh, 32rem)` (`min(40dvh, 32rem)` on mobile); Profile entries within
+`min(40dvh, 24rem)`. Controls/detail/footer remain outside list scroll scopes. Only
+`RESTORED_DRAFT_MESSAGE` is hidden outside Batch, with no navigation-driven clear/dismiss state change
+and no change to other warnings. Themes, application navigation/header, Batch and Prompt semantics,
+SQLite, backend APIs, durable formats and dependencies are unchanged by this follow-up.
+
+Prior authoring/layout evidence remains in the plan; the
+[dialog cleanup checkpoint](plans/BC-026-global-workflow-library.md#add-to-project-dialog-cleanup) records
+presentation, exact-selection, receipt and cancellation constraints and prior checkpoint evidence.
+Hidden Rename fields retain the current draft without resetting
+request identity, not durable unsent edits. The inline Added/pending-apply panel does not survive reload;
+persisted copies remain in the Project library, with no Recovery v4 or backend contract change.
+Historical Run Plan/Result Details Import to Library is implemented. BC-026 stays In Progress and the
+application version remains 1.1.0; no v1.2.0 tag or everyday-installation update is authorized. Workflow
+images are deferred optional upcoming work, not a v1.2.0 completion gate.
+
+### BC-026 historical setup import
+
+`GET /api/library/run-setup?run_id=...` and `POST /api/library/workflows/import-run` are additive routes;
+see `API.md` for exact request/provenance shapes. The service owns immutable filesystem validation and
+registered Project ownership; the DB helper owns atomic pair/receipt writes. Execution metadata is not
+read, Assets/outputs are not required, and immutable tampering still fails. Receipt replay precedes source
+loading and is rechecked under the write lock. Existing migrations 0001-0006, v1 bytes, dependencies and
+working-session Recovery v4 remain unchanged.
+
+App owns the single-operation historical-import controller above portals. Review validates source
+identity/provenance; closing stops waiting, and navigation/owner removal suppresses stale callbacks.
+Unchanged resume uses no GET. Reload retains reviewed names and same-hash request identity; failed
+reload retains the last validated setup for receipt retry. New names/hashes require a new operation.
+Backend validation remains authoritative, including when no receipt exists.
+
+Backend acceptance covers importing a v1 Project fixture into an empty database with no original
+Workflow/Profile or global catalog, then frozen setup -> global -> new Project -> Preview/Run. Browser
+coverage uses archived mutable source rows, not empty-database portability, and API transport fault
+injection drops responses from real backend receipt-backed writes. Keep these evidence scopes distinct.
+The plan's [Final verification](plans/BC-026-global-workflow-library.md#final-verification) section is the
+single record of prior historical-import counts and pending final reruns/owner acceptance. No new
+full-pass claim follows from this documentation update.
+
 Cancellation changes require tests for durable and idempotent intent, both request/admission race
 orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and
 blocked precedence, succeeded-prefix/cancelled-suffix validation, absence of ComfyUI interrupt or queue
