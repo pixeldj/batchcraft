@@ -8,15 +8,28 @@ import { PromptLibraryEditor } from "./PromptLibraryEditor";
 
 describe("PromptLibraryEditor workspace", () => {
   it("prefills a unique visible workflow copy name and sends the user's name only on explicit creation", async () => {
-    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("existing", "Workflow prompt copy")] })) });
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("existing", "Workflow prompt")] })) });
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} workflowPrompt={{ text: "original" }} {...callbackProps()} />);
-    await waitFor(() => expect(screen.getByLabelText("Workflow Prompt copy name")).toHaveValue("Workflow prompt copy 2"));
+    await waitFor(() => expect(screen.getByLabelText("Workflow Prompt copy name")).toHaveValue("Workflow prompt 2"));
     fireEvent.change(screen.getByLabelText("Workflow Prompt copy name"), { target: { value: "" } });
     expect(screen.getByRole("button", { name: "Use this prompt" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Workflow Prompt copy name"), { target: { value: "My baseline" } });
     expect(api.createPrompt).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Use this prompt" }));
     await waitFor(() => expect(api.createPrompt).toHaveBeenCalledExactlyOnceWith("project-1", { name: "My baseline", text: "original", description: null }));
+  });
+
+  it.each([
+    [[], "Workflow prompt"],
+    [[" WORKFLOW PROMPT "], "Workflow prompt 2"],
+    [["Workflow prompt", "workflow PROMPT 2"], "Workflow prompt 3"],
+  ])("suggests a collision-safe workflow name for %j", async (names, expected) => {
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: names.map((name, index) => libraryPrompt(`existing-${index}`, name)) })) });
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} workflowPrompt={{ text: "original" }} {...callbackProps()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Use this prompt" })).toBeEnabled());
+    expect(screen.getByLabelText("Workflow Prompt copy name")).toHaveValue(expected);
+    fireEvent.click(screen.getByRole("button", { name: "Use this prompt" }));
+    await waitFor(() => expect(api.createPrompt).toHaveBeenCalledExactlyOnceWith("project-1", { name: expected, text: "original", description: null }));
   });
 
   it("edits the exact selected older revision and replaces only its keyed row via semantic onChange", async () => {
@@ -219,7 +232,7 @@ describe("PromptLibraryEditor workspace", () => {
     expect(document.querySelector(".workflow-prompt pre")?.textContent).toBe(text);
     fireEvent.click(button);
     fireEvent.click(button);
-    expect(api.createPrompt).toHaveBeenCalledExactlyOnceWith("project-1", { name: "Workflow prompt copy", text, description: null });
+    expect(api.createPrompt).toHaveBeenCalledExactlyOnceWith("project-1", { name: "Workflow prompt", text, description: null });
     await act(async () => pending.resolve({ prompt: prompt(), version: version({ text, placeholders: ["subject"] }) }));
     expect(callbacks.onChange).toHaveBeenCalledExactlyOnceWith([expect.objectContaining({
       libraryProjectId: "project-1", promptId: "prompt-1", versionId: "version-1", versionNumber: 1, text, placeholders: ["subject"],

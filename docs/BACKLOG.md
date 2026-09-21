@@ -1642,7 +1642,7 @@ optional upcoming work, not a v1.2.0 completion gate.
 | --- | --- |
 | ID | BC-027 |
 | Priority | P3 |
-| Status | In Progress |
+| Status | Done |
 | Area | Prompts / Batch UX |
 | Summary | Inspect/copy the mapped Workflow prompt with a reviewed name; edit exact selected Prompt rows, mutable general notes, and permanently delete unreferenced Prompt families with confirmation. |
 | Dependencies / Notes | Reuses BC-010's local mapped-input reader and the existing atomic Prompt-plus-first-version API. Separate from BC-026; no release or owner-acceptance gate is changed. |
@@ -1682,8 +1682,14 @@ Simple-confirmation follow-up verification: 51 focused PromptLibraryEditor tests
 passed; targeted workflow-prompt fake-backed E2E passed desktop/mobile in sequential Vite and built
 same-origin modes (two tests each). The built run retained the non-fatal chunk-size warning. This is
 focused verification, not a new full-suite claim; deletion guards and permanent all-revision warnings remain.
-The owner accepted the first feature ("looks good"); acceptance of these additional changes remains
-pending, so BC-027 stays In Progress. No release acceptance or completion of BC-026 is claimed.
+The owner accepted tested candidate `5a137c0` ("otherwise looks great"), requesting only the default-name
+follow-up: `Workflow prompt`, then `Workflow prompt 2`, etc. That follow-up preserves case-insensitive
+collision checking, user-edited names, and existing duplication naming. Verification passed: 54 focused
+PromptLibraryEditor tests (including default and numbered/case-insensitive collision coverage), ESLint,
+TypeScript, and targeted fake-backed workflow-prompt E2E on desktop/mobile in sequential Vite and built
+same-origin modes (two tests each). The built run retained the non-fatal chunk-size warning. This is
+focused follow-up verification, not a new full-suite or owner retest claim. BC-027 is Done; no release
+acceptance or completion of BC-026 is claimed. No everyday or live ComfyUI data was touched.
 
 ## Maintenance rules
 

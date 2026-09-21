@@ -189,7 +189,8 @@ Copied placeholders use the normal binding and Preview validation flow. If Proje
 Profile, or Prompt selection changes while creation is pending, the saved copy stays in the original
 Project's library without being applied to the changed Batch. Repeated clicks are single-flight and
 failed requests are not automatically retried. The generated unique copy name is visible and editable
-before creation. This BC-027 convenience uses ordinary v1 provenance with no new durable format.
+before creation, defaulting to `Workflow prompt`, then `Workflow prompt 2`, `Workflow prompt 3`, etc.
+on name collisions. This BC-027 convenience uses ordinary v1 provenance with no new durable format.
 
 **Edit Prompt** beside a selected row's ordering controls opens that exact revision, not the library's
 latest text. Saving changed text creates a revision and immediately replaces only that row, preserving

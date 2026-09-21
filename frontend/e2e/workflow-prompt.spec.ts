@@ -57,7 +57,7 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   await expect(prompts.locator(".workflow-prompt pre")).toHaveJSProperty("textContent", text);
   await prompts.screenshot({ path: testInfo.outputPath("workflow-prompt.png") });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await expect(prompts.getByLabel("Workflow Prompt copy name")).toHaveValue("Workflow prompt copy");
+  await expect(prompts.getByLabel("Workflow Prompt copy name")).toHaveValue("Workflow prompt");
   await prompts.getByLabel("Workflow Prompt copy name").fill("Reviewed baseline");
   const copiedResponse = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/projects/${project.id}/prompts` && r.request().method() === "POST");
   await prompts.getByRole("button", { name: "Use this prompt" }).click();

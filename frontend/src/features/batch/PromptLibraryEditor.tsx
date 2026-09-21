@@ -190,7 +190,7 @@ export function PromptLibraryEditor({
   };
   const inspectedPrompt = activeLibrary.prompts.find((prompt) => prompt.id === inspectedPromptId) ?? null;
   const workspaceSaving = mutationState.saving || createDraft.saving || Boolean(editDraft?.saving) || Boolean(duplicateDraft?.saving);
-  const copyName = workflowCopyName ?? suggestCopyName("Workflow prompt", activeLibrary.prompts);
+  const copyName = workflowCopyName ?? suggestCopyName("Workflow prompt", activeLibrary.prompts, "");
 
   useEffect(() => {
     setWorkspaceOpen(false);
@@ -1274,11 +1274,11 @@ function historicalPromptSignature(
   ]);
 }
 
-function suggestCopyName(sourceName: string, library: ProjectPrompt[]): string {
+function suggestCopyName(sourceName: string, library: ProjectPrompt[], copySuffix = " copy"): string {
   const names = new Set(library.map((prompt) => prompt.name.trim().toLocaleLowerCase()));
   let suffix = 1;
   while (true) {
-    const candidate = `${sourceName} copy${suffix === 1 ? "" : ` ${suffix}`}`;
+    const candidate = `${sourceName}${copySuffix}${suffix === 1 ? "" : ` ${suffix}`}`;
     if (!names.has(candidate.toLocaleLowerCase())) return candidate;
     suffix += 1;
   }
