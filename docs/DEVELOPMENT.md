@@ -223,8 +223,11 @@ the FastAPI endpoints documented in `docs/API.md`.
 Batch editing includes an ordered repeatable list of immutable PromptVersion snapshots. The current
 Project's persistent Prompt library opens as a searchable modal workspace with exact template previews,
 direct Prompt creation, lazy version history, immutable revision creation, and exact-revision
-duplication into a new logical Prompt. Inspecting, searching, creating a revision, and duplicating do not
-change the Batch selection. Explicit additions, removals, and ordering changes invalidate Preview; exact
+duplication into a new logical Prompt. Inspecting, searching, library-created revisions, and duplicating do not
+change the Batch selection. BC-027 adds exact selected-row editing: only that row is replaced through
+the normal semantic `onChange`, retaining its key/order and all Variable Bindings. Unchanged-text saves
+do not POST a revision. Name/general notes use the separate metadata PATCH; immutable version notes
+are never overwritten. Explicit additions, removals, and ordering changes invalidate Preview; exact
 library reconciliation does not. The browser session restoration stores library linkage and exact
 immutable snapshots without UI keys. Named Image Input binding and browser session v10 supersede the
 original picker and session shape in Phase 2.4.
@@ -888,6 +891,16 @@ and displays backend-returned PromptVersion identity in Preview. It does not cal
 or infer provenance from resolved prompt text. Prompt library refresh and logical Prompt rename must
 never replace a selected immutable snapshot. Archived or missing selections detach while retaining
 their exact stored identity, name snapshot, and text; known cross-Project selections block Preview.
+
+BC-027's permanent Prompt deletion uses the existing PromptVersion cascade and Saved Batch RESTRICT
+foreign keys, with a reference check and deletion serialized under `BEGIN IMMEDIATE`. Keep applied
+migrations unchanged. The API's dedicated `prompt_referenced` safe diagnostic must retain actionable
+Saved Batch removal/save guidance. Tests use only temporary databases and fake-backed browser data;
+feature authorization is not authorization to delete actual user data. Name the Prompt in the UI warning
+and require explicit confirmation without typing; block current Batch selections and never clear
+Saved Batch references automatically.
+Recovery v4 remains unchanged and preserves unavailable snapshots as detached. Guard row-edit reads
+and writes against Project/Batch/selection changes, including away-and-back transitions and unmount.
 
 Workflow and Workflow Profile selectors follow the same snapshot rule. Logical metadata changes do
 not invalidate Preview, while selecting another immutable version does. Linked selections must belong

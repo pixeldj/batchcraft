@@ -8,6 +8,7 @@ import pytest
 
 from batchcraft.db import (
     ProjectStore,
+    PromptConflictError,
     PromptNameConflictError,
     PromptNotFoundError,
     PromptProjectNotFoundError,
@@ -19,6 +20,61 @@ from batchcraft.db import (
 )
 
 CREATED_AT = datetime(2026, 8, 28, 10, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("selected_revision", [1, 2])
+@pytest.mark.parametrize("archived", [False, True])
+def test_delete_referenced_prompt_is_atomic(
+    tmp_path: Path, selected_revision: int, archived: bool
+) -> None:
+    path = _database(tmp_path)
+    store = PromptStore(path)
+    prompt, first = store.create("project-1", "Protected", "first", note="Immutable")
+    second = store.create_version(prompt.id, "second")
+    selected = first if selected_revision == 1 else second
+    if archived:
+        store.archive_version(selected.id)
+    with closing(open_connection(path)) as connection:
+        connection.execute(
+            """INSERT INTO batch (id, project_id, filesystem_key, name, revision,
+            seed_mode, seed_values_json, created_at, updated_at, archived_at)
+            VALUES ('batch', 'project-1', 'batch', 'Protected Batch', 1,
+            'fixed', '[1]', '2026-09-20T00:00:00Z', '2026-09-20T00:00:00Z', ?)""",
+            ("2026-09-20T00:00:00Z" if archived else None,),
+        )
+        connection.execute(
+            "INSERT INTO batch_prompt_selection VALUES ('batch', 1, ?)", (selected.id,)
+        )
+        connection.commit()
+        before = list(connection.iterdump())
+    with pytest.raises(PromptConflictError, match="Saved Batch"):
+        store.delete(prompt.id)
+    with closing(open_connection(path)) as connection:
+        assert list(connection.iterdump()) == before
+
+
+def test_delete_cascades_all_versions_but_preserves_other_projects(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    store = PromptStore(path)
+    prompt, _ = store.create("project-1", "Delete", "first")
+    second = store.create_version(prompt.id, "second")
+    store.archive_version(second.id)
+    ProjectStore(path).create("Other", "other", project_id="project-2")
+    other, other_version = store.create("project-2", "Delete", "unrelated")
+    store.delete(prompt.id)
+    with closing(open_connection(path)) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM prompt_version WHERE prompt_id = ?", (prompt.id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert store.get(other.id) == other
+    assert store.get_version(other_version.id) == other_version
+    assert store.create("project-1", "Delete", "name released")[0].id != prompt.id
+    with pytest.raises(PromptNotFoundError):
+        store.delete(prompt.id)
 
 
 def _database(tmp_path: Path) -> Path:

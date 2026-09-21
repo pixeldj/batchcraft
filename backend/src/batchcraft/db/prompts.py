@@ -41,6 +41,10 @@ class PromptNameConflictError(PromptConflictError):
     """The Prompt name already exists within its Project."""
 
 
+class PromptReferencedError(PromptConflictError):
+    """A Saved Batch still references a revision of this Prompt."""
+
+
 class PromptVersionConflictError(PromptStoreError):
     """A PromptVersion uniqueness constraint conflicts with an existing row."""
 
@@ -243,6 +247,32 @@ class PromptStore:
                 connection.rollback()
                 raise
             return _get_prompt(connection, prompt_id)
+
+    def delete(self, prompt_id: str) -> None:
+        _validate_nonempty(prompt_id, "Prompt ID")
+        with closing(open_connection(self.database_path)) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                _get_prompt(connection, prompt_id)
+                referenced = connection.execute(
+                    """
+                    SELECT 1 FROM batch_prompt_selection AS selection
+                    JOIN prompt_version AS version ON version.id = selection.prompt_version_id
+                    WHERE version.prompt_id = ? LIMIT 1
+                    """,
+                    (prompt_id,),
+                ).fetchone()
+                if referenced is not None:
+                    raise PromptReferencedError(
+                        "Cannot permanently delete this Prompt: a Saved Batch references one "
+                        "of its revisions. Remove its revisions from every referencing Saved "
+                        "Batch and save those changes first (including archived Saved Batches)."
+                    )
+                connection.execute("DELETE FROM prompt WHERE id = ?", (prompt_id,))
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
 
     def list_versions(
         self, prompt_id: str, *, include_archived: bool = False

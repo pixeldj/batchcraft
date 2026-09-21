@@ -1,4 +1,6 @@
 import type { JsonObject } from "../../api/types";
+import { readWorkflowPrompt } from "./baseWorkflowValue";
+import { WorkflowPrompt } from "./WorkflowPrompt";
 
 function object(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -17,6 +19,7 @@ export function ReadonlyProfileSummary({ profile, workflow }: { profile: JsonObj
   }
   const mappings = object(profile.mappings);
   return <div className="global-profile-summary">
+    <WorkflowPrompt text={readWorkflowPrompt(workflow, profile)} />
     <dl className="global-profile-core">{[["prompt", "Prompt"], ["seed", "Seed"], ["output_prefix", "Output Prefix"]].map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{mappings[key] ? nodeLabel(object(mappings[key])) : "Not mapped"}</dd></div>)}</dl>
     <h5>Named Image Inputs</h5>
     {Array.isArray(profile.image_inputs) ? profile.image_inputs.length ? <ul>{profile.image_inputs.map((value, index) => { const item = object(value); return <li key={index}>{String(item.label ?? item.key ?? "Unnamed input")} <code>{String(item.key ?? "")}</code></li>; })}</ul> : <p>No named Image Inputs.</p> : <p>Summary unavailable</p>}

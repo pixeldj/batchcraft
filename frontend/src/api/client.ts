@@ -135,6 +135,7 @@ export interface BatchcraftApi extends LibraryApi {
   createPrompt(projectId: string, body: CreatePromptRequest): Promise<CreatePromptResponse>;
   getPrompt(promptId: string, signal?: AbortSignal): Promise<Prompt>;
   updatePrompt(promptId: string, body: PromptUpdateRequest): Promise<Prompt>;
+  deletePrompt(promptId: string): Promise<void>;
   listPromptVersions(
     promptId: string,
     includeArchived?: boolean,
@@ -391,6 +392,10 @@ export class BatchcraftApiClient implements BatchcraftApi {
     );
   }
 
+  deletePrompt(promptId: string): Promise<void> {
+    return this.request(`/api/prompts/${encodeURIComponent(promptId)}`, { method: "DELETE" });
+  }
+
   listPromptVersions(
     promptId: string,
     includeArchived = false,
@@ -636,6 +641,7 @@ export class BatchcraftApiClient implements BatchcraftApi {
         );
       }
 
+      if (response.status === 204) return undefined as T;
       try {
         return (await response.json()) as T;
       } catch {

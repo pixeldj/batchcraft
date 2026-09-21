@@ -208,6 +208,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .checkbox-row input { width: auto; min-height: 0; }
 .prompt-card .prompt-editor { min-height: 7rem; margin-top: 0.9rem; }
 pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; overflow-x: auto; background: var(--paper-raised); border-left: 3px solid var(--accent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow-prompt { margin-block: 0.5rem; min-width: 0; }
+.workflow-prompt-copy { margin-bottom: 1rem; }
+.workflow-prompt pre.prompt-editor { max-height: 20rem; overflow: auto; }
 .inline-control { gap: 0.6rem; align-items: flex-end; }
 .inline-control .field { flex: 1; }
 .limitation-note, .empty-note { margin: -0.2rem 0 0.85rem; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
@@ -326,6 +329,7 @@ pre.prompt-editor { min-height: 0; margin-bottom: 0.9rem; padding: 0.75rem; over
 .button-primary.compact, .button-secondary.compact { min-height: 2rem; padding: 0.3rem 0.65rem; font-size: 0.72rem; }
 .button-link { padding: 0; color: inherit; background: transparent; border: 0; text-decoration: underline; text-underline-offset: 0.2em; }
 .button-link.danger { color: var(--danger); font-size: 0.74rem; }
+.prompt-delete-confirm { color: var(--danger-text); background: var(--danger-bg); border-color: var(--danger); }
 .configuration-content-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.65rem; margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
 .missing-bindings-assistance { display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: 1rem; padding: 0.75rem 0.85rem; background: var(--accent-bg); border-left: 4px solid var(--accent); }
 .missing-bindings-assistance p { margin: 0; }

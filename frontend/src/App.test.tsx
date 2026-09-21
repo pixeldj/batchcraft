@@ -2169,7 +2169,7 @@ describe("PromptVersion editor", () => {
 
     await expandConfiguration("Prompts");
     fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Prompt" }));
+    fireEvent.click(await within(screen.getByRole("dialog", { name: "Prompts" })).findByRole("button", { name: "Edit Prompt" }));
     fireEvent.change(screen.getByLabelText("Prompt template"), {
       target: { value: "Changed {{subject}} in {{style}}" },
     });
@@ -5138,6 +5138,7 @@ function makeApi(
     createPrompt: vi.fn(async () => ({ prompt, version })),
     getPrompt: vi.fn(async () => prompt),
     updatePrompt: vi.fn(async () => prompt),
+    deletePrompt: vi.fn(async () => undefined),
     listPromptVersions: vi.fn(async () => ({ prompt_versions: [version] })),
     createPromptVersion: vi.fn(async () => version),
     getPromptVersion: vi.fn(async () => version),
