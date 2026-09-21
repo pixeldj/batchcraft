@@ -980,6 +980,15 @@ missing or corrupt Results. File retrieval accepts integer Job and artifact ordi
 matching `ResultRecord`, and validates the selected regular file's path, size, and SHA-256 before returning
 it. Arbitrary filesystem paths are never accepted.
 
+The current-Run frontend does not list Results on every execution poll. It lists on the first execution
+observation, per-Job ordinal/count changes, terminal transitions, loss of active ownership while running,
+and explicit Refresh Results. Recovery and reconciliation share this coordination. Slow requests
+coalesce genuine refresh needs without blocking execution polling; failed listings retain visible data
+and retry on a later successful execution observation or manual refresh. Consequently, external artifact
+changes with unchanged counts are classified at the next actual listing, not necessarily the next poll.
+This is frontend read behavior, not an API cache or a new freshness contract; each listing still hashes
+the recorded artifacts and each download independently validates the served bytes.
+
 Integrity-only listing hashes in bounded chunks. Result and Asset reads reject non-regular files without
 waiting for FIFO writers. Downloads copy and hash the selected descriptor's bytes into a disk tempfile
 in 256 KiB chunks before HTTP success, then stream only that snapshot in 64 KiB chunks. No pathname is
