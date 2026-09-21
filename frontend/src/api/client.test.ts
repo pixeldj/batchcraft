@@ -823,6 +823,13 @@ describe("BatchcraftApiClient", () => {
     });
   });
 
+  it("permanently deletes an encoded Prompt ID and accepts empty 204", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new BatchcraftApiClient("http://api.test").deletePrompt("prompt/one")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("http://api.test/api/prompts/prompt%2Fone", { method: "DELETE" });
+  });
+
   it("lists archived PromptVersion history with the query and AbortSignal", async () => {
     const fetchMock = successfulFetch({ prompt_versions: [] });
     vi.stubGlobal("fetch", fetchMock);

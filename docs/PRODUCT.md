@@ -176,6 +176,40 @@ shot with a {{lens}} lens.
 
 Prompt Templates are versioned so historical Runs can identify the exact prompt revision used.
 
+With an exact WorkflowVersion and compatible ProfileVersion selected, the Batch's Prompts section
+offers an expandable, read-only **Workflow prompt** from that mapped input. The same disclosure appears
+in read-only Profile summaries. It preserves original whitespace and does not infer text from connected,
+missing, or non-string inputs; an exact empty string is labeled explicitly.
+
+When the Batch has no Prompt Templates selected, **Use this prompt** explicitly creates an independent
+Project-owned Prompt Template and its first PromptVersion from the exact nonblank text, then selects
+that version. Selection alone never creates a template. The Workflow and any existing Prompt selection
+remain unchanged. Empty/blank text is not offered as an executable template; Add Prompt remains available.
+Copied placeholders use the normal binding and Preview validation flow. If Project, Batch, Workflow,
+Profile, or Prompt selection changes while creation is pending, the saved copy stays in the original
+Project's library without being applied to the changed Batch. Repeated clicks are single-flight and
+failed requests are not automatically retried. The generated unique copy name is visible and editable
+before creation. This BC-027 convenience uses ordinary v1 provenance with no new durable format.
+
+**Edit Prompt** beside a selected row's ordering controls opens that exact revision, not the library's
+latest text. Saving changed text creates a revision and immediately replaces only that row, preserving
+its key, order, other rows and Variable Bindings while invalidating Preview normally. Changed Project,
+Batch or Prompt selection (including away-and-back changes) prevents late application. Detached or
+unverified snapshots must use normal linkage/import handling rather than pretending to edit a library
+record. Editing from the library remains independent and never automatically replaces Batch rows.
+
+**General notes** are mutable Prompt `description`, edited with the library name through **Edit name /
+general notes** and **Save details**, without a revision or Preview invalidation. Optional revision
+notes are separate immutable change reasons. Unchanged text, including revision-note-only edits, does
+not create another revision in the editor.
+
+**Delete Prompt** is permanent, not archive. A confirmation names the Prompt without requiring typing
+and warns of losing all library revisions; frozen Runs and Results remain untouched. A Prompt selected in the current
+unsaved Batch must first be removed. Any Saved Batch reference to any revision, including an archived
+Batch, blocks the backend transaction until the user explicitly removes that reference and saves.
+Nothing automatically deletes Batches or clears references. Other browser recovery snapshots are not
+tracked globally; after deletion their exact text remains detached through normal recovery behavior.
+
 ### Variable List
 
 A named, reusable ordered list of authoring values.

@@ -23,6 +23,7 @@ import {
 import { PromptLibraryEditor } from "./PromptLibraryEditor";
 import { SavedBatchSelector, type SavedBatchCreateInput } from "./SavedBatchSelector";
 import { WorkflowLibraryEditor } from "./WorkflowLibraryEditor";
+import { readWorkflowPrompt } from "./baseWorkflowValue";
 
 interface Props {
   active: boolean;
@@ -233,6 +234,16 @@ export function BatchEditor({
 
       <PromptLibraryEditor
         api={api}
+        workflowPrompt={form.workflowVersionId && form.workflowProfileVersionId
+          && form.workflowProfileWorkflowVersionId === form.workflowVersionId
+          ? { text: readWorkflowPrompt(workflow, safeWorkflow(form.workflowProfileJson)) }
+          : undefined}
+        workflowPromptContext={JSON.stringify([
+          active, projectSwitchingBlocked, form.projectId, form.batchId, savedBatchId,
+          form.workflowVersionId, form.workflowProfileVersionId,
+          form.workflowJson, form.workflowProfileJson,
+        ])}
+        workflowPromptDisabled={!active || projectSwitchingBlocked}
         projectId={projectVerified && selectedProjectId === form.projectId ? form.projectId : ""}
         prompts={form.prompts}
         historicalImportCopyResolutions={form.historicalImportCopyResolutions}

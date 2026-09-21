@@ -91,6 +91,7 @@ from batchcraft.db import (
 )
 from batchcraft.db.history_filters import HistoryReindexRequiredError
 from batchcraft.db.history_query import HistoryGenerationChangedError, HistoryQueryError
+from batchcraft.db.prompts import PromptReferencedError
 from batchcraft.diagnostics import public_error_message, safe_exception
 from batchcraft.domain import CompilationError, SeedInput
 from batchcraft.execution import execute_run
@@ -291,7 +292,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[configured.frontend_origin],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
     _register_error_handlers(app)
@@ -645,6 +646,11 @@ def create_app(
             update_description="description" in request.model_fields_set,
         )
         return PromptResponse.from_record(prompt)
+
+    @app.delete("/api/prompts/{prompt_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_prompt(prompt_id: str, library: LibraryDependency) -> Response:
+        await asyncio.to_thread(library.delete_prompt, prompt_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/prompts/{prompt_id}/archive", response_model=PromptResponse)
     async def archive_prompt(prompt_id: str, library: LibraryDependency) -> PromptResponse:
@@ -1438,6 +1444,10 @@ def _register_error_handlers(app: FastAPI) -> None:
             "invalid_workflow_profile_target",
             str(error),
         )
+
+    @app.exception_handler(PromptReferencedError)
+    async def prompt_referenced(_request: Request, error: Exception) -> JSONResponse:
+        return _error_response(status.HTTP_409_CONFLICT, "prompt_referenced", str(error))
 
     @app.exception_handler(ProjectConflictError)
     @app.exception_handler(PromptConflictError)

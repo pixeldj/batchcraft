@@ -123,6 +123,11 @@ _ERROR_MESSAGES = {
     "saved_batch_revision_conflict": "Saved Batch changed since it was loaded; reload before saving",
     "invalid_workflow_profile_target": "Workflow Profile must target a version of its own Workflow",
     "library_conflict": "Library identity or name already exists; choose a different name or reload",
+    "prompt_referenced": (
+        "Cannot permanently delete this Prompt: a Saved Batch references one of its revisions. "
+        "Remove its revisions from every referencing Saved Batch and save those changes first "
+        "(including archived Saved Batches)."
+    ),
     "project_publication_failed": "Project could not be published; check filesystem ownership and permissions",
     "saved_batch_publication_conflict": "Saved Batch could not be published; check filesystem ownership",
     "project_adoption_failed": "Project could not be adopted; check owner identity and filesystem key",

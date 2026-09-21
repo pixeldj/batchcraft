@@ -13,11 +13,15 @@ import { OverlayPortal } from "../../components/OverlayPortal";
 import { errorMessage } from "../../utils/errors";
 import { ConfigurationSection } from "./ConfigurationSection";
 import type { HistoricalImportCopyResolutions, PromptForm } from "./form";
+import { WorkflowPrompt } from "./WorkflowPrompt";
 
 interface Props {
   api: BatchcraftApi;
   projectId: string;
   prompts: PromptForm[];
+  workflowPrompt?: { text: string | null };
+  workflowPromptContext?: string;
+  workflowPromptDisabled?: boolean;
   historicalImportCopyResolutions?: HistoricalImportCopyResolutions;
   sourceRunId?: string | null;
   onChange(prompts: PromptForm[]): void;
@@ -28,7 +32,7 @@ interface Props {
   onMetadataChange(prompts: PromptForm[]): void;
 }
 
-type WorkspacePanel = "browse" | "create" | "edit" | "duplicate" | "history";
+type WorkspacePanel = "browse" | "create" | "edit" | "duplicate" | "history" | "metadata" | "delete";
 
 interface PromptDraft {
   text: string;
@@ -59,6 +63,9 @@ export function PromptLibraryEditor({
   api,
   projectId,
   prompts,
+  workflowPrompt,
+  workflowPromptContext = "",
+  workflowPromptDisabled = false,
   historicalImportCopyResolutions = {
     promptVersions: [],
     workflowVersion: null,
@@ -83,6 +90,10 @@ export function PromptLibraryEditor({
   const [viewedVersion, setViewedVersion] = useState<LibraryPromptVersion | null>(null);
   const [createDraft, setCreateDraft] = useState<CreateDraft>(EMPTY_CREATE_DRAFT);
   const [editDraft, setEditDraft] = useState<PromptDraft | null>(null);
+  const [metadataDraft, setMetadataDraft] = useState({ name: "", description: "" });
+  const [mutationState, setMutationState] = useState({ saving: false, error: "" });
+  const mutationPending = useRef(false);
+  const rowEdit = useRef<{ key: number; context: object } | null>(null);
   const [duplicateDraft, setDuplicateDraft] = useState<CreateDraft | null>(null);
   const [historyCache, setHistoryCache] = useState<Record<string, LibraryPromptVersion[]>>({});
   const [historyState, setHistoryState] = useState<{
@@ -92,6 +103,18 @@ export function PromptLibraryEditor({
   } | null>(null);
   const [historyRetry, setHistoryRetry] = useState(0);
   const [expanded, setExpanded] = useState(false);
+  const [workflowCopy, setWorkflowCopy] = useState({ saving: false, error: "", notice: "" });
+  const workflowCopyPending = useRef(false);
+  const [workflowCopyName, setWorkflowCopyName] = useState<string | null>(null);
+  const copyContext = useRef({ signature: "" });
+  const copySignature = JSON.stringify([projectId, workflowPromptContext, workflowPrompt, workflowPromptDisabled, prompts]);
+  if (copyContext.current.signature !== copySignature) {
+    // Object identity also rejects a selection changed away and then back while saving.
+    copyContext.current = { signature: copySignature };
+  }
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => () => { copyContext.current = { signature: "" }; }, []);
   const [detachedState, setDetachedState] = useState<Record<number, "checking" | "detached" | "integrity">>({});
   const [importState, setImportState] = useState<Record<number, { saving: boolean; error: string | null }>>({});
   const loadTag = useRef(0);
@@ -166,7 +189,14 @@ export function PromptLibraryEditor({
     error: null,
   };
   const inspectedPrompt = activeLibrary.prompts.find((prompt) => prompt.id === inspectedPromptId) ?? null;
-  const workspaceSaving = createDraft.saving || Boolean(editDraft?.saving) || Boolean(duplicateDraft?.saving);
+  const workspaceSaving = mutationState.saving || createDraft.saving || Boolean(editDraft?.saving) || Boolean(duplicateDraft?.saving);
+  const copyName = workflowCopyName ?? suggestCopyName("Workflow prompt", activeLibrary.prompts);
+
+  useEffect(() => {
+    setWorkspaceOpen(false);
+    rowEdit.current = null;
+    setWorkflowCopyName(null);
+  }, [workflowPromptContext, projectId]);
   const selectionHasIssue = prompts.some((prompt) => {
     const projectMismatch = Boolean(
       prompt.libraryProjectId && prompt.libraryProjectId !== normalizedProjectId,
@@ -361,12 +391,14 @@ export function PromptLibraryEditor({
   }
 
   function inspectPrompt(logicalPrompt: ProjectPrompt) {
+    rowEdit.current = null;
     setInspectedPromptId(logicalPrompt.id);
     setViewedVersion(logicalPrompt.latest_active_version);
     setWorkspacePanel("browse");
   }
 
   function openWorkspace(trigger: HTMLButtonElement) {
+    rowEdit.current = null;
     workspaceTrigger.current = trigger;
     setExpanded(true);
     const initial = activeLibrary.prompts.find((logicalPrompt) =>
@@ -381,6 +413,7 @@ export function PromptLibraryEditor({
   }
 
   function closeWorkspace() {
+    rowEdit.current = null;
     setWorkspaceOpen(false);
     setWorkspacePanel("browse");
   }
@@ -392,6 +425,37 @@ export function PromptLibraryEditor({
       ...prompts,
       promptForm(freshKey(), normalizedProjectId, inspectedPrompt.name, viewedVersion),
     ]);
+  }
+
+  async function copyWorkflowPrompt() {
+    const text = workflowPrompt?.text;
+    if (workflowCopyPending.current || workflowPromptDisabled || !normalizedProjectId
+      || prompts.length || typeof text !== "string" || !text.trim()
+      || activeLibrary.loading || activeLibrary.error || !copyName.trim()) return;
+    workflowCopyPending.current = true;
+    const context = copyContext.current;
+    const requestedProjectId = normalizedProjectId;
+    setWorkflowCopy({ saving: true, error: "", notice: "" });
+    try {
+      const response = await api.createPrompt(requestedProjectId, {
+        name: copyName, text, description: null,
+      });
+      const logicalPrompt: ProjectPrompt = { ...response.prompt, latest_active_version: response.version };
+      setLibrary((current) => current.projectId === requestedProjectId
+        ? { ...current, prompts: [...current.prompts.filter((item) => item.id !== logicalPrompt.id), logicalPrompt] }
+        : current);
+      if (copyContext.current === context) {
+        setExpanded(true);
+        onChangeRef.current([promptForm(freshKey(), requestedProjectId, logicalPrompt.name, response.version)]);
+        setWorkflowCopy({ saving: false, error: "", notice: "" });
+      } else {
+        setWorkflowCopy({ saving: false, error: "", notice: "Prompt Template created in the original Project's library. Batch selection changed, so it was not added." });
+      }
+    } catch (caught) {
+      setWorkflowCopy({ saving: false, notice: "", error: `${errorMessage(caught)} Check the original Project's Prompt library before trying again; the request may have saved the copy.` });
+    } finally {
+      workflowCopyPending.current = false;
+    }
   }
 
   async function createPrompt(event: FormEvent<HTMLFormElement>) {
@@ -422,13 +486,51 @@ export function PromptLibraryEditor({
 
   function openEdit() {
     if (!viewedVersion) return;
+    rowEdit.current = null;
     setEditDraft({ text: viewedVersion.text, note: "", error: null, saving: false });
     setWorkspacePanel("edit");
   }
 
+  async function openRowEdit(prompt: PromptForm, trigger: HTMLButtonElement) {
+    if (mutationPending.current || workflowPromptDisabled) return;
+    const context = copyContext.current;
+    mutationPending.current = true;
+    setMutationState({ saving: true, error: "" });
+    workspaceTrigger.current = trigger;
+    try {
+      const version = await api.getPromptVersion(prompt.versionId);
+      if (copyContext.current !== context) return;
+      const logical = activeLibrary.prompts.find((item) => item.id === version.prompt_id);
+      if (!logical || version.archived_at || version.id !== prompt.versionId
+        || version.text !== prompt.text || version.name_snapshot !== prompt.snapshotName) {
+        throw new Error("Prompt linkage changed. Reload the library or import the detached snapshot first.");
+      }
+      setInspectedPromptId(logical.id);
+      setViewedVersion(version);
+      rowEdit.current = { key: prompt.key, context };
+      setEditDraft({ text: version.text, note: "", error: null, saving: false });
+      setWorkspacePanel("edit");
+      setExpanded(true);
+      setWorkspaceOpen(true);
+    } catch (caught) {
+      if (copyContext.current === context) setMutationState({ saving: false, error: errorMessage(caught) });
+    } finally {
+      mutationPending.current = false;
+      setMutationState((current) => ({ ...current, saving: false }));
+    }
+  }
+
   async function createVersion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!inspectedPrompt || !editDraft || editDraft.saving) return;
+    if (!inspectedPrompt || !viewedVersion || !editDraft || editDraft.saving || mutationPending.current
+      || editDraft.text === viewedVersion.text || workflowPromptDisabled) return;
+    const target = rowEdit.current;
+    if (target && target.context !== copyContext.current) {
+      setEditDraft((current) => current && ({ ...current, error: "Batch selection changed. Close and reopen Edit Prompt from the selected row." }));
+      return;
+    }
+    const context = copyContext.current;
+    mutationPending.current = true;
     setEditDraft((current) => current && ({ ...current, saving: true, error: null }));
     const requestedProjectId = normalizedProjectId;
     try {
@@ -436,7 +538,7 @@ export function PromptLibraryEditor({
         text: editDraft.text,
         note: editDraft.note.trim() || null,
       });
-      if (projectIdRef.current !== requestedProjectId) return;
+      if (copyContext.current !== context) return;
       setHistoryCache((current) => {
         const cached = current[inspectedPrompt.id];
         return cached ? { ...current, [inspectedPrompt.id]: [version, ...cached] } : current;
@@ -450,9 +552,53 @@ export function PromptLibraryEditor({
       setViewedVersion(version);
       setEditDraft(null);
       setWorkspacePanel("browse");
+      if (target) {
+        reconnectPatches.current.delete(target.key);
+        onChangeRef.current(promptsRef.current.map((prompt) => prompt.key === target.key
+          ? promptForm(prompt.key, requestedProjectId, inspectedPrompt.name, version)
+          : prompt));
+        closeWorkspace();
+      }
     } catch (caught) {
-      if (projectIdRef.current !== requestedProjectId) return;
+      if (copyContext.current !== context) return;
       setEditDraft((current) => current && ({ ...current, saving: false, error: errorMessage(caught) }));
+    } finally {
+      mutationPending.current = false;
+      setEditDraft((current) => current && ({ ...current, saving: false }));
+    }
+  }
+
+  async function saveMetadataOrDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!inspectedPrompt || mutationPending.current || workflowPromptDisabled) return;
+    const deleting = workspacePanel === "delete";
+    if (deleting && prompts.some((prompt) =>
+      prompt.promptId === inspectedPrompt.id || prompt.versionId === viewedVersion?.id)) return;
+    const context = copyContext.current;
+    mutationPending.current = true;
+    setMutationState({ saving: true, error: "" });
+    try {
+      if (deleting) {
+        await api.deletePrompt(inspectedPrompt.id);
+        if (copyContext.current !== context) return;
+        setLibrary((current) => ({ ...current, prompts: current.prompts.filter((prompt) => prompt.id !== inspectedPrompt.id) }));
+        setHistoryCache((current) => omitStringKey(current, inspectedPrompt.id));
+        setInspectedPromptId(null);
+        setViewedVersion(null);
+      } else {
+        const updated = await api.updatePrompt(inspectedPrompt.id, {
+          name: metadataDraft.name, description: metadataDraft.description.trim() || null,
+        });
+        if (copyContext.current !== context) return;
+        setLibrary((current) => ({ ...current, prompts: current.prompts.map((prompt) =>
+          prompt.id === updated.id ? { ...prompt, ...updated } : prompt) }));
+      }
+      setWorkspacePanel("browse");
+    } catch (caught) {
+      if (copyContext.current === context) setMutationState({ saving: false, error: errorMessage(caught) });
+    } finally {
+      mutationPending.current = false;
+      setMutationState((current) => ({ ...current, saving: false }));
     }
   }
 
@@ -622,6 +768,21 @@ export function PromptLibraryEditor({
       )}
       onExpandedChange={setExpanded}
     >
+      {workflowPrompt ? <div className="workflow-prompt-copy">
+        <WorkflowPrompt text={workflowPrompt.text} />
+        {prompts.length === 0 && typeof workflowPrompt.text === "string" && workflowPrompt.text.trim() ? <>
+          <p className="section-note">Create an independent Prompt Template in this Project from the exact workflow text. Placeholders still require bindings.</p>
+          <label className="field"><span className="field-label">Workflow Prompt copy name</span>
+            <input value={copyName} disabled={workflowCopy.saving} onChange={(event) => setWorkflowCopyName(event.target.value)} />
+          </label>
+          <button className="button-secondary compact" type="button"
+            disabled={workflowCopy.saving || workflowPromptDisabled || !normalizedProjectId || activeLibrary.loading || Boolean(activeLibrary.error) || !copyName.trim()}
+            onClick={() => void copyWorkflowPrompt()}>{workflowCopy.saving ? "Creating Prompt..." : "Use this prompt"}</button>
+        </> : null}
+      </div> : null}
+      {workflowCopy.notice ? <p role="status">{workflowCopy.notice}</p> : null}
+      {workflowCopy.error ? <p className="operation-error" role="alert">{workflowCopy.error}</p> : null}
+      {mutationState.error && !workspaceOpen ? <p className="operation-error" role="alert">{mutationState.error}</p> : null}
       {!projectId.trim() ? <p className="empty-note">Select a Project to load its Prompt library.</p> : null}
       {activeLibrary.loading ? <p role="status">Loading Prompt library...</p> : null}
       {activeLibrary.error ? (
@@ -668,6 +829,9 @@ export function PromptLibraryEditor({
                   {prompt.versionNumber !== null ? <span className="prompt-revision">v{prompt.versionNumber}</span> : null}
                 </div>
                 <div className="repeater-actions">
+                  <button className="button-link" type="button"
+                    disabled={workspaceSaving || workflowPromptDisabled || activeLibrary.loading || Boolean(activeLibrary.error) || !currentPrompt || projectMismatch || !prompt.libraryProjectId || detached || authoritativeConflict || Boolean(detachedState[prompt.key])}
+                    onClick={(event) => void openRowEdit(prompt, event.currentTarget)}>Edit Prompt</button>
                   <button className="button-link" type="button" disabled={index === 0} onClick={() => move(index, -1)}>Move up</button>
                   <button className="button-link" type="button" disabled={index === prompts.length - 1} onClick={() => move(index, 1)}>Move down</button>
                   <button className="button-link danger" type="button" onClick={() => onChange(prompts.filter((item) => item.key !== prompt.key))}>Remove</button>
@@ -778,15 +942,24 @@ export function PromptLibraryEditor({
                   </section>
                 ) : null}
 
-                {workspacePanel === "browse" && inspectedPrompt && viewedVersion ? (
+                {workspacePanel === "browse" && inspectedPrompt ? (
                   <PromptInspection
                     prompt={inspectedPrompt}
                     version={viewedVersion}
-                    selected={prompts.some((prompt) => prompt.versionId === viewedVersion.id)}
+                    selected={prompts.some((prompt) => prompt.versionId === viewedVersion?.id)}
                     onAdd={appendViewedVersion}
                     onEdit={openEdit}
                     onDuplicate={openDuplicate}
                     onHistory={() => setWorkspacePanel("history")}
+                    onMetadata={() => {
+                      setMetadataDraft({ name: inspectedPrompt.name, description: inspectedPrompt.description ?? "" });
+                      setMutationState({ saving: false, error: "" });
+                      setWorkspacePanel("metadata");
+                    }}
+                    onDelete={() => {
+                      setMutationState({ saving: false, error: "" });
+                      setWorkspacePanel("delete");
+                    }}
                   />
                 ) : null}
 
@@ -804,7 +977,8 @@ export function PromptLibraryEditor({
                 {workspacePanel === "edit" && editDraft && inspectedPrompt && viewedVersion ? (
                   <section aria-labelledby="edit-prompt-title">
                     <h3 id="edit-prompt-title">Edit Prompt</h3>
-                    <p className="prompt-library-helper">Saving creates a new revision and preserves v{viewedVersion.version_number} and every Batch selection.</p>
+                    <p><strong>{inspectedPrompt.name}</strong> / v{viewedVersion.version_number}</p>
+                    <p className="prompt-library-helper">Saving changed text creates a new revision and preserves v{viewedVersion.version_number}. {rowEdit.current ? "Only this selected Batch row is replaced; Preview must be refreshed." : "Every Batch selection stays unchanged."} General notes are edited separately without a revision.</p>
                     <form onSubmit={createVersion}>
                       <label className="field">
                         <span className="field-label">Prompt template</span>
@@ -817,11 +991,42 @@ export function PromptLibraryEditor({
                       {editDraft.error ? <p className="operation-error" role="alert">{editDraft.error}</p> : null}
                       <div className="prompt-library-form-actions">
                         <button className="button-secondary" type="button" disabled={editDraft.saving} onClick={() => setWorkspacePanel("browse")}>Cancel</button>
-                        <button className="button-primary" type="submit" disabled={editDraft.saving}>{editDraft.saving ? "Saving..." : "Save revision"}</button>
+                        <button className="button-primary" type="submit" disabled={editDraft.saving || editDraft.text === viewedVersion.text}>{editDraft.saving ? "Saving..." : "Save revision"}</button>
                       </div>
                     </form>
                   </section>
                 ) : null}
+
+                {workspacePanel === "metadata" && inspectedPrompt ? <section>
+                  <h3>Edit Prompt details</h3>
+                  <p>General notes and the library name are mutable. Saving does not create a revision or change frozen revision notes or Runs.</p>
+                  <form onSubmit={saveMetadataOrDelete}>
+                    <label className="field"><span className="field-label">Prompt name</span>
+                      <input required value={metadataDraft.name} onChange={(event) => setMetadataDraft({ ...metadataDraft, name: event.target.value })} />
+                    </label>
+                    <label className="field"><span className="field-label">General notes</span>
+                      <textarea value={metadataDraft.description} onChange={(event) => setMetadataDraft({ ...metadataDraft, description: event.target.value })} />
+                    </label>
+                    {mutationState.error ? <p role="alert">{mutationState.error}</p> : null}
+                    <div className="prompt-library-form-actions">
+                      <button className="button-secondary" type="button" disabled={workspaceSaving} onClick={() => setWorkspacePanel("browse")}>Cancel</button>
+                      <button className="button-primary" type="submit" disabled={workspaceSaving || !metadataDraft.name.trim()}>{workspaceSaving ? "Saving..." : "Save details"}</button>
+                    </div>
+                  </form>
+                </section> : null}
+                {workspacePanel === "delete" && inspectedPrompt ? <section>
+                  <h3>Permanently delete Prompt</h3>
+                  <p>Delete "{inspectedPrompt.name}" and ALL its revisions permanently. This cannot be undone. Frozen Runs and Results remain untouched. Saved Batch references block deletion, including archived Batches.</p>
+                  {prompts.some((prompt) => prompt.promptId === inspectedPrompt.id || prompt.versionId === viewedVersion?.id)
+                    ? <p role="alert">Remove from Batch first. Then save any referencing Saved Batches before deleting.</p>
+                    : <form onSubmit={saveMetadataOrDelete}>
+                      <div className="prompt-library-form-actions">
+                        <button className="button-secondary prompt-delete-confirm" type="submit" disabled={workspaceSaving}>{workspaceSaving ? "Deleting..." : "Permanently delete"}</button>
+                      </div>
+                    </form>}
+                  {mutationState.error ? <p role="alert">{mutationState.error}</p> : null}
+                  <button className="button-link" type="button" disabled={workspaceSaving} onClick={() => setWorkspacePanel("browse")}>Cancel</button>
+                </section> : null}
 
                 {workspacePanel === "duplicate" && duplicateDraft ? (
                   <PromptCreateForm
@@ -944,33 +1149,40 @@ function PromptInspection({
   onEdit,
   onDuplicate,
   onHistory,
+  onMetadata,
+  onDelete,
 }: {
   prompt: ProjectPrompt;
-  version: LibraryPromptVersion;
+  version: LibraryPromptVersion | null;
   selected: boolean;
   onAdd(): void;
   onEdit(): void;
   onDuplicate(): void;
   onHistory(): void;
+  onMetadata(): void;
+  onDelete(): void;
 }) {
   return (
     <article className="prompt-library-inspection">
       <div className="prompt-library-panel-heading">
         <div>
-          <p className="prompt-revision">v{version.version_number}</p>
+          <p className="prompt-revision">{version ? `v${version.version_number}` : "No active revision"}</p>
           <h3>{prompt.name}</h3>
-          {prompt.description ? <p className="prompt-library-description">{prompt.description}</p> : null}
+          <p className="prompt-library-description">General notes: {prompt.description ?? "None"}</p>
         </div>
         <div className="prompt-library-inspection-actions">
-          <button className="button-primary" type="button" disabled={selected || Boolean(version.archived_at)} onClick={onAdd}>
-            {version.archived_at ? "Archived" : selected ? "Selected in Batch" : "Add to Batch"}
+          <button className="button-primary" type="button" disabled={!version || selected || Boolean(version.archived_at)} onClick={onAdd}>
+            {version?.archived_at ? "Archived" : selected ? "Selected in Batch" : "Add to Batch"}
           </button>
-          <button className="button-secondary" type="button" onClick={onEdit}>Edit Prompt</button>
-          <button className="button-secondary" type="button" onClick={onDuplicate}>Duplicate</button>
+          <button className="button-secondary" type="button" disabled={!version} onClick={onEdit}>Edit Prompt</button>
+          <button className="button-secondary" type="button" disabled={!version} onClick={onDuplicate}>Duplicate</button>
           <button className="button-link" type="button" onClick={onHistory}>History</button>
+          <button className="button-link" type="button" onClick={onMetadata}>Edit name / general notes</button>
+          <button className="button-link danger" type="button" onClick={onDelete}>Delete Prompt</button>
         </div>
       </div>
-      <pre className="prompt-library-text">{version.text}</pre>
+      {version ? <pre className="prompt-library-text">{version.text}</pre> : null}
+      {version?.note ? <p>Immutable revision note: {version.note}</p> : null}
     </article>
   );
 }
@@ -1011,7 +1223,7 @@ function PromptCreateForm({
         </label>
         {lockTemplate ? <p className="prompt-library-helper">The inspected revision becomes v1 unchanged. Edit the duplicate afterward to create another revision.</p> : null}
         <label className="field">
-          <span className="field-label">Description (optional)</span>
+          <span className="field-label">General notes (optional)</span>
           <textarea value={draft.description} onChange={(event) => onDraftChange((current) => ({ ...current, description: event.target.value }))} />
         </label>
         {draft.error ? <p className="operation-error" role="alert">{draft.error}</p> : null}

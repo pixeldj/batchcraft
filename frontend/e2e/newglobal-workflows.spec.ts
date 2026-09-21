@@ -133,7 +133,7 @@ test("real API: global catalog without a Project uses bounded metadata reads and
   await dialog.getByRole("button", { name: "Copy actions for CFG mapping", exact: true }).click();
   await dialog.getByRole("menuitem", { name: "Inspect mappings", exact: true }).click();
   await dialog.getByText("Technical mapping targets", { exact: true }).click();
-  await expect(dialog.getByRole("region", { name: "Inspect Profile mappings" }).locator("pre")).toContainText('"input_name": "cfg"');
+  await expect(dialog.getByRole("region", { name: "Inspect Profile mappings" }).locator("details").filter({ has: page.getByText("Technical mapping targets", { exact: true }) }).locator("pre")).toContainText('"input_name": "cfg"');
   await page.screenshot({ path: testInfo.outputPath("global-profile-inspection.png") });
   await page.setViewportSize({ width: 320, height: 740 });
   await page.screenshot({ path: testInfo.outputPath("global-copy-dialog-320.png") });

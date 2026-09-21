@@ -974,6 +974,60 @@ def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
         assert len(all_projects.json()["projects"]) == 1
 
 
+def test_prompt_permanent_delete_http_and_frozen_run_preservation(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = FakeComfyUIClient()
+    with TestClient(create_app(settings, client_factory=lambda _settings: client)) as http:
+        preflight = http.options(
+            "/api/prompts/example",
+            headers={
+                "Origin": settings.frontend_origin,
+                "Access-Control-Request-Method": "DELETE",
+            },
+        )
+        assert preflight.status_code == 200
+        assert "DELETE" in preflight.headers["access-control-allow-methods"]
+        project = http.post(
+            "/api/projects", json={"name": "Prompt deletion", "filesystem_key": "delete_test"}
+        ).json()
+        definition = _saved_batch_definition(http, project["id"])
+        definition["filesystem_key"] = "protected_batch"
+        selections = cast(list[dict[str, object]], definition["prompt_selections"])
+        version_id = selections[0]["prompt_version_id"]
+        first = http.get(f"/api/prompt-versions/{version_id}").json()
+        prompt_id = first["prompt_id"]
+        second = http.post(
+            f"/api/prompts/{prompt_id}/versions", json={"text": "new text", "note": "Keep"}
+        ).json()
+        batch = http.post(f"/api/projects/{project['id']}/batches", json=definition)
+        assert batch.status_code == 201, batch.text
+        before = batch.json()
+        blocked = http.delete(f"/api/prompts/{prompt_id}")
+        assert blocked.status_code == 409
+        assert blocked.json()["error"]["code"] == "prompt_referenced"
+        assert "Saved Batch" in blocked.json()["error"]["message"]
+        assert http.get(f"/api/batches/{before['id']}").json() == before
+        assert http.get(f"/api/prompt-versions/{version_id}").json() == first
+        assert http.get(f"/api/prompt-versions/{second['id']}").json() == second
+        # A separate frozen Run remains byte-for-byte intact; deletion never invokes filesystem IO.
+        run = http.post("/api/runs", json=_batch_request(())).json()
+        frozen = {
+            path: path.read_bytes() for path in settings.projects_root.rglob("*") if path.is_file()
+        }
+        definition["prompt_selections"] = []
+        definition["expected_revision"] = before["revision"]
+        del definition["filesystem_key"]
+        assert http.patch(f"/api/batches/{before['id']}", json=definition).status_code == 200
+        deleted = http.delete(f"/api/prompts/{prompt_id}")
+        assert deleted.status_code == 204
+        assert deleted.content == b""
+        assert http.get(f"/api/prompts/{prompt_id}").status_code == 404
+        assert http.get(f"/api/prompt-versions/{second['id']}").status_code == 404
+        assert http.delete(f"/api/prompts/{prompt_id}").status_code == 404
+        assert http.get(f"/api/runs/{run['run_id']}").status_code == 200
+        assert {path: path.read_bytes() for path in frozen} == frozen
+
+
 def test_prompt_response_defers_malformed_placeholder_validation(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
 

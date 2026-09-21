@@ -357,6 +357,9 @@ class LibraryService:
     def archive_prompt(self, prompt_id: str) -> PromptRecord:
         return self._prompts.archive(prompt_id)
 
+    def delete_prompt(self, prompt_id: str) -> None:
+        self._prompts.delete(prompt_id)
+
     def list_prompt_versions(
         self, prompt_id: str, *, include_archived: bool = False
     ) -> tuple[PromptVersionRecord, ...]:

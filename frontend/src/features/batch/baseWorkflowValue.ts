@@ -11,6 +11,14 @@ export interface BaseWorkflowValueDisplay {
   available: boolean;
 }
 
+export function readWorkflowPrompt(workflow: JsonObject, profile: JsonObject): string | null {
+  const mappings = profile.mappings;
+  const target = isObject(mappings) ? mappings.prompt : null;
+  if (!isObject(target) || typeof target.node_id !== "string" || typeof target.input_name !== "string") return null;
+  const input = readFrozenWorkflowInput(workflow, { node_id: target.node_id, input_name: target.input_name });
+  return input.found && typeof input.value === "string" ? input.value : null;
+}
+
 export function readFrozenWorkflowInput(
   workflow: JsonObject,
   target: WorkflowInputTarget,

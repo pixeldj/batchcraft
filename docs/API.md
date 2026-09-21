@@ -336,6 +336,7 @@ GET  /api/projects/{project_id}/prompts
 POST /api/projects/{project_id}/prompts
 GET  /api/prompts/{prompt_id}
 PATCH /api/prompts/{prompt_id}
+DELETE /api/prompts/{prompt_id}
 POST /api/prompts/{prompt_id}/archive
 GET  /api/prompts/{prompt_id}/versions
 POST /api/prompts/{prompt_id}/versions
@@ -426,6 +427,20 @@ Saving text creates the next monotonic version. Archiving hides records from lis
 restoring an older version creates a new version with the current Prompt name snapshot. Add
 `include_archived=true` to Project, Prompt, or PromptVersion list requests when archived records are
 needed.
+
+`DELETE /api/prompts/{prompt_id}` permanently removes the logical Prompt and all its library
+revisions, including archived revisions. Success returns an empty HTTP 204; missing IDs return
+`404 prompt_not_found`. Under one `BEGIN IMMEDIATE` transaction, any Saved Batch reference to any
+revision blocks the entire operation with `409 prompt_referenced` and actionable removal/save
+guidance. Archived Saved Batches also protect their references. Existing foreign keys cascade only
+PromptVersions and restrict referenced versions; no migration is required. No Saved Batch references,
+historical projections, or filesystem Runs are cleared or rewritten. The endpoint follows existing
+ID-addressed library operations, not a client-selected Project scope. Browser unsaved selections are
+not visible to the backend; the UI separately blocks deletion of Prompts selected in its current Batch.
+
+Prompt **General notes** use the existing mutable `description` PATCH field (explicit `null` clears it),
+not immutable PromptVersion `note`. Metadata saves create no revision. The UI refuses unchanged-text
+revision saves, including note-only edits; the existing explicit POST-version API contract is unchanged.
 
 Every Prompt library version response includes `placeholders`, an ordered list derived from immutable
 template text by the compiler's authoritative parser. Names preserve first occurrence, exact case, and
