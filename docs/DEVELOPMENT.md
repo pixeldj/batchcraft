@@ -720,8 +720,10 @@ and `Job` captions; keep the info popup, accessible descriptions, lightbox label
 unavailable-artifact placeholders, and image-load failure handling. Cancellation behavior is unchanged.
 This cleanup changes no SQLite schema, filesystem format, or backend API DTO.
 
-BC-007's visual checkpoint replaces the mounted Project History UI with `ProjectBrowser`, backed by
-`useProjectBrowserHistory` and `useWorkspaceNavigation`. Top navigation exposes Batch/Gallery/Runs;
+Project history uses `ProjectBrowser`, backed by `useProjectBrowserHistory` and
+`useWorkspaceNavigation`. The unmounted legacy `ProjectHistory` component and its dedicated tests and
+frontend API wrapper/types have been removed; the backend's v1 history endpoint remains supported.
+Top navigation exposes Batch/Gallery/Runs;
 keep the Batch subtree and `RunWorkspace` mounted but hide inactive authoring controls. Monitoring
 continues with a compact strip showing the frozen Run's actual Project/Batch, independently of draft
 identity. In-app review preserves editor-local drafts and valid in-memory Preview. Cold-load Preview
@@ -747,8 +749,8 @@ guidance rather than repeated reindexing.
 
 The browser retains at most two metadata pages, one per view: 48 Results or 25 Runs, with Previous/Next
 navigation and at most 20 previous cursor bookmarks per view. App's frozen-Run cache is capped at 20
-entries. Do not restore the legacy
-`listProjectRuns` plus per-Run `getResults` fan-out: browsing uses `browseProjectRuns` and
+entries. Do not restore the legacy unbounded Run listing plus per-Run `getResults` fan-out:
+browsing uses `browseProjectRuns` and
 `browseProjectResults`. Selected Result Details still calls `getResults` for that selected owning Run
 and checks ownership, Job/artifact ordinals, and hash against frozen provenance. Gallery images use
 `loading="lazy"` and `decoding="async"` on original artifact URLs; generated thumbnails are deferred.
@@ -940,9 +942,24 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run check:distribution
 ```
 
 The committed npm lockfile defines dependency versions. Do not commit `.env` or `.env.local`.
+
+CI runs full checks for pull requests, pushes to `main`, and all tag pushes. Feature-branch pushes
+without a pull request do not run Checks. Newer runs cancel older runs of the same workflow and PR
+number or ref; unrelated PRs and refs remain independent. A main push and a tag push at the same commit
+still each run verification, preserving tag/release coverage without custom duplicate detection.
+
+Browser CI runs the full built-frontend suite once on desktop and mobile, then only
+`npm run test:e2e:smoke` against Vite and its separate backend origin. The narrow `api-smoke.spec.ts`
+checks rendered simulated ComfyUI status and UI-driven Project creation through real browser API/CORS
+requests; it also runs in the full built suite using same-origin requests. `npm run test:e2e` remains
+the full local Vite suite, and `npm run test:e2e:built` selects the full built suite. See
+`LOCAL_INSTANCES.md` for sequential commands and separate report/output directories. CI retains the
+default distribution build/check before the explicitly configured same-origin browser build, followed
+by the existing artifact-browser security check. Backend checks and secret scans remain required.
 
 ## History browser measurement
 

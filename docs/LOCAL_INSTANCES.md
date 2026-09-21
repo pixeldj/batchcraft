@@ -258,7 +258,8 @@ From `frontend/`:
 npm run browser:install
 npm run test:e2e
 npm run test:e2e:headed
-BATCHCRAFT_E2E_BUILT=1 npm run test:e2e
+npm run test:e2e:built
+npm run test:e2e:smoke
 ```
 
 The built-frontend variant builds the frontend with same-origin API requests and serves it from the
@@ -272,15 +273,41 @@ test port. Each backend launch allocates a fresh temporary database and Projects
 that owned temporary root on normal shutdown. Browser contexts are isolated; test Projects have unique
 names. Tests run sequentially because one backend owns at most one active Run.
 
-The smoke tests exercise the real HTTP boundary, Saved Batch loading, Preview, Run creation, execution,
+The full suite exercises the real HTTP boundary, Saved Batch loading, Preview, Run creation, execution,
 actual image decoding, lightbox, cold-tab restoration, Stop-after-current cancellation, and historical
 Batch reconstruction. They run in desktop Chromium and mobile-emulated Chromium. They do not replace
 Safari testing, live ComfyUI checks, or the separate v1 cross-instance release gate.
 
-Screenshots and failure traces go to ignored `frontend/test-results/`; the HTML report goes to ignored
-`frontend/playwright-report/`. Open the latter with `npx playwright show-report`. CI runs the same tests
-against a fake client and retains browser artifacts for seven days. Ordinary `npm test` still runs only
-the fast Vitest suite.
+`test:e2e` remains the full Vite suite. `test:e2e:smoke` explicitly selects only `e2e/api-smoke.spec.ts`
+on desktop and mobile against Vite. It checks browser-rendered simulated ComfyUI status, then creates
+and selects a Project through the UI, asserting the API request Origin and matching CORS response.
+It uses the real backend and temporary data, not intercepted API replies or request-context-only checks.
+The same test is included in `test:e2e:built`, asserting same-origin requests there.
+
+Default screenshots and failure traces go to ignored `frontend/test-results/`; the HTML report goes to
+ignored `frontend/playwright-report/`. Open the latter with `npx playwright show-report`. To retain both
+invocations' evidence, use separate subdirectories as CI does, sequentially from `frontend/`:
+
+```bash
+BATCHCRAFT_E2E_OUTPUT_DIR=test-results/built \
+  PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/built npm run test:e2e:built
+BATCHCRAFT_E2E_OUTPUT_DIR=test-results/vite-smoke \
+  PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/vite-smoke npm run test:e2e:smoke
+npx playwright show-report playwright-report/built
+# Or: npx playwright show-report playwright-report/vite-smoke
+```
+
+`BATCHCRAFT_E2E_OUTPUT_DIR` configures Playwright's output directory; `PLAYWRIGHT_HTML_OUTPUT_DIR`
+is the HTML reporter's native override. A later default full-suite invocation can replace the default
+parent output directories, so inspect or preserve these reports before doing that.
+
+CI runs the full built suite once, followed by the narrow Vite smoke and existing artifact-browser
+security check. The built launcher still creates its own same-origin build with the Browser test label;
+the preceding ordinary distribution check tests the default build separately. Both browser artifact
+uploads use `always()` and separate names (`browser-report-built`, `browser-report-vite-smoke`), with
+seven-day retention. If the built pass fails, later test steps do not run: its failure evidence is still
+uploaded and the absent Vite output only produces the upload action's missing-files warning. If Vite
+fails, both invocations' evidence remains available. Ordinary `npm test` runs only Vitest.
 
 ### Interactive agent browser
 

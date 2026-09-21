@@ -2,7 +2,13 @@ name: Checks
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -64,20 +70,37 @@ jobs:
           npm run lint
           npm run build
           npm run check:distribution
-      - name: Browser smoke tests (fake ComfyUI)
+      - name: Install browser
         working-directory: frontend
-        run: |
-          npx playwright install --with-deps chromium
-          npm run test:e2e
-          BATCHCRAFT_E2E_BUILT=1 npm run test:e2e
+        run: npx playwright install --with-deps chromium
+      - name: Full built browser tests (fake ComfyUI)
+        working-directory: frontend
+        env:
+          BATCHCRAFT_E2E_OUTPUT_DIR: test-results/built
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/built
+        run: npm run test:e2e:built
+      - name: Vite API smoke (fake ComfyUI)
+        working-directory: frontend
+        env:
+          BATCHCRAFT_E2E_OUTPUT_DIR: test-results/vite-smoke
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/vite-smoke
+        run: npm run test:e2e:smoke
       - name: Artifact browser security (fake ComfyUI)
         working-directory: backend
         run: PYTHONPATH=. uv run python tests/api/check_artifact_browser.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: browser-report
+          name: browser-report-built
           path: |
-            frontend/playwright-report/
-            frontend/test-results/
+            frontend/playwright-report/built/
+            frontend/test-results/built/
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: browser-report-vite-smoke
+          path: |
+            frontend/playwright-report/vite-smoke/
+            frontend/test-results/vite-smoke/
           retention-days: 7
