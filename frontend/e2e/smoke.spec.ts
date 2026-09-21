@@ -595,9 +595,11 @@ test("real API: Preview, execution, images, closed-tab recovery, historical reus
   await expect(details.locator(".result-technical-details dl > div").filter({ has: page.getByText("Integrity", { exact: true }) }).locator("dd")).toHaveText("verified");
   await details.getByRole("button", { name: "Close", exact: true }).click();
 
+  const historyReindexed = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/projects/${project.id}/reindex` && response.request().method() === "POST");
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Runs", exact: true }).click();
   const openHistory = page.getByRole("region", { name: "Project browser" });
-  await expect(openHistory.getByText("Checking Project history...", { exact: true })).toHaveCount(0);
+  expect((await historyReindexed).ok()).toBe(true);
+  await expect(openHistory.getByRole("button", { name: "Reindex Project", exact: true })).toBeEnabled();
   await openHistory.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(openHistory.locator(".pb-run .status-pill")).toHaveText("succeeded");
   await expect(openHistory.getByText("2 Results", { exact: true })).toBeVisible();

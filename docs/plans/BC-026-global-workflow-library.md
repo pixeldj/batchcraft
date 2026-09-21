@@ -1,7 +1,7 @@
 # BC-026: Global Workflow Library
 
-Status: In Progress. Target release: v1.2.0 after the agreed Workflow updates are complete and verified.
-Application version remains 1.1.0 during this implementation pass; no release or deployment is implied.
+Status: Done. Release: v1.2.0. Implementation verification and explicit owner acceptance are complete.
+Application version is 1.2.0; release and safe everyday installation update are authorized.
 
 Backlog: [BC-026](../BACKLOG.md#bc-026-global-workflow-library-and-project-copies).
 Decision: [ADR 0016](../adr/0016-global-workflow-library-project-copies.md).
@@ -60,9 +60,9 @@ authorization to bump version 1.1.0, publish v1.2.0, or update an everyday insta
 
 ## Current authoring checkpoint
 
-Backend and UI authoring are implemented. BC-026 remains In Progress: historical Import to Library is
-also implemented below, but this checkpoint is not final acceptance or a v1.2.0 tag.
-The application version stays 1.1.0.
+Backend and UI authoring are implemented. At this checkpoint BC-026 remained In Progress;
+historical Import to Library and final acceptance are recorded below. The application version
+at this checkpoint was 1.1.0.
 
 - Global New Workflow has one Save action. Success saves the Workflow, then opens the shared Profile
   mapper with `${name}-profile` prefilled. Cancel keeps that Workflow; Profile errors retain the Profile
@@ -171,8 +171,8 @@ no threshold was relaxed. Owner acceptance of this cleanup and overall BC-026 co
 This frontend interaction follow-up uses the current `SetupReview` rather than introducing another copy
 flow. Only its global-to-Project branch changes; Project-source Import to Library keeps its direction
 and legacy dialog. No backend, API, SQLite, v1 format, architecture, dependency, synchronization, or
-Saved Batch/snapshot semantics change is included. BC-026 remains In Progress, targeting a future
-v1.2.0; the application version remains 1.1.0. Workflow images and historical Run import are outside
+Saved Batch/snapshot semantics change is included. At this checkpoint BC-026 remained In Progress,
+targeting v1.2.0; the application version was 1.1.0. Workflow images and historical Run import are outside
 this cleanup.
 
 ### Presentation and selection
@@ -344,7 +344,10 @@ An existing copy test now waits for the enabled Add action after exact-revision 
 clicking as soon as its checkbox appears; its payload assertions remain intact. Reviewed 1440px/390px
 screenshots cover the compact initial review, naming conflict, renaming, nested dialogs, and success.
 The existing non-fatal Vite warning is approximately 569 kB minified; no threshold was relaxed.
-Owner acceptance remains pending before BC-026 closure and v1.2.0 release preparation.
+The owner subsequently explicitly accepted BC-026 and authorized release and installation work:
+"Yes it looks good to go. Go ahead with tag and release, changelog, installation update,etc."
+BC-026 is Done. See [release notes](../V1_2_RELEASE_NOTES.md) for final local verification after
+the 1.2.0 metadata update; hosted checks remain a required publication gate.
 
 Backend coverage includes a v1 Project fixture imported into an empty database without source
 Workflow/Profile rows or a copied global catalog, then frozen setup -> global -> new Project ->
@@ -358,8 +361,9 @@ libraries do not become portable Project data. No live ComfyUI or installed-app 
 
 ## Remaining scope
 
-Complete final verification and owner acceptance before marking BC-026 Done or preparing v1.2.0.
-The application version remains 1.1.0; no release/tag or everyday installation update is authorized.
+Final implementation checks and explicit owner acceptance are complete. Application version 1.2.0,
+tag/release publication and the safe everyday installation update are authorized. Publication requires
+green hosted checks; installation requires an idle, stopped backend and whole-data backup.
 Workflow images are deferred optional upcoming work, not a v1.2.0 completion gate.
 
 ## Implementation checkpoints
@@ -407,8 +411,8 @@ Workflow images are deferred optional upcoming work, not a v1.2.0 completion gat
   mobile UI, and retention of drafts/valid Preview when merely viewing or importing into the catalog.
 - Run normal frontend/backend checks and fake-backed browser acceptance. Do not touch everyday data or
   live ComfyUI without explicit authorization.
-- Record owner acceptance and any additional agreed Workflow scope before preparing v1.2.0 metadata,
-  tagged release, or installation updates. BC-009 is not silently included in this milestone.
+- Owner acceptance and publication/installation authorization are recorded above. BC-009 is not
+  silently included in this milestone.
 
 ## Non-goals
 

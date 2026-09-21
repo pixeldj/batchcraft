@@ -156,12 +156,13 @@ History and Archive actions use keyboard-operable menus. Selected Profiles show 
 names, ordered Image Inputs and typed parameters, with technical targets/JSON in disclosures. Search is
 debounced with immediate Enter submission; Refresh resets paging without changing exact selections.
 Only the restored-draft notice is hidden outside Batch without clearing its state; other warnings remain
-unchanged. This frontend cleanup changes no backend or durable semantics, and owner acceptance is pending.
+unchanged. This frontend cleanup changes no backend or durable semantics and is included in owner acceptance.
 
-Existing v1 Project archives still carry setups used by Runs, not unused global libraries. BC-026 remains
-In Progress pending owner acceptance before v1.2.0 version preparation; implementation checks have passed. Workflow
-images are deferred optional upcoming work, not a v1.2.0 completion gate. The target is v1.2.0 after agreed work and
-verification; the actual application version remains 1.1.0. This checkpoint does not publish a tag or release.
+Existing v1 Project archives still carry setups used by Runs, not unused global libraries. BC-026 is
+Done after passing implementation checks and explicit owner acceptance. The owner authorized the
+v1.2.0 release and everyday installation update. The application version is 1.2.0;
+see [release notes](V1_2_RELEASE_NOTES.md).
+Workflow images remain deferred optional work, not a v1.2.0 completion gate.
 
 ### Prompt Template
 

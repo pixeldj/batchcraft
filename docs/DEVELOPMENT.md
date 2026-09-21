@@ -627,9 +627,10 @@ presentation, exact-selection, receipt and cancellation constraints and prior ch
 Hidden Rename fields retain the current draft without resetting
 request identity, not durable unsent edits. The inline Added/pending-apply panel does not survive reload;
 persisted copies remain in the Project library, with no Recovery v4 or backend contract change.
-Historical Run Plan/Result Details Import to Library is implemented. BC-026 stays In Progress and the
-application version remains 1.1.0; no v1.2.0 tag or everyday-installation update is authorized. Workflow
-images are deferred optional upcoming work, not a v1.2.0 completion gate.
+Historical Run Plan/Result Details Import to Library is implemented. BC-026 is Done after passing
+implementation checks and explicit owner acceptance, with v1.2.0 publication and everyday-installation
+update authorized. Workflow images remain deferred optional work, not a v1.2.0 completion gate.
+See [release notes](V1_2_RELEASE_NOTES.md).
 
 ### BC-026 historical setup import
 
@@ -651,8 +652,8 @@ Workflow/Profile or global catalog, then frozen setup -> global -> new Project -
 coverage uses archived mutable source rows, not empty-database portability, and API transport fault
 injection drops responses from real backend receipt-backed writes. Keep these evidence scopes distinct.
 The plan's [Final verification](plans/BC-026-global-workflow-library.md#final-verification) section is the
-single record of prior historical-import counts and pending final reruns/owner acceptance. No new
-full-pass claim follows from this documentation update.
+record of passing historical-import implementation checks and owner acceptance. Release verification
+is recorded separately in [release notes](V1_2_RELEASE_NOTES.md).
 
 Cancellation changes require tests for durable and idempotent intent, both request/admission race
 orderings, cancellation during local preparation, successful current-Job Result ingestion, failure and

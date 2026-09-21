@@ -14,9 +14,9 @@ ComfyUI remains the workflow editor and generation engine. batchcraft sits above
 
 ## Status
 
-This source tree targets **v1.1.0**, source-only on macOS. See the
-[v1.1.0 release notes](docs/V1_1_RELEASE_NOTES.md) for changes since v1.0.0 and upgrade precautions.
-The [v1.1.0 GitHub Release page](https://github.com/pixeldj/batchcraft/releases/tag/v1.1.0)
+This source tree targets **v1.2.0**, source-only on macOS. See the
+[v1.2.0 release notes](docs/V1_2_RELEASE_NOTES.md) for changes since v1.1.0 and upgrade precautions.
+The [v1.2.0 GitHub Release page](https://github.com/pixeldj/batchcraft/releases/tag/v1.2.0)
 is the publication point for release notes and source downloads.
 The original [v1 cross-instance portability gate](docs/V1_CROSS_INSTANCE_ACCEPTANCE.md) passed with
 owner-reported candidate acceptance, and ADR 0012 is Accepted. BC-025 in
@@ -57,9 +57,18 @@ beyond v1. Generated thumbnails, richer historical filter combinations, a global
 backend recovery remain deferred. Stop-after-current and local `Stop waiting` detach are supported;
 neither interrupts ComfyUI.
 
+**v1.2.0** adds a global Workflow Library with direct API-JSON authoring, immutable
+History, archive management, and independent copies from Projects or frozen Run setups. Add to Project
+and Apply to Batch are separate explicit actions; historical import copies the base Workflow and one
+Profile, not Job overrides. Prompt conveniences include reviewed Workflow prompt copies, exact selected-row
+editing, separate general/revision notes, and confirmed deletion guarded by Saved Batch references.
+Unused global library data remains SQLite-only, not portable in a Project folder: back up the whole data
+root before upgrading. Forward migrations 0005/0006 preserve existing migration bytes,
+v1 historical formats and working-session Recovery v4. BC-026 has passed owner acceptance.
+
 ## Install From Source (macOS)
 
-v1.1.0 is source-only on macOS, not a standalone app bundle. Prerequisites: Git,
+v1.2.0 is source-only on macOS, not a standalone app bundle. Prerequisites: Git,
 [`uv`](https://docs.astral.sh/uv/getting-started/installation/) with Python 3.13 or newer,
 and Node.js with npm satisfying `^22.22.2 || ^24.15.0 || >=26.0.0`.
 Node 24.15 or newer in the 24.x line is recommended for the locked frontend dependencies.
@@ -67,7 +76,7 @@ Node 24.15 or newer in the 24.x line is recommended for the locked frontend depe
 ComfyUI must be installed separately; see its [installation guide](https://docs.comfy.org/installation/overview).
 batchcraft does not install GPUs, models, or custom nodes. Replace the URL below with the ComfyUI
 engine's base URL reachable from this Mac, such as `http://<generation-host>:8188`, not batchcraft's URL.
-Use the published `v1.1.0` tag for `--revision`; the command below targets that release.
+Use the published `v1.2.0` tag for `--revision`; the command below targets that release.
 
 ```bash
 git clone https://github.com/pixeldj/batchcraft.git
@@ -77,7 +86,7 @@ uv run --directory backend python -m tools.install_app \
   --app-path "$HOME/ai/batchcraft-app" \
   --data-root "$HOME/ai/batchcraft-data" \
   --comfyui-url "http://<generation-host>:8188" \
-  --revision v1.1.0
+  --revision v1.2.0
 ```
 
 `--revision` is optional and defaults to the source clone's `HEAD`, which is not a release guarantee.
@@ -97,8 +106,9 @@ data and start GPU Jobs. Do not expose it to the internet.
 
 There are no automatic updates, and the installer does not reuse existing destinations. Before updating
 an existing installation, finish active Runs, stop its backend, and back up the **entire data root**,
-including SQLite and any sidecars plus Projects. v1.1.0 preserves the v1 filesystem formats but includes
-forward SQLite migrations `0003_history_browsing` and `0004_history_provenance`. Returning to older code
+including SQLite and any sidecars plus Projects. v1.2.0 preserves the v1 filesystem formats and adds
+forward SQLite migrations `0005_global_workflow_library` and `0006_global_workflow_authoring` to v1.1.0.
+Unused global libraries are SQLite state, not portable Project-folder content. Returning to older code
 after migration requires a deliberate restore of the matching whole-data backup, not just a Git revision
 change. Follow [updating and backing up](docs/LOCAL_INSTANCES.md#updating-and-backing-up).
 

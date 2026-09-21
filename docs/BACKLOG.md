@@ -1505,7 +1505,7 @@ the verification above is not perpetual security, licensing, or platform certifi
 | --- | --- |
 | ID | BC-026 |
 | Priority | P2 |
-| Status | In Progress |
+| Status | Done |
 | Area | Workflow libraries / Cross-Project reuse |
 | Summary | Browse reusable Workflows and compatible Profiles above Projects, with explicit independent copies into Projects and Import to Library from Project or historical setups. |
 | Dependencies / Notes | Builds on BC-005 and BC-007; BC-009 schema assistance is separate, not a prerequisite. Target release: v1.2.0 after the agreed Workflow updates and verification are complete. ADR 0016 defines ownership. |
@@ -1632,9 +1632,13 @@ the passing final implementation checks, distinguishing backend empty-database p
 browser archived-source and lost-response coverage.
 Verification: 1497 backend tests, 983 frontend tests, and 52 browser tests in each serving mode passed,
 alongside lint, formatting, type checks, builds, and reviewed desktop/mobile screenshots.
-BC-026 remains **In Progress** pending owner acceptance before v1.2.0 version
-preparation. Version stays **1.1.0**, with no v1.2.0 tag/release. Workflow images are deferred
-optional upcoming work, not a v1.2.0 completion gate.
+BC-026 is **Done** after passing implementation checks and explicit owner acceptance:
+"Yes it looks good to go. Go ahead with tag and release, changelog, installation update,etc."
+This authorizes v1.2.0 publication and the safe everyday installation update, subject to green hosted
+checks and offline whole-data backup. Final local verification passed 1,503 backend tests, 1,023 frontend
+tests and 56 browser tests in each serving mode, plus quality, package and artifact-security checks;
+see [release notes](V1_2_RELEASE_NOTES.md). Earlier counts remain checkpoint evidence. Workflow images
+are deferred optional upcoming work, not a v1.2.0 completion gate.
 
 ### BC-027: Workflow prompt copy and Prompt editing/deletion
 
