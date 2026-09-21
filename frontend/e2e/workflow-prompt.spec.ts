@@ -68,13 +68,17 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   await expect(prompts.getByRole("button", { name: "Use this prompt" })).toHaveCount(0);
   await expect(prompts.locator(".prompt-card pre")).toHaveJSProperty("textContent", text);
   // Copied placeholders follow normal binding validation, not literal bypass semantics.
+  const invalidPreviewResponse = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/batches/preview" && r.request().method() === "POST");
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
+  expect((await invalidPreviewResponse).status()).toBe(422);
   await expect(page.getByRole("button", { name: "Create Run", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Create missing bindings", exact: true }).click();
   await page.getByRole("textbox", { name: "Values", exact: true }).fill("mountain");
   const previewResponse = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/batches/preview");
   await page.getByRole("button", { name: "Preview Batch", exact: true }).click();
-  const preview = await (await previewResponse).json() as PreviewResponse;
+  const previewHttp = await previewResponse;
+  expect(previewHttp.ok(), await previewHttp.text()).toBe(true);
+  const preview = await previewHttp.json() as PreviewResponse;
   expect(preview.jobs[0]).toMatchObject({ resolved_prompt: text.replace("{{subject}}", "mountain"), prompt_version_id: copied.version.id });
   const saved = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/batches/${batch.id}` && r.request().method() === "PATCH");
   await page.getByRole("button", { name: "Save", exact: true }).click();
