@@ -1,8 +1,8 @@
 # ADR 0016: Global Workflow Library With Project-Owned Copies
 
 - Status: Accepted
-- Scope: BC-026; implementation is incremental.
-- Release target: v1.2.0 after the agreed Workflow updates are verified.
+- Scope: BC-026; implementation verified and accepted by the owner.
+- Release: v1.2.0.
 
 ## Context
 
@@ -81,10 +81,11 @@ source loss, and recheck under `BEGIN IMMEDIATE` prevents concurrent duplication
 commit atomically; migration 0006 authoring receipts remain independent. No migration, dependency or
 v1 format change is introduced. An App-owned single-operation cache supports dialog retry without
 becoming Recovery v4 state or a general catalog cache. Import never applies to Batch; opening Workflow
-Library after success is explicit navigation. BC-026 remains In Progress; this
-incremental implementation does not change Accepted status or the v1 portability contract. Application
-version remains 1.1.0 with no v1.2.0 tag; final acceptance is still required. Workflow images are deferred
-optional upcoming work, not a v1.2.0 completion gate.
+Library after success is explicit navigation. BC-026 is Done after implementation verification and
+explicit owner acceptance. This does not change Accepted status or the v1 portability contract.
+The owner authorized v1.2.0 publication and the everyday installation update;
+see [release notes](../V1_2_RELEASE_NOTES.md).
+Workflow images are deferred optional upcoming work, not a v1.2.0 completion gate.
 
 - Global and Project copies intentionally diverge. There is no automatic upgrade or synchronization.
 - The first slice can import existing Project setups before adding historical sources or catalog editors.
