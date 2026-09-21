@@ -239,7 +239,7 @@ export function BatchEditor({
           ? { text: readWorkflowPrompt(workflow, safeWorkflow(form.workflowProfileJson)) }
           : undefined}
         workflowPromptContext={JSON.stringify([
-          active, projectSwitchingBlocked, form.projectId, form.batchId, savedBatchId,
+          active, form.projectId, form.batchId, savedBatchId,
           form.workflowVersionId, form.workflowProfileVersionId,
           form.workflowJson, form.workflowProfileJson,
         ])}

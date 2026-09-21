@@ -9,6 +9,85 @@ async function post<T>(request: APIRequestContext, path: string, data: unknown):
   return response.json() as Promise<T>;
 }
 
+test("Prompt Library sorts without reordering the Batch and duplicates edited old text as independent v1", async ({ page, request }, testInfo) => {
+  const suffix = randomUUID().slice(0, 8);
+  const project = await post<ProjectResponse>(request, "/api/projects", { name: `Library ${suffix}`, filesystem_key: `library_${suffix}` });
+  const source = await post<CreatePromptResponse>(request, `/api/projects/${project.id}/prompts`, { name: "zebra", text: "  old exact text\n", description: "Source notes" });
+  await post(request, `/api/prompts/${source.prompt.id}/versions`, { text: "Latest source text", note: "Second revision" });
+  await post(request, `/api/projects/${project.id}/prompts`, { name: "Beta", text: "Beta text" });
+  await post(request, `/api/projects/${project.id}/prompts`, { name: "alpha", text: "Alpha text" });
+  const originalHistory = await (await request.get(`${apiUrl}/api/prompts/${source.prompt.id}/versions`)).json();
+  await page.goto("/");
+  await page.getByLabel("Active Project").selectOption(project.id);
+  const prompts = page.getByRole("group", { name: "Prompts", exact: true });
+  await prompts.getByRole("button", { name: "Prompt Library", exact: true }).click();
+  const library = page.getByRole("dialog", { name: "Prompts", exact: true });
+  await expect(library.locator(".prompt-library-item strong")).toHaveText(["alpha", "Beta", "zebra"]);
+  await expect(library.getByRole("heading", { name: "alpha", exact: true })).toBeVisible();
+  await library.getByRole("button", { name: "zebra v2", exact: true }).click();
+  await library.getByRole("button", { name: "History", exact: true }).click();
+  await library.getByRole("button", { name: "Inspect revision 1", exact: true }).click();
+  await library.getByRole("button", { name: "Back to Prompt", exact: true }).click();
+  const footer = library.locator("footer");
+  await footer.getByRole("button", { name: "Add to Batch", exact: true }).click();
+  await expect(footer.getByRole("button", { name: "Selected in Batch", exact: true })).toBeDisabled();
+  await library.getByRole("button", { name: "Duplicate", exact: true }).click();
+  const template = library.getByRole("textbox", { name: "Prompt template", exact: true });
+  await expect(template).toHaveValue("  old exact text\n");
+  const edited = "  Edited older revision {{subject}}\n";
+  await template.fill(edited);
+  await library.getByLabel("Prompt name", { exact: true }).fill("aardvark copy");
+  await expect(footer.getByRole("button", { name: "Add to Batch", exact: true })).toHaveCount(0);
+  for (const event of ["visibilitychange", "pageshow"]) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let refreshing = false;
+    await page.route("**/api/executions/active", async (route) => {
+      const response = await route.fetch();
+      refreshing = true;
+      await gate;
+      await route.fulfill({ response });
+    }, { times: 1 });
+    try {
+      await template.focus();
+      await page.evaluate((name) => {
+        if (name === "pageshow") window.dispatchEvent(new PageTransitionEvent(name));
+        else {
+          Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+          document.dispatchEvent(new Event(name));
+        }
+      }, event);
+      await expect.poll(() => refreshing).toBe(true);
+      await expect(library).toBeVisible();
+      await expect(template).toHaveValue(edited);
+      await expect(template).toBeFocused();
+      await expect(library.getByRole("button", { name: "Duplicate Prompt", exact: true })).toBeDisabled();
+    } finally { release(); }
+    await expect(library.getByRole("button", { name: "Duplicate Prompt", exact: true })).toBeEnabled();
+    await expect(template).toHaveValue(edited);
+  }
+  const copiedResponse = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/projects/${project.id}/prompts` && r.request().method() === "POST");
+  await library.getByRole("button", { name: "Duplicate Prompt", exact: true }).click();
+  const copied = await (await copiedResponse).json() as CreatePromptResponse;
+  expect(copied.prompt.id).not.toBe(source.prompt.id);
+  expect(copied.version).toMatchObject({ version_number: 1, text: edited, prompt_id: copied.prompt.id });
+  await expect(library.locator(".prompt-library-item strong")).toHaveText(["aardvark copy", "alpha", "Beta", "zebra"]);
+  await expect(library.getByRole("heading", { name: "aardvark copy", exact: true })).toBeVisible();
+  await expect(footer.getByRole("listitem")).toHaveCount(1);
+  await expect(footer.getByRole("listitem")).toContainText("zebra v1");
+  expect(await (await request.get(`${apiUrl}/api/prompts/${source.prompt.id}/versions`)).json()).toEqual(originalHistory);
+  expect((await (await request.get(`${apiUrl}/api/prompts/${copied.prompt.id}/versions`)).json()).prompt_versions).toHaveLength(1);
+  if (testInfo.project.name === "mobile") await page.setViewportSize({ width: 320, height: 740 });
+  for (const name of ["Add to Batch", "Done"]) {
+    await expect(footer.getByRole("button", { name, exact: true })).toBeInViewport();
+  }
+  expect(await library.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await library.screenshot({ path: testInfo.outputPath("prompt-library-footer.png") });
+  await footer.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(prompts.locator(".prompt-card pre")).toHaveJSProperty("textContent", source.version.text);
+});
+
 test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run provenance", async ({ page, request }, testInfo) => {
   const suffix = randomUUID().slice(0, 8);
   const text = "  A {{subject}} at sunset\n\n" + "Detailed landscape with gentle light. ".repeat(30) + "  ";
@@ -93,7 +172,7 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   expect((await (await request.get(`${apiUrl}/api/workflow-versions/${workflow.version.id}`)).json()).workflow).toEqual(workflow.version.workflow);
   await page.getByRole("button", { name: "Start Run", exact: true }).click();
   await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
-  await prompts.getByRole("button", { name: "Add Prompt", exact: true }).click();
+  await prompts.getByRole("button", { name: "Prompt Library", exact: true }).click();
   const library = page.getByRole("dialog", { name: "Prompts", exact: true });
   await library.getByRole("button", { name: "Edit name / general notes" }).click();
   await library.getByLabel("General notes", { exact: true }).fill("Mutable general guidance");
@@ -124,7 +203,7 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   expect(otherBrowserRecovery).not.toBeNull();
   // Removing an unsaved row does not clear the persisted v1 reference.
   await prompts.getByRole("button", { name: "Remove", exact: true }).click();
-  await prompts.getByRole("button", { name: "Add Prompt", exact: true }).click();
+  await prompts.getByRole("button", { name: "Prompt Library", exact: true }).click();
   await library.getByRole("button", { name: "Delete Prompt", exact: true }).click();
   await expect(library.getByRole("button", { name: "Permanently delete", exact: true })).toBeEnabled();
   await library.getByRole("button", { name: "Permanently delete", exact: true }).click();
@@ -134,7 +213,7 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   const cleared = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/batches/${batch.id}` && r.request().method() === "PATCH");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   expect((await cleared).ok()).toBe(true);
-  await prompts.getByRole("button", { name: "Add Prompt", exact: true }).click();
+  await prompts.getByRole("button", { name: "Prompt Library", exact: true }).click();
   await library.getByRole("button", { name: "Delete Prompt", exact: true }).click();
   await expect(library.getByRole("button", { name: "Permanently delete", exact: true })).toBeEnabled();
   await library.screenshot({ path: testInfo.outputPath("prompt-delete-confirmation.png") });

@@ -10,6 +10,7 @@ export default defineConfig({
   retries: 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
+  outputDir: process.env.BATCHCRAFT_E2E_OUTPUT_DIR ?? "test-results",
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: builtFrontend ? "http://localhost:8002" : "http://127.0.0.1:5175",

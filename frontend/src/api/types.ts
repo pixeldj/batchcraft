@@ -244,39 +244,6 @@ export interface HistoryDiagnosticPageResponse {
   has_more: boolean;
 }
 
-export interface HistoryDiagnosticResponse {
-  scope: string;
-  filesystem_key: string | null;
-  entity_id: string | null;
-  code: string;
-  message: string;
-}
-
-export interface HistoricalRunResponse {
-  run_id: string;
-  batch_id: string;
-  batch_filesystem_key: string;
-  batch_name: string;
-  run_number: number;
-  filesystem_key: string;
-  run_name: string | null;
-  run_description: string | null;
-  created_at: string;
-  job_count: number;
-  execution_available: boolean;
-  execution_status: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  integrity_status: "verified" | "degraded";
-  replayable: boolean;
-}
-
-export interface ProjectRunsResponse {
-  project_id: string;
-  runs: HistoricalRunResponse[];
-  diagnostics: HistoryDiagnosticResponse[];
-}
-
 export interface HistoryParameterFilter {
   key: string;
   value_type: ParameterValueType;

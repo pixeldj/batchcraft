@@ -1695,6 +1695,37 @@ same-origin modes (two tests each). The built run retained the non-fatal chunk-s
 focused follow-up verification, not a new full-suite or owner retest claim. BC-027 is Done; no release
 acceptance or completion of BC-026 is claimed. No everyday or live ComfyUI data was touched.
 
+### BC-028: Prompt Library continuity and authoring polish
+
+| Field | Value |
+| --- | --- |
+| ID | BC-028 |
+| Priority | P3 |
+| Status | Done |
+| Area | Prompt Library / UX |
+| Summary | Preserve unfinished Prompt panels across browser foreground revalidation, move exact-revision Add beside Done, allow editing duplicates before v1 creation, rename the launcher Prompt Library, and sort library browsing alphabetically. |
+| Dependencies / Notes | Builds on BC-004 and BC-027 without changing their completion records, v1.2 release notes, backend APIs, migrations, durable formats, dependencies, or Recovery v4. |
+
+Keep semantic Project/Batch/Workflow/Profile and app workspace guards distinct from transient Run
+revalidation eligibility. Pending stale responses and selection-away-and-back changes cannot apply to
+the Batch; mutations remain single-flight and blocked while disabled. Browser tab return retains the
+same open panel, text and focus, not a persisted draft across reload. Footer Add uses the exact inspected
+active revision only in browse mode; History keeps Add this revision. Duplication saves editable text as
+an independent Prompt v1 without changing the source or Batch. Case-insensitive name sorting with stable
+ID ties is derived display state only, including search/fallback and rename/create updates.
+
+Verification passed: 1,038 frontend unit tests across 25 files, ESLint, TypeScript, production build,
+and 58 fake-backed real-API E2E tests in each of sequential full Vite and built same-origin runs.
+Desktop and 320px mobile footer screenshots were inspected; both actions remain reachable without
+horizontal overflow. Coverage includes delayed foreground reads with unfinished text/focus retained,
+current async application eligibility, stale context/away-and-back guards, case-insensitive name/ID
+ordering, exact footer and History actions, and edited old-revision duplication into an independent v1
+with unchanged source history and Batch selection. The first browser attempt was interrupted by the
+terminal tool's two-minute ceiling; its owned test servers were stopped before the complete runs.
+No test timeout or retry setting changed. The existing non-fatal Vite bundle-size warning remains.
+No backend tests were rerun because backend code/contracts are unchanged. No commit, release,
+installation, everyday-data or live ComfyUI changes were made.
+
 ## Maintenance rules
 
 - Update only entries affected by the current task.
