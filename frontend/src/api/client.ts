@@ -41,7 +41,6 @@ import type {
   ProjectImportRequest,
   ProjectImportResponse,
   ProjectResponse,
-  ProjectRunsResponse,
   ProjectsResponse,
   ProjectUpdateRequest,
   Prompt,
@@ -112,7 +111,6 @@ export interface BatchcraftApi extends LibraryApi {
   adoptProject(body: ProjectAdoptRequest): Promise<ProjectResponse>;
   importProject(body: ProjectImportRequest): Promise<ProjectImportResponse>;
   reindexProject(projectId: string, signal?: AbortSignal): Promise<ProjectImportResponse>;
-  listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse>;
   browseProjectDiagnostics(projectId: string, query?: HistoryDiagnosticQuery, signal?: AbortSignal): Promise<HistoryDiagnosticPageResponse>;
   getHistoryChoices(projectId: string, kind: HistoryChoiceKind, q?: string, signal?: AbortSignal): Promise<HistoryChoicesResponse>;
   browseProjectRuns(projectId: string, query?: HistoryQuery, signal?: AbortSignal): Promise<HistoryRunPageResponse>;
@@ -289,10 +287,6 @@ export class BatchcraftApiClient implements BatchcraftApi {
       method: "POST",
       signal,
     });
-  }
-
-  listProjectRuns(projectId: string, signal?: AbortSignal): Promise<ProjectRunsResponse> {
-    return this.request(`/api/projects/${encodeURIComponent(projectId)}/runs`, { signal });
   }
 
   browseProjectDiagnostics(projectId: string, query?: HistoryDiagnosticQuery, signal?: AbortSignal): Promise<HistoryDiagnosticPageResponse> {

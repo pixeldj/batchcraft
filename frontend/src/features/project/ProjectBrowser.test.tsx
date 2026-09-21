@@ -261,7 +261,7 @@ describe("ProjectBrowser", () => {
     expect(screen.queryByRole("button", { name: /^Filter Gallery/ })).not.toBeInTheDocument();
   });
 
-  it("reads a bounded index before scanning, with no per-Run fanout or legacy history", async () => {
+  it("reads a bounded index before scanning, with no per-Run fanout", async () => {
     const first = deferred<HistoryResultPageResponse>();
     const api = makeApi({ browseProjectResults: vi.fn(() => first.promise) });
     render(<ProjectBrowser {...props(api)} />);
@@ -281,7 +281,6 @@ describe("ProjectBrowser", () => {
     expect(screen.getByText("2 Results on this page")).toBeInTheDocument();
     expect(api.getResults).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     for (const image of screen.getAllByRole("img")) {
       expect(image).toHaveAttribute("loading", "lazy");
       expect(image).toHaveAttribute("decoding", "async");
@@ -800,7 +799,6 @@ describe("ProjectBrowser", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Execution unavailable")).not.toBeInTheDocument();
     expect(api.getResults).not.toHaveBeenCalled();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("No Results to show yet.");
@@ -863,7 +861,6 @@ describe("ProjectBrowser", () => {
     expect(
       screen.queryByText("Your first experiment starts in Batch."),
     ).not.toBeInTheDocument();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
   });
 
   it("adopts the first confirmed scan from a null-generation empty index and reports diagnostics", async () => {
@@ -880,7 +877,6 @@ describe("ProjectBrowser", () => {
     render(<ProjectBrowser {...props(api)} />);
     expect(await screen.findByText("found")).toBeInTheDocument();
     expect(screen.getByText(/3 records need attention/)).toBeInTheDocument();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
   });
 
   it("opens bounded diagnostics without scanning and closes on workspace navigation", async () => {
@@ -1434,7 +1430,6 @@ function makeApi(overrides: Partial<BatchcraftApi> = {}): BatchcraftApi {
       items: [{ run: summary("original"), result_count: 2 }],
     })),
     reindexProject: vi.fn(() => new Promise<ProjectImportResponse>(() => {})),
-    listProjectRuns: vi.fn(),
     getRun: vi.fn(),
     getResults: vi.fn(),
     resultUrl: (url: string) => url,

@@ -696,7 +696,6 @@ describe("Workspace navigation", () => {
     expect(api.previewBatch).toHaveBeenCalledOnce();
     expect(api.getRun).toHaveBeenCalledOnce();
     expect(api.startRun).not.toHaveBeenCalled();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
   });
 
   it("keeps a newly started Run visible and polling in Gallery without restarting execution", async () => {
@@ -718,7 +717,6 @@ describe("Workspace navigation", () => {
     expect(screen.getByRole("region", { name: "Project browser" })).toBeVisible();
     expect(api.startRun).toHaveBeenCalledExactlyOnceWith("run-123");
     expect(loadWorkingSession().currentRunId).toBe("run-123");
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
   });
 
   it("cancels then accepts historical Batch replacement, invalidating Preview only on acceptance", async () => {
@@ -842,7 +840,6 @@ describe("Workspace navigation", () => {
     await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: "Gallery" })).toHaveAttribute("aria-current", "page"));
     expect(pushState).toHaveBeenCalledOnce();
     expect(replaceState).not.toHaveBeenCalled();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
     expect(api.getResults).not.toHaveBeenCalled();
   });
@@ -870,7 +867,6 @@ describe("Workspace navigation", () => {
     expect(screen.getByRole("region", { name: "Preview" })).toHaveTextContent("Preview required");
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
     expect(api.previewBatch).toHaveBeenCalledOnce();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
     expect(api.getResults).not.toHaveBeenCalled();
   });
@@ -911,7 +907,6 @@ describe("Workspace provenance filters", () => {
     expect(view === "gallery" ? api.browseProjectRuns : api.browseProjectResults).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: 'Edit caption (string): ""' })).toBeVisible();
     expect(api.getHistoryChoices).not.toHaveBeenCalled();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
   });
 
   it.each(["gallery", "runs"] as const)("passes raw float tokens and JSON-looking strings unchanged in scope to %s", async (view) => {
@@ -1123,7 +1118,6 @@ describe("Project selection", () => {
     expect(await within(history as HTMLElement).findByText("Imported baseline")).toBeInTheDocument();
     expect(within(history as HTMLElement).getByText("Execution unavailable")).toBeInTheDocument();
     expect(api.browseProjectRuns).toHaveBeenCalledWith("project-1", expect.objectContaining({ limit: 25, cursor: null }), expect.any(AbortSignal));
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(loadWorkingSession().currentRunId).toBeNull();
     expect(api.startRun).not.toHaveBeenCalled();
   });
@@ -4364,7 +4358,6 @@ describe("Result lightbox", () => {
     expect(within(lightbox).getByRole("img")).toHaveAccessibleName("Run 7, Run 7, Job 1, artifact 1: first.png");
     fireEvent.keyDown(lightbox, { key: "ArrowRight" });
     expect(within(lightbox).getByText("2/3")).toHaveAccessibleName("2 of 3 loaded images");
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     expect(api.getResults).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
     expect(api.startRun).not.toHaveBeenCalled();
@@ -4968,7 +4961,6 @@ describe("Current Results without Batch Results", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
     expect(api.browseProjectRuns).not.toHaveBeenCalled();
     expect(api.browseProjectResults).not.toHaveBeenCalled();
-    expect(api.listProjectRuns).not.toHaveBeenCalled();
     if (currentRunId) {
       await screen.findByRole("heading", { name: "Run 11" });
       expect(await within(currentResultsSection()).findByAltText("Result 1 from Job 1: run-b.png")).toBeInTheDocument();
@@ -5156,11 +5148,6 @@ function makeApi(
       asset_count: 0,
       run_count: 0,
       diagnostic_count: 0,
-    })),
-    listProjectRuns: vi.fn(async (projectId: string) => ({
-      project_id: projectId,
-      runs: [],
-      diagnostics: [],
     })),
     browseProjectDiagnostics: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
     browseProjectRuns: vi.fn(async (projectId: string) => ({ project_id: projectId, generation: null, scanned_at: null, items: [], next_cursor: null, has_more: false })),
