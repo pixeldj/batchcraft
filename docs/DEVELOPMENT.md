@@ -903,6 +903,18 @@ Saved Batch references automatically.
 Recovery v4 remains unchanged and preserves unavailable snapshots as detached. Guard row-edit reads
 and writes against Project/Batch/selection changes, including away-and-back transitions and unmount.
 
+BC-028 separates Prompt workspace semantic identity from transient mutation eligibility. Foreground
+`pageshow` and visible `visibilitychange` still perform normal active-Run revalidation, but its temporary
+lock must not close the modal or clear unfinished panel text. Keep Project/Batch/Workflow/Profile and
+in-app workspace departure guards, selection generation checks, single-flight saves, and current
+eligibility checks before asynchronous Batch application. Writes cannot start while disabled.
+The Prompt Library list sorts a derived copy by lowercase name with stable ID ties; never sort API
+responses, revision History, or selected Batch rows in place. Footer Add is browse-only and exact-revision
+guarded. Duplicate text is editable before the existing atomic Prompt-plus-v1 create request, with no
+automatic Batch application. Regression checks cover delayed foreground reads, preserved focus/drafts,
+stale writes, sorting/rename/creation, Preview retention, and desktop/mobile footer access through the
+real API using only fake-backed temporary browser data. No backend or durable contract changes apply.
+
 Workflow and Workflow Profile selectors follow the same snapshot rule. Logical metadata changes do
 not invalidate Preview, while selecting another immutable version does. Linked selections must belong
 to the verified Project and target the exact selected WorkflowVersion. Detached snapshots with

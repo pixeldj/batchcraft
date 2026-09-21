@@ -399,6 +399,7 @@ dialog form { display: grid; gap: 0.9rem; }
 .prompt-history-inspect time, .prompt-history-inspect span { color: var(--muted); font-size: 0.72rem; }
 .prompt-history-item .prompt-editor { margin-top: 0.7rem; }
 .prompt-library-footer { min-width: 0; border-top: 2px solid var(--line-strong); }
+.prompt-library-footer-actions { display: flex; flex-wrap: wrap; gap: .5rem; flex-shrink: 0; }
 .prompt-library-batch-selection { display: flex; min-width: 0; flex: 1; gap: 0.8rem; align-items: center; overflow-x: auto; font-size: 0.75rem; }
 .prompt-library-batch-selection > strong, .prompt-library-batch-selection > span { flex: 0 0 auto; }
 .prompt-library-batch-selection ol { display: flex; gap: 0.55rem; margin: 0; padding: 0; list-style: none; counter-reset: prompt-order; }
@@ -685,7 +686,8 @@ progress::-moz-progress-bar { background: var(--accent); }
   .prompt-library-sidebar { border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .prompt-library-header, .prompt-library-footer, .prompt-library-panel-heading { align-items: flex-start; }
   .prompt-library-footer { flex-direction: column; }
-  .prompt-library-footer > .button-primary { width: 100%; }
+  .prompt-library-footer-actions { width: 100%; }
+  .prompt-library-footer-actions > button { flex: 1; }
   .prompt-library-batch-selection { width: 100%; }
   .missing-bindings-assistance { align-items: stretch; flex-direction: column; }
 }

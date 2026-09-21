@@ -185,7 +185,7 @@ missing, or non-string inputs; an exact empty string is labeled explicitly.
 When the Batch has no Prompt Templates selected, **Use this prompt** explicitly creates an independent
 Project-owned Prompt Template and its first PromptVersion from the exact nonblank text, then selects
 that version. Selection alone never creates a template. The Workflow and any existing Prompt selection
-remain unchanged. Empty/blank text is not offered as an executable template; Add Prompt remains available.
+remain unchanged. Empty/blank text is not offered as an executable template; Prompt Library remains available.
 Copied placeholders use the normal binding and Preview validation flow. If Project, Batch, Workflow,
 Profile, or Prompt selection changes while creation is pending, the saved copy stays in the original
 Project's library without being applied to the changed Batch. Repeated clicks are single-flight and
@@ -204,6 +204,19 @@ record. Editing from the library remains independent and never automatically rep
 general notes** and **Save details**, without a revision or Preview invalidation. Optional revision
 notes are separate immutable change reasons. Unchanged text, including revision-note-only edits, does
 not create another revision in the editor.
+
+**Prompt Library** opens the Project's searchable Prompt workspace. Its list is alphabetical,
+case-insensitive, with stable ID ties; creation and renaming update that display order without changing
+the ordered Batch selection, History, or Preview. Inspection stays attached to the same Prompt identity.
+While browsing, **Add to Batch** sits beside **Done** in the footer and adds only the exact inspected
+active revision. History retains its explicit **Add this revision** action. Duplicate prefills the exact
+inspected revision and lets the user edit its text before saving an independent Prompt at v1; it never
+changes the source or automatically adds the copy to the Batch.
+
+Switching browser tabs and returning preserves the open Prompt panel and unfinished text through
+foreground Run revalidation. Mutation actions pause while eligibility is checked; genuine Project,
+Batch, Workflow/Profile, or in-app workspace changes still close the modal and reject stale application.
+These BC-028 changes do not persist unfinished modal drafts across page reloads or change Recovery v4.
 
 **Delete Prompt** is permanent, not archive. A confirmation names the Prompt without requiring typing
 and warns of losing all library revisions; frozen Runs and Results remain untouched. A Prompt selected in the current

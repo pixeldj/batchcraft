@@ -85,6 +85,29 @@ describe("PromptLibraryEditor workspace", () => {
     expect(callbacks.onChange).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("checks current eligibility when a pending row save completes (re-enabled: %s)", async (reenabled) => {
+    const pending = deferred<LibraryPromptVersion>();
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })), createPromptVersion: vi.fn(() => pending.promise) });
+    const props = { api, projectId: "project-1", prompts: [formPrompt()], workflowPromptContext: "original", ...callbackProps() };
+    const view = render(<PromptLibraryEditor {...props} />);
+    await expandPrompts();
+    const edit = screen.getByRole("button", { name: "Edit Prompt" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    fireEvent.change(await screen.findByLabelText("Prompt template"), { target: { value: "changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+    view.rerender(<PromptLibraryEditor {...props} workflowPromptDisabled />);
+    expect(screen.getByLabelText("Prompt template")).toHaveValue("changed");
+    if (reenabled) view.rerender(<PromptLibraryEditor {...props} />);
+    await act(async () => pending.resolve(version({ id: "new", text: "changed", version_number: 2 })));
+    expect(props.onChange).toHaveBeenCalledTimes(reenabled ? 1 : 0);
+    expect(api.createPromptVersion).toHaveBeenCalledTimes(1);
+    if (!reenabled) {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add to Batch" })).toBeDisabled();
+    }
+  });
+
   it("saves mutable name/general notes separately without a revision or semantic Batch edit", async () => {
     const api = makeApi({
       listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt("prompt-1", "Portrait", version({ note: "Immutable original" }))] })),
@@ -175,6 +198,7 @@ describe("PromptLibraryEditor workspace", () => {
     render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbackProps()} />);
     await openLibrary();
     expect(screen.getByRole("button", { name: "Edit Prompt" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add to Batch" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Edit name / general notes" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Delete Prompt" }));
     expect(screen.getByRole("button", { name: "Permanently delete" })).toBeEnabled();
@@ -402,6 +426,7 @@ describe("PromptLibraryEditor workspace", () => {
 
     await openLibrary();
     const sidebar = screen.getByRole("complementary", { name: "Prompt library" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: /Portrait/ }));
     expect(within(sidebar).getByText("In Batch: v2")).toBeInTheDocument();
     expect(screen.getByText("General notes: Portrait lighting study")).toBeInTheDocument();
     expect(screen.getByText("v3", { selector: ".prompt-revision" })).toBeInTheDocument();
@@ -486,6 +511,116 @@ describe("PromptLibraryEditor Batch selection", () => {
 });
 
 describe("PromptLibraryEditor creation and revisions", () => {
+  it("sorts a derived library case-insensitively with ID ties and retains inspection through rename and creation", async () => {
+    const source = [libraryPrompt("z", "zebra"), libraryPrompt("b", "alpha"), libraryPrompt("a", "ALPHA"), libraryPrompt("c", "Beta")];
+    const api = makeApi({
+      listPrompts: vi.fn(async () => ({ prompts: source })),
+      updatePrompt: vi.fn(async () => prompt("a", "ZZ last")),
+      createPrompt: vi.fn(async () => ({ prompt: prompt("new", "aardvark"), version: version({ id: "new-v1", prompt_id: "new" }) })),
+    });
+    const callbacks = callbackProps();
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
+    await openLibrary();
+    const sidebar = screen.getByRole("complementary", { name: "Prompt library" });
+    const names = () => within(sidebar).getAllByRole("button").map((button) => button.querySelector("strong")?.textContent);
+    expect(names()).toEqual(["ALPHA", "alpha", "Beta", "zebra"]);
+    expect(screen.getByRole("heading", { name: "ALPHA" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search Prompts"), { target: { value: "AlPh" } });
+    expect(names()).toEqual(["ALPHA", "alpha"]);
+    fireEvent.change(screen.getByLabelText("Search Prompts"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit name / general notes" }));
+    fireEvent.change(screen.getByLabelText("Prompt name"), { target: { value: "ZZ last" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+    await screen.findByRole("heading", { name: "ZZ last" });
+    expect(names()).toEqual(["alpha", "Beta", "zebra", "ZZ last"]);
+    expect(within(sidebar).getByRole("button", { name: /ZZ last/ })).toHaveAttribute("aria-current", "true");
+    fireEvent.click(screen.getByRole("button", { name: "New Prompt" }));
+    fillPromptForm("aardvark", "new text", "");
+    fireEvent.click(screen.getByRole("button", { name: "Create Prompt" }));
+    await screen.findByRole("heading", { name: "aardvark" });
+    expect(names()).toEqual(["aardvark", "alpha", "Beta", "zebra", "ZZ last"]);
+    expect(source.map((item) => item.id)).toEqual(["z", "b", "a", "c"]);
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+  });
+
+  it("retains edited duplication text on error, saves once as new v1, and never changes the source or Batch", async () => {
+    const pending = deferred<CreatePromptResponse>();
+    const source = libraryPrompt();
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [source] })), createPrompt: vi.fn()
+      .mockRejectedValueOnce(new Error("Save failed"))
+      .mockImplementationOnce(() => pending.promise) });
+    const callbacks = callbackProps();
+    render(<PromptLibraryEditor api={api} projectId="project-1" prompts={[]} {...callbacks} />);
+    await openLibrary();
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+    fillPromptForm("Edited copy", "  edited {{subject}}\n", "new notes");
+    const form = screen.getByLabelText("Prompt template").closest("form")!;
+    fireEvent.submit(form);
+    await screen.findByText("Save failed");
+    expect(screen.getByLabelText("Prompt template")).toHaveValue("  edited {{subject}}\n");
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(api.createPrompt).toHaveBeenCalledTimes(2);
+    expect(api.createPrompt).toHaveBeenLastCalledWith("project-1", { name: "Edited copy", text: "  edited {{subject}}\n", description: "new notes" });
+    await act(async () => pending.resolve({ prompt: prompt("copy", "Edited copy"), version: version({ id: "copy-v1", prompt_id: "copy", text: "  edited {{subject}}\n" }) }));
+    expect(screen.getByRole("heading", { name: "Edited copy" })).toBeInTheDocument();
+    expect(screen.getByText("v1", { selector: ".prompt-revision" })).toBeInTheDocument();
+    expect(source.latest_active_version?.text).toBe("saved text");
+    expect(api.createPromptVersion).not.toHaveBeenCalled();
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["Project", "Batch", "Workflow", "Profile", "workspace", "selection"])("ignores late duplication after %s changes away and back", async (change) => {
+    const pending = deferred<CreatePromptResponse>();
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })), createPrompt: vi.fn(() => pending.promise) });
+    const props = { api, projectId: "project-1", prompts: [] as PromptForm[], workflowPromptContext: "original", ...callbackProps() };
+    const view = render(<PromptLibraryEditor {...props} />);
+    await openLibrary();
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate Prompt" }));
+    view.rerender(<PromptLibraryEditor {...props} projectId={change === "Project" ? "other" : props.projectId}
+      prompts={change === "selection" ? [formPrompt()] : props.prompts}
+      workflowPromptContext={change === "Project" || change === "selection" ? "original" : change} />);
+    view.rerender(<PromptLibraryEditor {...props} />);
+    await act(async () => pending.resolve({ prompt: prompt("copy", "Late copy"), version: version() }));
+    expect(screen.queryByRole("heading", { name: "Late copy" })).not.toBeInTheDocument();
+    expect(props.onChange).not.toHaveBeenCalled();
+    expect(api.createPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps footer Add next to Done only while browsing exact eligible revisions", async () => {
+    const archived = version({ id: "archived", archived_at: "2026-01-01", version_number: 2 });
+    const api = makeApi({ listPrompts: vi.fn(async () => ({ prompts: [libraryPrompt()] })), listPromptVersions: vi.fn(async () => ({ prompt_versions: [archived, version()] })) });
+    const props = { api, projectId: "project-1", prompts: [] as PromptForm[], ...callbackProps() };
+    const view = render(<PromptLibraryEditor {...props} />);
+    await openLibrary();
+    const add = screen.getByRole("button", { name: "Add to Batch" });
+    expect(add.closest("footer")).toContainElement(within(screen.getByRole("dialog")).getByRole("button", { name: "Done" }));
+    expect(add).toHaveAttribute("type", "button");
+    add.focus();
+    view.rerender(<PromptLibraryEditor {...props} workflowPromptDisabled />);
+    expect(add).toBeDisabled();
+    fireEvent.click(add);
+    expect(props.onChange).not.toHaveBeenCalled();
+    view.rerender(<PromptLibraryEditor {...props} />);
+    expect(add).toHaveFocus();
+    for (const action of ["New Prompt", "Edit Prompt", "Duplicate", "Edit name / general notes", "Delete Prompt"]) {
+      fireEvent.click(screen.getByRole("button", { name: action }));
+      expect(screen.queryByRole("button", { name: "Add to Batch" })).not.toBeInTheDocument();
+      expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Done" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(screen.queryByRole("button", { name: "Add to Batch" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Add this revision" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect revision 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to Prompt" }));
+    expect(screen.getByRole("button", { name: "Archived" })).toBeDisabled();
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Prompt library" })).getByRole("button", { name: /Portrait/ }));
+    view.rerender(<PromptLibraryEditor {...props} prompts={[formPrompt()]} />);
+    expect(screen.getByRole("button", { name: "Selected in Batch" })).toBeDisabled();
+  });
+
   it("retains a failed New Prompt draft and on success stays open without changing the Batch", async () => {
     const createdVersion = version({ id: "created-v1", prompt_id: "created", text: "new text" });
     const createdPrompt = prompt("created", "Created Prompt");
@@ -559,7 +694,7 @@ describe("PromptLibraryEditor creation and revisions", () => {
     fireEvent.click(within(oldCard).getByRole("button", { name: "Duplicate" }));
     expect(screen.getByLabelText("Prompt name")).toHaveValue("Portrait copy 2");
     expect(screen.getByLabelText("Prompt template")).toHaveValue("old exact text");
-    expect(screen.getByLabelText("Prompt template")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Prompt template")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("General notes (optional)")).toHaveValue("source description");
     fireEvent.click(screen.getByRole("button", { name: "Duplicate Prompt" }));
 
@@ -972,7 +1107,7 @@ async function openLibrary(): Promise<HTMLButtonElement> {
   const section = screen.getByRole("group", { name: "Prompts" });
   const edit = within(section).queryByRole("button", { name: "Edit" });
   if (edit) fireEvent.click(edit);
-  const trigger = await within(section).findByRole("button", { name: "Add Prompt" });
+  const trigger = await within(section).findByRole("button", { name: "Prompt Library" });
   await waitFor(() => expect(trigger).toBeEnabled());
   fireEvent.click(trigger);
   await screen.findByRole("dialog", { name: "Prompts" });

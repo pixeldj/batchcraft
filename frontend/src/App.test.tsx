@@ -1351,7 +1351,7 @@ describe("Batch preview", () => {
     expect(promptEdit).toHaveAttribute("aria-expanded", "false");
     expect(promptEdit.closest(".section-summary-actions")?.parentElement).toHaveClass("configuration-section-header");
     expect(promptEdit.closest(".configuration-section-header")?.querySelector(".configuration-section-heading")).not.toBeNull();
-    expect(within(prompts).queryByRole("button", { name: "Add Prompt" })).not.toBeInTheDocument();
+    expect(within(prompts).queryByRole("button", { name: "Prompt Library" })).not.toBeInTheDocument();
 
     const bindings = screen.getByRole("group", { name: "Variable bindings" });
     expect(bindings).toHaveTextContent("subject: 2 values · cat, dog");
@@ -1362,7 +1362,7 @@ describe("Batch preview", () => {
     expect(within(seeds).getByRole("button", { name: "Edit" })).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(promptEdit);
-    expect(within(prompts).getByRole("button", { name: "Add Prompt" })).toBeInTheDocument();
+    expect(within(prompts).getByRole("button", { name: "Prompt Library" })).toBeInTheDocument();
   });
 
   it("places Prompt and Variable Binding actions in one footer after expanded content", async () => {
@@ -1370,7 +1370,7 @@ describe("Batch preview", () => {
 
     await expandConfiguration("Prompts");
     const prompts = screen.getByRole("group", { name: "Prompts" });
-    const addPrompt = within(prompts).getByRole("button", { name: "Add Prompt" });
+    const addPrompt = within(prompts).getByRole("button", { name: "Prompt Library" });
     const promptDone = within(prompts).getByRole("button", { name: "Done" });
     const promptActions = addPrompt.closest(".configuration-content-actions");
     expect(promptActions).not.toBeNull();
@@ -2149,7 +2149,7 @@ describe("PromptVersion editor", () => {
     fireEvent.click(within(promptCards()[0]).getByRole("button", { name: "Remove" }));
 
     expect(promptCards()).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "Add Prompt" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Prompt Library" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     expect(await screen.findByText("Add at least one PromptVersion.")).toBeInTheDocument();
     expect(api.previewBatch).not.toHaveBeenCalled();
@@ -2168,7 +2168,7 @@ describe("PromptVersion editor", () => {
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
 
     await expandConfiguration("Prompts");
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prompt Library" }));
     fireEvent.click(await within(screen.getByRole("dialog", { name: "Prompts" })).findByRole("button", { name: "Edit Prompt" }));
     fireEvent.change(screen.getByLabelText("Prompt template"), {
       target: { value: "Changed {{subject}} in {{style}}" },
@@ -2196,7 +2196,7 @@ describe("PromptVersion editor", () => {
     const promptSection = screen.getByRole("group", { name: "Prompts" });
     const editPrompts = within(promptSection).queryByRole("button", { name: "Edit" });
     if (editPrompts) fireEvent.click(editPrompts);
-    fireEvent.click(screen.getByRole("button", { name: "Add Prompt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prompt Library" }));
     fireEvent.change(screen.getByLabelText("Search Prompts"), { target: { value: "portrait" } });
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
@@ -3117,6 +3117,50 @@ describe("Active Run rediscovery", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     await waitFor(() => expect(getActiveExecution).toHaveBeenCalledTimes(3));
+  });
+
+  it.each(["New Prompt", "Edit Prompt", "Duplicate", "Edit name / general notes"])("preserves unfinished %s through pending browser foreground Run refresh", async (action) => {
+    const api = makeApi();
+    render(<App api={api} />);
+    await reachPreview();
+    await expandConfiguration("Prompts");
+    fireEvent.click(screen.getByRole("button", { name: "Prompt Library" }));
+    const dialog = screen.getByRole("dialog", { name: "Prompts" });
+    fireEvent.click(within(dialog).getByRole("button", { name: action }));
+    const field = within(dialog).getByLabelText(action === "Edit name / general notes" ? "General notes" : "Prompt template");
+    fireEvent.change(field, { target: { value: "Unfinished text\n  preserved" } });
+    field.focus();
+    const submitName = action === "New Prompt" ? "Create Prompt" : action === "Edit Prompt" ? "Save revision" : action === "Duplicate" ? "Duplicate Prompt" : "Save details";
+    for (const event of ["visibilitychange", "pageshow"]) {
+      const pending = deferred<{ run_id: string | null }>();
+      vi.mocked(api.getActiveExecution).mockImplementationOnce(() => pending.promise);
+      const calls = vi.mocked(api.getActiveExecution).mock.calls.length;
+      act(() => {
+        if (event === "visibilitychange") {
+          Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+          document.dispatchEvent(new Event(event));
+          expect(api.getActiveExecution).toHaveBeenCalledTimes(calls);
+          Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+          document.dispatchEvent(new Event(event));
+        } else window.dispatchEvent(new PageTransitionEvent(event));
+      });
+      await waitFor(() => expect(api.getActiveExecution).toHaveBeenCalledTimes(calls + 1));
+      expect(screen.getByRole("dialog", { name: "Prompts" })).toBe(dialog);
+      expect(field).toHaveValue("Unfinished text\n  preserved");
+      expect(field).toHaveFocus();
+      expect(within(dialog).getByRole("button", { name: submitName })).toBeDisabled();
+      fireEvent.submit(field.closest("form")!);
+      expect(api.createPrompt).not.toHaveBeenCalled();
+      expect(api.createPromptVersion).not.toHaveBeenCalled();
+      expect(api.updatePrompt).not.toHaveBeenCalled();
+      await act(async () => pending.resolve({ run_id: null }));
+      expect(screen.getByRole("dialog", { name: "Prompts" })).toBe(dialog);
+      expect(field).toHaveValue("Unfinished text\n  preserved");
+      expect(field).toHaveFocus();
+      expect(within(dialog).getByRole("button", { name: submitName })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    }
+    expect(api.startRun).not.toHaveBeenCalled();
   });
 
   it("coalesces concurrent lifecycle revalidation and never submits execution", async () => {
@@ -5713,10 +5757,10 @@ async function openPromptLibrary(): Promise<HTMLElement> {
   await waitFor(() => {
     if (screen.queryByRole("dialog", { name: "Prompts" })) return;
     const section = screen.getByRole("group", { name: "Prompts" });
-    const add = within(section).queryByRole("button", { name: "Add Prompt" });
+    const add = within(section).queryByRole("button", { name: "Prompt Library" });
     if (add && !add.hasAttribute("disabled")) {
       fireEvent.click(add);
-      throw new Error("Waiting for the Add Prompt dialog");
+      throw new Error("Waiting for the Prompt Library dialog");
     }
     const edit = within(section).queryByRole("button", { name: "Edit" });
     if (edit) {
