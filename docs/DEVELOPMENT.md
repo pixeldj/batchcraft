@@ -720,6 +720,27 @@ and `Job` captions; keep the info popup, accessible descriptions, lightbox label
 unavailable-artifact placeholders, and image-load failure handling. Cancellation behavior is unchanged.
 This cleanup changes no SQLite schema, filesystem format, or backend API DTO.
 
+Current-Run Results refreshes are coordinated inside `useRunExecution`, separately from execution
+polling. The first execution observation (including terminal/inactive Runs with zero Results), a change
+to any Job's `(ordinal, result_count)`, a terminal transition, and loss of active ownership while running
+request a listing. Equivalent newly allocated poll responses do not. Recovery and action reconciliation
+use the same observations; explicit Refresh Results uses the same coordinator. Special created-state
+Start/Discard reconciliation remains independent of the normal monitor-ending rules.
+Results and error seeds initialize only on entry to a Run lifetime. Same-Run foreground hydration
+placeholders never replace loaded Results or clear a listing error; successful listings do that.
+
+Only one Results request runs for the current Run. Genuine needs arriving during it coalesce into a
+followup for the latest generation; unchanged polls do not queue work. Polling cleanup cannot abort a
+final listing, and Results never delay progress or cancellation controls. Failed listings retain data
+and an error, retry on a later successful execution observation or explicit refresh, and do not retry
+themselves in a loop. Run replacement/unmount invalidates queued work and aborts the old request;
+late settlements cannot update the new Run. The adjacent hook tests use controlled timers and deferred
+responses to verify counts, coalescing, retry, and lifetime races; App integration coverage remains intact.
+
+This reduces repeated full-artifact hashing, not backend integrity checks. External deletion/corruption
+with unchanged execution counts is classified on the next actual Results refresh (including explicit
+Refresh Results), not every execution poll. Downloads still independently verify the bytes they serve.
+
 Project history uses `ProjectBrowser`, backed by `useProjectBrowserHistory` and
 `useWorkspaceNavigation`. The unmounted legacy `ProjectHistory` component and its dedicated tests and
 frontend API wrapper/types have been removed; the backend's v1 history endpoint remains supported.

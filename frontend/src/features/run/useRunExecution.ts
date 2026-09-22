@@ -44,75 +44,137 @@ export function useRunExecution(
   const stopRetryAvailable = useRef(false);
   const detachReconciliation = useRef(false);
   const detachRetryAvailable = useRef(false);
-  const resultsRequest = useRef<AbortController | null>(null);
-  const trailingResultsRefresh = useRef(false);
+  const resultsRefresh = useRef<{
+    runId: string;
+    observation: string | null;
+    generation: number;
+    request: AbortController | null;
+    failed: boolean;
+  } | null>(null);
   const executionFailures = useRef(0);
+  const runId = run?.run_id;
+  const executionRunId = useRef(runId);
 
-  const requestResults = useEffectEvent(function loadResults(runId: string) {
-    if (resultsRequest.current) {
-      trailingResultsRefresh.current = true;
-      return;
+  function requestResults(runId: string, observation?: ExecutionResponse) {
+    const scope = resultsRefresh.current;
+    if (!scope || scope.runId !== runId) return;
+    if (observation) {
+      const signature = JSON.stringify([
+        observation.jobs.map(({ ordinal, result_count }) => [ordinal, result_count] as const)
+          .sort(([left], [right]) => left - right),
+        TERMINAL_STATUSES.has(observation.status) ? observation.status
+          : observation.status === "running" && !observation.execution_task_active ? "inactive" : null,
+      ]);
+      if (signature === scope.observation) {
+        if (!scope.failed || scope.request) return;
+      } else {
+        scope.observation = signature;
+        scope.generation += 1;
+      }
+    } else {
+      scope.generation += 1;
     }
-    const controller = new AbortController();
-    resultsRequest.current = controller;
-    void api.getResults(runId, controller.signal).then(
-      (nextResults) => {
-        if (controller.signal.aborted) return;
+    if (scope.request) return;
+
+    // Each request covers only the need captured at dispatch, not later observations.
+    async function loadResults() {
+      if (!scope || resultsRefresh.current !== scope) return;
+      const generation = scope.generation;
+      const controller = new AbortController();
+      scope.request = controller;
+      try {
+        const nextResults = await api.getResults(runId, controller.signal);
+        if (resultsRefresh.current !== scope) return;
+        scope.failed = false;
         setResults(nextResults.results);
         setResultsError(null);
-      },
-      (caught: unknown) => {
-        if (!isAbort(caught) && !controller.signal.aborted) setResultsError(errorMessage(caught));
-      },
-    ).finally(() => {
-      if (resultsRequest.current !== controller) return;
-      resultsRequest.current = null;
-      if (trailingResultsRefresh.current && !controller.signal.aborted) {
-        trailingResultsRefresh.current = false;
-        loadResults(runId);
+      } catch (caught) {
+        if (resultsRefresh.current !== scope) return;
+        scope.failed = true;
+        if (!isAbort(caught)) setResultsError(errorMessage(caught));
+      } finally {
+        if (resultsRefresh.current === scope) {
+          scope.request = null;
+          if (scope.generation > generation) void loadResults();
+          else setRefreshingResults(false);
+        }
       }
-    });
-  });
+    }
+    void loadResults();
+  }
 
-  useEffect(() => () => {
-    resultsRequest.current?.abort();
-    resultsRequest.current = null;
-    trailingResultsRefresh.current = false;
-  }, [run?.run_id]);
+  const observeResults = useEffectEvent((next: ExecutionResponse) => requestResults(next.run_id, next));
 
   useEffect(() => {
-    if (!run || !initialExecution || initialExecution.run_id !== run.run_id) return;
+    resultsRefresh.current = runId ? {
+      runId, observation: null, generation: 0, request: null, failed: false,
+    } : null;
+    const scope = resultsRefresh.current;
+    reconciliation.current = null;
+    createdReconciliationPolls.current = 0;
+    stopReconciliation.current = false;
+    stopRetryAvailable.current = false;
+    detachReconciliation.current = false;
+    detachRetryAvailable.current = false;
+    executionFailures.current = 0;
+    queueMicrotask(() => {
+      if (resultsRefresh.current !== scope) return;
+      setRefreshingResults(false);
+      setStarting(false);
+      setDiscarding(false);
+      setRequestingStop(false);
+      setReconcilingStop(false);
+      setRequestingDetach(false);
+      setReconcilingDetach(false);
+      setCreatedUnavailable(false);
+      setError(null);
+    });
+    return () => {
+      resultsRefresh.current = null;
+      scope?.request?.abort();
+    };
+  }, [runId]);
+
+  useEffect(() => {
+    const replaced = executionRunId.current !== runId;
+    executionRunId.current = runId;
+    const seed = initialExecution?.run_id === runId ? initialExecution : null;
+    if (!seed && !replaced) return;
     let current = true;
     queueMicrotask(() => {
       if (!current) return;
-      setExecution(initialExecution);
-      setPolling(initialExecution.execution_task_active);
+      setExecution(seed);
+      setPolling(seed?.execution_task_active ?? false);
     });
     return () => { current = false; };
-  }, [initialExecution, run]);
+  }, [initialExecution, runId]);
+
+  const resultsSeed = useEffectEvent(() => ({ results: initialResults, error: initialResultsError }));
 
   useEffect(() => {
-    if (!run) return;
+    if (!runId) return;
+    // Recovery seeds initialize a Run lifetime, not subsequent foreground observations.
+    const seed = resultsSeed();
     let current = true;
     queueMicrotask(() => {
       if (!current) return;
-      setResults(initialResults);
-      setResultsError(initialResultsError);
+      setResults(seed.results);
+      setResultsError(seed.error);
     });
     return () => { current = false; };
-  }, [initialResults, initialResultsError, run]);
+  }, [runId]);
 
   useEffect(() => {
-    if (!run || !initialExecution) return;
-    requestResults(run.run_id);
-  }, [api, initialExecution, run]);
+    if (!runId || !initialExecution || initialExecution.run_id !== runId) return;
+    observeResults(initialExecution);
+  }, [api, initialExecution, runId]);
 
   useEffect(() => {
     onStatusChange(execution?.status ?? (run ? "created" : null));
   }, [execution?.status, onStatusChange, run]);
 
   useEffect(() => {
-    if (!polling || !run) {
+    if (!polling || !runId) {
       return;
     }
 
@@ -121,11 +183,11 @@ export function useRunExecution(
     let disposed = false;
 
     async function poll() {
-      if (disposed || !run) {
+      if (disposed || !runId) {
         return;
       }
       try {
-        const nextExecution = await api.getExecution(run.run_id, controller.signal);
+        const nextExecution = await api.getExecution(runId, controller.signal);
         if (disposed) {
           return;
         }
@@ -141,6 +203,7 @@ export function useRunExecution(
             : nextExecution
         ));
         executionFailures.current = 0;
+        observeResults(nextExecution);
 
         if (stopReconciliation.current) {
           stopReconciliation.current = false;
@@ -195,8 +258,6 @@ export function useRunExecution(
           }
         }
 
-        requestResults(run.run_id);
-
         if (
           TERMINAL_STATUSES.has(nextExecution.status) ||
           (nextExecution.status === "running" && !nextExecution.execution_task_active)
@@ -228,20 +289,23 @@ export function useRunExecution(
         clearTimeout(timer);
       }
     };
-  }, [api, pollIntervalMs, polling, run]);
+  }, [api, pollIntervalMs, polling, runId]);
 
   async function start() {
     if (!run || starting || polling || discarding || createdUnavailable || (execution?.status ?? "created") !== "created") {
       return;
     }
     setStarting(true);
+    const scope = resultsRefresh.current;
     reconciliation.current = null;
     setCreatedUnavailable(false);
     setError(null);
     try {
       await api.startRun(run.run_id);
+      if (resultsRefresh.current !== scope) return;
       setPolling(true);
     } catch (caught) {
+      if (resultsRefresh.current !== scope) return;
       if (caught instanceof ApiError && caught.code === "network_error") {
         setError(`${errorMessage(caught)}. The Start response was ambiguous; checking durable state.`);
         createdReconciliationPolls.current = 0;
@@ -251,7 +315,9 @@ export function useRunExecution(
         const message = errorMessage(caught);
         try {
           const nextExecution = await api.getExecution(run.run_id);
+          if (resultsRefresh.current !== scope) return;
           setExecution(nextExecution);
+          requestResults(run.run_id, nextExecution);
           setCreatedUnavailable(
             nextExecution.status === "created" && !nextExecution.execution_task_active,
           );
@@ -262,13 +328,13 @@ export function useRunExecution(
               : null,
           );
         } catch {
-          setError(message);
+          if (resultsRefresh.current === scope) setError(message);
         }
       } else {
         setError(errorMessage(caught));
       }
     } finally {
-      setStarting(false);
+      if (resultsRefresh.current === scope) setStarting(false);
     }
   }
 
@@ -277,20 +343,26 @@ export function useRunExecution(
       return;
     }
     setDiscarding(true);
+    const scope = resultsRefresh.current;
     reconciliation.current = null;
     setCreatedUnavailable(false);
     setError(null);
     try {
       const nextExecution = await api.discardRun(run.run_id);
+      if (resultsRefresh.current !== scope) return;
       setExecution(nextExecution);
+      requestResults(run.run_id, nextExecution);
       onStatusChange(nextExecution.status);
       setPolling(false);
     } catch (caught) {
+      if (resultsRefresh.current !== scope) return;
       const message = errorMessage(caught);
       const discardRejected = caught instanceof ApiError && caught.code === "run_discard_not_eligible";
       try {
         const nextExecution = await api.getExecution(run.run_id);
+        if (resultsRefresh.current !== scope) return;
         setExecution(nextExecution);
+        requestResults(run.run_id, nextExecution);
         onStatusChange(nextExecution.status);
         if (discardRejected && nextExecution.status === "created") {
           createdReconciliationPolls.current = 0;
@@ -303,10 +375,10 @@ export function useRunExecution(
           setError(nextExecution.status === "created" ? message : null);
         }
       } catch {
-        setError(message);
+        if (resultsRefresh.current === scope) setError(message);
       }
     } finally {
-      setDiscarding(false);
+      if (resultsRefresh.current === scope) setDiscarding(false);
     }
   }
 
@@ -323,10 +395,12 @@ export function useRunExecution(
       return;
     }
     setRequestingStop(true);
+    const scope = resultsRefresh.current;
     stopRetryAvailable.current = false;
     setError(null);
     try {
       const response = await api.cancelRun(run.run_id);
+      if (resultsRefresh.current !== scope) return;
       setExecution((current) => current ? {
         ...current,
         cancellation: {
@@ -337,6 +411,7 @@ export function useRunExecution(
       } : current);
       setPolling(true);
     } catch (caught) {
+      if (resultsRefresh.current !== scope) return;
       const message = errorMessage(caught);
       if (caught instanceof ApiError && caught.code === "network_error") {
         stopReconciliation.current = true;
@@ -349,7 +424,7 @@ export function useRunExecution(
         setError(message);
       }
     } finally {
-      setRequestingStop(false);
+      if (resultsRefresh.current === scope) setRequestingStop(false);
     }
   }
 
@@ -366,10 +441,12 @@ export function useRunExecution(
       return;
     }
     setRequestingDetach(true);
+    const scope = resultsRefresh.current;
     detachRetryAvailable.current = false;
     setError(null);
     try {
       const response = await api.detachRun(run.run_id);
+      if (resultsRefresh.current !== scope) return;
       setExecution((current) => current ? {
         ...current,
         cancellation: {
@@ -380,6 +457,7 @@ export function useRunExecution(
       } : current);
       setPolling(true);
     } catch (caught) {
+      if (resultsRefresh.current !== scope) return;
       const message = errorMessage(caught);
       if (caught instanceof ApiError && caught.code === "network_error") {
         detachReconciliation.current = true;
@@ -392,43 +470,30 @@ export function useRunExecution(
         setError(message);
       }
     } finally {
-      setRequestingDetach(false);
+      if (resultsRefresh.current === scope) setRequestingDetach(false);
     }
   }
 
-  async function refreshResults() {
-    if (!run || refreshingResults) {
-      return;
-    }
-    setRefreshingResults(true);
-    setResultsError(null);
-    try {
-      const nextResults = await api.getResults(run.run_id);
-      setResults(nextResults.results);
-    } catch (caught) {
-      setResultsError(errorMessage(caught));
-    } finally {
-      setRefreshingResults(false);
+  function refreshResults() {
+    if (run) {
+      setRefreshingResults(true);
+      requestResults(run.run_id);
     }
   }
 
   async function reconcileCancellationRejection(message: string) {
     if (!run) return;
+    const scope = resultsRefresh.current;
     try {
       const nextExecution = await api.getExecution(run.run_id);
+      if (resultsRefresh.current !== scope) return;
       setExecution(nextExecution);
       const unavailable = nextExecution.status === "running" && !nextExecution.execution_task_active;
       setPolling(nextExecution.status === "running" && nextExecution.execution_task_active);
       setError(unavailable || TERMINAL_STATUSES.has(nextExecution.status) ? null : message);
-      try {
-        const nextResults = await api.getResults(run.run_id);
-        setResults(nextResults.results);
-        setResultsError(null);
-      } catch (caught) {
-        setResultsError(errorMessage(caught));
-      }
+      requestResults(run.run_id, nextExecution);
     } catch {
-      setError(message);
+      if (resultsRefresh.current === scope) setError(message);
     }
   }
 

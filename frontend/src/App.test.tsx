@@ -3099,6 +3099,36 @@ describe("Active Run rediscovery", () => {
     expect(api.startRun).not.toHaveBeenCalled();
   });
 
+  it.each(["pageshow", "visibilitychange"])("preserves terminal Results through equivalent foreground %s hydration", async (event) => {
+    seedWorkingSession("run-terminal");
+    const api = makeApi({
+      getActiveExecution: vi.fn(async () => ({ run_id: null })),
+      getRun: vi.fn(async () => runLookupResponse("succeeded", "run-terminal", 39)),
+      getExecution: vi.fn(async () => execution("succeeded", "run-terminal")),
+      getResults: vi.fn(async () => ({
+        run_id: "run-terminal",
+        results: [result(1, 1, "image/png", "kept.png", 512)],
+      })),
+    });
+    render(<App api={api} />);
+    const image = await screen.findByAltText("Result 1 from Job 1: kept.png");
+    expect(image).toBeVisible();
+    expect(api.getResults).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      if (event === "visibilitychange") {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+        document.dispatchEvent(new Event(event));
+      } else window.dispatchEvent(new PageTransitionEvent(event));
+    });
+
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(api.getExecution).toHaveBeenCalledTimes(2);
+    expect(api.getResults).toHaveBeenCalledTimes(1);
+    expect(image).toBeInTheDocument();
+    expect(image).toBeVisible();
+  });
+
   it("revalidates on pageshow and visible visibilitychange", async () => {
     const getActiveExecution = vi.fn(async () => ({ run_id: null }));
     const api = makeApi({ getActiveExecution });
