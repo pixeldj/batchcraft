@@ -13,6 +13,8 @@ import {
   newVariableBinding,
   normalizedBindingValues,
   parseExplicitSeedValues,
+  parseSeedIntent,
+  splitSeeds,
   buildParameterBindings,
   buildLinkedParameterSets,
   reconcileImageBindings,
@@ -105,7 +107,7 @@ export function buildSavedBatchDefinition(form: BatchFormState): SavedBatchDefin
     image_bindings: imageBindings,
     parameter_bindings: parameterBindings,
     linked_parameter_sets: linkedParameterSets,
-    seed_intent: savedSeedIntent(form),
+    seed_intent: parseSeedIntent(form),
     selected_workflow_version: emptyWorkflow ? null : {
       id: form.workflowVersionId as string,
       content_sha256: form.workflowContentSha256 as string,
@@ -316,36 +318,6 @@ function savedParameterStateToForm(
     }];
   });
   return reconcileParameterState(parameterBindings, linkedParameterSets, parameters);
-}
-
-function savedSeedIntent(form: BatchFormState) {
-  if (form.seedMode === "random") {
-    const count = Number(form.randomSeedCount.trim());
-    if (!Number.isInteger(count) || count < 1 || count > 100) {
-      throw new FormBuildError("seeds", "Random seed count must be between 1 and 100.");
-    }
-    return { mode: "random" as const, values: [], random_seed_count: count };
-  }
-  const values = form.seedMode === "explicit"
-    ? parseExplicitSeedValues(form.seedValues)
-    : parseSeeds(form.seedValues);
-  if (form.seedMode === "fixed" && values.length !== 1) {
-    throw new FormBuildError("seeds", "Fixed seed intent requires exactly one seed.");
-  }
-  return { mode: form.seedMode, values, random_seed_count: null };
-}
-
-function parseSeeds(value: string): number[] {
-  return splitSeeds(value).map((item) => {
-    if (!/^\d+$/.test(item)) throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is not a nonnegative integer.`);
-    const seed = Number(item);
-    if (!Number.isSafeInteger(seed)) throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is outside the safe integer range.`);
-    return seed;
-  });
-}
-
-function splitSeeds(value: string): string[] {
-  return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
 function parseObject(value: string, label: string): JsonObject {

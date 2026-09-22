@@ -279,8 +279,9 @@ no fourth mode or Step syntax. Direction is automatic, increasing or decreasing 
 Comma/newline-separated items may mix literals and ranges. Blank items are ignored; order and duplicates
 are preserved. Each item is digits or two digit-only endpoints separated by a hyphen with optional
 surrounding whitespace. Values must be integers in `0..9007199254740991` (`2^53-1`); negative spelling,
-including Explicit `-0`, is rejected. Fixed parsing and existing execution behavior in all three modes
-are unchanged.
+including `-0`, is rejected. Fixed now consistently requires exactly one unsigned decimal token;
+Random requires one unsigned decimal count in `1..100`. This corrects former Save/Preview parsing
+discrepancies without changing execution behavior. See `BATCH_COMPILER.md` for the authoring grammar.
 
 New frontend authoring allows at most 10,000 Explicit seeds across all literals and expanded ranges,
 checked before any seed values are materialized. The overall Job budget remains separate. Invalid Seeds

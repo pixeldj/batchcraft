@@ -193,7 +193,7 @@ test("real API: Explicit range validation and ordering leave Fixed and Random ge
     expect(previewRequests.at(-1)?.seeds).toMatchObject({ mode: "explicit", values });
   }
   const beforeInvalid = previewRequests.length;
-  for (const text of ["foo", "5-1-abc", "0-9007199254740991"]) {
+  for (const text of ["5-1-abc", "0-9007199254740991"]) {
     await page.getByLabel(/Explicit seeds/).fill(text);
     await expect(seeds).toContainText("Explicit · incomplete");
     await expect(seeds.getByRole("button", { name: "Done", exact: true })).toBeDisabled();

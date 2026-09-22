@@ -10,6 +10,7 @@ import {
   FormBuildError,
   MAX_EXPLICIT_SEEDS,
   parseExplicitSeedValues,
+  parseSeedIntent,
   MAX_RANDOM_SEED_COUNT,
   missingPromptPlaceholders,
   newPrompt,
@@ -22,6 +23,41 @@ import {
   restoreHistoricalResourceState,
   withMaterializedRandomSeeds,
 } from "./form";
+
+describe("parseSeedIntent", () => {
+  it.each([
+    ["0", 0], [" ,\n 0005 ,\r\n", 5], ["9007199254740991", Number.MAX_SAFE_INTEGER],
+    [`${"0".repeat(100_000)}1`, 1],
+  ])("parses one Fixed unsigned decimal token (case %#)", (seedValues, seed) => {
+    expect(parseSeedIntent({ seedMode: "fixed", seedValues, randomSeedCount: "invalid" }))
+      .toEqual({ mode: "fixed", values: [seed], random_seed_count: null });
+  });
+
+  it.each([
+    "", " ,\n, ", "1,2", "1\n2", "5-5", "5 - 6", "-0", "-1", "+1",
+    "1e1", "1E1", "0x10", "0b10", "0o10", "1.0", ".5", "1 2", "1;2",
+    "１２", "١", "Infinity", "NaN", "9007199254740992", "9".repeat(100_000),
+  ])("rejects invalid Fixed syntax, cardinality, or bounds (case %#)", (seedValues) => {
+    expect(() => parseSeedIntent({ seedMode: "fixed", seedValues, randomSeedCount: "1" }))
+      .toThrow(expect.objectContaining({ field: "seeds" }));
+  });
+
+  it.each([["1", 1], [" 0010\n", 10], ["100", MAX_RANDOM_SEED_COUNT], [`${"0".repeat(100_000)}1`, 1]])(
+    "parses Random repetition count (case %#)", (randomSeedCount, count) => {
+      expect(parseSeedIntent({ seedMode: "random", seedValues: "invalid", randomSeedCount }))
+        .toEqual({ mode: "random", values: [], random_seed_count: count });
+    },
+  );
+
+  it.each([
+    "", " ", "0", "000", "101", "-0", "-1", "+1", "1.5", "1.0", "two",
+    "1e1", "1E1", "0x10", "0b10", "0o10", "1,2", "1\n2", "1,", "1-1",
+    "1 - 2", "1 2", "１２", "١", "Infinity", "NaN", "9".repeat(100_000),
+  ])("rejects invalid Random syntax or bounds (case %#)", (randomSeedCount) => {
+    expect(() => parseSeedIntent({ seedMode: "random", seedValues: "1", randomSeedCount }))
+      .toThrow(expect.objectContaining({ field: "seeds" }));
+  });
+});
 
 describe("parseExplicitSeedValues", () => {
   it.each([
@@ -38,8 +74,8 @@ describe("parseExplicitSeedValues", () => {
 
   it.each([
     "foo", "5-", "-5", "-0", "5--10", "5-foo", "1-20:2", "1..20",
-    "1e3", "1E3", "+5", "1.0", "0x10", "5 6", "1;2", "5-6-7", "1/2",
-    "9007199254740992", "0-9007199254740992", "9007199254740992-0",
+    "1e3", "1E3", "+5", "1.0", "0x10", "0b10", "0o10", "１２", "١", "5 6", "1;2", "5-6-7", "1/2",
+    "9007199254740992", "0-9007199254740992", "9007199254740992-0", "5-+6", "1-2.0", "0-1e1",
   ])("rejects invalid item %j with a seeds-field error", (item) => {
     expect(() => parseExplicitSeedValues(`1,${item}`)).toThrow(FormBuildError);
     expect(() => parseExplicitSeedValues(`1,${item}`)).toThrow(expect.objectContaining({
@@ -54,6 +90,7 @@ describe("parseExplicitSeedValues", () => {
   it("bounds long endpoints before BigInt conversion without limiting leading zeros", () => {
     expect(parseExplicitSeedValues(`${"0".repeat(100_000)}5-6`)).toEqual([5, 6]);
     expect(() => parseExplicitSeedValues("9".repeat(100_000))).toThrow(/between 0 and 9007199254740991/);
+    expect(() => parseExplicitSeedValues(`${"9".repeat(100_000)}-`)).toThrow(FormBuildError);
   });
 
   it.each(["0-9999", "9999-0", "0-9998,0", Array(10_000).fill("5").join(",")])(
@@ -114,7 +151,7 @@ describe("Prompt placeholder requirements", () => {
 
 describe("buildBatchRequest", () => {
   it("uses expanded Explicit values in both request and snapshot without editing raw text", () => {
-    const form = { ...populatedBatchForm(), seedMode: "explicit" as const, seedValues: "005-007,6" };
+    const form = { ...populatedBatchForm(), seedMode: "explicit" as const, seedValues: "005-007,6", randomSeedCount: "invalid" };
     const request = buildBatchRequest(form);
     expect(request.seeds).toEqual({ mode: "explicit", values: [5, 6, 7, 6] });
     expect(request.batch_snapshot.seed_intent).toEqual({ mode: "explicit", values: [5, 6, 7, 6], random_seed_count: null });
@@ -124,16 +161,29 @@ describe("buildBatchRequest", () => {
     ));
   });
 
-  it.each(["5--10", "0-10000"])("rejects invalid Explicit authoring in both builders: %s", (seedValues) => {
-    const form = { ...populatedBatchForm(), seedMode: "explicit" as const, seedValues };
+  it("rejects invalid Explicit authoring in both builders", () => {
+    const form = { ...populatedBatchForm(), seedMode: "explicit" as const, seedValues: "5--10" };
     expect(() => buildBatchRequest(form)).toThrow(FormBuildError);
     expect(() => buildEditableBatchSnapshot(form)).toThrow(FormBuildError);
   });
 
-  it("preserves Fixed negative zero and rejection of range syntax", () => {
-    const form = { ...populatedBatchForm(), seedValues: "-0" };
-    expect(buildBatchRequest(form).seeds.values).toEqual([-0]);
-    expect(() => buildBatchRequest({ ...form, seedValues: "5-10" })).toThrow(/not an integer/);
+  it.each(["-0", "1,2"])("rejects Fixed %j consistently before Preview", (seedValues) => {
+    const form = { ...populatedBatchForm(), seedValues };
+    expect(() => buildBatchRequest(form)).toThrow(expect.objectContaining({ field: "seeds" }));
+    expect(() => buildEditableBatchSnapshot(form)).toThrow(expect.objectContaining({ field: "seeds" }));
+  });
+
+  it("rejects Random exponent count before Preview", () => {
+    const form = { ...populatedBatchForm(), seedMode: "random" as const, randomSeedCount: "1e1" };
+    expect(() => buildBatchRequest(form)).toThrow(expect.objectContaining({ field: "seeds" }));
+  });
+
+  it("uses one validated Fixed value in request and snapshot without changing raw text", () => {
+    const form = { ...populatedBatchForm(), seedValues: " , 0005\n", randomSeedCount: "invalid" };
+    const request = buildBatchRequest(form);
+    expect(request.seeds).toEqual({ mode: "fixed", values: [5] });
+    expect(request.batch_snapshot.seed_intent).toEqual({ mode: "fixed", values: [5], random_seed_count: null });
+    expect(form.seedValues).toBe(" , 0005\n");
   });
 
   it.each([
@@ -595,25 +645,17 @@ describe("buildBatchRequest", () => {
     expect(editableBatchSnapshotIdentity(left)).not.toBe(editableBatchSnapshotIdentity(right));
   });
 
-  it.each(["", "0", "-1", "1.5", "two", String(MAX_RANDOM_SEED_COUNT + 1)])(
-    "rejects invalid Random seed count %j",
-    (randomSeedCount) => {
-      const form = populatedBatchForm();
-      form.seedMode = "random";
-      form.randomSeedCount = randomSeedCount;
-
-      expect(() => buildBatchRequest(form)).toThrow(/Random seed count/);
-    },
-  );
-
   it("sends Random repetition intent to Preview without materialized seeds", () => {
     const form = populatedBatchForm();
     form.seedMode = "random";
-    form.randomSeedCount = "3";
+    form.randomSeedCount = " 003 ";
+    form.seedValues = "invalid inactive draft";
 
     const request = buildBatchRequest(form);
 
     expect(request.seeds).toEqual({ mode: "random", values: [], random_seed_count: 3 });
+    expect(request.batch_snapshot.seed_intent).toEqual(request.seeds);
+    expect(form.randomSeedCount).toBe(" 003 ");
   });
 
   it("adds Preview's per-Job Random seeds without changing editable intent", () => {
