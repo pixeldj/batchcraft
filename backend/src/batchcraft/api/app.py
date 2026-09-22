@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, BinaryIO, cast
 
+import anyio
 from fastapi import Depends, FastAPI, File, Query, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +52,7 @@ from batchcraft.application import (
     SavedBatchPublicationError,
     SavedBatchRevisionConflictError,
 )
+from batchcraft.application.errors import ExecutionServiceClosedError
 from batchcraft.comfyui import ComfyUIClient, WorkflowPreparationError
 from batchcraft.db import (
     ProjectConflictError,
@@ -279,8 +281,20 @@ def create_app(
         try:
             yield
         finally:
-            await registry.shutdown()
-            await client.aclose()
+            try:
+                await registry.shutdown()
+            finally:
+                closing_client = asyncio.create_task(client.aclose())
+                cancelled = False
+                with anyio.CancelScope(shield=True):
+                    while not closing_client.done():
+                        try:
+                            await asyncio.shield(closing_client)
+                        except asyncio.CancelledError:
+                            cancelled = True
+                closing_client.result()
+                if cancelled:
+                    raise asyncio.CancelledError
 
     app = DiagnosticFastAPI(
         title="batchcraft API",
@@ -1624,6 +1638,16 @@ def _register_error_handlers(app: FastAPI) -> None:
             status.HTTP_409_CONFLICT,
             "execution_already_active",
             "Run execution is already active",
+        )
+
+    @app.exception_handler(ExecutionServiceClosedError)
+    async def closed_execution_service(
+        _request: Request, _error: ExecutionServiceClosedError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "execution_service_closed",
+            "Execution service is shutting down; Start and Discard are unavailable",
         )
 
     @app.exception_handler(ExecutionNotEligibleError)

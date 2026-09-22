@@ -144,6 +144,7 @@ _ERROR_MESSAGES = {
     "invalid_project_key": "Project filesystem key or directory is unsafe",
     "invalid_asset_upload": "Image upload is invalid; use matching PNG, JPEG, or WebP filename, MIME, and bytes",
     "execution_not_eligible": "Run is not eligible for execution; existing execution cannot be restarted",
+    "execution_service_closed": "Execution service is shutting down; Start and Discard are unavailable",
     "run_discard_not_eligible": "Only an unstarted Run without submission evidence can be discarded",
 }
 

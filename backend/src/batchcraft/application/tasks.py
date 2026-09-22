@@ -3,12 +3,19 @@ import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 
+import anyio
+
+from batchcraft._async_io import file_operation
 from batchcraft.db import RunCancellationMode, RunCancellationRequestRecord
 from batchcraft.diagnostics import safe_exception
 from batchcraft.execution import RunExecutionState
 
 from .cancellation import ActiveRunCancellationControl
-from .errors import ExecutionAlreadyActiveError, RunDiscardNotEligibleError
+from .errors import (
+    ExecutionAlreadyActiveError,
+    ExecutionServiceClosedError,
+    RunDiscardNotEligibleError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +35,20 @@ class RunTaskRegistry:
     def __init__(self) -> None:
         self._active_runs: dict[str, _ActiveRun] = {}
         self._lock = asyncio.Lock()
+        self._closing = False
+        self._shutdown_task: asyncio.Task[None] | None = None
 
     async def start(
         self,
         run_id: str,
         cancellation_control: ActiveRunCancellationControl,
         factory: ExecutionCoroutineFactory,
+        *,
+        prepare: Callable[[], None],
     ) -> None:
         async with self._lock:
+            if self._closing:
+                raise ExecutionServiceClosedError("Execution service is shutting down")
             self._remove_completed()
             for active_run_id in self._active_runs:
                 if active_run_id == run_id:
@@ -44,16 +57,22 @@ class RunTaskRegistry:
                     f"Run {active_run_id!r} is already executing; concurrent Runs are disabled"
                 )
 
+            # Retain admission until storage finishes, even if the caller is cancelled.
+            await file_operation(prepare)
+            # The synchronous factory may require the running loop. No await may
+            # separate coroutine creation from registration and observation.
             task = asyncio.create_task(factory(), name="batchcraft-run")
             self._active_runs[run_id] = _ActiveRun(task, cancellation_control)
             task.add_done_callback(lambda completed: self._task_completed(run_id, completed))
 
     async def discard(self, run_id: str, operation: DiscardOperation) -> RunExecutionState:
         async with self._lock:
+            if self._closing:
+                raise ExecutionServiceClosedError("Execution service is shutting down")
             self._remove_completed()
             if run_id in self._active_runs:
                 raise RunDiscardNotEligibleError(f"Run {run_id!r} has an active execution task")
-            return operation()
+            return await file_operation(operation)
 
     def is_active(self, run_id: str) -> bool:
         active = self._active_runs.get(run_id)
@@ -78,7 +97,25 @@ class RunTaskRegistry:
             return requested
 
     async def shutdown(self) -> None:
-        tasks = tuple(active.task for active in self._active_runs.values())
+        # Close admission before waiting for an already admitted storage operation.
+        self._closing = True
+        if self._shutdown_task is None:
+            self._shutdown_task = asyncio.create_task(self._drain(), name="batchcraft-run-shutdown")
+        cancelled = False
+        with anyio.CancelScope(shield=True):
+            while not self._shutdown_task.done():
+                try:
+                    await asyncio.shield(self._shutdown_task)
+                except asyncio.CancelledError:
+                    cancelled = True
+        self._shutdown_task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _drain(self) -> None:
+        async with self._lock:
+            tasks = tuple(active.task for active in self._active_runs.values())
+        # Executor cleanup and completion callbacks may themselves acquire the lock.
         for task in tasks:
             task.cancel()
         if tasks:

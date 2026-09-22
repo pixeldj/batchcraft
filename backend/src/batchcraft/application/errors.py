@@ -102,6 +102,10 @@ class ExecutionNotEligibleError(ApplicationError):
     pass
 
 
+class ExecutionServiceClosedError(ApplicationError):
+    pass
+
+
 class RunDiscardNotEligibleError(ApplicationError):
     pass
 

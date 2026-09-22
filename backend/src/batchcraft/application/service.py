@@ -814,7 +814,7 @@ class BatchcraftService:
         return _run_cancellation(state, intent)
 
     async def start_execution(self, run_id: str) -> PublishedRun:
-        run = self.get_run(run_id)
+        run = await file_operation(lambda: self.get_run(run_id))
         stop_intent, detach_intent = await asyncio.gather(
             asyncio.to_thread(
                 self._get_cancellation_intent,
@@ -834,7 +834,7 @@ class BatchcraftService:
             detach_requested=detach_intent is not None,
         )
 
-        def create_execution() -> Coroutine[object, object, RunExecutionState]:
+        def prepare_execution() -> None:
             state_store = ExecutionStateStore(run.path)
             if detach_intent is not None:
                 raise ExecutionNotEligibleError(
@@ -851,6 +851,8 @@ class BatchcraftService:
                 raise ExecutionNotEligibleError(
                     f"Run {run_id!r} storage is not eligible for execution"
                 ) from error
+
+        def create_execution() -> Coroutine[object, object, RunExecutionState]:
             return self._executor(
                 run=run,
                 client=self.comfyui_client,
@@ -858,7 +860,9 @@ class BatchcraftService:
                 cancellation_control=cancellation_control,
             )
 
-        await self.task_registry.start(run_id, cancellation_control, create_execution)
+        await self.task_registry.start(
+            run_id, cancellation_control, create_execution, prepare=prepare_execution
+        )
         return run
 
     async def request_run_cancellation(
@@ -935,7 +939,7 @@ class BatchcraftService:
         )
 
     async def discard_run(self, run_id: str) -> RunExecutionState:
-        run = self.get_run(run_id)
+        run = await file_operation(lambda: self.get_run(run_id))
 
         def discard() -> RunExecutionState:
             store = ExecutionStateStore(run.path)

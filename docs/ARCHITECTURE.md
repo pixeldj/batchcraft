@@ -206,6 +206,20 @@ The first production executor fixes queue depth at exactly `1` and executes one 
 
 FastAPI starts a retained `asyncio.Task` for an accepted Run and returns immediately. The local-process registry permits at most one active Run, rejects duplicate or concurrent starts, observes task errors, and cancels tasks during shutdown. Start admission and discard-before-start use the same registry lock: discard cannot race execution start and independently requires absent or exactly pristine initial state with no active task for that Run. Discard writes terminal `cancelled` execution state without deleting the Run or changing frozen provenance.
 
+Start/Discard strict initial Run lookup runs in joined file workers. The registry holds its asyncio
+lock across joined synchronous storage preparation (Start) or read/validate/save (Discard). Only after
+successful Start preparation does it invoke the synchronous coroutine factory on the event loop, then
+create, register, and observe the task without an intervening await. Workers never own registry or
+executor control flow. Cancellation joins workers before releasing admission; it cannot abandon a
+write or create an unowned execution coroutine. Active-Run discovery may wait on this lock even though
+health and independent reads remain responsive to slow storage.
+
+Shutdown closes admission before acquiring the lock, then snapshots tasks after any admitted worker
+finishes. It drains tasks outside the lock so executor cleanup and completion callbacks can acquire it.
+Repeated caller cancellation does not skip the drain or close the client early. Start/Discard requests
+not yet admitted are rejected after closure, including pending initial reads. This process-local
+lifecycle boundary changes neither filesystem authority nor durable cancellation intent.
+
 Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` or `detach` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. After persisting `detach`, the registry targets only the owned local `asyncio.Task` with cancellation to wake an in-flight await. The executor recognizes that wake-up only when the same control reports durable detach intent, writes an honest blocked state, and leaves ordinary task cancellation to propagate. It preserves known submission evidence and Results, leaves later Jobs pending, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while `batchcraft.execution` v1 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. All prerelease execution formats are unsupported.
 
 Execution API read models expose whether the current process still owns a live task. This ephemeral fact

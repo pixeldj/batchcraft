@@ -300,7 +300,7 @@ Health, active-execution discovery, and mutation/control routes do not acquire a
 read queue; execution polling never joins the bulk queue. This is not a general latency
 guarantee: persisted parsing still does full validation, unrelated work can use worker capacity, and
 this policy does not make all mutation or compilation work nonblocking. Run creation, Project Asset
-import, and cancellation validation use joined file workers for their filesystem work. Cancellation
+import, Start/Discard, and cancellation validation use joined file workers for their filesystem work. Cancellation
 joins an active file operation before releasing its slot or closing its tempfile, without blocking the
 event loop.
 
@@ -897,6 +897,28 @@ The task registry:
 - cancels and observes active tasks during API shutdown.
 
 Start admission and discard are serialized by the same task-registry lock, so a Run cannot start and be discarded concurrently. Discard independently verifies that no task for the Run is active and that execution state is either absent or exactly the initial state derived from the frozen Run. It rejects any progression or submission evidence, including modified pending state, with `409 run_discard_not_eligible`.
+
+Start and Discard first perform strict Run lookup in a joined file worker. Under the registry lock,
+Start then checks mutable execution storage in a joined worker before invoking the executor factory
+on the event loop and registering its task without another await. Any existing `execution.json`, even
+an exact initial state, forbids Start; durable detach intent also forbids it. Discard performs its
+read/validation/decision/final save in one joined worker under that same lock. A validated already
+`cancelled` state is returned unchanged, including stop-after-current outcomes. Another Run's active
+task does not prevent Discard. No intermediate `created` execution record is written.
+
+Request cancellation joins admitted filesystem work before releasing the lock. Cancelled Start
+preparation creates no executor task; cancelling the request after task registration does not stop or
+detach that task. A cancelled Discard request may still have durably completed; inspect execution state
+before deciding what to do next. Health and independent reads remain available during this storage
+work, but active-execution discovery and other registry operations may wait for the admission lock.
+This is not an overall throughput or latency guarantee.
+
+Shutdown closes Start/Discard admission before waiting for protected work, snapshots registered tasks
+under the lock, and cancels/joins them outside it before closing the ComfyUI client. Repeated shutdown
+caller cancellation waits for cleanup before propagating. Late Start/Discard admission returns
+`409 execution_service_closed` in the existing error envelope, including Starts whose initial lookup
+or intent reads were pending when shutdown began. Initial strict lookup errors retain their existing
+`run_not_found`/`invalid_run_data` precedence. Shutdown does not interrupt remote ComfyUI work.
 
 `POST /api/runs/{run_id}/cancel` accepts one of two modes:
 
