@@ -66,16 +66,23 @@ function created(runId = "a"): ExecutionResponse {
   };
 }
 
-function setup(initial = observation(), results = empty) {
+function setup(initial = observation(), results = empty, resultsError: string | null = null) {
   const api = new BatchcraftApiClient();
   // Fresh allocations on every poll deliberately rule out object-identity comparisons.
   const getExecution = vi.spyOn(api, "getExecution").mockImplementation(async () => structuredClone(initial));
   const getResults = vi.spyOn(api, "getResults").mockImplementation(async (runId) => ({
     run_id: runId, results: listed(initial.jobs.map((job) => job.result_count)),
   }));
+  const initialProps: {
+    currentRun: RunCreatedResponse;
+    seed: ExecutionResponse | null;
+    initialResults?: ResultResponse[];
+    initialResultsError?: string | null;
+  } = { currentRun: run(initial.run_id), seed: initial };
   const hook = () => renderHook(
-    ({ currentRun, seed }) => useRunExecution(api, currentRun, 100, seed, results, null, onStatus),
-    { initialProps: { currentRun: run(initial.run_id), seed: initial as ExecutionResponse | null } },
+    ({ currentRun, seed, initialResults = results, initialResultsError = resultsError }) =>
+      useRunExecution(api, currentRun, 100, seed, initialResults, initialResultsError, onStatus),
+    { initialProps },
   );
   return { api, getExecution, getResults, hook };
 }
@@ -87,6 +94,67 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("current Run Results coordination", () => {
+  it("ignores newly allocated same-Run Results seeds after a successful listing", async () => {
+    const { hook, getResults } = setup(observation([1, 0, 0], "succeeded"));
+    const { result, rerender } = hook();
+    await flush();
+    for (const initialResultsError of [null, "obsolete seed error"]) {
+      rerender({ currentRun: run(), seed: observation([1, 0, 0], "succeeded"), initialResults: [], initialResultsError });
+      await flush();
+      expect(result.current.results).toEqual([artifact]);
+      expect(result.current.resultsError).toBeNull();
+      expect(getResults).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("preserves Results and a failed refresh error through same-Run placeholders until retry succeeds", async () => {
+    const retry = deferred<ResultsResponse>();
+    const { hook, getResults } = setup(observation([1, 0, 0], "succeeded"));
+    const { result, rerender } = hook();
+    await flush();
+    getResults.mockRejectedValueOnce(new Error("listing failed"));
+    await act(async () => result.current.refreshResults());
+    rerender({ currentRun: run(), seed: null, initialResults: [], initialResultsError: null });
+    await flush();
+    expect(result.current.results).toEqual([artifact]);
+    expect(result.current.resultsError).toBe("listing failed");
+    expect(getResults).toHaveBeenCalledTimes(2);
+
+    getResults.mockImplementationOnce(() => retry.promise);
+    for (let index = 0; index < 2; index++) {
+      rerender({ currentRun: run(), seed: observation([1, 0, 0], "succeeded"), initialResults: [], initialResultsError: null });
+      await flush();
+      expect(result.current.results).toEqual([artifact]);
+      expect(result.current.resultsError).toBe("listing failed");
+      expect(getResults).toHaveBeenCalledTimes(3);
+    }
+    await act(async () => retry.resolve({ run_id: "a", results: listed([1, 1, 0]) }));
+    expect(result.current.results).toEqual(listed([1, 1, 0]));
+    expect(result.current.resultsError).toBeNull();
+    expect(getResults).toHaveBeenCalledTimes(3);
+  });
+
+  it("initializes Results and errors for each Run lifetime, including returning to a previous Run", async () => {
+    const pending = deferred<ResultsResponse>();
+    const { hook, getResults } = setup(observation([1, 0, 0], "succeeded"), [artifact], "initial error");
+    getResults.mockImplementationOnce(() => pending.promise);
+    const { result, rerender } = hook();
+    await flush();
+    expect(result.current.results).toEqual([artifact]);
+    expect(result.current.resultsError).toBe("initial error");
+    for (const runId of ["b", "a"]) {
+      const initialResults = runId === "b" ? [] : listed([0, 1, 0]);
+      rerender({ currentRun: run(runId), seed: null, initialResults, initialResultsError: `${runId} seed error` });
+      await flush();
+      expect(result.current.results).toEqual(initialResults);
+      expect(result.current.resultsError).toBe(`${runId} seed error`);
+    }
+    await act(async () => pending.resolve({ run_id: "a", results: [artifact] }));
+    expect(result.current.results).toEqual(listed([0, 1, 0]));
+    expect(result.current.resultsError).toBe("a seed error");
+    expect(getResults).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["pending", "settled"])("ignores reordered equivalent Job tuples with a %s Results request", async (state) => {
     const pending = deferred<ResultsResponse>();
     const { hook, getExecution, getResults } = setup(observation([1, 2, 0]));

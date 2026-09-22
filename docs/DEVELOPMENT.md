@@ -726,6 +726,8 @@ to any Job's `(ordinal, result_count)`, a terminal transition, and loss of activ
 request a listing. Equivalent newly allocated poll responses do not. Recovery and action reconciliation
 use the same observations; explicit Refresh Results uses the same coordinator. Special created-state
 Start/Discard reconciliation remains independent of the normal monitor-ending rules.
+Results and error seeds initialize only on entry to a Run lifetime. Same-Run foreground hydration
+placeholders never replace loaded Results or clear a listing error; successful listings do that.
 
 Only one Results request runs for the current Run. Genuine needs arriving during it coalesce into a
 followup for the latest generation; unchanged polls do not queue work. Polling cleanup cannot abort a

@@ -149,16 +149,20 @@ export function useRunExecution(
     return () => { current = false; };
   }, [initialExecution, runId]);
 
+  const resultsSeed = useEffectEvent(() => ({ results: initialResults, error: initialResultsError }));
+
   useEffect(() => {
     if (!runId) return;
+    // Recovery seeds initialize a Run lifetime, not subsequent foreground observations.
+    const seed = resultsSeed();
     let current = true;
     queueMicrotask(() => {
       if (!current) return;
-      setResults(initialResults);
-      setResultsError(initialResultsError);
+      setResults(seed.results);
+      setResultsError(seed.error);
     });
     return () => { current = false; };
-  }, [initialResults, initialResultsError, runId]);
+  }, [runId]);
 
   useEffect(() => {
     if (!runId || !initialExecution || initialExecution.run_id !== runId) return;
