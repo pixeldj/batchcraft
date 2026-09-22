@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 from typing import cast
 
+import execution_wait
 import pytest
-import test_api
 from api_client import LoopbackTestClient
 from httpx import Response
 
@@ -77,18 +77,18 @@ def test_wait_for_status_budget_and_diagnostics(
         responses.append(response)
         return response
 
-    # Replace only this test module's clock, not time.monotonic process-wide.
-    monkeypatch.setattr(test_api, "time", SimpleNamespace(monotonic=monotonic, sleep=sleep))
+    # Replace only the support module's clock, not time.monotonic process-wide.
+    monkeypatch.setattr(execution_wait, "time", SimpleNamespace(monotonic=monotonic, sleep=sleep))
     http = cast(LoopbackTestClient, SimpleNamespace(get=get))
     options = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
     if failure is None:
-        result = test_api._wait_for_status(http, "test-run", expected, **options)
+        result = execution_wait._wait_for_status(http, "test-run", expected, **options)
         assert result.status == expected
         assert result.jobs[0].result_count == 2
         assert now == pytest.approx(104.41 if len(statuses) == 2 else 102.2)
     else:
         with pytest.raises(AssertionError, match=failure) as raised:
-            test_api._wait_for_status(http, "test-run", expected, **options)
+            execution_wait._wait_for_status(http, "test-run", expected, **options)
         message = str(raised.value)
         assert f"did not reach {expected!r}" in message
         assert f"after {now - 100:.3f}s" in message

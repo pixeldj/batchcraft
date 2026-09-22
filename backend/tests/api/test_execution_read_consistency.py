@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from test_api import _batch_request
+from batch_fixture import _batch_request
 
 from batchcraft.api import create_app
 from batchcraft.application.service import BatchcraftService

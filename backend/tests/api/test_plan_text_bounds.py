@@ -6,12 +6,11 @@ from unittest.mock import Mock
 
 import pytest
 from api_client import LoopbackTestClient as TestClient
-from test_api import (
-    FakeComfyUIClient,
+from api_support import FakeComfyUIClient, _settings
+from batch_fixture import (
     _batch_request,
     _publish_project_owner,
     _saved_batch_definition,
-    _settings,
     _sync_batch_snapshot,
 )
 
