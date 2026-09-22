@@ -43,6 +43,64 @@ beforeEach(() => {
   saveWorkingSession(populatedBatchForm(), null, "project-1");
 });
 
+describe("Concurrent library metadata", () => {
+  it.each(["prompt-first", "workflow-first"])("retains detached Prompts and Preview when responses settle %s in one batch", async (order) => {
+    const workflow = copiedSetup.workflow.version;
+    const profile = copiedSetup.profiles[0].version;
+    const form = {
+      ...populatedBatchForm(),
+      workflowId: workflow.workflow_id,
+      workflowVersionId: workflow.id,
+      workflowProfileId: profile.workflow_profile_id,
+      workflowProfileVersionId: profile.id,
+      workflowJson: JSON.stringify(workflow.workflow, null, 4),
+      workflowProfileJson: JSON.stringify(profile.profile, null, 4),
+      seedValues: "00042",
+    };
+    form.prompts[0] = { ...form.prompts[0], libraryProjectId: "project-1", promptId: "deleted-prompt", versionId: "deleted-version", text: "  Exact deleted text\n\n" };
+    saveWorkingSession(form, null, "project-1");
+    const missingPrompt = deferred<void>();
+    const workflowResponse = deferred<typeof workflow>();
+    const profileResponse = deferred<typeof profile>();
+    const api = makeApi({
+      ...workflowLibraryApi(),
+      listPrompts: vi.fn(async () => ({ prompts: [] })),
+      getPromptVersion: vi.fn(() => missingPrompt.promise.then(() => { throw new ApiError("Missing", "prompt_version_not_found", 404); })),
+      getWorkflowVersion: vi.fn(() => workflowResponse.promise),
+      getWorkflowProfileVersion: vi.fn(() => profileResponse.promise),
+    });
+    render(<App api={api} />);
+    await waitFor(() => {
+      expect(api.getPromptVersion).toHaveBeenCalled();
+      expect(api.getWorkflowVersion).toHaveBeenCalled();
+      expect(api.getWorkflowProfileVersion).toHaveBeenCalled();
+    });
+    await reachPreview();
+    const before = loadWorkingSession().form;
+    await act(async () => {
+      if (order === "prompt-first") missingPrompt.resolve();
+      workflowResponse.resolve(workflow);
+      profileResponse.resolve(profile);
+      if (order === "workflow-first") missingPrompt.resolve();
+    });
+    expect(loadWorkingSession().form.prompts).toEqual(before.prompts.map((prompt) => ({ ...prompt, key: expect.any(Number), libraryProjectId: null, promptId: null })));
+    expect(screen.getByText(/detached from the Prompt library/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Edit Prompt" })).toBeDisabled();
+    expect(document.querySelector(".prompt-card pre")?.textContent).toBe(form.prompts[0].text);
+    const after = loadWorkingSession().form;
+    expect(after.workflowName).toBe(copiedSetup.workflow.workflow.name);
+    expect(after.workflowProfileName).toBe(copiedSetup.profiles[0].workflow_profile.name);
+    expect(after.seedValues).toBe("00042");
+    expect(after.variableBindings).toEqual(before.variableBindings.map((binding) => ({ ...binding, key: expect.any(Number) })));
+    expect(after.imageBindings).toEqual(before.imageBindings);
+    await expandConfiguration("Workflow Setup", "Change");
+    expect(screen.getByLabelText("Workflow JSON")).toHaveValue(form.workflowJson);
+    expect(screen.getByLabelText("Workflow Profile JSON")).toHaveValue(form.workflowProfileJson);
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+  });
+});
+
 describe("Seed authoring", () => {
   it.each([
     { seedMode: "fixed" as const, seedValues: "-0", randomSeedCount: "1", error: /Fixed seed must be an unsigned decimal integer/ },

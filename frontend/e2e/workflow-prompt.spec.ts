@@ -227,6 +227,32 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   expect((await (await request.get(`${apiUrl}/api/projects/${project.id}/prompts`)).json()).prompts).toHaveLength(0);
   // A different browser's untracked recovery still has exact text, but no editable library record.
   await page.addInitScript((value) => localStorage.setItem("batchcraft.working-session-recovery.v4", value!), otherBrowserRecovery);
+  // Hydrate the recovery snapshots first, then settle the three real integrity bodies together.
+  await page.addInitScript(({ workflowId, profileId }) => {
+    const fetch = window.fetch.bind(window);
+    const seen = new Map<string, number>();
+    const releases: Array<() => void> = [];
+    window.fetch = async (...args) => {
+      const response = await fetch(...args);
+      const path = new URL(response.url).pathname;
+      const workflow = path === `/api/workflow-versions/${workflowId}` || path === `/api/workflow-profile-versions/${profileId}`;
+      const prompt = path.startsWith("/api/prompt-versions/");
+      if (!workflow && !prompt) return response;
+      const count = (seen.get(path) ?? 0) + 1;
+      seen.set(path, count);
+      if (workflow && count === 1) return response;
+      const json = response.json.bind(response);
+      response.json = async () => {
+        const body: unknown = await json();
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+          if (releases.length >= 3) releases.forEach((release) => release());
+        });
+        return body;
+      };
+      return response;
+    };
+  }, { workflowId: workflow.version.id, profileId: profile.version.id });
   await page.reload();
   await expect(prompts.locator(".prompt-card pre")).toHaveJSProperty("textContent", editedText);
   await expect(prompts.getByText(/detached from the Prompt library/)).toBeVisible();
