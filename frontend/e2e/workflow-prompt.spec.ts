@@ -126,6 +126,7 @@ test("mapped workflow prompt explicitly becomes real Project v1 and ordinary Run
   });
   await page.goto("/");
   await page.getByLabel("Active Project").selectOption(project.id);
+  await expect(page.getByLabel("Active Project")).toHaveValue(project.id);
   await page.getByLabel("Saved Batch", { exact: true }).selectOption(batch.id);
   await page.getByRole("button", { name: "Discard and switch", exact: true }).click();
   await expect(page.getByLabel("Saved Batch", { exact: true })).toHaveValue(batch.id);
