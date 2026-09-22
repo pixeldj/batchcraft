@@ -871,9 +871,12 @@ the frozen Base value beside an override. `Add Parameter` routes through Workflo
 selected compatible Profile, creates one when the Workflow has no Profiles, or focuses the chooser when
 multiple existing Profiles require an explicit selection.
 
-Explicit seed authoring uses the shared exported `parseExplicitSeedValues` in
-`frontend/src/features/batch/form.ts` for request building, Saved Batch saving, canonical intent,
-summary, and Seeds completion. It accepts comma/newline-separated items, ignores blank items, and
+Seed authoring uses the shared exported `parseSeedIntent` in `frontend/src/features/batch/form.ts`
+for request/snapshot building, Saved Batch saving, and Seeds completion. Request building reuses
+the validated snapshot intent rather than parsing Random counts again. Save uses this seed-only helper
+rather than the full Preview builder, so unrelated incomplete drafts remain saveable under Save's rules.
+The helper validates only active-mode fields and delegates Explicit expansion (also used by canonical
+intent) to `parseExplicitSeedValues`. Explicit accepts comma/newline-separated items, ignores blank items, and
 preserves order and duplicates. A trimmed item must match digits or two digit-only endpoints separated
 by a hyphen with optional whitespace around it. Inclusive `5-10` becomes `[5,6,7,8,9,10]`, `10-5`
 descends to `[10,9,8,7,6,5]`, and `1,5-7` followed by a newline and `20` becomes `[1,5,6,7,20]`.
@@ -881,7 +884,12 @@ Direction is automatic with increment `+1` or `-1`; no Step syntax or fourth mod
 Increment mode (BC-012), including persisted increment intent, is superseded rather than implemented.
 
 Literals and endpoints must be integers in `0..9007199254740991` (`2^53-1`). Explicit rejects negative
-grammar including `-0`; Fixed parsing is unchanged. Strip leading zeros and bound decimal text by length
+grammar including `-0`. Fixed now requires exactly one unsigned ASCII decimal token after the same
+comma/newline split, trim, and blank removal; ranges including `5-5` are invalid. Random requires one
+trimmed unsigned ASCII decimal count in `1..100`, without lists or ranges. Both accept leading zeros
+and reject signs, fractions, radix notation, and exponents. This intentionally corrects the former
+Save/Preview discrepancies: Save accepted Random `1e1`, while Preview accepted Fixed `-0` and `1,2`.
+Strip leading zeros and bound decimal text by length
 and maximum-value comparison before BigInt conversion, including enormous pasted endpoints. BigInt
 arithmetic validates/counts endpoints exactly. `MAX_EXPLICIT_SEEDS = 10000` limits the aggregate authored
 count across all literals and expanded ranges; check it before any seed-value materialization, not
@@ -890,6 +898,9 @@ after expansion or once per range. The overall backend Job budget remains a sepa
 The summary for `5-10` is `Explicit · 6 seeds`. Invalid drafts have no valid count, leave Seeds incomplete,
 and show actionable Seeds errors when Preview is attempted without sending an API request. Canonical
 intent compares valid shorthand by its expanded values; invalid drafts retain raw text for comparison.
+Fixed canonical intent still compares trimmed nonblank text tokens; Random still compares trimmed count
+text. Leading-zero edits remain dirty on those paths even when numeric payloads match. No editor text
+is rewritten, and Save's in-memory baseline remains the sent form; reopening uses persisted numeric values.
 Durable Saved Batch and Run snapshots keep Explicit arrays only. Saved Batch reload and `Load Run as
 Batch` normalize arrays to newline-separated values. Existing browser working-session recovery may
 retain raw draft text: no persisted shorthand means durable files, not a new persisted browser
@@ -897,8 +908,11 @@ seed-intent requirement. Historical arrays above 10,000 are still read in full, 
 or truncation; new frontend writes and Preview apply the cap. API, backend compiler, SQLite, and v1
 schemas are unchanged, as are Fixed, Explicit, and Random execution semantics.
 
-Regression coverage includes huge-range rejection before expansion, normalized persistence, summary
-and incomplete states, historical reads above the authoring cap, and unchanged Fixed/Random behavior.
+Parser tests own grammar, bounds, cardinality, and aggregate expansion limits. Consumer tests cover
+the three corrected discrepancies, active-mode wiring, incomplete Save versus Preview, raw dirty identity,
+summary/completion, normalized persistence, and historical reads above the authoring cap. App and browser
+tests retain representative valid/invalid Explicit flows rather than repeating grammar matrices;
+Fixed/Random generation, publication retry, and fresh-preview lifecycle coverage remains intact.
 Real-API browser checks use fake ComfyUI; see BC-012 for verification evidence.
 
 Random seed intent remains editable frontend and Batch snapshot state as

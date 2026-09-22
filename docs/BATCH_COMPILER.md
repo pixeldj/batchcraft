@@ -220,6 +220,12 @@ Every applicable Job uses one chosen seed.
 
 Useful for controlled comparisons.
 
+Frontend Save, Preview, and Seeds completion share `parseSeedIntent`. Fixed accepts exactly one
+ASCII unsigned decimal token in `0..9007199254740991`, after comma/newline splitting, trimming,
+and ignoring blanks. Leading zeros are valid; signs (including `-0` and `+1`), exponents, radix
+notation, fractions, multiple values, and all ranges (even `5-5`) are invalid. This intentionally
+corrects Preview's former acceptance of Fixed `-0` and multiple values to agree with Save.
+
 ### Explicit Seed List
 
 A selected list of seeds becomes another Batch dimension.
@@ -237,7 +243,7 @@ Fixed, Explicit, and Random remain the only three modes with unchanged execution
 
 The shared frontend `parseExplicitSeedValues` accepts trimmed digit-only literals or digit-only
 endpoints with optional whitespace around a hyphen. Values must be integers in `0..2^53-1`
-(`9007199254740991`); Explicit `-0` is rejected as negative grammar, without changing Fixed parsing.
+(`9007199254740991`); `-0` is rejected as negative grammar in both Explicit and Fixed authoring.
 Normalized decimal text is bounded against the maximum before BigInt conversion, so enormous endpoints
 are rejected before conversion. Exact BigInt endpoint arithmetic counts all literals and inclusive ranges
 against the aggregate `MAX_EXPLICIT_SEEDS = 10000` before any seed values are materialized. This frontend
@@ -253,6 +259,12 @@ Historical arrays above 10,000 remain readable in full without truncation, while
 and Preview enforce the cap. No API, backend compiler, SQLite, or v1 schema change is introduced.
 
 ### Random Seeds
+
+Frontend Random count accepts one trimmed ASCII unsigned decimal value in `1..100`, including
+leading zeros, but no lists, ranges, signs, fractions, radix notation, or exponents. Save now rejects
+`1e1` rather than coercing it to 10, matching Preview. Only active-mode fields are validated.
+Valid seeds do not make incomplete Saved Batch prompts, workflow selection, or variable values
+subject to full Preview validation. Request seeds reuse the validated snapshot intent.
 
 Random x N means N fastest-varying repetitions for every ordered non-seed configuration. The backend
 Preview boundary determines the final Job count and materializes one unique concrete seed per Job within

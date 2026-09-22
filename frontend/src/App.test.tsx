@@ -43,13 +43,29 @@ beforeEach(() => {
   saveWorkingSession(populatedBatchForm(), null, "project-1");
 });
 
-describe("Explicit seed ranges", () => {
+describe("Seed authoring", () => {
   it.each([
-    ["5-10", [5, 6, 7, 8, 9, 10]],
-    ["10-5", [10, 9, 8, 7, 6, 5]],
-    ["1,5-7\n20", [1, 5, 6, 7, 20]],
-    ["5-7,6", [5, 6, 7, 6]],
-  ])("previews %s as ordered numeric values and counts expanded seeds", async (text, values) => {
+    { seedMode: "fixed" as const, seedValues: "-0", randomSeedCount: "1", error: /Fixed seed must be an unsigned decimal integer/ },
+    { seedMode: "fixed" as const, seedValues: "1,2", randomSeedCount: "1", error: /Fixed seed intent requires exactly one seed/ },
+    { seedMode: "random" as const, seedValues: "1", randomSeedCount: "1e1", error: /Random seed count must be a whole number/ },
+  ])("keeps recovered invalid $seedMode intent incomplete (case %#)", async ({ error, ...seeds }) => {
+    saveWorkingSession({ ...populatedBatchForm(), ...seeds }, null, "project-1");
+    const api = makeApi();
+    render(<App api={api} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview Batch" })).toBeEnabled());
+    const section = screen.getByRole("group", { name: "Seeds" });
+    expect(within(section).getByText(seeds.seedMode === "fixed" ? "Fixed · incomplete" : "Random · incomplete")).toBeVisible();
+    expect(within(section).getByRole("button", { name: "Done" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
+    expect(await screen.findByText(error)).toBeVisible();
+    expect(api.previewBatch).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
+    expect(loadWorkingSession().form).toMatchObject(seeds);
+  });
+
+  it("previews expanded numeric values and counts seeds without editing raw text", async () => {
+    const text = "005-007,6";
+    const values = [5, 6, 7, 6];
     const api = makeApi();
     render(<App api={api} />);
     await expandConfiguration("Seeds");
@@ -70,7 +86,8 @@ describe("Explicit seed ranges", () => {
     expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
   });
 
-  it.each(["foo", "5-1-abc", "0-9007199254740991"])("keeps %s incomplete and blocks Preview locally", async (text) => {
+  it("keeps invalid Explicit intent incomplete and blocks Preview locally", async () => {
+    const text = "5-1-abc";
     const api = makeApi();
     render(<App api={api} />);
     await reachPreview();
@@ -84,9 +101,7 @@ describe("Explicit seed ranges", () => {
     expect(screen.getByLabelText(/Explicit seeds/)).toHaveValue(text);
     expect(screen.queryByRole("button", { name: "Create Run" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
-    expect(await screen.findByText(text.startsWith("0-")
-      ? /exceeds the 10,000 Explicit seeds limit\. Reduce the range or remove items/
-      : /must be a nonnegative integer or inclusive range such as 5-10/)).toBeVisible();
+    expect(await screen.findByText(/must be a nonnegative integer or inclusive range such as 5-10/)).toBeVisible();
     expect(api.previewBatch).not.toHaveBeenCalled();
     expect(api.createRun).not.toHaveBeenCalled();
     expect(loadWorkingSession().form.seedValues).toBe(text);

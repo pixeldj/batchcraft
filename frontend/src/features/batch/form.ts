@@ -258,13 +258,15 @@ export function buildBatchRequest(
   context: BatchRequestContext = { sourceSavedBatch: null },
 ): BatchRequest {
   const batchSnapshot = buildEditableBatchSnapshot(form, context);
-  const seedInput = form.seedMode === "random"
+  // Snapshot construction has already validated the active mode and its count.
+  const seedIntent = batchSnapshot.seed_intent;
+  const seedInput = seedIntent.mode === "random"
     ? {
       mode: "random" as const,
-      values: [],
-      random_seed_count: parseRandomSeedCount(form.randomSeedCount),
+      values: seedIntent.values,
+      random_seed_count: seedIntent.random_seed_count!,
     }
-    : { mode: form.seedMode, values: batchSnapshot.seed_intent.values };
+    : { mode: seedIntent.mode, values: seedIntent.values };
 
   return {
     project: batchSnapshot.project,
@@ -380,19 +382,7 @@ export function buildEditableBatchSnapshot(
   );
   const parameterBindings = buildParameterBindings(parameterState.parameterBindings);
   const linkedParameterSets = buildLinkedParameterSets(parameterState.linkedParameterSets);
-  const seedIntent = form.seedMode === "random"
-    ? {
-      mode: "random" as const,
-      values: [],
-      random_seed_count: parseRandomSeedCount(form.randomSeedCount),
-    }
-    : {
-      mode: form.seedMode,
-      values: form.seedMode === "explicit"
-        ? parseExplicitSeedValues(form.seedValues)
-        : parseSeedValues(form.seedValues),
-      random_seed_count: null,
-    };
+  const seedIntent = parseSeedIntent(form);
 
   return {
     format: "batchcraft.batch-snapshot",
@@ -1058,26 +1048,35 @@ export function editableBatchSnapshotIdentity(snapshot: EditableBatchSnapshot): 
   return JSON.stringify(canonicalize(snapshot));
 }
 
-function parseRandomSeedCount(value: string): number {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new FormBuildError("seeds", "Random seed count must be a whole number.");
+export function parseSeedIntent(form: Pick<BatchFormState, "seedMode" | "seedValues" | "randomSeedCount">) {
+  if (form.seedMode === "random") {
+    const trimmed = form.randomSeedCount.trim();
+    if (!/^[0-9]+$/.test(trimmed)) {
+      throw new FormBuildError("seeds", "Random seed count must be a whole number.");
+    }
+    const count = Number(trimmed);
+    if (count < 1 || count > MAX_RANDOM_SEED_COUNT) {
+      throw new FormBuildError("seeds", `Random seed count must be between 1 and ${MAX_RANDOM_SEED_COUNT}.`);
+    }
+    return { mode: "random" as const, values: [], random_seed_count: count };
   }
-  const count = Number(trimmed);
-  if (count < 1 || count > MAX_RANDOM_SEED_COUNT) {
-    throw new FormBuildError(
-      "seeds",
-      `Random seed count must be between 1 and ${MAX_RANDOM_SEED_COUNT}.`,
-    );
+  if (form.seedMode === "fixed") {
+    const items = splitSeeds(form.seedValues);
+    if (items.length !== 1) {
+      throw new FormBuildError("seeds", "Fixed seed intent requires exactly one seed.");
+    }
+    if (!/^[0-9]+$/.test(items[0])) {
+      throw new FormBuildError("seeds", "Fixed seed must be an unsigned decimal integer, not a list or range.");
+    }
   }
-  return count;
+  return { mode: form.seedMode, values: parseExplicitSeedValues(form.seedValues), random_seed_count: null };
 }
 
 export function parseExplicitSeedValues(input: string): number[] {
   const maximum = String(Number.MAX_SAFE_INTEGER);
   let count = 0n;
   const segments = splitSeeds(input).map((item) => {
-    const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(item);
+    const match = /^([0-9]+)(?:\s*-\s*([0-9]+))?$/.exec(item);
     if (!match) {
       throw new FormBuildError(
         "seeds",
@@ -1117,23 +1116,6 @@ export function parseExplicitSeedValues(input: string): number[] {
   return seeds;
 }
 
-function parseSeedValues(value: string): number[] {
-  const seeds = splitSeeds(value).map((item) => {
-    if (!/^-?\d+$/.test(item)) {
-      throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} is not an integer.`);
-    }
-    const seed = Number(item);
-    if (!Number.isSafeInteger(seed) || seed < 0) {
-      throw new FormBuildError("seeds", `Seed ${JSON.stringify(item)} must be a nonnegative safe integer.`);
-    }
-    return seed;
-  });
-  if (seeds.length === 0) {
-    throw new FormBuildError("seeds", "Enter at least one seed.");
-  }
-  return seeds;
-}
-
 export function normalizedBindingValues(values: string[]): string[] {
   return values.flatMap((item) => {
     if (item === "") return [""];
@@ -1142,7 +1124,7 @@ export function normalizedBindingValues(values: string[]): string[] {
   });
 }
 
-function splitSeeds(value: string): string[] {
+export function splitSeeds(value: string): string[] {
   return value
     .split(/[\n,]/)
     .map((item) => item.trim())

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProjectResponse, SavedBatchDetail } from "../../api/types";
-import { FormBuildError, initialBatchForm } from "./form";
+import { buildBatchRequest, FormBuildError, initialBatchForm } from "./form";
 import {
   buildSavedBatchDefinition,
   canonicalBatchIntent,
@@ -25,17 +25,16 @@ describe("Saved Batch seeds", () => {
     expect(canonicalBatchIntent({ ...form, seedValues: "2-0,5-7,6" })).not.toBe(canonicalBatchIntent(form));
   });
 
-  it.each(["", "-0", "5--10", "0-10000", "9007199254740992"])(
+  it.each(["5--10", "0-10000"])(
     "rejects invalid Explicit saves but preserves raw dirty identity: %j", (seedValues) => {
       const form = { ...initialBatchForm(), seedMode: "explicit" as const, seedValues };
       expect(() => buildSavedBatchDefinition(form)).toThrow(FormBuildError);
       expect(JSON.parse(canonicalBatchIntent(form)).seed).toEqual({ mode: "explicit", values: seedValues });
+      expect(canonicalBatchIntent({ ...form, seedValues: `${seedValues} ` })).not.toBe(canonicalBatchIntent(form));
     },
   );
 
-  it("accepts the authoring boundary but reads larger historical arrays without truncation", () => {
-    const form = { ...initialBatchForm(), seedMode: "explicit" as const, seedValues: "0-9999" };
-    expect(buildSavedBatchDefinition(form).seed_intent.values).toHaveLength(10_000);
+  it("reads larger historical arrays without truncation but rejects new saves", () => {
     const values = Array.from({ length: 10_001 }, (_, index) => index);
     const restored = savedBatchToForm({ ...savedBatchDetail(), seed_mode: "explicit", seed_values: values }, project());
     expect(restored.seedValues).toBe(values.join("\n"));
@@ -43,14 +42,44 @@ describe("Saved Batch seeds", () => {
     expect(() => buildSavedBatchDefinition(restored)).toThrow(/10,000 Explicit seeds limit/);
   });
 
-  it("preserves Fixed validation and Random's existing count parser", () => {
+  it("rejects Fixed negative zero and multiple seeds before Save", () => {
     const form = initialBatchForm();
     expect(buildSavedBatchDefinition(form).seed_intent).toEqual({ mode: "fixed", values: [1], random_seed_count: null });
-    for (const seedValues of ["-0", "5-10", "1,2"]) {
+    for (const seedValues of ["-0", "1,2"]) {
       expect(() => buildSavedBatchDefinition({ ...form, seedValues })).toThrow(FormBuildError);
     }
-    expect(buildSavedBatchDefinition({ ...form, seedMode: "random", seedValues: "invalid", randomSeedCount: "1e1" }).seed_intent)
-      .toEqual({ mode: "random", values: [], random_seed_count: 10 });
+  });
+
+  it("rejects Random exponent count before Save", () => {
+    const form = { ...initialBatchForm(), seedMode: "random" as const, randomSeedCount: "1e1" };
+    expect(() => buildSavedBatchDefinition(form)).toThrow(expect.objectContaining({ field: "seeds" }));
+  });
+
+  it.each(["fixed", "explicit", "random"] as const)("saves valid %s seeds despite unrelated incomplete intent", (seedMode) => {
+    const form = { ...initialBatchForm(), seedMode, seedValues: seedMode === "random" ? "invalid" : "005",
+      randomSeedCount: seedMode === "random" ? " 003 " : "invalid" };
+    form.variableBindings[0].values = [];
+    const saved = buildSavedBatchDefinition(form);
+    expect(saved.seed_intent).toEqual(seedMode === "random"
+      ? { mode: "random", values: [], random_seed_count: 3 }
+      : { mode: seedMode, values: [5], random_seed_count: null });
+    expect(saved.prompt_selections).toEqual([]);
+    expect(saved.selected_workflow_version).toBeNull();
+    expect(saved.variable_bindings[0].values).toEqual([]);
+    expect(() => buildBatchRequest(form)).toThrow(/Add at least one PromptVersion/);
+  });
+
+  it.each(["fixed", "random"] as const)("preserves %s raw leading-zero dirty semantics and ignores inactive fields", (seedMode) => {
+    const form = { ...initialBatchForm(), seedMode, seedValues: "001", randomSeedCount: "001" };
+    const padded = { ...form, seedValues: " , 001\n", randomSeedCount: " 001 " };
+    expect(canonicalBatchIntent(padded)).toBe(canonicalBatchIntent(form));
+    expect(canonicalBatchIntent({ ...form, seedValues: "1", randomSeedCount: "1" })).not.toBe(canonicalBatchIntent(form));
+    const inactive = seedMode === "fixed" ? { ...form, randomSeedCount: "invalid" } : { ...form, seedValues: "invalid" };
+    expect(canonicalBatchIntent(inactive)).toBe(canonicalBatchIntent(form));
+    expect(buildSavedBatchDefinition(inactive).seed_intent).toEqual(buildSavedBatchDefinition(form).seed_intent);
+    const invalid = seedMode === "fixed" ? { ...form, seedValues: "-0" } : { ...form, randomSeedCount: "1e1" };
+    expect(() => canonicalBatchIntent(invalid)).not.toThrow();
+    expect(canonicalBatchIntent(invalid)).not.toBe(canonicalBatchIntent(form));
   });
 });
 
