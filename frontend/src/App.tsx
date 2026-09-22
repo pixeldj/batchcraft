@@ -574,7 +574,20 @@ export default function App({ api = apiClient, pollIntervalMs = 1000 }: Props) {
   }
 
   function changeWorkflowMetadata(next: BatchFormState) {
-    setForm(next);
+    // Library reconciliation must not replace concurrent Prompt or Batch updates.
+    setForm((current) => ({
+      ...current,
+      workflowLibraryProjectId: next.workflowLibraryProjectId,
+      workflowId: next.workflowId,
+      workflowName: next.workflowName,
+      workflowVersionNumber: next.workflowVersionNumber,
+      workflowContentSha256: next.workflowContentSha256,
+      workflowProfileId: next.workflowProfileId,
+      workflowProfileName: next.workflowProfileName,
+      workflowProfileVersionNumber: next.workflowProfileVersionNumber,
+      workflowProfileWorkflowVersionId: next.workflowProfileWorkflowVersionId,
+      workflowProfileContentSha256: next.workflowProfileContentSha256,
+    }));
   }
 
   function reconnectProject(project: ProjectResponse) {

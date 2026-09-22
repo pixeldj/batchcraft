@@ -692,7 +692,8 @@ describe("Global Workflow Library", () => {
     render(<GlobalWorkflowLibrary {...props} />);
     fireEvent.click(await screen.findByRole("button", { name: "Reusable portrait" }));
     await screen.findByRole("button", { name: "Mapping 19" });
-    expect(api.getGlobalProfileVersion).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(api.getGlobalProfileVersion).toHaveBeenCalledTimes(2));
+    expect(pending).toHaveLength(2);
     expect(screen.getAllByText("Loading mappings...")).toHaveLength(20);
     expect(screen.queryByText(/0 named inputs/)).not.toBeInTheDocument();
     await act(async () => pending[0].resolve({ ...copiedSetup.profiles[0].version, id: "version-0", workflow_profile_id: "family-0", workflow_id: globalWorkflow.id }));

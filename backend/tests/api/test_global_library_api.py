@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 from api_client import LoopbackTestClient as TestClient
-from test_batch_reconstruction_api import _client, _settings
+from api_support import _client
+from api_support import _history_settings as _settings
 
 from batchcraft.api import create_app
 from batchcraft.db import WorkflowStore, open_connection

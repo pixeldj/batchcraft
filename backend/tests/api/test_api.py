@@ -5,9 +5,7 @@ import json
 import shutil
 import threading
 import time
-from collections.abc import AsyncIterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,15 +13,24 @@ from typing import NoReturn, cast
 
 import pytest
 from api_client import LoopbackTestClient as TestClient
+from api_support import FakeComfyUIClient, _settings
 from artifact_fixture import artifact_png
+from batch_fixture import (
+    _batch_request,
+    _create_run,
+    _import_asset,
+    _publish_project_owner,
+    _saved_batch_definition,
+    _sync_batch_snapshot,
+)
+from execution_wait import _wait_for_status
 from httpx import Response
 from pydantic import BaseModel, TypeAdapter
 
 import batchcraft.execution.state as execution_state_module
-from batchcraft.api import Settings, create_app
+from batchcraft.api import create_app
 from batchcraft.api.schemas import (
     BatchRequest,
-    ExecutionResponse,
     ParameterBindingRequest,
     ParameterValuesBindingRequest,
     PreviewResponse,
@@ -36,14 +43,9 @@ from batchcraft.application.service import materialize_random_seeds
 from batchcraft.comfyui import (
     ComfyUIConnectionError,
     DownloadedArtifact,
-    ExecutionEvent,
     ExecutionOutcome,
-    ExecutionStatus,
-    PromptSubmission,
     RemoteOutputArtifact,
-    ServerInfo,
     SubmissionDisposition,
-    UploadedInput,
 )
 from batchcraft.db import (
     HistoricalProjectionError,
@@ -159,277 +161,6 @@ def test_editable_range_intent_dtos_preserve_exact_decimal_text() -> None:
     ):
         parsed = cast(BaseModel, TypeAdapter(model).validate_python(payload))
         assert parsed.model_dump(mode="json") == payload
-
-
-class FakeEventSource:
-    async def events(self, prompt_id: str) -> AsyncIterator[ExecutionEvent]:
-        yield ExecutionEvent(
-            event_type="execution_success",
-            prompt_id=prompt_id,
-            node_id=None,
-            data={"prompt_id": prompt_id},
-        )
-
-
-class FakeEventContext(AbstractAsyncContextManager[FakeEventSource]):
-    async def __aenter__(self) -> FakeEventSource:
-        return FakeEventSource()
-
-    async def __aexit__(self, *_args: object) -> None:
-        return None
-
-
-class FakeComfyUIClient:
-    def __init__(
-        self,
-        *,
-        status_error: Exception | None = None,
-        submission_disposition: SubmissionDisposition = SubmissionDisposition.ACCEPTED,
-        history_status: ExecutionStatus = ExecutionStatus.SUCCEEDED,
-        upload_error: Exception | None = None,
-        artifact_count: int = 0,
-    ) -> None:
-        self.status_error = status_error
-        self.submission_disposition = submission_disposition
-        self.history_status = history_status
-        self.upload_error = upload_error
-        self.artifact_count = artifact_count
-        self.closed = False
-        self.submission_count = 0
-        self.submitted_workflows: list[dict[str, object]] = []
-
-    async def get_server_info(self) -> ServerInfo:
-        if self.status_error is not None:
-            raise self.status_error
-        return ServerInfo(
-            data={
-                "system": {"comfyui_version": "0.31.0"},
-                "devices": [{"name": "Test GPU"}],
-            }
-        )
-
-    async def upload_input(
-        self,
-        *,
-        filename: str,
-        content: bytes,
-        mime_type: str = "application/octet-stream",
-        subfolder: str = "",
-    ) -> UploadedInput:
-        if self.upload_error is not None:
-            raise self.upload_error
-        return UploadedInput(
-            name=filename,
-            subfolder=subfolder,
-            remote_type="input",
-            workflow_value=f"{subfolder}/{filename}",
-        )
-
-    def open_event_stream(self, client_id: str) -> AbstractAsyncContextManager[FakeEventSource]:
-        return FakeEventContext()
-
-    async def submit_prompt(
-        self, workflow: Mapping[str, object], *, client_id: str
-    ) -> PromptSubmission:
-        self.submitted_workflows.append(copy.deepcopy(dict(workflow)))
-        self.submission_count += 1
-        prompt_id = (
-            f"prompt-{self.submission_count}"
-            if self.submission_disposition is SubmissionDisposition.ACCEPTED
-            else None
-        )
-        return PromptSubmission(
-            disposition=self.submission_disposition,
-            client_id=client_id,
-            prompt_id=prompt_id,
-            http_status=200,
-            response={"prompt_id": prompt_id} if prompt_id else None,
-            diagnostic=(
-                "submission outcome unknown"
-                if self.submission_disposition is SubmissionDisposition.UNKNOWN
-                else None
-            ),
-        )
-
-    async def get_history(self, prompt_id: str) -> ExecutionOutcome | None:
-        artifacts = tuple(
-            RemoteOutputArtifact(
-                producing_node_id=str(40 + ordinal),
-                output_name="images",
-                filename=f"{prompt_id}-{ordinal}.png",
-                subfolder="batchcraft",
-                remote_type="output",
-            )
-            for ordinal in range(1, self.artifact_count + 1)
-        )
-        return ExecutionOutcome(
-            prompt_id=prompt_id,
-            status=self.history_status,
-            artifacts=artifacts,
-            status_data={"completed": True, "status_str": self.history_status.value},
-        )
-
-    async def download_artifact(self, artifact: RemoteOutputArtifact) -> DownloadedArtifact:
-        content = artifact_png(artifact.filename)
-        return DownloadedArtifact(
-            remote=artifact,
-            content=content,
-            content_type="image/png",
-            sha256=hashlib.sha256(content).hexdigest(),
-        )
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-def _settings(tmp_path: Path) -> Settings:
-    return Settings(
-        projects_root=tmp_path / "projects",
-        comfyui_base_url="http://comfyui.test:8188",
-        comfyui_timeout_seconds=1,
-        websocket_timeout_seconds=1,
-        history_timeout_seconds=1,
-        history_poll_interval_seconds=0.01,
-        frontend_origin="http://localhost:5173",
-        server_host="127.0.0.1",
-        server_port=8000,
-        data_root=tmp_path,
-        database_path=tmp_path / "batchcraft.sqlite3",
-    )
-
-
-def _publish_project_owner(settings: Settings) -> None:
-    ProjectOwnerStore(settings.projects_root).publish(
-        ProjectIdentity(id="project-id", filesystem_key="project_key", name="Project")
-    )
-
-
-def _import_asset(settings: Settings, tmp_path: Path, asset_id: str = "asset-1") -> str:
-    _publish_project_owner(settings)
-    source = tmp_path / f"{asset_id}.png"
-    source.write_bytes(f"reference:{asset_id}".encode())
-    asset = ProjectAssetStore(
-        settings.projects_root / "project_key",
-        id_factory=lambda: asset_id,
-    ).import_file(source)
-    return asset.asset_id
-
-
-def _batch_request(
-    asset_ids: tuple[str, ...],
-    *,
-    include_unused_binding: bool = False,
-    invalid_profile: bool = False,
-) -> dict[str, object]:
-    bindings: list[dict[str, object]] = [
-        {
-            "placeholder": "animal",
-            "values": ["dog", "cat"],
-        }
-    ]
-    if include_unused_binding:
-        bindings.append(
-            {
-                "placeholder": "unused",
-                "values": ["value"],
-            }
-        )
-    profile = {
-        "id": "profile-id",
-        "name": "Profile",
-        "mappings": {
-            "prompt": {"node_id": "34", "input_name": "prompt", "value_type": "string"},
-            "seed": {"node_id": "7", "input_name": "seed", "value_type": "integer"},
-            "output_prefix": {
-                "node_id": "41",
-                "input_name": "filename_prefix",
-                "value_type": "string",
-            },
-        },
-        "image_inputs": [
-            {"key": "reference", "label": "Reference", "node_id": "25", "input_name": "image"},
-            {"key": "style", "label": "Style", "node_id": "26", "input_name": "image"},
-        ],
-        "parameters": [],
-    }
-    if invalid_profile:
-        mappings = profile["mappings"]
-        assert isinstance(mappings, dict)
-        mappings.pop("output_prefix")
-    project = {"id": "project-id", "filesystem_key": "project_key", "name": "Project"}
-    batch = {"id": "batch-id", "filesystem_key": "batch_key", "name": "Batch"}
-    prompt_versions = [
-        {"id": "prompt-v1", "name": "Portrait prompt", "text": "Portrait of {{animal}}"}
-    ]
-    assert len(asset_ids) <= 2
-    image_bindings = [
-        {
-            "slot_key": slot_key,
-            "values": [asset_ids[index] if index < len(asset_ids) else None],
-        }
-        for index, slot_key in enumerate(("reference", "style"))
-    ]
-    seeds = {"mode": "explicit", "values": [9, 3]}
-    workflow = {
-        "7": {"class_type": "KSampler", "inputs": {"seed": 0}},
-        "25": {"class_type": "LoadImage", "inputs": {"image": "original.png"}},
-        "26": {"class_type": "LoadImage", "inputs": {"image": "style-original.png"}},
-        "34": {"class_type": "TextEncode", "inputs": {"prompt": "original"}},
-        "41": {"class_type": "SaveImage", "inputs": {"filename_prefix": "original"}},
-    }
-    return {
-        "project": project,
-        "batch": batch,
-        "prompt_versions": prompt_versions,
-        "variable_bindings": bindings,
-        "image_bindings": image_bindings,
-        "parameter_bindings": [],
-        "linked_parameter_sets": [],
-        "seeds": seeds,
-        "workflow": workflow,
-        "workflow_profile": profile,
-        "batch_snapshot": {
-            "format": "batchcraft.batch-snapshot",
-            "format_version": 1,
-            "project": copy.deepcopy(project),
-            "source_saved_batch": None,
-            "batch": {**batch, "description": None},
-            "prompt_versions": copy.deepcopy(prompt_versions),
-            "variable_bindings": copy.deepcopy(bindings),
-            "image_bindings": copy.deepcopy(image_bindings),
-            "parameter_bindings": [],
-            "linked_parameter_sets": [],
-            "seed_intent": {**seeds, "random_seed_count": None},
-            "workflow_selection": {
-                "workflow_id": None,
-                "workflow_version_id": None,
-                "workflow_profile_id": None,
-                "workflow_profile_version_id": None,
-                "workflow": copy.deepcopy(workflow),
-                "workflow_profile": copy.deepcopy(profile),
-            },
-        },
-    }
-
-
-def _sync_batch_snapshot(request: dict[str, object]) -> None:
-    snapshot = request["batch_snapshot"]
-    assert isinstance(snapshot, dict)
-    snapshot["prompt_versions"] = request["prompt_versions"]
-    snapshot["variable_bindings"] = request["variable_bindings"]
-    snapshot["image_bindings"] = request["image_bindings"]
-    snapshot["parameter_bindings"] = request["parameter_bindings"]
-    snapshot["linked_parameter_sets"] = request["linked_parameter_sets"]
-    workflow_selection = snapshot["workflow_selection"]
-    assert isinstance(workflow_selection, dict)
-    workflow_selection["workflow"] = request["workflow"]
-    workflow_selection["workflow_profile"] = request["workflow_profile"]
-
-
-def _create_run(http: TestClient, request: dict[str, object]) -> str:
-    response = http.post("/api/runs", json=request)
-    assert response.status_code == 201, response.text
-    return str(response.json()["run_id"])
 
 
 def test_preview_and_run_expose_resolved_workflow_parameters(tmp_path: Path) -> None:
@@ -758,114 +489,6 @@ def test_batch_request_rejects_unsupported_or_non_integer_snapshot_versions(
 
     with pytest.raises(ValueError):
         BatchRequest.model_validate(request)
-
-
-def _saved_batch_definition(
-    http: TestClient, project_id: str, *, linked_parameters: bool = False
-) -> dict[str, object]:
-    request = _batch_request(())
-    workflow = request["workflow"]
-    profile = request["workflow_profile"]
-    assert isinstance(workflow, dict)
-    assert isinstance(profile, dict)
-    mappings = profile["mappings"]
-    assert isinstance(mappings, dict)
-    if linked_parameters:
-        sampler_inputs = cast(dict[str, object], cast(dict[str, object], workflow["7"])["inputs"])
-        sampler_inputs.update({"width": 512, "height": 512})
-        profile["parameters"] = [
-            {
-                "key": "width",
-                "label": "Width",
-                "node_id": "7",
-                "input_name": "width",
-                "value_type": "integer",
-            },
-            {
-                "key": "height",
-                "label": "Height",
-                "node_id": "7",
-                "input_name": "height",
-                "value_type": "integer",
-            },
-        ]
-    prompt = http.post(
-        f"/api/projects/{project_id}/prompts",
-        json={"name": "Saved prompt", "text": "Portrait of {{animal}}"},
-    ).json()
-    workflow_created = http.post(
-        f"/api/projects/{project_id}/workflows",
-        json={"name": "Saved workflow", "workflow": workflow},
-    ).json()
-    workflow_version = workflow_created["version"]
-    profile_created = http.post(
-        f"/api/workflows/{workflow_created['workflow']['id']}/profiles",
-        json={
-            "name": "Saved profile",
-            "workflow_version_id": workflow_version["id"],
-            "mappings": mappings,
-            "image_inputs": profile["image_inputs"],
-            "parameters": profile["parameters"],
-        },
-    ).json()
-    profile_version = profile_created["version"]
-    return {
-        "name": "Saved experiment",
-        "description": "Editable definition",
-        "prompt_selections": [
-            {
-                "prompt_version_id": prompt["version"]["id"],
-                "name_snapshot": prompt["version"]["name_snapshot"],
-                "text": prompt["version"]["text"],
-            }
-        ],
-        "variable_bindings": [
-            {
-                "placeholder": "animal",
-                "values": ["dog", "cat"],
-            }
-        ],
-        "image_bindings": [
-            {"slot_key": "reference", "values": ["asset-2"]},
-            {"slot_key": "style", "values": [None]},
-        ],
-        "parameter_bindings": [],
-        "linked_parameter_sets": (
-            [
-                {
-                    "set_key": "resolution",
-                    "set_label": "Resolution",
-                    "members": ["width", "height"],
-                    "rows": [
-                        {
-                            "row_label": "Square",
-                            "values": {"width": 512, "height": 512},
-                        },
-                        {
-                            "row_label": "Landscape",
-                            "values": {"width": 1024, "height": 768},
-                        },
-                    ],
-                }
-            ]
-            if linked_parameters
-            else []
-        ),
-        "seed_intent": {"mode": "explicit", "values": [9, 3], "random_seed_count": None},
-        "selected_workflow_version": {
-            "id": workflow_version["id"],
-            "content_sha256": workflow_version["content_sha256"],
-            "workflow": workflow_version["workflow"],
-        },
-        "selected_workflow_profile_id": profile_created["workflow_profile"]["id"],
-        "selected_workflow_profile_version": {
-            "id": profile_version["id"],
-            "workflow_profile_id": profile_version["workflow_profile_id"],
-            "workflow_version_id": profile_version["workflow_version_id"],
-            "content_sha256": profile_version["content_sha256"],
-            "profile": profile_version["profile"],
-        },
-    }
 
 
 def test_project_and_prompt_library_lifecycle(tmp_path: Path) -> None:
@@ -1877,34 +1500,6 @@ def test_fresh_state_smoke_persists_empty_binding_run_and_discard_across_restart
     assert reloaded_run.status_code == 200
     assert reloaded_run.json()["batch_snapshot"]["variable_bindings"] == [binding]
     assert reloaded_run.json()["execution"]["status"] == "cancelled"
-
-
-def _wait_for_status(
-    http: TestClient, run_id: str, expected: str, *, timeout_seconds: float = 10
-) -> ExecutionResponse:
-    # Functional completion budget, not a disk/runner performance assertion.
-    started = time.monotonic()
-    deadline = started + timeout_seconds
-    last_response = "<no response>"
-    reason = "timed out"
-    while time.monotonic() < deadline:
-        response = http.get(f"/api/runs/{run_id}/execution")
-        last_response = response.text
-        if response.status_code != 200:
-            reason = f"HTTP {response.status_code}"
-            break
-        body = ExecutionResponse.model_validate(response.json())
-        if body.status == expected:
-            return body
-        if body.status in {"succeeded", "failed", "blocked", "cancelled"}:
-            reason = f"unexpected terminal status {body.status!r}"
-            break
-        time.sleep(0.01)
-    raise AssertionError(
-        f"Run {run_id} did not reach {expected!r}: {reason} after "
-        f"{time.monotonic() - started:.3f}s (budget {timeout_seconds:g}s); "
-        f"last response: {last_response}"
-    )
 
 
 def _wait_for_no_active_execution(http: TestClient) -> None:

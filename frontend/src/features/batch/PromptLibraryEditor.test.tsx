@@ -93,9 +93,14 @@ describe("PromptLibraryEditor workspace", () => {
     await expandPrompts();
     const edit = screen.getByRole("button", { name: "Edit Prompt" });
     await waitFor(() => expect(edit).toBeEnabled());
-    fireEvent.click(edit);
-    fireEvent.change(await screen.findByLabelText("Prompt template"), { target: { value: "changed" } });
+    await act(async () => { fireEvent.click(edit); });
+    const template = await screen.findByLabelText("Prompt template");
+    expect(template).toHaveValue("saved text");
+    fireEvent.change(template, { target: { value: "changed" } });
+    expect(template).toHaveValue("changed");
     fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+    expect(api.createPromptVersion).toHaveBeenCalledExactlyOnceWith("prompt-1", { text: "changed", note: null });
+    expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
     view.rerender(<PromptLibraryEditor {...props} workflowPromptDisabled />);
     expect(screen.getByLabelText("Prompt template")).toHaveValue("changed");
     if (reenabled) view.rerender(<PromptLibraryEditor {...props} />);

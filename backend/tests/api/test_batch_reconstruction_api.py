@@ -2,41 +2,17 @@ import copy
 import hashlib
 import sqlite3
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 import pytest
 from api_client import LoopbackTestClient as TestClient
+from api_support import _client
+from api_support import _history_settings as _settings
 
-from batchcraft.api import Settings, create_app
-from batchcraft.application import ApplicationComfyUIClient
+from batchcraft.api import create_app
 from batchcraft.db import ProjectStore, PromptStore, WorkflowProfileStore, WorkflowStore
 from batchcraft.files._io import canonical_json_bytes
-
-
-class UnusedClient:
-    async def aclose(self) -> None:
-        return None
-
-
-def _client(_settings: Settings) -> ApplicationComfyUIClient:
-    return cast(ApplicationComfyUIClient, UnusedClient())
-
-
-def _settings(tmp_path: Path, *, database_name: str = "batchcraft.sqlite3") -> Settings:
-    return Settings(
-        projects_root=tmp_path / "projects",
-        comfyui_base_url="http://unused",
-        comfyui_timeout_seconds=1,
-        websocket_timeout_seconds=1,
-        history_timeout_seconds=1,
-        history_poll_interval_seconds=0.01,
-        frontend_origin="http://localhost:5173",
-        server_host="127.0.0.1",
-        server_port=8000,
-        data_root=tmp_path / "data",
-        database_path=tmp_path / "data" / database_name,
-    )
 
 
 def _create_linked_run(

@@ -1,76 +1,13 @@
-import hashlib
 import json
 import shutil
 from pathlib import Path
-from typing import cast
 
 from api_client import LoopbackTestClient as TestClient
+from api_support import _client
+from api_support import _history_settings as _settings
+from history_fixture import _add_result, _copy_fixture
 
-from batchcraft.api import Settings, create_app
-from batchcraft.application import ApplicationComfyUIClient
-
-FIXTURE = Path(__file__).parent.parent / "fixtures" / "v1_project" / "project_key"
-
-
-class UnusedClient:
-    async def aclose(self) -> None:
-        return None
-
-
-def _client(_settings: Settings) -> ApplicationComfyUIClient:
-    return cast(ApplicationComfyUIClient, UnusedClient())
-
-
-def _settings(tmp_path: Path) -> Settings:
-    return Settings(
-        projects_root=tmp_path / "projects",
-        comfyui_base_url="http://unused",
-        comfyui_timeout_seconds=1,
-        websocket_timeout_seconds=1,
-        history_timeout_seconds=1,
-        history_poll_interval_seconds=0.01,
-        frontend_origin="http://localhost:5173",
-        server_host="127.0.0.1",
-        server_port=8000,
-        data_root=tmp_path / "data",
-        database_path=tmp_path / "data" / "batchcraft.sqlite3",
-    )
-
-
-def _copy_fixture(settings: Settings) -> Path:
-    settings.projects_root.mkdir()
-    project = settings.projects_root / "project_key"
-    shutil.copytree(FIXTURE, project)
-    # Git does not preserve the fixture's empty outputs directory.
-    (project / "batches" / "batch_key" / "001-run" / "outputs").mkdir(exist_ok=True)
-    return project
-
-
-def _add_result(project: Path) -> Path:
-    run = project / "batches" / "batch_key" / "001-run"
-    result_path = run / "outputs" / "000001-01.png"
-    content = b"result-bytes"
-    result_path.write_bytes(content)
-    execution_path = run / "execution.json"
-    execution = json.loads(execution_path.read_text())
-    execution["jobs"][0]["results"] = [
-        {
-            "job_id": "job-1",
-            "job_ordinal": 1,
-            "artifact_ordinal": 1,
-            "producing_node_id": "301",
-            "output_name": "images",
-            "remote_filename": "result.png",
-            "remote_subfolder": "",
-            "remote_type": "output",
-            "local_path": "outputs/000001-01.png",
-            "content_type": "image/png",
-            "byte_size": len(content),
-            "sha256": hashlib.sha256(content).hexdigest(),
-        }
-    ]
-    execution_path.write_text(json.dumps(execution, sort_keys=True, separators=(",", ":")) + "\n")
-    return result_path
+from batchcraft.api import create_app
 
 
 def test_import_reindex_history_and_existing_run_detail_work_without_library_rows(

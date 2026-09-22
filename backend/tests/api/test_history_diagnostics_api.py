@@ -4,7 +4,9 @@ from typing import cast
 
 import pytest
 from api_client import LoopbackTestClient as TestClient
-from test_history_api import _client, _copy_fixture, _settings
+from api_support import _client
+from api_support import _history_settings as _settings
+from history_fixture import _copy_fixture
 
 from batchcraft.api import create_app
 from batchcraft.application.service import BatchcraftService

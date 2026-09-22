@@ -94,6 +94,49 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("current Run Results coordination", () => {
+  it("does not overlap execution polls", async () => {
+    const pending = deferred<ExecutionResponse>();
+    const { hook, getExecution } = setup();
+    getExecution.mockImplementationOnce(() => pending.promise);
+    const { result } = hook();
+    await flush();
+    for (let index = 0; index < 10; index++) await poll();
+    expect(getExecution).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve(observation()));
+    expect(result.current.polling).toBe(true);
+    expect(getExecution).toHaveBeenCalledTimes(1);
+    await poll();
+    expect(getExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["failed", "blocked", "cancelled"] as const)("stops execution polling after %s", async (status) => {
+    const initial = observation([1, 1, 0]);
+    if (status === "cancelled") {
+      initial.current_job_ordinal = null;
+      initial.jobs[2] = { ...initial.jobs[2], status: "pending", prompt_id: null, started_at: null };
+    }
+    const terminal = observation([1, 1, 0], status);
+    terminal.error = status === "failed" ? "generation failed" : status === "blocked" ? "Remote outcome unknown" : null;
+    terminal.jobs[2] = {
+      ...terminal.jobs[2],
+      status: status === "blocked" ? "submitted" : status,
+      prompt_id: status === "cancelled" ? null : "prompt-2",
+      started_at: status === "cancelled" ? null : terminal.started_at,
+      completed_at: status === "blocked" ? null : terminal.completed_at,
+      error: status === "failed" ? terminal.error : null,
+    };
+    const { hook, getExecution } = setup(initial);
+    const { result } = hook();
+    await flush();
+    getExecution.mockResolvedValue(terminal);
+    await poll();
+    expect(result.current.execution).toEqual(terminal);
+    expect(result.current.polling).toBe(false);
+    expect(getExecution).toHaveBeenCalledTimes(2);
+    for (let index = 0; index < 3; index++) await poll();
+    expect(getExecution).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores newly allocated same-Run Results seeds after a successful listing", async () => {
     const { hook, getResults } = setup(observation([1, 0, 0], "succeeded"));
     const { result, rerender } = hook();
@@ -370,6 +413,9 @@ describe("current Run Results coordination", () => {
     expect(getResults).toHaveBeenCalledTimes(1);
     expect(getExecution).not.toHaveBeenCalled();
     expect(result.current.executionControlUnavailable).toBe(kind === "inactive");
+    await poll();
+    expect(getExecution).not.toHaveBeenCalled();
+    expect(getResults).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes on active ownership loss without calling durable running terminal", async () => {
@@ -382,6 +428,9 @@ describe("current Run Results coordination", () => {
     expect(result.current.execution?.status).toBe("running");
     expect(result.current.executionControlUnavailable).toBe(true);
     expect(result.current.polling).toBe(false);
+    await poll();
+    expect(getExecution).toHaveBeenCalledTimes(2);
+    expect(getResults).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces multiple changes and terminal state behind a slow request; final work survives polling cleanup", async () => {

@@ -8,8 +8,8 @@ from typing import Any
 
 import httpx
 import pytest
+from batch_fixture import _batch_request
 from starlette.datastructures import UploadFile
-from test_api import _batch_request
 
 from batchcraft.api import create_app
 from batchcraft.application.service import BatchcraftService

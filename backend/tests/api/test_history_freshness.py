@@ -15,9 +15,11 @@ from weakref import ref
 import httpx
 import pytest
 from api_client import LoopbackTestClient as TestClient
+from api_support import _client
+from api_support import _history_settings as _settings
+from batch_fixture import _batch_request
+from history_fixture import _add_result, _copy_fixture
 from httpx import Response
-from test_api import _batch_request
-from test_history_api import _add_result, _client, _copy_fixture, _settings
 
 from batchcraft.api import create_app
 from batchcraft.application.service import BatchcraftService

@@ -11,10 +11,22 @@ const result: ResultResponse = {
   remote_filename: "portrait.png", content_type: "image/png", byte_size: 1024,
   sha256: "abc123", integrity_status: "verified", download_url: "/image.png",
 };
-const items = [0, 1].map((index) => ({
-  key: String(index), url: "/image.png", alt: "Portrait", label: "Portrait", result,
+const items = ["portrait", "landscape", "detail"].map((name, index) => ({
+  key: String(index), url: `/${name}.png`, alt: `${name} preview`, label: `Job ${index + 1}: ${name}`,
+  result: { ...result, job_ordinal: index + 1, remote_filename: `${name}.png`, download_url: `/${name}.png` },
 }));
 const loadRun = () => new Promise<never>(() => {});
+
+function Navigation({ onNavigate, onDetails = () => {} }: {
+  onNavigate(delta: number): void;
+  onDetails?(result: ResultResponse, target: HTMLElement): void;
+}) {
+  const [index, setIndex] = useState(0);
+  const [open, setOpen] = useState(true);
+  return open && <ResultLightbox items={items} index={index} restoreTarget={null}
+    onClose={() => setOpen(false)} onDetails={onDetails}
+    onNavigate={(delta) => { onNavigate(delta); setIndex((current) => current + delta); }} />;
+}
 
 function Nested() {
   const [open, setOpen] = useState(true);
@@ -30,6 +42,51 @@ function Nested() {
 }
 
 describe("Result inspection native modals", () => {
+  it("closes with Escape", () => {
+    render(<Navigation onNavigate={vi.fn()} />);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["Previous/Next", "keyboard arrows"])("navigates with %s without callbacks beyond either endpoint", (controls) => {
+    const onNavigate = vi.fn();
+    const onDetails = vi.fn();
+    render(<Navigation onNavigate={onNavigate} onDetails={onDetails} />);
+    const dialog = screen.getByRole("dialog");
+    const previous = within(dialog).getByRole("button", { name: "Previous" });
+    const next = within(dialog).getByRole("button", { name: "Next" });
+    function navigate(delta: number) {
+      if (controls === "Previous/Next") fireEvent.click(delta < 0 ? previous : next);
+      else fireEvent.keyDown(dialog, { key: delta < 0 ? "ArrowLeft" : "ArrowRight" });
+    }
+    for (const [step, index] of [0, 1, 2, 1, 0].entries()) {
+      if (step > 0) navigate(step <= 2 ? 1 : -1);
+      const item = items[index];
+      expect(within(dialog).getByRole("img", { name: item.alt })).toHaveAttribute("src", item.url);
+      expect(within(dialog).getByText(item.label)).toBeInTheDocument();
+      expect(within(dialog).getByText(`${index + 1} of 3`)).toBeInTheDocument();
+      const original = within(dialog).getByRole("link", { name: "Open full image in new tab" });
+      expect(original).toHaveAttribute("href", item.url);
+      expect(original).toHaveAttribute("target", "_blank");
+      expect(original).toHaveAttribute("rel", "noopener noreferrer");
+      const details = within(dialog).getByRole("button", { name: /Details/ });
+      fireEvent.click(details);
+      expect(onDetails).toHaveBeenLastCalledWith(item.result, details);
+      expect(onDetails.mock.calls.at(-1)?.[0]).toBe(item.result);
+      if (index === 0) expect(previous).toBeDisabled();
+      else expect(previous).toBeEnabled();
+      if (index === 2) expect(next).toBeDisabled();
+      else expect(next).toBeEnabled();
+      if (index === 0 || index === 2) {
+        navigate(index === 0 ? -1 : 1);
+        expect(onNavigate).toHaveBeenCalledTimes(step);
+      }
+    }
+    expect(onNavigate.mock.calls).toEqual([[1], [1], [-1], [-1]]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("opens through showModal in StrictMode, focuses Close, and restores the opener and scroll state", () => {
     const opener = document.createElement("button");
     document.body.append(opener);
@@ -111,7 +168,7 @@ describe("Result inspection native modals", () => {
       toJSON: () => ({}),
     });
     fireEvent.click(dialog, { clientX: 20, clientY: 20 });
-    fireEvent.click(screen.getByAltText("Portrait"));
+    fireEvent.click(screen.getByAltText("portrait preview"));
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(dialog, { clientX: 5, clientY: 20 });
     expect(onClose).toHaveBeenCalledTimes(1);

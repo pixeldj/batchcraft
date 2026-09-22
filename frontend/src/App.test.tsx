@@ -43,6 +43,64 @@ beforeEach(() => {
   saveWorkingSession(populatedBatchForm(), null, "project-1");
 });
 
+describe("Concurrent library metadata", () => {
+  it.each(["prompt-first", "workflow-first"])("retains detached Prompts and Preview when responses settle %s in one batch", async (order) => {
+    const workflow = copiedSetup.workflow.version;
+    const profile = copiedSetup.profiles[0].version;
+    const form = {
+      ...populatedBatchForm(),
+      workflowId: workflow.workflow_id,
+      workflowVersionId: workflow.id,
+      workflowProfileId: profile.workflow_profile_id,
+      workflowProfileVersionId: profile.id,
+      workflowJson: JSON.stringify(workflow.workflow, null, 4),
+      workflowProfileJson: JSON.stringify(profile.profile, null, 4),
+      seedValues: "00042",
+    };
+    form.prompts[0] = { ...form.prompts[0], libraryProjectId: "project-1", promptId: "deleted-prompt", versionId: "deleted-version", text: "  Exact deleted text\n\n" };
+    saveWorkingSession(form, null, "project-1");
+    const missingPrompt = deferred<void>();
+    const workflowResponse = deferred<typeof workflow>();
+    const profileResponse = deferred<typeof profile>();
+    const api = makeApi({
+      ...workflowLibraryApi(),
+      listPrompts: vi.fn(async () => ({ prompts: [] })),
+      getPromptVersion: vi.fn(() => missingPrompt.promise.then(() => { throw new ApiError("Missing", "prompt_version_not_found", 404); })),
+      getWorkflowVersion: vi.fn(() => workflowResponse.promise),
+      getWorkflowProfileVersion: vi.fn(() => profileResponse.promise),
+    });
+    render(<App api={api} />);
+    await waitFor(() => {
+      expect(api.getPromptVersion).toHaveBeenCalled();
+      expect(api.getWorkflowVersion).toHaveBeenCalled();
+      expect(api.getWorkflowProfileVersion).toHaveBeenCalled();
+    });
+    await reachPreview();
+    const before = loadWorkingSession().form;
+    await act(async () => {
+      if (order === "prompt-first") missingPrompt.resolve();
+      workflowResponse.resolve(workflow);
+      profileResponse.resolve(profile);
+      if (order === "workflow-first") missingPrompt.resolve();
+    });
+    expect(loadWorkingSession().form.prompts).toEqual(before.prompts.map((prompt) => ({ ...prompt, key: expect.any(Number), libraryProjectId: null, promptId: null })));
+    expect(screen.getByText(/detached from the Prompt library/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Edit Prompt" })).toBeDisabled();
+    expect(document.querySelector(".prompt-card pre")?.textContent).toBe(form.prompts[0].text);
+    const after = loadWorkingSession().form;
+    expect(after.workflowName).toBe(copiedSetup.workflow.workflow.name);
+    expect(after.workflowProfileName).toBe(copiedSetup.profiles[0].workflow_profile.name);
+    expect(after.seedValues).toBe("00042");
+    expect(after.variableBindings).toEqual(before.variableBindings.map((binding) => ({ ...binding, key: expect.any(Number) })));
+    expect(after.imageBindings).toEqual(before.imageBindings);
+    await expandConfiguration("Workflow Setup", "Change");
+    expect(screen.getByLabelText("Workflow JSON")).toHaveValue(form.workflowJson);
+    expect(screen.getByLabelText("Workflow Profile JSON")).toHaveValue(form.workflowProfileJson);
+    expect(screen.getByRole("button", { name: "Create Run" })).toBeEnabled();
+    expect(api.previewBatch).toHaveBeenCalledOnce();
+  });
+});
+
 describe("Seed authoring", () => {
   it.each([
     { seedMode: "fixed" as const, seedValues: "-0", randomSeedCount: "1", error: /Fixed seed must be an unsigned decimal integer/ },
@@ -3380,7 +3438,7 @@ describe("Discard unstarted Run", () => {
 });
 
 describe("Run execution polling", () => {
-  it("starts the Run, renders progress, and stops polling on success", async () => {
+  it("starts the Run and renders progress through success", async () => {
     const secondPoll = deferred<ExecutionResponse>();
     const api = makeApi({
       previewBatch: vi.fn(async () => previewResponse()),
@@ -3402,11 +3460,9 @@ describe("Run execution polling", () => {
     secondPoll.resolve(execution("succeeded"));
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
-    await pause(20);
-    expect(api.getExecution).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["failed", "blocked"] as const)("stops polling on %s", async (status) => {
+  it.each(["failed", "blocked"] as const)("renders the %s outcome and available controls", async (status) => {
     const api = makeApi({
       previewBatch: vi.fn(async () => previewResponse()),
       getExecution: vi.fn(async () => execution(status)),
@@ -3421,29 +3477,7 @@ describe("Run execution polling", () => {
       expect(screen.getByText(/Automatic execution stopped/)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /Retry/i })).not.toBeInTheDocument();
     }
-    await pause(20);
-    expect(api.getExecution).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Discard Run" })).not.toBeInTheDocument();
-  });
-
-  it("does not overlap execution polls", async () => {
-    const firstPoll = deferred<ExecutionResponse>();
-    const api = makeApi({
-      previewBatch: vi.fn(async () => previewResponse()),
-      getExecution: vi
-        .fn<BatchcraftApi["getExecution"]>()
-        .mockImplementationOnce(() => firstPoll.promise)
-        .mockResolvedValueOnce(execution("succeeded")),
-    });
-    render(<App api={api} pollIntervalMs={5} />);
-    await createRunAndStart();
-
-    await waitFor(() => expect(api.getExecution).toHaveBeenCalledOnce());
-    await pause(20);
-    expect(api.getExecution).toHaveBeenCalledOnce();
-
-    firstPoll.resolve(execution("running"));
-    await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
   });
 
   it("observes durable state after an ambiguous Start network failure", async () => {
@@ -3550,8 +3584,6 @@ describe("Stop after current Job", () => {
     expect(screen.queryByRole("region", { name: "Batch Results" })).not.toBeInTheDocument();
     expect(screen.getByText(/Preview required/)).toBeInTheDocument();
     expect(loadWorkingSession().currentRunId).toBe("run-123");
-    await pause(20);
-    expect(recoveredApi.getExecution).toHaveBeenCalledOnce();
     expect(recoveredApi.startRun).not.toHaveBeenCalled();
     expect(recoveredApi.cancelRun).not.toHaveBeenCalled();
   });
@@ -3686,8 +3718,6 @@ describe("Stop waiting", () => {
     )).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled());
     expect(screen.getByRole("button", { name: "Create Another Run" })).toBeEnabled();
-    await pause(20);
-    expect(api.getExecution).toHaveBeenCalledTimes(2);
     expect(api.reindexProject).not.toHaveBeenCalled();
     navigateWorkspace("Gallery");
     await waitFor(() => expect(api.reindexProject).toHaveBeenCalledExactlyOnceWith("project-1"));
@@ -3939,7 +3969,7 @@ describe("Current Run restoration", () => {
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
   });
 
-  it("restores an uncontrolled running Run without polling and permits replacement", async () => {
+  it("restores an uncontrolled running Run and permits replacement", async () => {
     seedWorkingSession("run-uncontrolled");
     const uncontrolled = execution("running", "run-uncontrolled");
     uncontrolled.execution_task_active = false;
@@ -3959,8 +3989,6 @@ describe("Current Run restoration", () => {
       expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
     });
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    await pause(20);
-    expect(api.getExecution).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Batch" }));
     const createAnother = await screen.findByRole("button", { name: "Create Another Run" });
@@ -4031,7 +4059,7 @@ describe("Current Run restoration", () => {
     await waitFor(() => expect(api.getExecution).toHaveBeenCalledTimes(2));
   });
 
-  it("restores a detached Run as terminal with Results and never resumes polling", async () => {
+  it("restores a detached Run as terminal with Results and editing available", async () => {
     seedWorkingSession("run-detached");
     const artifact = result(1, 1, "image/png", "restored-detached.png", 1024);
     const api = makeApi({
@@ -4046,8 +4074,6 @@ describe("Current Run restoration", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Active Project" })).toBeEnabled();
     expect(api.startRun).not.toHaveBeenCalled();
-    await pause(20);
-    expect(api.getExecution).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -4289,7 +4315,7 @@ describe("Result lightbox", () => {
     const frozen = runLookupResponse();
     frozen.plan.jobs[0].resolved_parameters = [{ parameter_key: "enabled", label: "Enabled", value: false }];
     const api = completedRunApi({
-      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
+      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages.slice(0, 2) })),
       getRun: vi.fn(async () => frozen),
     });
     render(<App api={api} pollIntervalMs={5} />);
@@ -4298,13 +4324,14 @@ describe("Result lightbox", () => {
     const lightbox = await openFirstImage();
     const lightboxOverlay = lightbox.closest("[data-overlay-level='lightbox']");
     expect(lightboxOverlay?.parentElement).toBe(document.body);
-    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
+    expect(within(lightbox).getByText("1 of 2")).toBeInTheDocument();
     expect(within(lightbox).getByText("Job 001")).toBeInTheDocument();
     const fullImage = within(lightbox).getByRole("link", { name: "Open full image in new tab" });
     expect(fullImage).toHaveAttribute("href", "http://api.test/api/result/1/1");
     expect(fullImage).toHaveAttribute("target", "_blank");
     expect(fullImage).toHaveAttribute("rel", "noopener noreferrer");
     const previewImage = within(lightbox).getByAltText("Result 1 from Job 1: first.png");
+    expect(previewImage).toHaveAttribute("src", "http://api.test/api/result/1/1");
     const fit = previewImage.parentElement;
     expect(fit).toHaveClass("lightbox-image-fit");
     expect(fit?.parentElement).toHaveClass("lightbox-image-stage");
@@ -4323,66 +4350,19 @@ describe("Result lightbox", () => {
     fireEvent.click(within(details).getByRole("button", { name: "Close" }));
     expect(screen.getByRole("dialog", { name: "Result image preview" })).toBeInTheDocument();
 
+    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
+    expect(within(lightbox).getByAltText("Result 1 from Job 2: second.jpg"))
+      .toHaveAttribute("src", "http://api.test/api/result/2/1");
+    expect(within(lightbox).queryByAltText("Result 1 from Job 1: first.png")).not.toBeInTheDocument();
+    expect(within(lightbox).getByText("Job 002")).toBeInTheDocument();
+    expect(fullImage).toHaveAttribute("href", "http://api.test/api/result/2/1");
+    fireEvent.click(within(lightbox).getByRole("button", { name: "ⓘ Details" }));
+    const nextDetails = await screen.findByRole("dialog", { name: "Job 002 · Artifact 1" });
+    expect(within(nextDetails).getByText("second.jpg")).toBeInTheDocument();
+    expect(within(nextDetails).queryByText("first.png")).not.toBeInTheDocument();
+    fireEvent.click(within(nextDetails).getByRole("button", { name: "Close" }));
     fireEvent.click(within(lightbox).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog", { name: "Result image preview" })).not.toBeInTheDocument();
-  });
-
-  it("closes with Escape", async () => {
-    const api = completedRunApi({
-      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
-    });
-    render(<App api={api} pollIntervalMs={5} />);
-    await createRunAndStart();
-
-    const lightbox = await openFirstImage();
-    fireEvent.keyDown(lightbox, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Result image preview" })).not.toBeInTheDocument();
-  });
-
-  it("navigates deterministically with Previous/Next and disables unavailable directions", async () => {
-    const api = completedRunApi({
-      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
-    });
-    render(<App api={api} pollIntervalMs={5} />);
-    await createRunAndStart();
-
-    const image = await screen.findByAltText("Result 1 from Job 1: first.png");
-    fireEvent.click(image.closest("button") as HTMLElement);
-    const lightbox = await screen.findByRole("dialog", { name: "Result image preview" });
-
-    // First item: Previous disabled, no wrap-around.
-    expect(within(lightbox).getByRole("button", { name: "Previous" })).toBeDisabled();
-    expect(within(lightbox).getByRole("button", { name: "Next" })).toBeEnabled();
-    fireEvent.click(within(lightbox).getByRole("button", { name: "Previous" }));
-    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
-
-    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
-    expect(within(lightbox).getByText("2 of 3")).toBeInTheDocument();
-    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
-    expect(within(lightbox).getByText("3 of 3")).toBeInTheDocument();
-
-    // Last item: Next disabled, no wrap-around.
-    expect(within(lightbox).getByRole("button", { name: "Next" })).toBeDisabled();
-    expect(within(lightbox).getByRole("button", { name: "Previous" })).toBeEnabled();
-    fireEvent.click(within(lightbox).getByRole("button", { name: "Next" }));
-    expect(within(lightbox).getByText("3 of 3")).toBeInTheDocument();
-  });
-
-  it("navigates with keyboard arrows", async () => {
-    const api = completedRunApi({
-      getResults: vi.fn(async () => ({ run_id: "run-123", results: threeImages })),
-    });
-    render(<App api={api} pollIntervalMs={5} />);
-    await createRunAndStart();
-
-    const lightbox = await openFirstImage();
-    fireEvent.keyDown(lightbox, { key: "ArrowRight" });
-    expect(within(lightbox).getByText("2 of 3")).toBeInTheDocument();
-    fireEvent.keyDown(lightbox, { key: "ArrowLeft" });
-    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
-    // ArrowLeft at the first item does not wrap.
-    fireEvent.keyDown(lightbox, { key: "ArrowLeft" });
-    expect(within(lightbox).getByText("1 of 3")).toBeInTheDocument();
   });
 
   it("opens historical Results with Run labels and deterministic lightbox navigation", async () => {
