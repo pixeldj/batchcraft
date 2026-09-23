@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from typing import Any
 
 import anyio
 
@@ -21,6 +22,19 @@ logger = logging.getLogger(__name__)
 
 ExecutionCoroutineFactory = Callable[[], Coroutine[object, object, RunExecutionState]]
 DiscardOperation = Callable[[], RunExecutionState]
+
+
+class _LifecycleCleanupTask(asyncio.Task[None]):
+    """Decline cancellation of owned drain/close operations, even at runner teardown.
+
+    Unlike ordinary Tasks, cancel() always returns False and never injects cancellation.
+    The original coroutine's result or exception remains authoritative. Construct only
+    for these two lifecycle operations, deliberately bypassing the loop's task factory;
+    callers retain their own cancellation through the shielded join loops.
+    """
+
+    def cancel(self, msg: Any = None) -> bool:
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +114,9 @@ class RunTaskRegistry:
         # Close admission before waiting for an already admitted storage operation.
         self._closing = True
         if self._shutdown_task is None:
-            self._shutdown_task = asyncio.create_task(self._drain(), name="batchcraft-run-shutdown")
+            self._shutdown_task = _LifecycleCleanupTask(
+                self._drain(), loop=asyncio.get_running_loop(), name="batchcraft-run-shutdown"
+            )
         cancelled = False
         with anyio.CancelScope(shield=True):
             while not self._shutdown_task.done():
@@ -117,7 +133,9 @@ class RunTaskRegistry:
             tasks = tuple(active.task for active in self._active_runs.values())
         # Executor cleanup and completion callbacks may themselves acquire the lock.
         for task in tasks:
-            task.cancel()
+            # Runner teardown may already have cancelled it into executor cleanup.
+            if not task.cancelling():
+                task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         async with self._lock:

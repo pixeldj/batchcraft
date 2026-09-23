@@ -53,6 +53,7 @@ from batchcraft.application import (
     SavedBatchRevisionConflictError,
 )
 from batchcraft.application.errors import ExecutionServiceClosedError
+from batchcraft.application.tasks import _LifecycleCleanupTask
 from batchcraft.comfyui import ComfyUIClient, WorkflowPreparationError
 from batchcraft.db import (
     ProjectConflictError,
@@ -284,7 +285,9 @@ def create_app(
             try:
                 await registry.shutdown()
             finally:
-                closing_client = asyncio.create_task(client.aclose())
+                closing_client = _LifecycleCleanupTask(
+                    client.aclose(), loop=asyncio.get_running_loop(), name="batchcraft-client-close"
+                )
                 cancelled = False
                 with anyio.CancelScope(shield=True):
                     while not closing_client.done():

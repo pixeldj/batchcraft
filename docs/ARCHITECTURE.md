@@ -220,6 +220,22 @@ Repeated caller cancellation does not skip the drain or close the client early. 
 not yet admitted are rejected after closure, including pending initial reads. This process-local
 lifecycle boundary changes neither filesystem authority nor durable cancellation intent.
 
+Only the retained registry drain and ComfyUI client close use the private `_LifecycleCleanupTask`.
+Unlike an ordinary asyncio Task, its `cancel()` declines every request with `False`, without recording
+a cancellation or injecting `CancelledError`. It preserves the original coroutine's actual result or
+exception, including cancellation raised by that coroutine itself. Direct construction deliberately
+bypasses custom loop task factories for these two operations only; there is no global factory change.
+Existing AnyIO-shielded join loops retain each caller's cancellation until cleanup settles, without
+cancelling an uncancelled concurrent caller. Runner teardown can therefore join the original cleanup
+operation rather than aborting and retrying it. Retrying client close is unsafe: HTTPX marks its client
+closed before awaiting transport cleanup, so a second close can be a no-op after partial cleanup.
+
+The drain does not cancel an already-cancelling executor again, but still joins every captured task
+outside the registry lock. This protects cooperative executor cleanup already entered during runner
+teardown. The guarantee requires the event loop to continue running and joining, workers to finish, and
+executors to settle; it is not protection against a stopped loop, SIGKILL, or noncooperative executors.
+Ordinary execution/request tasks and the joined file-operation helper retain their existing semantics.
+
 Each active task also owns an in-process cancellation control initialized from SQLite. Durable `after_current_job` or `detach` request insertion and the short `preparing -> submitting` admission transition share one lock. A request therefore either wins before submission admission or observes that the current Job was already admitted; the lock is never held across the ComfyUI HTTP submission. After persisting `detach`, the registry targets only the owned local `asyncio.Task` with cancellation to wake an in-flight await. The executor recognizes that wake-up only when the same control reports durable detach intent, writes an honest blocked state, and leaves ordinary task cancellation to propagate. It preserves known submission evidence and Results, leaves later Jobs pending, and never interrupts ComfyUI or clears its queue. SQLite owns cancellation intent, while `batchcraft.execution` v1 in `execution.json` owns the resulting Run and Job outcomes. The registry is not durable scheduler state, and a restarted API refuses automatic recovery of non-created execution state. All prerelease execution formats are unsupported.
 
 Execution API read models expose whether the current process still owns a live task. This ephemeral fact

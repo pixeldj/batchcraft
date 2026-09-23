@@ -10,6 +10,8 @@ from batch_fixture import _batch_request
 
 from batchcraft.api import create_app
 from batchcraft.application.service import BatchcraftService
+from batchcraft.application.tasks import _LifecycleCleanupTask
+from batchcraft.comfyui import ComfyUIClient
 from batchcraft.db import RunCancellationMode
 from batchcraft.execution import (
     ExecutionStateError,
@@ -95,6 +97,323 @@ def test_start_discard_storage_does_not_block_loop(
                 if action == "execute"
                 else 200
             )
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("phase", ["drain", "client_close"])
+def test_runner_teardown_finishes_lifespan_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    worker_entered, worker_release = threading.Event(), threading.Event()
+    worker_finished, runner_cancelled = threading.Event(), threading.Event()
+    cleanup_release, close_entered = asyncio.Event(), asyncio.Event()
+    shutdown_requested, lifespan_entered = asyncio.Event(), asyncio.Event()
+    order: list[str] = []
+    controller_errors: list[str] = []
+    retained: dict[str, asyncio.Task[Any]] = {}
+    cancel_attempts: list[str] = []
+    loop_errors: list[dict[str, Any]] = []
+
+    class Client(FakeComfyUIClient):
+        async def aclose(self) -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            if phase == "client_close":
+                retained["close"] = task
+            order.append("close_started")
+            close_entered.set()
+            if phase == "client_close":
+                try:
+                    await cleanup_release.wait()
+                except asyncio.CancelledError:
+                    runner_cancelled.set()
+                    raise
+            order.append("client_closed")
+
+    async def executor(**kwargs: Any) -> Any:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            order.append("executor_cleanup_started")
+            await app.state.service.task_registry.active_run_id()
+            await cleanup_release.wait()
+            order.append("executor_cleanup_finished")
+        return initial_execution_state(kwargs["run"])
+
+    client: FakeComfyUIClient | ComfyUIClient = Client()
+    if phase == "client_close":
+        client = ComfyUIClient("http://localhost:8002")
+        # Exercise real ComfyUIClient/HTTPX closure, gating only the transport.
+        # This phase performs no network requests.
+        monkeypatch.setattr(client._http._transport, "aclose", Client().aclose)
+    app = create_app(
+        settings_for("test", tmp_path), client_factory=lambda _: client, executor=executor
+    )
+
+    async def lifetime() -> None:
+        async with app.router.lifespan_context(app):
+            lifespan_entered.set()
+            await shutdown_requested.wait()
+
+    async def discard(run_id: str) -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://localhost:8002"
+        ) as http:
+            return await http.post(f"/api/runs/{run_id}/discard")
+
+    def controller(loop: asyncio.AbstractEventLoop) -> None:
+        try:
+            if not runner_cancelled.wait(2):
+                controller_errors.append("runner did not cancel pending tasks")
+        finally:
+            worker_release.set()
+            try:
+                loop.call_soon_threadsafe(cleanup_release.set)
+            except RuntimeError:
+                if not loop.is_closed():
+                    raise
+
+    controllers: list[threading.Thread] = []
+
+    async def prepare_teardown() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+        retained["lifespan"] = asyncio.create_task(lifetime())
+        await asyncio.wait_for(lifespan_entered.wait(), 2)
+        registry = app.state.service.task_registry
+        original_completed = registry._task_completed
+
+        def completed(*args: Any) -> None:
+            original_completed(*args)
+            order.append("executor_observed")
+
+        monkeypatch.setattr(registry, "_task_completed", completed)
+        if phase == "drain":
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app), base_url="http://localhost:8002"
+            ) as http:
+                first = await http.post("/api/runs", json=_batch_request(()))
+                second = await http.post("/api/runs", json=_batch_request(()))
+                assert first.status_code == second.status_code == 201
+                run_id = first.json()["run_id"]
+                assert (await http.post(f"/api/runs/{run_id}/execute")).status_code == 202
+                retained["executor"] = registry._active_runs[run_id].task
+            original_save = ExecutionStateStore.save
+
+            def save(*args: Any, **kwargs: Any) -> Any:
+                worker_entered.set()
+                try:
+                    assert worker_release.wait(5), "worker watchdog expired"
+                    return original_save(*args, **kwargs)
+                finally:
+                    order.append("worker_finished")
+                    worker_finished.set()
+
+            monkeypatch.setattr(ExecutionStateStore, "save", save)
+            retained["discard"] = asyncio.create_task(discard(second.json()["run_id"]))
+            assert await asyncio.to_thread(worker_entered.wait, 2)
+        shutdown_requested.set()
+        async with asyncio.timeout(2):
+            if phase == "drain":
+                while registry._shutdown_task is None:
+                    await asyncio.sleep(0)
+                retained["drain"] = registry._shutdown_task
+                await asyncio.sleep(0)
+                assert registry._lock.locked()
+                assert not retained["drain"].done()
+            else:
+                await close_entered.wait()
+
+        cleanup_name = "drain" if phase == "drain" else "close"
+        original_cancel = retained[cleanup_name].cancel
+
+        def cancel(msg: Any = None) -> bool:
+            cancel_attempts.append(cleanup_name)
+            return original_cancel(msg)
+
+        monkeypatch.setattr(retained[cleanup_name], "cancel", cancel)
+
+        def inspect_cancellation() -> None:
+            if not cancel_attempts or not all(
+                task.cancelling() for name, task in retained.items() if name != cleanup_name
+            ):
+                loop.call_later(0.001, inspect_cancellation)
+                return
+            if phase == "drain" and (not registry._lock.locked() or worker_finished.is_set()):
+                controller_errors.append("admitted worker lost lock before finishing")
+            runner_cancelled.set()
+
+        loop.call_soon(inspect_cancellation)
+        thread = threading.Thread(target=controller, args=(loop,))
+        controllers.append(thread)
+        thread.start()
+        # Return with lifespan, drain/close, executor and HTTP request pending.
+        # Only asyncio.run's real _cancel_all_tasks initiates their cancellation.
+
+    async def main() -> None:
+        try:
+            await prepare_teardown()
+        finally:
+            if not controllers:
+                worker_release.set()
+                cleanup_release.set()
+
+    try:
+        asyncio.run(main())
+    finally:
+        worker_release.set()
+        for thread in controllers:
+            thread.join(5)
+            assert not thread.is_alive(), "controller watchdog expired"
+    assert not controller_errors
+    assert runner_cancelled.is_set()
+    assert all(task.done() for task in retained.values())
+    cleanup_name = "drain" if phase == "drain" else "close"
+    assert cancel_attempts == [cleanup_name]
+    assert retained[cleanup_name].cancelling() == 0
+    assert all(task.cancelling() for name, task in retained.items() if name != cleanup_name)
+    outcomes = {
+        name: "cancelled" if task.cancelled() else task.exception()
+        for name, task in retained.items()
+    }
+    assert not loop_errors, loop_errors
+    assert outcomes[cleanup_name] is None
+    assert outcomes["lifespan"] == "cancelled"
+    assert not app.state.service.task_registry._active_runs
+    if phase == "drain":
+        assert worker_finished.is_set()
+        assert outcomes["discard"] == "cancelled"
+        assert order.index("worker_finished") < order.index("executor_cleanup_finished")
+        assert order.index("executor_cleanup_finished") < order.index("executor_observed")
+        assert order.index("executor_observed") < order.index("close_started"), order
+    assert "client_closed" in order, (order, outcomes)
+    assert order.count("close_started") == order.count("client_closed") == 1
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancelled"])
+def test_lifecycle_cleanup_declines_cancel_without_changing_outcome(outcome: str) -> None:
+    async def check() -> None:
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+        failure = RuntimeError("cleanup failed")
+
+        async def cleanup() -> None:
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            if outcome == "error":
+                raise failure
+            if outcome == "cancelled":
+                raise asyncio.CancelledError
+
+        def unexpected_factory(*args: Any, **kwargs: Any) -> Any:
+            pytest.fail("lifecycle cleanup must bypass the loop task factory")
+
+        loop = asyncio.get_running_loop()
+        original_factory = loop.get_task_factory()
+        loop.set_task_factory(unexpected_factory)
+        try:
+            task = _LifecycleCleanupTask(cleanup(), loop=loop, name="test-lifecycle-cleanup")
+        finally:
+            loop.set_task_factory(original_factory)
+        try:
+            assert task.cancel("before start") is False
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(3):
+                assert task.cancel("while suspended") is False
+                await asyncio.sleep(0)
+                assert not task.done()
+                assert task.cancelling() == 0
+        finally:
+            release.set()
+            result = await asyncio.gather(task, return_exceptions=True)
+        assert calls == 1
+        assert task.cancel("after completion") is False
+        assert task.cancelling() == 0
+        if outcome == "success":
+            assert result[0] is None
+            assert task.result() is None
+        elif outcome == "error":
+            assert result[0] is failure
+            assert task.exception() is failure
+        else:
+            assert isinstance(result[0], asyncio.CancelledError)
+            assert task.cancelled()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("executor_fails", [False, True])
+def test_concurrent_shutdown_callers_keep_independent_cancellation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, executor_fails: bool
+) -> None:
+    cleanup_entered, cleanup_release = asyncio.Event(), asyncio.Event()
+    closed = asyncio.Event()
+
+    class Client(FakeComfyUIClient):
+        async def aclose(self) -> None:
+            closed.set()
+
+    async def executor(**kwargs: Any) -> Any:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await app.state.service.task_registry.active_run_id()
+            cleanup_entered.set()
+            await cleanup_release.wait()
+            if executor_fails:
+                raise RuntimeError("injected executor cleanup failure")
+        return initial_execution_state(kwargs["run"])
+
+    app = create_app(
+        settings_for("test", tmp_path), client_factory=lambda _: Client(), executor=executor
+    )
+
+    async def check() -> None:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app), base_url="http://localhost:8002"
+            ) as http,
+        ):
+            created = await http.post("/api/runs", json=_batch_request(()))
+            assert created.status_code == 201
+            run_id = created.json()["run_id"]
+            assert (await http.post(f"/api/runs/{run_id}/execute")).status_code == 202
+            registry = app.state.service.task_registry
+            first = asyncio.create_task(registry.shutdown())
+            second = asyncio.create_task(registry.shutdown())
+            try:
+                await asyncio.wait_for(cleanup_entered.wait(), 2)
+                drain = registry._shutdown_task
+                assert drain is not None
+                for _ in range(3):
+                    first.cancel()
+                    await asyncio.sleep(0)
+                assert not first.done() and not second.done() and not drain.done()
+                assert not closed.is_set()
+                assert second.cancelling() == drain.cancelling() == 0
+                for action in ("execute", "discard"):
+                    response = await http.post(f"/api/runs/{run_id}/{action}")
+                    assert response.status_code == 409
+                    assert response.json()["error"]["code"] == "execution_service_closed"
+            finally:
+                cleanup_release.set()
+                results = await asyncio.wait_for(
+                    asyncio.gather(first, second, return_exceptions=True), 2
+                )
+            assert isinstance(results[0], asyncio.CancelledError)
+            assert results[1] is None
+            await asyncio.wait_for(registry.shutdown(), 2)
+            assert registry._shutdown_task is drain
+            assert drain.result() is None
+            assert not registry._active_runs
+            assert not closed.is_set()
+        assert closed.is_set()
+        if executor_fails:
+            assert "Run execution task failed" in caplog.text
 
     asyncio.run(check())
 
@@ -563,14 +882,20 @@ def test_closed_registry_rejects_mutation(tmp_path: Path, action: str) -> None:
     asyncio.run(check())
 
 
-def test_lifespan_joins_client_close_under_repeated_cancellation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_lifespan_joins_client_close_under_repeated_cancellation(
+    tmp_path: Path, close_fails: bool
+) -> None:
     entered, release, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    failure = RuntimeError("injected client close failure")
 
     class Client(FakeComfyUIClient):
         async def aclose(self) -> None:
             entered.set()
             await release.wait()
             closed.set()
+            if close_fails:
+                raise failure
 
     app = create_app(settings_for("test", tmp_path), client_factory=lambda _: Client())
 
@@ -587,8 +912,13 @@ def test_lifespan_joins_client_close_under_repeated_cancellation(tmp_path: Path)
             assert not closed.is_set()
         finally:
             release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(shutdown, 2)
+        if close_fails:
+            with pytest.raises(RuntimeError) as caught:
+                await asyncio.wait_for(shutdown, 2)
+            assert caught.value is failure
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(shutdown, 2)
         assert closed.is_set()
 
     asyncio.run(check())

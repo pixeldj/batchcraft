@@ -920,6 +920,14 @@ caller cancellation waits for cleanup before propagating. Late Start/Discard adm
 or intent reads were pending when shutdown began. Initial strict lookup errors retain their existing
 `run_not_found`/`invalid_run_data` precedence. Shutdown does not interrupt remote ComfyUI work.
 
+The owned drain and client-close operations also survive direct cancellation attempts during
+`asyncio.run()` teardown. Already-cancelling executors are joined without another cancellation that
+could interrupt their cleanup. Concurrent shutdown callers share the drain, but only cancelled callers
+receive cancellation after it finishes. Cleanup errors remain errors; client close is never retried to
+simulate completion. This requires the event loop to keep running and joining, storage operations to
+finish, and executors to cooperate and settle. It does not cover a stopped loop, process termination,
+or an executor that refuses to finish.
+
 `POST /api/runs/{run_id}/cancel` accepts one of two modes:
 
 ```json
