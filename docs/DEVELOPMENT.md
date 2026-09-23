@@ -208,6 +208,26 @@ Do not build the full prompt library, advanced search, elaborate ratings, multi-
 
 The slice accepts an ephemeral complete Batch request for preview and Run creation. It does not define another durable Batch format before SQLite. Run lookup narrowly scans complete published Run directories, and long-running execution uses retained in-process tasks while `execution.json` remains authoritative. Start and discard tests exercise the shared registry lock, exact pristine-state eligibility, restart durability, terminal cancellation, and preservation of frozen Run files.
 
+`tests/api/test_start_discard_admission.py` uses temporary real stores, the ASGI API, and bounded
+threading-event gates to cover Start/Discard joined storage I/O. Keep both forced admission orderings,
+worker success/failure under repeated request cancellation, loop-only synchronous executor factories,
+registered-task ownership, and shutdown during admitted preparation/writes or pre-admission reads.
+Health, a loop callback, and an independent read must finish before releasing a paused storage worker;
+`/api/executions/active` is deliberately not a responsiveness probe here because it shares the admission
+lock. Shutdown drains registered tasks outside that lock before client close, even when its caller is
+repeatedly cancelled. These checks are not a disk-speed SLA or a claim that all backend I/O is async.
+
+Shutdown regressions must also return from `main()` with pending tasks and let real `asyncio.run()`
+teardown cancel them, using the supported Python runtime and real AnyIO/FastAPI modules. Cover a
+registered executor whose cleanup needs the admission lock while another Run's Discard worker owns it,
+and already-started real ComfyUIClient/HTTPX closure with a gated transport. External controller threads
+use bounded gates and release them in `finally`; all task outcomes are observed. Spy on cancellation
+attempts rather than requiring every task's `cancelling()` count to increase: the two private owned
+lifecycle tasks deliberately decline cancellation. Keep separate coverage for cancellation before
+cleanup starts and while suspended, original success/error/cancellation outcomes, custom task-factory
+bypass, and concurrent/repeated shutdown callers with independent cancellation. These tests establish
+cleanup while the loop is running and joining, not forced-process termination safety.
+
 ### Phase 2.1: first React workflow
 
 Completed.

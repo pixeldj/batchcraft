@@ -160,7 +160,9 @@ def test_task_failure_before_execution_state_write_retains_safe_context(
         control = ActiveRunCancellationControl(
             PRIVATE_PATH, RunCancellationRequestStore(settings.database_path)
         )
-        await registry.start(PRIVATE_PATH, control, lambda: execute_run(run=run, client=client))
+        await registry.start(
+            PRIVATE_PATH, control, lambda: execute_run(run=run, client=client), prepare=lambda: None
+        )
         async with asyncio.timeout(5):
             while registry.is_active(PRIVATE_PATH):
                 await asyncio.sleep(0)
